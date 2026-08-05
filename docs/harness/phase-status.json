@@ -1,0 +1,76 @@
+{
+  "project": "claim-center-report-studio",
+  "currentPhase": "P00",
+  "phases": {
+    "P00": {
+      "name": "workspace-bootstrap",
+      "status": "READY_FOR_REVIEW",
+      "implementationCommit": "bad2a28",
+      "reviewReport": "docs/reviews/requests/P00-review-request.md"
+    },
+    "P01": {
+      "name": "product-contract",
+      "status": "PLANNED"
+    },
+    "P02": {
+      "name": "stitch-ux-ui-design",
+      "status": "PLANNED"
+    },
+    "P03": {
+      "name": "app-shell-design-system",
+      "status": "PLANNED"
+    },
+    "P04": {
+      "name": "db-auth-permissions-audit",
+      "status": "PLANNED"
+    },
+    "P05": {
+      "name": "case-management-core",
+      "status": "PLANNED"
+    },
+    "P06": {
+      "name": "workspace-file-version-minutes",
+      "status": "PLANNED"
+    },
+    "P07": {
+      "name": "proposal-template-builder",
+      "status": "PLANNED"
+    },
+    "P08": {
+      "name": "report-template-catalog",
+      "status": "PLANNED"
+    },
+    "P09": {
+      "name": "report-studio-core",
+      "status": "PLANNED"
+    },
+    "P10": {
+      "name": "ai-gateway-config",
+      "status": "PLANNED"
+    },
+    "P11": {
+      "name": "evidence-based-ai-generation",
+      "status": "PLANNED"
+    },
+    "P12": {
+      "name": "review-approval-export",
+      "status": "PLANNED"
+    },
+    "P13": {
+      "name": "cost-success-fee",
+      "status": "PLANNED"
+    },
+    "P14": {
+      "name": "google-workspace-integration",
+      "status": "PLANNED"
+    },
+    "P15": {
+      "name": "integration-security-accessibility",
+      "status": "PLANNED"
+    },
+    "P16": {
+      "name": "demo-release",
+      "status": "PLANNED"
+    }
+  }
+}
