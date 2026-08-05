@@ -1,0 +1,71 @@
+[2026-08-05T11:29:19+09:00] EXEC: npx --yes pnpm@9.15.0 --version
+[OUTPUT]:
+9.15.0
+
+[2026-08-05T11:29:23+09:00] EXEC: npx --yes pnpm@9.15.0 install --frozen-lockfile
+[OUTPUT]:
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+devDependencies:
++ @types/node 20.19.43
++ @typescript-eslint/eslint-plugin 8.66.0
++ @typescript-eslint/parser 8.66.0
++ eslint 9.39.5
++ tsx 4.23.6
++ typescript 5.9.3
+
+Done in 638ms
+
+[2026-08-05T11:29:27+09:00] EXEC: npx --yes pnpm@9.15.0 lint
+[OUTPUT]:
+> claim-center-report-studio-monorepo@0.1.0 lint E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
+> tsx scripts/harness-check.ts lint
+
+[Harness Engine TS] Executing target: lint
+[Harness Engine TS] Performing strict TypeScript type check (tsc --noEmit)...
+  ✓ TypeScript strict type check PASSED.
+[Harness Lint] Executing real ESLint engine (max-warnings=0)...
+  ✓ ESLint static code analysis PASSED (0 warnings).
+[Harness Lint] Verifying JSON syntax and file encoding...
+  ✓ JSON valid: package.json
+  ✓ JSON valid: tsconfig.base.json
+  ✓ JSON valid: tsconfig.json
+  ✓ JSON valid: docs/harness/phase-status.json
+  ✓ JSON valid: docs/harness/initial-state.json
+  ✓ JSON valid: artifacts/harness/P00/manifest.json
+[Harness Lint] All linters passed.
+
+[2026-08-05T11:29:35+09:00] EXEC: npx --yes pnpm@9.15.0 typecheck
+[OUTPUT]:
+> claim-center-report-studio-monorepo@0.1.0 typecheck E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
+> tsc --noEmit
+
+[2026-08-05T11:29:39+09:00] EXEC: npx --yes pnpm@9.15.0 test
+[OUTPUT]:
+> claim-center-report-studio-monorepo@0.1.0 test E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
+> tsx --test scripts/harness-test.ts
+
+✔ P00 Harness Directory Skeleton Verification (2.6366ms)
+✔ P00 Essential Harness Files Verification (0.8553ms)
+✔ Phase Status Machine Integration (0.344ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 337.1183
+
+[2026-08-05T11:29:44+09:00] EXEC: npx --yes pnpm@9.15.0 build
+[OUTPUT]:
+> claim-center-report-studio-monorepo@0.1.0 build E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
+> tsx scripts/harness-check.ts build
+
+[Harness Engine TS] Executing target: build
+[Harness Engine TS] Performing strict TypeScript type check (tsc --noEmit)...
+  ✓ TypeScript strict type check PASSED.
+[Harness Build] Compiling TypeScript source files to dist/ artifacts...
+  ✓ TypeScript emit/compilation to dist/ PASSED.
+[Harness Build] Real workspace artifact compilation complete.
