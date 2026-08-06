@@ -1,5 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as http from 'node:http';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
 import {
   createPrismaClient, getDatabaseUrl, hashToken, verifyPassword,
   type Prisma, type PrismaClient, type User
@@ -18,6 +20,12 @@ const ALLOWED_CLAIM_TYPES = new Set(['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04',
 const ALLOWED_SCHEDULE_TYPES = new Set(['COURT', 'CLIENT', 'INTERNAL']);
 const CASE_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
 const CASE_DELETE_ROLES = new Set(['ceo', 'director', 'admin']);
+
+const ALLOWED_DOC_SOURCES = new Set(['RECEIVED', 'AUTHORED', 'SUBMITTED']);
+const ALLOWED_FILE_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.docx', '.xlsx', '.pptx', '.txt', '.hwp']);
+const FORBIDDEN_FILE_EXTENSIONS = new Set(['.exe', '.bat', '.sh', '.js', '.vbs', '.php', '.py', '.cmd', '.ps1', '.jar', '.scr', '.msi']);
+const UPLOAD_MAX_BYTES = 10 * 1024 * 1024; // 10MB
+const UPLOAD_DIR = path.resolve(__dirname, '../../database/.data/uploads');
 
 export const CASE_STATUSES = [
   'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
@@ -61,6 +69,56 @@ export interface ManagedApiServer extends http.Server {
   waitForDatabaseClose(): Promise<void>;
 }
 
+function ensureUploadDir(): void {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
+
+function sanitizeDisplayName(rawName: string): string {
+  if (!rawName) return 'unnamed_file';
+  let clean = rawName.replace(/[\0\r\n]/g, '').replace(/[\/\\]/g, '_').replace(/\.\.+/g, '.');
+  clean = path.basename(clean);
+  clean = clean.replace(/[^a-zA-Z0-9가-힣._-]/g, '_');
+  return clean || 'unnamed_file';
+}
+
+function validateFileSecurity(filename: string, buffer: Buffer): { extension: string } {
+  if (buffer.length > UPLOAD_MAX_BYTES) {
+    throw new HttpError(400, 'File size exceeds maximum 10MB limit');
+  }
+
+  const ext = path.extname(filename).toLowerCase();
+  if (FORBIDDEN_FILE_EXTENSIONS.has(ext)) {
+    throw new HttpError(400, `Forbidden executable file extension: ${ext}`);
+  }
+  if (!ALLOWED_FILE_EXTENSIONS.has(ext)) {
+    throw new HttpError(400, `Unsupported file extension: ${ext}`);
+  }
+
+  // Magic Byte Check
+  if (ext === '.pdf') {
+    if (buffer.length < 4 || buffer.subarray(0, 4).toString('utf8') !== '%PDF') {
+      throw new HttpError(400, 'Invalid PDF magic bytes');
+    }
+  } else if (ext === '.png') {
+    const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (buffer.length < 8 || !buffer.subarray(0, 8).equals(pngMagic)) {
+      throw new HttpError(400, 'Invalid PNG magic bytes');
+    }
+  } else if (ext === '.jpg' || ext === '.jpeg') {
+    const jpgMagic = Buffer.from([0xff, 0xd8, 0xff]);
+    if (buffer.length < 3 || !buffer.subarray(0, 3).equals(jpgMagic)) {
+      throw new HttpError(400, 'Invalid JPEG magic bytes');
+    }
+  } else if (['.docx', '.xlsx', '.pptx'].includes(ext)) {
+    const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+    if (buffer.length < 4 || !buffer.subarray(0, 4).equals(zipMagic)) {
+      throw new HttpError(400, 'Invalid Office OpenXML magic bytes');
+    }
+  }
+
+  return { extension: ext };
+}
+
 function parseCookies(req: http.IncomingMessage): Record<string, string> {
   const cookies: Record<string, string> = {};
   for (const entry of (req.headers.cookie ?? '').split(';')) {
@@ -77,7 +135,7 @@ async function readJson(req: http.IncomingMessage): Promise<Record<string, unkno
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > 1_000_000) throw new HttpError(413, 'Request body too large');
+    if (total > 10_000_000) throw new HttpError(413, 'Request body too large');
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
@@ -147,12 +205,13 @@ function requireAnyRole(context: SessionContext, roles: Set<string>, message: st
 export function getKstDateString(date: Date): string {
   const kstOffsetMs = 9 * 60 * 60 * 1000;
   const kstDate = new Date(date.getTime() + kstOffsetMs);
-  return kstDate.toISOString().slice(0, 10);
+  return kstDate.toISOString().slice(0, 10).replace(/-/g, '');
 }
 
 export function calculateDDay(targetDate: Date, nowDate = new Date()): { dDayStr: string; isOverdue: boolean; isToday: boolean; diffDays: number } {
-  const targetKstStr = getKstDateString(targetDate);
-  const todayKstStr = getKstDateString(nowDate);
+  const kstOffsetMs = 9 * 60 * 60 * 1000;
+  const targetKstStr = new Date(targetDate.getTime() + kstOffsetMs).toISOString().slice(0, 10);
+  const todayKstStr = new Date(nowDate.getTime() + kstOffsetMs).toISOString().slice(0, 10);
 
   const targetUtcMidnight = new Date(`${targetKstStr}T00:00:00.000Z`).getTime();
   const todayUtcMidnight = new Date(`${todayKstStr}T00:00:00.000Z`).getTime();
@@ -172,6 +231,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   const db = createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
   const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
+  ensureUploadDir();
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -292,11 +352,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
         });
 
-        // Schedules calculation (Today tasks vs Delayed tasks)
         const schedules = await db.schedule.findMany({
-          where: {
-            case: caseWhere
-          }
+          where: { case: caseWhere }
         });
 
         let todayTasksCount = 0;
@@ -662,6 +719,517 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
+      // --- P06 Documents Endpoints ---
+      const docMatch = pathname.match(/^\/api\/cases\/([^/]+)\/documents(?:\/([^/]+)(?:\/(versions(?:\/([^/]+)\/download)?|finalize))?)?$/);
+      if (docMatch) {
+        const [, caseId, docId, action, versionId] = docMatch;
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        // GET /api/cases/:id/documents
+        if (!docId && req.method === 'GET') {
+          const documents = await db.document.findMany({
+            where: { caseId, deletedAt: null },
+            include: {
+              versions: {
+                orderBy: { versionNumber: 'desc' },
+                include: { uploadedBy: { select: { id: true, name: true, email: true } } }
+              }
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          sendJson(res, 200, { documents });
+          return;
+        }
+
+        // POST /api/cases/:id/documents (Upload new document)
+        if (!docId && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document upload forbidden for Staff or Reviewer');
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const source = typeof body.source === 'string' ? body.source.trim() : '';
+          const category = typeof body.category === 'string' ? body.category.trim() : 'GENERAL';
+          const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
+          const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+
+          if (!title) throw new HttpError(400, 'Document title is required');
+          if (!ALLOWED_DOC_SOURCES.has(source)) throw new HttpError(400, 'Invalid document source. Must be RECEIVED, AUTHORED, or SUBMITTED');
+          if (!filename || !fileBase64) throw new HttpError(400, 'File filename and content (fileBase64) are required');
+
+          const buffer = Buffer.from(fileBase64, 'base64');
+          const { extension } = validateFileSecurity(filename, buffer);
+          const cleanTitle = sanitizeDisplayName(title);
+          const cleanFilename = sanitizeDisplayName(filename);
+
+          // Check for duplicate filename or duplicate title in same case
+          const existingDocs = await db.document.findMany({
+            where: { caseId, deletedAt: null },
+            include: { versions: true }
+          });
+          const isDuplicateFilename = existingDocs.some((d) => {
+            if (d.title.toLowerCase() === title.toLowerCase()) return true;
+            return d.versions.some((v) => v.displayName.toLowerCase().includes(cleanFilename.toLowerCase()));
+          });
+          if (isDuplicateFilename) {
+            throw new HttpError(409, 'A file with the exact same name already exists in this case');
+          }
+
+          const newDocId = `DOC-${crypto.randomUUID()}`;
+          const newVersionId = `DOCVER-${crypto.randomUUID()}`;
+          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
+          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+          const dateStr = getKstDateString(new Date());
+          const displayName = `${caseRow.caseNumber}_${category}_${cleanTitle}_${cleanFilename}_${dateStr}_v01${extension}`;
+          const diskPath = path.join(UPLOAD_DIR, storageKey);
+
+          fs.writeFileSync(diskPath, buffer);
+
+          try {
+            const document = await db.$transaction(async (tx) => {
+              const docItem = await tx.document.create({
+                data: {
+                  id: newDocId,
+                  caseId,
+                  title,
+                  category,
+                  source,
+                  currentVersionId: newVersionId
+                }
+              });
+
+              await tx.documentVersion.create({
+                data: {
+                  id: newVersionId,
+                  documentId: newDocId,
+                  versionNumber: 1,
+                  displayName,
+                  storageKey,
+                  fileSize: buffer.length,
+                  mimeType: body.mimeType && typeof body.mimeType === 'string' ? body.mimeType.trim() : 'application/octet-stream',
+                  sha256,
+                  isFinal: false,
+                  uploadedById: context.user.id
+                }
+              });
+
+              await tx.auditLog.create({
+                data: requestAudit(context, 'DOCUMENT_CREATED', 'Document', newDocId, {
+                  title, source, category, versionNumber: 1, storageKey
+                })
+              });
+
+              return docItem;
+            });
+
+            sendJson(res, 201, { document, versionId: newVersionId });
+            return;
+          } catch (err) {
+            fs.rmSync(diskPath, { force: true });
+            throw err;
+          }
+        }
+
+        // POST /api/cases/:id/documents/:docId/versions
+        if (docId && action === 'versions' && !versionId && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document version upload forbidden for Staff or Reviewer');
+          const docRow = await db.document.findUnique({
+            where: { id: docId },
+            include: { versions: { orderBy: { versionNumber: 'desc' } } }
+          });
+          if (!docRow || docRow.caseId !== caseId || docRow.deletedAt) throw new HttpError(404, 'Document not found');
+
+          const body = await readJson(req);
+          const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
+          const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+
+          if (!filename || !fileBase64) throw new HttpError(400, 'File filename and content (fileBase64) are required');
+
+          const buffer = Buffer.from(fileBase64, 'base64');
+          const { extension } = validateFileSecurity(filename, buffer);
+          const cleanTitle = sanitizeDisplayName(docRow.title);
+
+          const nextVersionNum = (docRow.versions[0]?.versionNumber ?? 0) + 1;
+          const paddedVer = String(nextVersionNum).padStart(2, '0');
+          const dateStr = getKstDateString(new Date());
+          const displayName = `${caseRow.caseNumber}_${docRow.category ?? 'GEN'}_${cleanTitle}_${dateStr}_v${paddedVer}${extension}`;
+          const newVersionId = `DOCVER-${crypto.randomUUID()}`;
+          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
+          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+          const diskPath = path.join(UPLOAD_DIR, storageKey);
+
+          fs.writeFileSync(diskPath, buffer);
+
+          try {
+            const version = await db.$transaction(async (tx) => {
+              const createdVersion = await tx.documentVersion.create({
+                data: {
+                  id: newVersionId,
+                  documentId: docId,
+                  versionNumber: nextVersionNum,
+                  displayName,
+                  storageKey,
+                  fileSize: buffer.length,
+                  mimeType: body.mimeType && typeof body.mimeType === 'string' ? body.mimeType.trim() : 'application/octet-stream',
+                  sha256,
+                  isFinal: false,
+                  uploadedById: context.user.id
+                }
+              });
+
+              await tx.document.update({
+                where: { id: docId },
+                data: { currentVersionId: newVersionId, updatedAt: new Date() }
+              });
+
+              await tx.auditLog.create({
+                data: requestAudit(context, 'DOCUMENT_VERSION_CREATED', 'DocumentVersion', newVersionId, {
+                  docId, versionNumber: nextVersionNum, storageKey
+                })
+              });
+
+              return createdVersion;
+            });
+
+            sendJson(res, 201, { version });
+            return;
+          } catch (err) {
+            fs.rmSync(diskPath, { force: true });
+            throw err;
+          }
+        }
+
+        // POST /api/cases/:id/documents/:docId/finalize
+        if (docId && action === 'finalize' && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document finalization forbidden for Staff or Reviewer');
+          const docRow = await db.document.findUnique({ where: { id: docId } });
+          if (!docRow || docRow.caseId !== caseId || docRow.deletedAt) throw new HttpError(404, 'Document not found');
+
+          const body = await readJson(req);
+          const targetVersionId = typeof body.versionId === 'string' ? body.versionId : '';
+          const targetVer = await db.documentVersion.findUnique({ where: { id: targetVersionId } });
+          if (!targetVer || targetVer.documentId !== docId) throw new HttpError(404, 'Document version not found');
+
+          await db.$transaction(async (tx) => {
+            await tx.documentVersion.updateMany({
+              where: { documentId: docId },
+              data: { isFinal: false }
+            });
+            await tx.documentVersion.update({
+              where: { id: targetVersionId },
+              data: { isFinal: true }
+            });
+            await tx.document.update({
+              where: { id: docId },
+              data: { currentVersionId: targetVersionId }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'DOCUMENT_FINALIZED', 'Document', docId, { versionId: targetVersionId, versionNumber: targetVer.versionNumber })
+            });
+          });
+
+          sendJson(res, 200, { message: 'Document version finalized', versionId: targetVersionId });
+          return;
+        }
+
+        // GET /api/cases/:id/documents/:docId/versions/:versionId/download
+        if (docId && action === 'versions' && versionId && req.url?.endsWith('/download') && req.method === 'GET') {
+          const versionRow = await db.documentVersion.findUnique({
+            where: { id: versionId },
+            include: { document: true }
+          });
+          if (!versionRow || versionRow.documentId !== docId || versionRow.document.caseId !== caseId || versionRow.document.deletedAt) {
+            throw new HttpError(404, 'Document file not found');
+          }
+
+          const diskPath = path.join(UPLOAD_DIR, versionRow.storageKey);
+          if (!fs.existsSync(diskPath)) {
+            throw new HttpError(404, 'File on disk not found');
+          }
+
+          await db.auditLog.create({
+            data: requestAudit(context, 'DOCUMENT_DOWNLOADED', 'DocumentVersion', versionId, { displayName: versionRow.displayName })
+          });
+
+          const stat = fs.statSync(diskPath);
+          res.writeHead(200, {
+            'Content-Type': versionRow.mimeType || 'application/octet-stream',
+            'Content-Length': stat.size,
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(versionRow.displayName)}`,
+            'Cache-Control': 'no-store'
+          });
+          fs.createReadStream(diskPath).pipe(res);
+          return;
+        }
+
+        // DELETE /api/cases/:id/documents/:docId
+        if (docId && !action && req.method === 'DELETE') {
+          requireAnyRole(context, CASE_DELETE_ROLES, 'Document deletion forbidden for PM or Staff');
+          const docRow = await db.document.findUnique({
+            where: { id: docId },
+            include: { versions: true }
+          });
+          if (!docRow || docRow.caseId !== caseId || docRow.deletedAt) throw new HttpError(404, 'Document not found');
+
+          const hasFinalVersion = docRow.versions.some((v) => v.isFinal);
+          if (hasFinalVersion) {
+            throw new HttpError(400, 'Finalized documents cannot be deleted');
+          }
+
+          await db.$transaction(async (tx) => {
+            await tx.document.update({
+              where: { id: docId },
+              data: { deletedAt: new Date() }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'DOCUMENT_SOFT_DELETED', 'Document', docId, {})
+            });
+          });
+
+          sendJson(res, 200, { message: 'Document soft deleted' });
+          return;
+        }
+      }
+
+      // --- P06 Meetings Endpoints ---
+      const meetingMatch = pathname.match(/^\/api\/cases\/([^/]+)\/meetings(?:\/([^/]+)(?:\/(finalize|action-items))?)?$/);
+      if (meetingMatch) {
+        const [, caseId, meetingId, action] = meetingMatch;
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        // GET /api/cases/:id/meetings
+        if (!meetingId && req.method === 'GET') {
+          const meetings = await db.meeting.findMany({
+            where: { caseId },
+            include: {
+              createdBy: { select: { id: true, name: true, email: true } },
+              actionItems: {
+                include: {
+                  assignee: { select: { id: true, name: true, email: true } },
+                  schedule: true
+                }
+              }
+            },
+            orderBy: { meetingDate: 'desc' }
+          });
+          sendJson(res, 200, { meetings });
+          return;
+        }
+
+        // POST /api/cases/:id/meetings
+        if (!meetingId && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting creation forbidden');
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const dateStr = typeof body.meetingDate === 'string' ? body.meetingDate : '';
+          const location = typeof body.location === 'string' ? body.location.trim() : null;
+          const attendees = typeof body.attendees === 'string' ? body.attendees.trim() : null;
+          const rawText = typeof body.rawText === 'string' ? body.rawText.trim() : null;
+          const summary = typeof body.summary === 'string' ? body.summary.trim() : null;
+          const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : null;
+          const actionItemsInput = Array.isArray(body.actionItems) ? body.actionItems : [];
+
+          if (!title) throw new HttpError(400, 'Meeting title is required');
+          const meetingDate = new Date(dateStr);
+          if (isNaN(meetingDate.getTime())) throw new HttpError(400, 'Invalid meeting date');
+
+          const newMeetingId = `MEET-${crypto.randomUUID()}`;
+
+          const createdMeeting = await db.$transaction(async (tx) => {
+            await tx.meeting.create({
+              data: {
+                id: newMeetingId,
+                caseId,
+                title,
+                meetingDate,
+                location,
+                attendees,
+                rawText,
+                summary,
+                decisions,
+                status: 'DRAFT',
+                version: 1,
+                createdById: context.user.id
+              }
+            });
+
+            for (const ai of actionItemsInput) {
+              if (typeof ai === 'object' && ai && typeof ai.title === 'string' && ai.title.trim()) {
+                const assigneeId = typeof ai.assigneeId === 'string' ? ai.assigneeId : null;
+                const scheduleId = typeof ai.scheduleId === 'string' ? ai.scheduleId : null;
+                if (assigneeId) {
+                  const assigneeUser = await tx.user.findUnique({ where: { id: assigneeId } });
+                  if (!assigneeUser || assigneeUser.organizationId !== context.user.organizationId) {
+                    throw new HttpError(403, 'Action item assignee must belong to the same organization');
+                  }
+                }
+                await tx.meetingActionItem.create({
+                  data: {
+                    id: `ACT-${crypto.randomUUID()}`,
+                    meetingId: newMeetingId,
+                    title: ai.title.trim(),
+                    assigneeId,
+                    scheduleId,
+                    dueDate: ai.dueDate && !isNaN(new Date(ai.dueDate).getTime()) ? new Date(ai.dueDate) : null,
+                    status: 'PENDING'
+                  }
+                });
+              }
+            }
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'MEETING_CREATED', 'Meeting', newMeetingId, { title, meetingDate: meetingDate.toISOString() })
+            });
+
+            return tx.meeting.findUniqueOrThrow({
+              where: { id: newMeetingId },
+              include: { actionItems: true }
+            });
+          });
+
+          sendJson(res, 201, { meeting: createdMeeting });
+          return;
+        }
+
+        // GET /api/cases/:id/meetings/:meetingId
+        if (meetingId && !action && req.method === 'GET') {
+          const meeting = await db.meeting.findUnique({
+            where: { id: meetingId },
+            include: {
+              createdBy: { select: { id: true, name: true, email: true } },
+              actionItems: {
+                include: {
+                  assignee: { select: { id: true, name: true, email: true } },
+                  schedule: true
+                }
+              }
+            }
+          });
+          if (!meeting || meeting.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          sendJson(res, 200, { meeting });
+          return;
+        }
+
+        // PATCH /api/cases/:id/meetings/:meetingId
+        if (meetingId && !action && req.method === 'PATCH') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting modification forbidden');
+          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
+          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          if (meetingRow.status === 'FINAL') {
+            throw new HttpError(400, 'Finalized meeting cannot be updated');
+          }
+
+          const body = await readJson(req);
+          const version = typeof body.version === 'number' ? body.version : -1;
+          const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : meetingRow.title;
+          const location = typeof body.location === 'string' ? body.location.trim() : meetingRow.location;
+          const attendees = typeof body.attendees === 'string' ? body.attendees.trim() : meetingRow.attendees;
+          const rawText = typeof body.rawText === 'string' ? body.rawText.trim() : meetingRow.rawText;
+          const summary = typeof body.summary === 'string' ? body.summary.trim() : meetingRow.summary;
+          const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : meetingRow.decisions;
+
+          const updated = await db.$transaction(async (tx) => {
+            const result = await tx.meeting.updateMany({
+              where: { id: meetingId, status: 'DRAFT', version },
+              data: { title, location, attendees, rawText, summary, decisions, version: { increment: 1 } }
+            });
+            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict or meeting already finalized');
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'MEETING_UPDATED', 'Meeting', meetingId, { title, version: version + 1 })
+            });
+
+            return tx.meeting.findUniqueOrThrow({ where: { id: meetingId } });
+          });
+
+          sendJson(res, 200, { meeting: updated });
+          return;
+        }
+
+        // POST /api/cases/:id/meetings/:meetingId/finalize
+        if (meetingId && action === 'finalize' && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting finalization forbidden');
+          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
+          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          if (meetingRow.status === 'FINAL') {
+            sendJson(res, 200, { meeting: meetingRow });
+            return;
+          }
+
+          const finalized = await db.$transaction(async (tx) => {
+            const item = await tx.meeting.update({
+              where: { id: meetingId },
+              data: { status: 'FINAL', version: { increment: 1 } }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'MEETING_FINALIZED', 'Meeting', meetingId, { title: meetingRow.title })
+            });
+
+            return item;
+          });
+
+          sendJson(res, 200, { meeting: finalized });
+          return;
+        }
+
+        // POST /api/cases/:id/meetings/:meetingId/action-items
+        if (meetingId && action === 'action-items' && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Action item creation forbidden');
+          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
+          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const assigneeId = typeof body.assigneeId === 'string' ? body.assigneeId : null;
+          const scheduleId = typeof body.scheduleId === 'string' ? body.scheduleId : null;
+          const dueDateStr = typeof body.dueDate === 'string' ? body.dueDate : null;
+
+          if (!title) throw new HttpError(400, 'Action item title is required');
+
+          const actionItem = await db.$transaction(async (tx) => {
+            if (assigneeId) {
+              const assigneeUser = await tx.user.findUnique({ where: { id: assigneeId } });
+              if (!assigneeUser || assigneeUser.organizationId !== context.user.organizationId) {
+                throw new HttpError(403, 'Action item assignee must belong to the same organization');
+              }
+            }
+            if (scheduleId) {
+              const schedRow = await tx.schedule.findUnique({ where: { id: scheduleId } });
+              if (!schedRow || schedRow.caseId !== caseId) {
+                throw new HttpError(403, 'Schedule must belong to the same case');
+              }
+            }
+
+            const created = await tx.meetingActionItem.create({
+              data: {
+                id: `ACT-${crypto.randomUUID()}`,
+                meetingId,
+                title,
+                assigneeId,
+                scheduleId,
+                dueDate: dueDateStr && !isNaN(new Date(dueDateStr).getTime()) ? new Date(dueDateStr) : null,
+                status: 'PENDING'
+              }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'ACTION_ITEM_CREATED', 'MeetingActionItem', created.id, { meetingId, title })
+            });
+
+            return created;
+          });
+
+          sendJson(res, 201, { actionItem });
+          return;
+        }
+      }
+
+      // --- P05 Case Detail Endpoint ---
       const caseMatch = pathname.match(/^\/api\/cases\/([^/]+)$/);
       if (caseMatch) {
         const caseId = decodeURIComponent(caseMatch[1]);
@@ -683,7 +1251,6 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
         if (req.method === 'GET') {
-          // Calculate D-day for each schedule
           const schedulesWithDDay = caseRow.schedules.map((s) => ({
             ...s,
             dDayInfo: calculateDDay(s.date)

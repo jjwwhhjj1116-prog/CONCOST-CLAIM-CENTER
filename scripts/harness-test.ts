@@ -7,6 +7,7 @@ import './p03-contract-test';
 import './p04-contract-test';
 import './p05-contract-test';
 import './p05-case-test';
+import './p06-materials-test';
 
 const EXPECTED_EXACT_SHAS: Record<string, string> = {
   'TPL-REF-001': '793cf78dd4262af8ddfddc77b85e5052f379e76d9e30f437cb799b9c43cec40a',
@@ -110,6 +111,6 @@ test('P04 Manifest declares independent DB, E2E and security gates', () => {
 test('Phase Status Machine Integration', () => {
   const status = JSON.parse(fs.readFileSync(path.join(__dirname, '../docs/harness/phase-status.json'), 'utf8'));
   assert.strictEqual(status.project, 'claim-center-report-studio');
-  for (const phase of ['P00', 'P01', 'P02', 'P03', 'P04']) assert.strictEqual(status.phases[phase].status, 'PASS');
-  assert.ok(['IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'].includes(status.phases.P05.status));
+  for (const phase of ['P00', 'P01', 'P02', 'P03', 'P04', 'P05']) assert.strictEqual(status.phases[phase].status, 'PASS');
+  assert.ok(['IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'].includes(status.phases.P06.status));
 });

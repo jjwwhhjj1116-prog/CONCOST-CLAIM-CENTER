@@ -39,7 +39,8 @@ if (mode === 'lint') {
     'docs/stitch/design-tokens.json',
     'docs/harness/phase-status.json',
     'artifacts/harness/P03/manifest.json',
-    'artifacts/harness/P04/manifest.json'
+    'artifacts/harness/P04/manifest.json',
+    'artifacts/harness/P05/manifest.json'
   ]) {
     JSON.parse(fs.readFileSync(path.join(root, relativePath), 'utf8'));
   }

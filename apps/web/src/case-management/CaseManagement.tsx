@@ -20,6 +20,24 @@ interface CaseRecord {
 }
 interface Kpi { totalCases: number; inProgressCount: number; reviewingDocsCount: number; todayTasksCount: number; delayedCount: number }
 
+interface DocumentVersion {
+  id: string; versionNumber: number; displayName: string; fileSize: number;
+  mimeType: string; sha256: string; isFinal: boolean; uploadedBy?: { name: string }; createdAt?: string;
+}
+interface CaseDocument {
+  id: string; title: string; category?: string; source: string; currentVersionId?: string;
+  versions: DocumentVersion[]; createdAt: string;
+}
+
+interface MeetingActionItem {
+  id: string; title: string; assignee?: { name: string }; schedule?: { title: string; date: string }; dueDate?: string; status: string;
+}
+interface MeetingRecord {
+  id: string; title: string; meetingDate: string; location?: string; attendees?: string;
+  rawText?: string; summary?: string; decisions?: string; status: 'DRAFT' | 'FINAL'; version: number;
+  createdBy?: { name: string }; actionItems: MeetingActionItem[]; createdAt: string;
+}
+
 const STATUS_LABELS: Record<string, string> = {
   INQUIRY: '문의', PROPOSAL: '제안', ESTIMATE: '견적', CONTRACT: '계약', MATERIAL_RECEIVED: '자료접수',
   ANALYSIS: '분석', REPORT_DRAFTING: '보고서 작성', SUBMITTED: '제출', LITIGATION: '소송 진행',
@@ -114,6 +132,172 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   </form></Card>;
 }
 
+function MaterialsPage(): React.ReactElement {
+  const caseId = new URLSearchParams(window.location.search).get('caseId') ?? 'CASE-SYN-001';
+  const [documents, setDocuments] = useState<CaseDocument[]>([]);
+  const [title, setTitle] = useState('');
+  const [source, setSource] = useState('RECEIVED');
+  const [category, setCategory] = useState('EVIDENCE');
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
+
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      const res = await apiRequest<{ documents: CaseDocument[] }>(`/api/cases/${encodeURIComponent(caseId)}/documents`);
+      setDocuments(res.documents);
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }, [caseId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!file) { setError('업로드할 파일을 선택하세요.'); return; }
+    setUploading(true); setError('');
+    try {
+      const arrayBuf = await file.arrayBuffer();
+      const base64 = Buffer.from(arrayBuf).toString('base64');
+      await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/documents`, {
+        method: 'POST',
+        body: JSON.stringify({
+          title, source, category, filename: file.name, fileBase64: base64, mimeType: file.type || 'application/octet-stream'
+        })
+      });
+      setTitle(''); setFile(null); await load();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setUploading(false); }
+  };
+
+  const handleFinalize = async (docId: string, versionId: string) => {
+    setError('');
+    try {
+      await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(docId)}/finalize`, {
+        method: 'POST', body: JSON.stringify({ versionId })
+      });
+      await load();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  };
+
+  return <div className="content-stack">
+    <Card title="신규 자료/문서 업로드 (v01)">
+      <form className="form-stack" onSubmit={(e) => void handleUpload(e)}>
+        <Input label="문서 제목" value={title} required onChange={(e) => setTitle(e.target.value)} />
+        <Select label="출처 구분" value={source} onChange={(e) => setSource(e.target.value)} options={[
+          { value: 'RECEIVED', label: '수신' }, { value: 'AUTHORED', label: '작성' }, { value: 'SUBMITTED', label: '제출' }
+        ]} />
+        <Select label="문서 카테고리" value={category} onChange={(e) => setCategory(e.target.value)} options={[
+          { value: 'PROPOSAL', label: '제안서' }, { value: 'EVIDENCE', label: '증거자료' }, { value: 'CONTRACT', label: '계약서' }, { value: 'ETC', label: '기타' }
+        ]} />
+        <Input label="첨부 파일 선택" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        {error && <ErrorBox error={error} />}
+        <Button type="submit" isLoading={uploading}>문서 업로드</Button>
+      </form>
+    </Card>
+
+    <Card title={`사건 문서 및 버전 이력 (${documents.length}건)`}>
+      {documents.length === 0 ? <p className="empty-box">등록된 문서가 없습니다.</p> : (
+        <ul className="doc-list">{documents.map((doc) => (
+          <li key={doc.id} className="doc-item">
+            <div>
+              <strong>{doc.title}</strong> ({doc.source} · {doc.category})
+              <ul className="version-sublist">
+                {doc.versions.map((ver) => (
+                  <li key={ver.id}>
+                    {ver.displayName} (v{String(ver.versionNumber).padStart(2, '0')})
+                    {ver.isFinal && <span className="badge badge-final"> [최종본]</span>}
+                    <Button size="sm" variant="secondary" onClick={() => void handleFinalize(doc.id, ver.id)}>최종본 지정</Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </li>
+        ))}</ul>
+      )}
+    </Card>
+  </div>;
+}
+
+function MeetingsPage(): React.ReactElement {
+  const caseId = new URLSearchParams(window.location.search).get('caseId') ?? 'CASE-SYN-001';
+  const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
+  const [title, setTitle] = useState('');
+  const [meetingDate, setMeetingDate] = useState('');
+  const [location, setLocation] = useState('');
+  const [attendees, setAttendees] = useState('');
+  const [rawText, setRawText] = useState('');
+  const [summary, setSummary] = useState('');
+  const [decisions, setDecisions] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setError('');
+    try {
+      const res = await apiRequest<{ meetings: MeetingRecord[] }>(`/api/cases/${encodeURIComponent(caseId)}/meetings`);
+      setMeetings(res.meetings);
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }, [caseId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault(); setSaving(true); setError('');
+    try {
+      await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/meetings`, {
+        method: 'POST',
+        body: JSON.stringify({
+          title, meetingDate: new Date(meetingDate).toISOString(), location, attendees, rawText, summary, decisions
+        })
+      });
+      setTitle(''); setMeetingDate(''); setLocation(''); setAttendees(''); setRawText(''); setSummary(''); setDecisions('');
+      await load();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setSaving(false); }
+  };
+
+  const handleFinalize = async (meetingId: string) => {
+    setError('');
+    try {
+      await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/meetings/${encodeURIComponent(meetingId)}/finalize`, {
+        method: 'POST', body: JSON.stringify({})
+      });
+      await load();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  };
+
+  return <div className="content-stack">
+    <Card title="신규 회의록 등록 (Draft)">
+      <form className="form-stack" onSubmit={(e) => void handleCreate(e)}>
+        <Input label="회의 제목" value={title} required onChange={(e) => setTitle(e.target.value)} />
+        <Input label="회의 일시" type="datetime-local" value={meetingDate} required onChange={(e) => setMeetingDate(e.target.value)} />
+        <Input label="장소" value={location} onChange={(e) => setLocation(e.target.value)} />
+        <Input label="참석자" value={attendees} onChange={(e) => setAttendees(e.target.value)} />
+        <Input label="회의 원문 텍스트" value={rawText} onChange={(e) => setRawText(e.target.value)} />
+        <Input label="핵심 요약" value={summary} onChange={(e) => setSummary(e.target.value)} />
+        <Input label="의결 사항" value={decisions} onChange={(e) => setDecisions(e.target.value)} />
+        {error && <ErrorBox error={error} />}
+        <Button type="submit" isLoading={saving}>회의록 등록</Button>
+      </form>
+    </Card>
+
+    <Card title={`회의록 목록 (${meetings.length}건)`}>
+      {meetings.length === 0 ? <p className="empty-box">등록된 회의록이 없습니다.</p> : (
+        <ul className="meeting-list">{meetings.map((m) => (
+          <li key={m.id} className="meeting-item">
+            <div>
+              <strong>{m.title}</strong> ({new Date(m.meetingDate).toLocaleString('ko-KR')}) - <span className={`badge status-${m.status}`}>{m.status}</span>
+              <p className="muted">요약: {m.summary || '없음'} · 결정: {m.decisions || '없음'}</p>
+              {m.status === 'DRAFT' && <Button size="sm" onClick={() => void handleFinalize(m.id)}>회의록 확정 (FINAL)</Button>}
+            </div>
+          </li>
+        ))}</ul>
+      )}
+    </Card>
+  </div>;
+}
+
 function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'parties' | 'schedules'; onNavigate: (path: string) => void }): React.ReactElement {
   const caseId = new URLSearchParams(window.location.search).get('caseId') ?? 'CASE-SYN-001';
   const [record, setRecord] = useState<CaseRecord | null>(null);
@@ -167,6 +351,8 @@ function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'partie
         <Button size="sm" variant={section === 'overview' ? 'primary' : 'secondary'} onClick={() => onNavigate(`/cases/detail?caseId=${caseId}`)}>개요</Button>
         <Button size="sm" variant={section === 'schedules' ? 'primary' : 'secondary'} onClick={() => onNavigate(`/cases/schedule?caseId=${caseId}`)}>일정</Button>
         <Button size="sm" variant={section === 'parties' ? 'primary' : 'secondary'} onClick={() => onNavigate(`/cases/parties?caseId=${caseId}`)}>관계자</Button>
+        <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${caseId}`)}>자료실</Button>
+        <Button size="sm" variant="secondary" onClick={() => onNavigate(`/meetings?caseId=${caseId}`)}>회의록</Button>
       </div>
     </Card>
     {error && <ErrorBox error={error} />}
@@ -197,5 +383,8 @@ export function CaseManagement({ routeId, onNavigate }: { routeId: string; onNav
   if (routeId === 'CASE-02') return <CaseCreatePage onNavigate={onNavigate} />;
   if (routeId === 'CASE-03') return <CaseDetailPage section="overview" onNavigate={onNavigate} />;
   if (routeId === 'CASE-04') return <CaseDetailPage section="schedules" onNavigate={onNavigate} />;
+  if (routeId === 'CASE-05') return <CaseDetailPage section="parties" onNavigate={onNavigate} />;
+  if (routeId === 'CASE-06') return <MaterialsPage />;
+  if (routeId === 'MEET-01') return <MeetingsPage />;
   return <CaseDetailPage section="parties" onNavigate={onNavigate} />;
 }

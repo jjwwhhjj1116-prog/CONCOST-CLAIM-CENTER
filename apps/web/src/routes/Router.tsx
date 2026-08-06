@@ -121,7 +121,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
 
-  if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05'].includes(currentRoute.id)) {
+  if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {
     return <section className="route-view" aria-labelledby="route-title"><div className="route-heading"><h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2></div><CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} /></section>;
   }
 
