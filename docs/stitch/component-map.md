@@ -11,7 +11,7 @@
 | `COMP-BTN-AI` | AIAssistButton | `--ai-accent`, `--ai-gradient` | AI 초안 생성, 요약 버튼 |
 | `COMP-BTN-SEC` | SecondaryButton | `--glass-border`, `--bg-dark-tertiary` | 취소, 닫기, 보조 버튼 |
 | `COMP-BDG-STAT` | StatusBadge | `--status-*` | 7대 표준 장 상태 및 12대 사건 상태 배지 |
-| `COMP-CARD-KPI` | KPICard | `--glass-surface`, `--glass-blur` | 대시보드 7대 질문 핵심 수치 카운터 |
+| `COMP-CARD-KPI` | KPICard | `--glass-surface`, `--glass-blur` | 대시보드 6대 질문 핵심 수치 카운터 |
 | `COMP-STUDIO-OUT`| StudioOutlineTree | `--bg-dark-secondary` | 보고서 스튜디오 260px 좌측 목차 패널 |
 | `COMP-STUDIO-EDT`| StudioRichEditor | `--bg-dark-primary`, `--text-primary` | 중앙 문단별 리치 에디터 |
 | `COMP-STUDIO-PAN`| StudioAIPanel | `--glass-surface`, `--ai-glow` | 우측 320px 증거 선택 & AI 제어 패널 |

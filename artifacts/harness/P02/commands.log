@@ -1,4 +1,7 @@
-[2026-08-06T12:59:16+09:00] EXEC: npx --yes pnpm@9.15.0 install --frozen-lockfile
+[CODEX CORRECTIVE VERIFICATION]
+Scope: P01 regression restoration, P02 semantic validator, seven isolated mutations, REPO-02 accessibility/state fix
+
+[2026-08-06T12:59:16+09:00] ANTIGRAVITY BASELINE EXEC: npx --yes pnpm@9.15.0 install --frozen-lockfile
 [OUTPUT]:
 Lockfile is up to date, resolution step is skipped
 Already up to date
@@ -72,3 +75,50 @@ Done in 690ms
 [2026-08-06T13:00:01+09:00] EXEC: npx --yes pnpm@9.15.0 audit --audit-level high
 [OUTPUT]:
 No known vulnerabilities found
+
+[2026-08-06T13:20:00+09:00] CODEX CLEAN SNAPSHOT
+Source commit: f19bf6a
+Snapshot: Git archive expanded into a new directory with no node_modules
+
+[2026-08-06T13:20:01+09:00] EXEC: npx --yes pnpm@9.15.0 install --frozen-lockfile
+[OUTPUT]:
+Lockfile is up to date, resolution step is skipped
+Packages: +112
+Progress: resolved 112, reused 112, downloaded 0, added 112, done
+Done in 1.8s
+
+[2026-08-06T13:20:09+09:00] EXEC: npx --yes pnpm@9.15.0 lint
+[OUTPUT]:
+[Harness Engine TS] Performing strict TypeScript type check (tsc --noEmit)... PASSED
+[Harness Lint] Executing real ESLint engine (max-warnings=0)... PASSED (0 warnings)
+[Harness Lint] Verifying JSON syntax and file encoding... PASSED
+
+[2026-08-06T13:20:15+09:00] EXEC: npx --yes pnpm@9.15.0 typecheck
+[OUTPUT]:
+tsc --noEmit: PASSED
+
+[2026-08-06T13:20:20+09:00] EXEC: npx --yes pnpm@9.15.0 test
+[OUTPUT]:
+P02 complete semantic contract: PASSED
+P02 adversarial missing screen: expected rejection PASSED
+P02 adversarial TYPE-07: expected rejection PASSED
+P02 adversarial template folder promoted to type: expected rejection PASSED
+P02 adversarial missing REPO-02 pane: expected rejection PASSED
+P02 adversarial missing 1024px drawer event: expected rejection PASSED
+P02 adversarial missing forbidden transition: expected rejection PASSED
+P02 adversarial missing keyboard focus rule: expected rejection PASSED
+P00 and P01 regression contracts: PASSED
+tests 15, pass 15, fail 0, skipped 0
+
+[2026-08-06T13:20:26+09:00] EXEC: npx --yes pnpm@9.15.0 build
+[OUTPUT]:
+TypeScript emit/compilation to dist/: PASSED
+
+[2026-08-06T13:20:32+09:00] EXEC: npx --yes pnpm@9.15.0 audit --audit-level high
+[OUTPUT]:
+No known vulnerabilities found
+
+[2026-08-06T13:21:16+09:00] SECURITY SCAN
+Tracked secret candidates: 0
+Actual PII candidates: 0
+Placeholder excluded: user@company.com

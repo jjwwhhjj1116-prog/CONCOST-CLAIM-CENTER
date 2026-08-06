@@ -16,8 +16,11 @@
     "artifacts/harness/P02/commands.log",
     "artifacts/harness/P02/manifest.json",
     "artifacts/harness/P02/notes.md",
+    "docs/stitch/artifacts/REPO-02/screen.html",
+    "docs/stitch/component-map.md",
     "docs/stitch/stitch-master-prompt.md",
-    "scripts/harness-test.ts"
+    "scripts/harness-test.ts",
+    "scripts/p02-contract-test.ts"
   ],
   "commandsExecuted": [
     "npx --yes pnpm@9.15.0 install --frozen-lockfile",
@@ -28,7 +31,7 @@
     "npx --yes pnpm@9.15.0 audit --audit-level high"
   ],
   "tests": {
-    "passed": 6,
+    "passed": 15,
     "failed": 0,
     "skipped": 0
   },
@@ -43,8 +46,10 @@
     "1024px drawer toggle javascript event handler working: PASS",
     "Focus ring, ARIA attributes & text ellipsis overflow verified: PASS",
     "6 Quality & Security gates (install, lint, typecheck, test, build, audit) passing: PASS",
+    "P01 full regression contract retained after P02 changes: PASS",
+    "Seven isolated adversarial mutations rejected by executable tests: PASS",
     "Exact changedFiles paths deepStrictEqual matching git diff-tree: PASS",
-    "Pure P02 implementation commit without external reviewer reports: PASS"
+    "Pure corrective implementation commit without external reviewer reports: PASS"
   ],
   "selfAssessment": "READY_FOR_REVIEW"
 }
