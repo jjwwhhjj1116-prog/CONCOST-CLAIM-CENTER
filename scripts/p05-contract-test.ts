@@ -46,11 +46,12 @@ test('P05 web binds to the real session and API instead of a synthetic role swit
   for (const category of ['대분류', '중분류', '소분류']) assert.ok(caseUi.includes(category));
 });
 
-test('P05 has distinct real browser and security suites while retaining P04 attacks', () => {
+test('P05 browser and security regressions remain available after later-phase gate promotion', () => {
   const packageJson = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
-  assert.strictEqual(packageJson.scripts['test:e2e'], 'tsx scripts/p05-e2e.ts');
+  assert.strictEqual(packageJson.scripts['test:e2e'], 'tsx scripts/p06-e2e.ts');
   assert.match(packageJson.scripts['test:security'], /p04-security-test\.ts/);
   assert.match(packageJson.scripts['test:security'], /p05-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p06-security-test\.ts/);
   const e2e = read('scripts/p05-e2e.ts');
   for (const marker of ['P05_BROWSER_SYNTHETIC_CASE', '관계자 추가', '기일 추가', '다음 단계로 이동', '200% zoom']) assert.ok(e2e.includes(marker));
 });

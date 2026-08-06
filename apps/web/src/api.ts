@@ -23,7 +23,7 @@ function readCookie(name: string): string {
   return entry ? decodeURIComponent(entry.slice(name.length + 1)) : '';
 }
 
-export async function apiRequest<T>(pathname: string, init: RequestInit = {}): Promise<T> {
+function requestHeaders(init: RequestInit): Headers {
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
@@ -31,9 +31,26 @@ export async function apiRequest<T>(pathname: string, init: RequestInit = {}): P
     const csrf = readCookie('csrf_token');
     if (csrf) headers.set('X-CSRF-Token', csrf);
   }
+  return headers;
+}
+
+export async function apiRequest<T>(pathname: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  const headers = requestHeaders(init);
 
   const response = await fetch(`${API_ORIGIN}${pathname}`, { ...init, method, headers, credentials: 'include' });
   const payload = await response.json().catch(() => ({})) as { error?: string };
   if (!response.ok) throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`);
   return payload as T;
+}
+
+export async function apiDownload(pathname: string): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_ORIGIN}${pathname}`, { credentials: 'include', headers: requestHeaders({}) });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`);
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  return { blob: await response.blob(), filename: encoded ? decodeURIComponent(encoded) : 'download.bin' };
 }

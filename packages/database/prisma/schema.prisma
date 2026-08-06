@@ -142,6 +142,7 @@ model Schedule {
   updatedAt   DateTime            @updatedAt
   case        CaseItem            @relation(fields: [caseId], references: [id], onDelete: Cascade)
   actionItems MeetingActionItem[]
+  documents   Document[]
 
   @@index([caseId])
   @@index([date])
@@ -165,17 +166,25 @@ model StatusHistory {
 model Document {
   id               String            @id
   caseId           String
+  scheduleId       String?
+  reportSectionId  String?
   title            String
   category         String?
   source           String            // RECEIVED, AUTHORED, SUBMITTED
   currentVersionId String?
+  finalVersionId   String?
+  version          Int               @default(1)
   deletedAt        DateTime?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  schedule         Schedule?         @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  reportSection    ReportSection?    @relation(fields: [reportSectionId], references: [id], onDelete: SetNull)
   versions         DocumentVersion[]
 
   @@index([caseId, deletedAt])
+  @@index([scheduleId])
+  @@index([reportSectionId])
   @@index([source])
 }
 
@@ -183,6 +192,7 @@ model DocumentVersion {
   id            String   @id
   documentId    String
   versionNumber Int
+  originalName  String
   displayName   String
   storageKey    String   @unique
   fileSize      Int
@@ -207,6 +217,7 @@ model Meeting {
   location    String?
   attendees   String?
   rawText     String?
+  rawTextSha256 String?
   summary     String?
   decisions   String?
   status      String              @default("DRAFT") // DRAFT, FINAL
@@ -267,6 +278,7 @@ model ReportSection {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   report    Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  documents Document[]
 
   @@index([reportId, deletedAt])
 }

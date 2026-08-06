@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input, Select, Table, Timeline } from '@claim-studio/ui';
-import { ApiError, apiRequest } from '../api';
+import { ApiError, apiDownload, apiRequest } from '../api';
 import { CLAIM_TYPES } from '../routes/Router';
 
 interface CaseCategory { major: string; middle: string; minor: string }
@@ -21,11 +21,12 @@ interface CaseRecord {
 interface Kpi { totalCases: number; inProgressCount: number; reviewingDocsCount: number; todayTasksCount: number; delayedCount: number }
 
 interface DocumentVersion {
-  id: string; versionNumber: number; displayName: string; fileSize: number;
-  mimeType: string; sha256: string; isFinal: boolean; uploadedBy?: { name: string }; createdAt?: string;
+  id: string; versionNumber: number; originalName: string; displayName: string; fileSize: number;
+  mimeType: string; sha256: string; isFinal: boolean; uploadedBy?: { name: string; email?: string }; createdAt?: string;
 }
 interface CaseDocument {
-  id: string; title: string; category?: string; source: string; currentVersionId?: string;
+  id: string; title: string; category?: string; source: string; currentVersionId?: string; finalVersionId?: string;
+  scheduleId?: string; reportSectionId?: string; version: number;
   versions: DocumentVersion[]; createdAt: string;
 }
 
@@ -47,6 +48,37 @@ const STATUS_SEQUENCE = Object.keys(STATUS_LABELS);
 
 function ErrorBox({ error }: { error: string }): React.ReactElement {
   return <div className="error-box" role="alert">{error}</div>;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error('파일을 읽지 못했습니다.'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      if (comma < 0) reject(new Error('파일 인코딩에 실패했습니다.'));
+      else resolve(result.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function fileMimeType(file: File): string {
+  if (file.type) return file.type;
+  const extension = file.name.toLowerCase().split('.').pop();
+  const known: Record<string, string> = {
+    pdf: 'application/pdf',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    hwp: 'application/x-hwp',
+    txt: 'text/plain',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg'
+  };
+  return extension ? known[extension] ?? 'application/octet-stream' : 'application/octet-stream';
 }
 
 function DashboardPage(): React.ReactElement {
@@ -138,9 +170,13 @@ function MaterialsPage(): React.ReactElement {
   const [title, setTitle] = useState('');
   const [source, setSource] = useState('RECEIVED');
   const [category, setCategory] = useState('EVIDENCE');
+  const [scheduleId, setScheduleId] = useState('');
+  const [reportSectionId, setReportSectionId] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [versionFiles, setVersionFiles] = useState<Record<string, File | null>>({});
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setError('');
@@ -148,6 +184,7 @@ function MaterialsPage(): React.ReactElement {
       const res = await apiRequest<{ documents: CaseDocument[] }>(`/api/cases/${encodeURIComponent(caseId)}/documents`);
       setDocuments(res.documents);
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setLoading(false); }
   }, [caseId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -157,26 +194,51 @@ function MaterialsPage(): React.ReactElement {
     if (!file) { setError('업로드할 파일을 선택하세요.'); return; }
     setUploading(true); setError('');
     try {
-      const arrayBuf = await file.arrayBuffer();
-      const base64 = Buffer.from(arrayBuf).toString('base64');
+      const base64 = await fileToBase64(file);
       await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/documents`, {
         method: 'POST',
         body: JSON.stringify({
-          title, source, category, filename: file.name, fileBase64: base64, mimeType: file.type || 'application/octet-stream'
+          title, source, category, scheduleId: scheduleId || null, reportSectionId: reportSectionId || null,
+          filename: file.name, fileBase64: base64, mimeType: fileMimeType(file)
         })
       });
-      setTitle(''); setFile(null); await load();
+      setTitle(''); setFile(null); setScheduleId(''); setReportSectionId(''); await load();
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setUploading(false); }
+  };
+
+  const handleNewVersion = async (doc: CaseDocument) => {
+    const nextFile = versionFiles[doc.id];
+    if (!nextFile) { setError('새 버전 파일을 선택하세요.'); return; }
+    setError('');
+    try {
+      await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(doc.id)}/versions`, {
+        method: 'POST',
+        body: JSON.stringify({ filename: nextFile.name, fileBase64: await fileToBase64(nextFile), mimeType: fileMimeType(nextFile), version: doc.version })
+      });
+      setVersionFiles((current) => ({ ...current, [doc.id]: null }));
+      await load();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
   const handleFinalize = async (docId: string, versionId: string) => {
     setError('');
     try {
       await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(docId)}/finalize`, {
-        method: 'POST', body: JSON.stringify({ versionId })
+        method: 'POST', body: JSON.stringify({ versionId, version: documents.find((doc) => doc.id === docId)?.version })
       });
       await load();
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  };
+
+  const handleDownload = async (docId: string, versionId: string) => {
+    setError('');
+    try {
+      const result = await apiDownload(`/api/cases/${encodeURIComponent(caseId)}/documents/${encodeURIComponent(docId)}/versions/${encodeURIComponent(versionId)}/download`);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = result.filename; anchor.click();
+      URL.revokeObjectURL(url);
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
@@ -191,32 +253,96 @@ function MaterialsPage(): React.ReactElement {
           { value: 'PROPOSAL', label: '제안서' }, { value: 'EVIDENCE', label: '증거자료' }, { value: 'CONTRACT', label: '계약서' }, { value: 'ETC', label: '기타' }
         ]} />
         <Input label="첨부 파일 선택" type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        <Input label="연결 기일 ID (선택)" value={scheduleId} onChange={(e) => setScheduleId(e.target.value)} />
+        <Input label="연결 보고서 장 ID (선택)" value={reportSectionId} onChange={(e) => setReportSectionId(e.target.value)} />
         {error && <ErrorBox error={error} />}
         <Button type="submit" isLoading={uploading}>문서 업로드</Button>
       </form>
     </Card>
 
     <Card title={`사건 문서 및 버전 이력 (${documents.length}건)`}>
-      {documents.length === 0 ? <p className="empty-box">등록된 문서가 없습니다.</p> : (
+      {loading ? <p role="status">자료실을 불러오는 중입니다.</p> : documents.length === 0 ? <p className="empty-box">등록된 문서가 없습니다.</p> : (
         <ul className="doc-list">{documents.map((doc) => (
           <li key={doc.id} className="doc-item">
             <div>
               <strong>{doc.title}</strong> ({doc.source} · {doc.category})
+              <p className="muted">연결 기일: {doc.scheduleId || '없음'} · 연결 보고서 장: {doc.reportSectionId || '없음'}</p>
               <ul className="version-sublist">
                 {doc.versions.map((ver) => (
                   <li key={ver.id}>
                     {ver.displayName} (v{String(ver.versionNumber).padStart(2, '0')})
                     {ver.isFinal && <span className="badge badge-final"> [최종본]</span>}
-                    <Button size="sm" variant="secondary" onClick={() => void handleFinalize(doc.id, ver.id)}>최종본 지정</Button>
+                    <span className="muted"> · 원본명 {ver.originalName} · {ver.mimeType} · {ver.fileSize} bytes · SHA-256 {ver.sha256.slice(0, 12)}… · {ver.uploadedBy?.name ?? '알 수 없음'}</span>
+                    <Button size="sm" variant="secondary" onClick={() => void handleDownload(doc.id, ver.id)}>다운로드</Button>
+                    {!ver.isFinal && <Button size="sm" variant="secondary" onClick={() => void handleFinalize(doc.id, ver.id)}>최종본 지정</Button>}
                   </li>
                 ))}
               </ul>
+              <Input label={`새 버전 파일 - ${doc.title}`} type="file" onChange={(event) => setVersionFiles((current) => ({ ...current, [doc.id]: event.target.files?.[0] ?? null }))} />
+              <Button size="sm" onClick={() => void handleNewVersion(doc)}>새 버전 업로드</Button>
             </div>
           </li>
         ))}</ul>
       )}
     </Card>
   </div>;
+}
+
+function MeetingEditor({ meeting, caseId, reload, onError }: {
+  meeting: MeetingRecord; caseId: string; reload: () => Promise<void>; onError: (message: string) => void;
+}): React.ReactElement {
+  const [summary, setSummary] = useState(meeting.summary ?? '');
+  const [decisions, setDecisions] = useState(meeting.decisions ?? '');
+  const [actionTitle, setActionTitle] = useState('');
+  const [assigneeId, setAssigneeId] = useState('');
+  const [scheduleId, setScheduleId] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [saving, setSaving] = useState(false);
+  const mutate = async (work: () => Promise<unknown>) => {
+    setSaving(true); onError('');
+    try { await work(); await reload(); }
+    catch (error) { onError(error instanceof Error ? error.message : String(error)); }
+    finally { setSaving(false); }
+  };
+  const base = `/api/cases/${encodeURIComponent(caseId)}/meetings/${encodeURIComponent(meeting.id)}`;
+  return <li className="meeting-item">
+    <div>
+      <strong>{meeting.title}</strong> ({new Date(meeting.meetingDate).toLocaleString('ko-KR')}) - <span className={`badge status-${meeting.status}`}>{meeting.status}</span>
+      <p className="muted">장소: {meeting.location || '없음'} · 참석자: {meeting.attendees || '없음'} · 작성자: {meeting.createdBy?.name || '알 수 없음'}</p>
+      <details><summary>보존된 회의 원문 보기</summary><pre className="meeting-transcript">{meeting.rawText || '원문 없음'}</pre></details>
+      {meeting.status === 'DRAFT' ? <div className="form-stack">
+        <Input label={`핵심 요약 - ${meeting.title}`} value={summary} onChange={(event) => setSummary(event.target.value)} />
+        <Input label={`결정사항 - ${meeting.title}`} value={decisions} onChange={(event) => setDecisions(event.target.value)} />
+        <div className="action-row">
+          <Button size="sm" isLoading={saving} onClick={() => void mutate(() => apiRequest(base, {
+            method: 'PATCH', body: JSON.stringify({ summary, decisions, version: meeting.version })
+          }))}>요약·결정사항 저장</Button>
+          <Button size="sm" variant="secondary" isLoading={saving} onClick={() => void mutate(() => apiRequest(`${base}/finalize`, {
+            method: 'POST', body: JSON.stringify({ version: meeting.version })
+          }))}>회의록 확정 (FINAL)</Button>
+        </div>
+        <fieldset className="form-stack">
+          <legend>회의 할 일 연결</legend>
+          <Input label={`할 일 제목 - ${meeting.title}`} value={actionTitle} onChange={(event) => setActionTitle(event.target.value)} />
+          <Input label={`담당자 ID - ${meeting.title}`} value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)} />
+          <Input label={`연결 기일 ID - ${meeting.title}`} value={scheduleId} onChange={(event) => setScheduleId(event.target.value)} />
+          <Input label={`할 일 기한 - ${meeting.title}`} type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+          <Button size="sm" isLoading={saving} onClick={() => void mutate(async () => {
+            await apiRequest(`${base}/action-items`, { method: 'POST', body: JSON.stringify({
+              title: actionTitle, assigneeId: assigneeId || null, scheduleId: scheduleId || null,
+              dueDate: dueDate ? new Date(`${dueDate}T00:00:00.000Z`).toISOString() : null
+            }) });
+            setActionTitle(''); setAssigneeId(''); setScheduleId(''); setDueDate('');
+          })}>할 일 추가</Button>
+        </fieldset>
+      </div> : <p className="muted">확정본은 원문·요약·결정사항·할 일을 변경할 수 없습니다.</p>}
+      <ul aria-label={`${meeting.title} 할 일 목록`}>
+        {meeting.actionItems.length === 0 ? <li>등록된 할 일이 없습니다.</li> : meeting.actionItems.map((item) => (
+          <li key={item.id}>{item.title} · 담당 {item.assignee?.name ?? '미지정'} · 기일 {item.schedule?.title ?? '미연결'} · {item.status}</li>
+        ))}
+      </ul>
+    </div>
+  </li>;
 }
 
 function MeetingsPage(): React.ReactElement {
@@ -229,8 +355,10 @@ function MeetingsPage(): React.ReactElement {
   const [rawText, setRawText] = useState('');
   const [summary, setSummary] = useState('');
   const [decisions, setDecisions] = useState('');
+  const [transcriptFile, setTranscriptFile] = useState<File | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setError('');
@@ -238,6 +366,7 @@ function MeetingsPage(): React.ReactElement {
       const res = await apiRequest<{ meetings: MeetingRecord[] }>(`/api/cases/${encodeURIComponent(caseId)}/meetings`);
       setMeetings(res.meetings);
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setLoading(false); }
   }, [caseId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -245,26 +374,17 @@ function MeetingsPage(): React.ReactElement {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true); setError('');
     try {
+      const transcript = transcriptFile ? await transcriptFile.text() : rawText;
       await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/meetings`, {
         method: 'POST',
         body: JSON.stringify({
-          title, meetingDate: new Date(meetingDate).toISOString(), location, attendees, rawText, summary, decisions
+          title, meetingDate: new Date(meetingDate).toISOString(), location, attendees, rawText: transcript, summary, decisions
         })
       });
-      setTitle(''); setMeetingDate(''); setLocation(''); setAttendees(''); setRawText(''); setSummary(''); setDecisions('');
+      setTitle(''); setMeetingDate(''); setLocation(''); setAttendees(''); setRawText(''); setTranscriptFile(null); setSummary(''); setDecisions('');
       await load();
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setSaving(false); }
-  };
-
-  const handleFinalize = async (meetingId: string) => {
-    setError('');
-    try {
-      await apiRequest(`/api/cases/${encodeURIComponent(caseId)}/meetings/${encodeURIComponent(meetingId)}/finalize`, {
-        method: 'POST', body: JSON.stringify({})
-      });
-      await load();
-    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
   return <div className="content-stack">
@@ -275,6 +395,7 @@ function MeetingsPage(): React.ReactElement {
         <Input label="장소" value={location} onChange={(e) => setLocation(e.target.value)} />
         <Input label="참석자" value={attendees} onChange={(e) => setAttendees(e.target.value)} />
         <Input label="회의 원문 텍스트" value={rawText} onChange={(e) => setRawText(e.target.value)} />
+        <Input label="회의 원문 TXT 업로드" type="file" accept=".txt,text/plain" onChange={(event) => setTranscriptFile(event.target.files?.[0] ?? null)} />
         <Input label="핵심 요약" value={summary} onChange={(e) => setSummary(e.target.value)} />
         <Input label="의결 사항" value={decisions} onChange={(e) => setDecisions(e.target.value)} />
         {error && <ErrorBox error={error} />}
@@ -283,15 +404,9 @@ function MeetingsPage(): React.ReactElement {
     </Card>
 
     <Card title={`회의록 목록 (${meetings.length}건)`}>
-      {meetings.length === 0 ? <p className="empty-box">등록된 회의록이 없습니다.</p> : (
-        <ul className="meeting-list">{meetings.map((m) => (
-          <li key={m.id} className="meeting-item">
-            <div>
-              <strong>{m.title}</strong> ({new Date(m.meetingDate).toLocaleString('ko-KR')}) - <span className={`badge status-${m.status}`}>{m.status}</span>
-              <p className="muted">요약: {m.summary || '없음'} · 결정: {m.decisions || '없음'}</p>
-              {m.status === 'DRAFT' && <Button size="sm" onClick={() => void handleFinalize(m.id)}>회의록 확정 (FINAL)</Button>}
-            </div>
-          </li>
+      {loading ? <p role="status">회의록을 불러오는 중입니다.</p> : meetings.length === 0 ? <p className="empty-box">등록된 회의록이 없습니다.</p> : (
+        <ul className="meeting-list">{meetings.map((meeting) => (
+          <MeetingEditor key={meeting.id} meeting={meeting} caseId={caseId} reload={load} onError={setError} />
         ))}</ul>
       )}
     </Card>

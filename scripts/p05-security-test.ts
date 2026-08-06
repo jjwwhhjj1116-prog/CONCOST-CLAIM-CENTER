@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import type { AddressInfo } from 'node:net';
-const initSqlJs = require('sql.js');
+import initSqlJs from 'sql.js';
 import { createApiServer, type ManagedApiServer } from '../apps/api/src/server';
 import { createPrismaClient, databaseUrlFor, migrateDatabase, resetDatabase, seedDatabase, type PrismaClient } from '../packages/database/src';
 

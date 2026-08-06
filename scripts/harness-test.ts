@@ -7,6 +7,7 @@ import './p03-contract-test';
 import './p04-contract-test';
 import './p05-contract-test';
 import './p05-case-test';
+import './p06-contract-test';
 import './p06-materials-test';
 
 const EXPECTED_EXACT_SHAS: Record<string, string> = {

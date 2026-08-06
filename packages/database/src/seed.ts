@@ -160,7 +160,7 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
 
       // 9. Schedules
       const schedules = [
-        { id: 'SCHED-SYN-001', caseId: 'CASE-SYN-004', title: 'SYNTHETIC_COURT_DEADLINE', type: 'COURT', date: new Date('2026-03-01T10:00:00.000Z'), location: 'SYNTHETIC_COURT_ROOM', description: 'Synthetic court schedule' }
+        { id: 'SCHED-SYN-001', caseId: 'CASE-SYN-004', title: 'SYNTHETIC_COURT_DEADLINE', type: 'COURT', date: new Date('2026-03-01T10:00:00.000Z'), location: 'SYNTHETIC_COURT_ROOM', description: 'Synthetic cross-case schedule' }
       ];
       for (let i = 1; i <= 100; i++) {
         const types = ['COURT', 'CLIENT', 'INTERNAL'];
@@ -204,29 +204,32 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
 
       // 11. P06 Documents & Document Versions
       const docs = [
-        { id: 'DOC-SYN-001', caseId: 'CASE-SYN-001', title: 'SYNTHETIC_DOC_PROPOSAL', category: 'PROPOSAL', source: 'AUTHORED', currentVersionId: 'DOCVER-SYN-002', deletedAt: null },
-        { id: 'DOC-SYN-002', caseId: 'CASE-SYN-004', title: 'SYNTHETIC_DOC_EVIDENCE', category: 'EVIDENCE', source: 'RECEIVED', currentVersionId: 'DOCVER-SYN-003', deletedAt: null }
+        { id: 'DOC-SYN-001', caseId: 'CASE-SYN-001', scheduleId: null, title: 'SYNTHETIC_DOC_PROPOSAL', category: 'PROPOSAL', source: 'AUTHORED', currentVersionId: 'DOCVER-SYN-002', finalVersionId: 'DOCVER-SYN-002' },
+        { id: 'DOC-SYN-002', caseId: 'CASE-SYN-004', scheduleId: null, title: 'SYNTHETIC_DOC_EVIDENCE', category: 'EVIDENCE', source: 'RECEIVED', currentVersionId: 'DOCVER-SYN-003', finalVersionId: 'DOCVER-SYN-003' }
       ];
       for (const d of docs) {
-        await tx.document.upsert({
-          where: { id: d.id },
-          update: { ...d, updatedAt: now },
-          create: { ...d, createdAt: now, updatedAt: now }
-        });
+        const existing = await tx.document.findUnique({ where: { id: d.id }, select: { id: true } });
+        if (!existing) {
+          await tx.document.create({ data: {
+            id: d.id, caseId: d.caseId, scheduleId: d.scheduleId, title: d.title, category: d.category,
+            source: d.source, currentVersionId: null, finalVersionId: null, version: 1,
+            createdAt: now, updatedAt: now
+          } });
+        }
       }
 
       const docVersions = [
         {
-          id: 'DOCVER-SYN-001', documentId: 'DOC-SYN-001', versionNumber: 1, displayName: 'CASE-2026-0001_PROPOSAL_SyntheticProposal_20260101_v01.pdf',
-          storageKey: 'storage-key-syn-doc-v01', fileSize: 1024, mimeType: 'application/pdf', sha256: 'a'.repeat(64), isFinal: false, uploadedById: 'USR-PM'
+          id: 'DOCVER-SYN-001', documentId: 'DOC-SYN-001', versionNumber: 1, originalName: 'SYNTHETIC_PROPOSAL_v01.pdf', displayName: 'CASE-2026-0001_PROPOSAL_SyntheticProposal_20260101_v01.pdf',
+          storageKey: 'storage-00000000-0000-4000-8000-000000000001.pdf', fileSize: 1024, mimeType: 'application/pdf', sha256: 'a'.repeat(64), isFinal: false, uploadedById: 'USR-PM'
         },
         {
-          id: 'DOCVER-SYN-002', documentId: 'DOC-SYN-001', versionNumber: 2, displayName: 'CASE-2026-0001_PROPOSAL_SyntheticProposal_20260101_v02.pdf',
-          storageKey: 'storage-key-syn-doc-v02', fileSize: 2048, mimeType: 'application/pdf', sha256: 'b'.repeat(64), isFinal: true, uploadedById: 'USR-PM'
+          id: 'DOCVER-SYN-002', documentId: 'DOC-SYN-001', versionNumber: 2, originalName: 'SYNTHETIC_PROPOSAL_v02.pdf', displayName: 'CASE-2026-0001_PROPOSAL_SyntheticProposal_20260101_v02.pdf',
+          storageKey: 'storage-00000000-0000-4000-8000-000000000002.pdf', fileSize: 2048, mimeType: 'application/pdf', sha256: 'b'.repeat(64), isFinal: true, uploadedById: 'USR-PM'
         },
         {
-          id: 'DOCVER-SYN-003', documentId: 'DOC-SYN-002', versionNumber: 1, displayName: 'CASE-2026-0004_EVIDENCE_ReceivedEvidence_20260101_v01.png',
-          storageKey: 'storage-key-syn-doc-v03', fileSize: 4096, mimeType: 'image/png', sha256: 'c'.repeat(64), isFinal: true, uploadedById: 'USR-STAFF'
+          id: 'DOCVER-SYN-003', documentId: 'DOC-SYN-002', versionNumber: 1, originalName: 'SYNTHETIC_EVIDENCE_v01.png', displayName: 'CASE-2026-0004_EVIDENCE_ReceivedEvidence_20260101_v01.png',
+          storageKey: 'storage-00000000-0000-4000-8000-000000000003.png', fileSize: 4096, mimeType: 'image/png', sha256: 'c'.repeat(64), isFinal: true, uploadedById: 'USR-STAFF'
         }
       ];
       for (const dv of docVersions) {
@@ -236,17 +239,25 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
           create: { ...dv, createdAt: now }
         });
       }
+      for (const d of docs) {
+        await tx.document.update({
+          where: { id: d.id },
+          data: { currentVersionId: d.currentVersionId, finalVersionId: d.finalVersionId, updatedAt: now }
+        });
+      }
 
       // 12. P06 Meetings & Meeting Action Items
       const meetings = [
         {
           id: 'MEET-SYN-001', caseId: 'CASE-SYN-001', title: 'SYNTHETIC_MEETING_01', meetingDate: new Date('2026-02-01T10:00:00.000Z'),
-          location: 'Conference Room 1', attendees: 'Synthetic Attendees', rawText: 'Synthetic meeting raw transcript text',
+          location: 'SYNTHETIC_ROOM_01', attendees: 'SYNTHETIC_ATTENDEES', rawText: 'Synthetic meeting raw transcript text',
+          rawTextSha256: crypto.createHash('sha256').update('Synthetic meeting raw transcript text').digest('hex'),
           summary: 'Synthetic summary text', decisions: 'Synthetic decisions text', status: 'DRAFT', version: 1, createdById: 'USR-PM'
         },
         {
           id: 'MEET-SYN-002', caseId: 'CASE-SYN-001', title: 'SYNTHETIC_MEETING_FINAL_02', meetingDate: new Date('2026-02-15T14:00:00.000Z'),
-          location: 'Executive Room', attendees: 'Synthetic Executive Attendees', rawText: 'Synthetic final raw transcript text',
+          location: 'SYNTHETIC_ROOM_02', attendees: 'SYNTHETIC_EXECUTIVE_ATTENDEES', rawText: 'Synthetic final raw transcript text',
+          rawTextSha256: crypto.createHash('sha256').update('Synthetic final raw transcript text').digest('hex'),
           summary: 'Synthetic final summary', decisions: 'Synthetic final decisions', status: 'FINAL', version: 1, createdById: 'USR-PM'
         }
       ];
@@ -259,7 +270,7 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
 
       const actionItems = [
         {
-          id: 'ACT-SYN-001', meetingId: 'MEET-SYN-001', title: 'Synthetic Action Item 1', assigneeId: 'USR-PM', scheduleId: 'SCHED-SYN-001',
+          id: 'ACT-SYN-001', meetingId: 'MEET-SYN-001', title: 'Synthetic Action Item 1', assigneeId: 'USR-PM', scheduleId: null,
           dueDate: new Date('2026-03-01T10:00:00.000Z'), status: 'PENDING'
         }
       ];

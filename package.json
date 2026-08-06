@@ -11,8 +11,8 @@
     "lint": "tsx scripts/harness-check.ts lint",
     "typecheck": "tsx scripts/harness-check.ts typecheck",
     "test": "tsx --test scripts/harness-test.ts",
-    "test:e2e": "tsx scripts/p05-e2e.ts",
-    "test:security": "tsx --test scripts/p04-security-test.ts scripts/p05-security-test.ts",
+    "test:e2e": "tsx scripts/p06-e2e.ts",
+    "test:security": "tsx --test scripts/p04-security-test.ts scripts/p05-security-test.ts scripts/p06-security-test.ts",
     "build": "tsx scripts/harness-check.ts build"
   },
   "devDependencies": {

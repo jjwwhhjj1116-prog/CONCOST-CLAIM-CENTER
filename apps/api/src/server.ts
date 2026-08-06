@@ -22,10 +22,22 @@ const CASE_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
 const CASE_DELETE_ROLES = new Set(['ceo', 'director', 'admin']);
 
 const ALLOWED_DOC_SOURCES = new Set(['RECEIVED', 'AUTHORED', 'SUBMITTED']);
-const ALLOWED_FILE_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.docx', '.xlsx', '.pptx', '.txt', '.hwp']);
+const ALLOWED_DOC_CATEGORIES = new Set(['PROPOSAL', 'EVIDENCE', 'CONTRACT', 'REPORT', 'MEETING', 'ETC']);
 const FORBIDDEN_FILE_EXTENSIONS = new Set(['.exe', '.bat', '.sh', '.js', '.vbs', '.php', '.py', '.cmd', '.ps1', '.jar', '.scr', '.msi']);
-const UPLOAD_MAX_BYTES = 10 * 1024 * 1024; // 10MB
-const UPLOAD_DIR = path.resolve(__dirname, '../../database/.data/uploads');
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_JSON_BODY_BYTES = Math.ceil(UPLOAD_MAX_BYTES * 4 / 3) + 1024 * 1024;
+const DEFAULT_UPLOAD_DIR = path.resolve(__dirname, '../../database/.data/uploads');
+const FILE_POLICIES: Record<string, readonly string[]> = {
+  '.pdf': ['application/pdf'],
+  '.png': ['image/png'],
+  '.jpg': ['image/jpeg'],
+  '.jpeg': ['image/jpeg'],
+  '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  '.xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  '.pptx': ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
+  '.txt': ['text/plain'],
+  '.hwp': ['application/x-hwp', 'application/haansofthwp']
+};
 
 export const CASE_STATUSES = [
   'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
@@ -63,14 +75,15 @@ export interface ApiServerOptions {
   databaseUrl?: string;
   allowedOrigins?: string[];
   secureCookies?: boolean;
+  uploadDir?: string;
 }
 
 export interface ManagedApiServer extends http.Server {
   waitForDatabaseClose(): Promise<void>;
 }
 
-function ensureUploadDir(): void {
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+function ensureUploadDir(uploadDir: string): void {
+  fs.mkdirSync(uploadDir, { recursive: true });
 }
 
 function sanitizeDisplayName(rawName: string): string {
@@ -81,22 +94,47 @@ function sanitizeDisplayName(rawName: string): string {
   return clean || 'unnamed_file';
 }
 
-function validateFileSecurity(filename: string, buffer: Buffer): { extension: string } {
+function validateOriginalFilename(filename: string): string {
+  if (!filename || filename.includes('\0') || filename.includes('/') || filename.includes('\\') || filename.includes('..') || path.basename(filename) !== filename) {
+    throw new HttpError(400, 'Unsafe file name');
+  }
+  const clean = sanitizeDisplayName(filename);
+  const segments = clean.toLowerCase().split('.');
+  if (segments.length < 2 || segments.slice(1, -1).some((segment) => FORBIDDEN_FILE_EXTENSIONS.has(`.${segment}`))) {
+    throw new HttpError(400, 'Double extension or executable disguise is forbidden');
+  }
+  return clean;
+}
+
+function decodeStrictBase64(value: string): Buffer {
+  const compact = value.replace(/\s/g, '');
+  if (!compact || compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) throw new HttpError(400, 'Invalid base64 file content');
+  const decoded = Buffer.from(compact, 'base64');
+  if (decoded.toString('base64') !== compact) throw new HttpError(400, 'Invalid base64 file content');
+  return decoded;
+}
+
+export function validateFileSecurity(filename: string, mimeType: string, buffer: Buffer): { extension: string; cleanFilename: string; mimeType: string } {
+  const cleanFilename = validateOriginalFilename(filename);
+  if (buffer.length === 0) throw new HttpError(400, 'Empty files are not allowed');
   if (buffer.length > UPLOAD_MAX_BYTES) {
     throw new HttpError(400, 'File size exceeds maximum 10MB limit');
   }
 
-  const ext = path.extname(filename).toLowerCase();
+  const ext = path.extname(cleanFilename).toLowerCase();
   if (FORBIDDEN_FILE_EXTENSIONS.has(ext)) {
     throw new HttpError(400, `Forbidden executable file extension: ${ext}`);
   }
-  if (!ALLOWED_FILE_EXTENSIONS.has(ext)) {
+  const normalizedMime = mimeType.split(';', 1)[0].trim().toLowerCase();
+  const allowedMimes = FILE_POLICIES[ext];
+  if (!allowedMimes) {
     throw new HttpError(400, `Unsupported file extension: ${ext}`);
   }
+  if (!allowedMimes.includes(normalizedMime)) throw new HttpError(400, 'MIME type does not match the file extension');
 
   // Magic Byte Check
   if (ext === '.pdf') {
-    if (buffer.length < 4 || buffer.subarray(0, 4).toString('utf8') !== '%PDF') {
+    if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
       throw new HttpError(400, 'Invalid PDF magic bytes');
     }
   } else if (ext === '.png') {
@@ -114,9 +152,25 @@ function validateFileSecurity(filename: string, buffer: Buffer): { extension: st
     if (buffer.length < 4 || !buffer.subarray(0, 4).equals(zipMagic)) {
       throw new HttpError(400, 'Invalid Office OpenXML magic bytes');
     }
+    const marker = ext === '.docx' ? 'word/' : ext === '.xlsx' ? 'xl/' : 'ppt/';
+    const archiveHeader = buffer.subarray(0, Math.min(buffer.length, 1_000_000)).toString('latin1');
+    if (!archiveHeader.includes('[Content_Types].xml') || !archiveHeader.includes(marker)) throw new HttpError(400, 'Office archive content does not match its extension');
+  } else if (ext === '.hwp') {
+    const oleMagic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    if (buffer.length < oleMagic.length || !buffer.subarray(0, oleMagic.length).equals(oleMagic)) throw new HttpError(400, 'Invalid HWP magic bytes');
+  } else if (ext === '.txt') {
+    if (buffer.includes(0) || buffer.toString('utf8').includes('\uFFFD')) throw new HttpError(400, 'Text upload must be valid UTF-8 without NUL bytes');
   }
 
-  return { extension: ext };
+  return { extension: ext, cleanFilename, mimeType: normalizedMime };
+}
+
+function safeStoragePath(uploadDir: string, storageKey: string): string {
+  if (!/^storage-[0-9a-f-]+\.[a-z0-9]+$/i.test(storageKey)) throw new HttpError(409, 'Stored file key is invalid');
+  const resolvedRoot = path.resolve(uploadDir);
+  const resolved = path.resolve(resolvedRoot, storageKey);
+  if (!resolved.startsWith(`${resolvedRoot}${path.sep}`)) throw new HttpError(409, 'Stored file path escaped the upload root');
+  return resolved;
 }
 
 function parseCookies(req: http.IncomingMessage): Record<string, string> {
@@ -135,7 +189,7 @@ async function readJson(req: http.IncomingMessage): Promise<Record<string, unkno
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
-    if (total > 10_000_000) throw new HttpError(413, 'Request body too large');
+    if (total > MAX_JSON_BODY_BYTES) throw new HttpError(413, 'Request body too large');
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
@@ -231,7 +285,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   const db = createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
   const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
-  ensureUploadDir();
+  const uploadDir = path.resolve(options.uploadDir ?? DEFAULT_UPLOAD_DIR);
+  ensureUploadDir(uploadDir);
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -243,6 +298,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
       }
       if (req.method === 'OPTIONS') {
         sendJson(res, 204, {});
@@ -720,7 +776,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       }
 
       // --- P06 Documents Endpoints ---
-      const docMatch = pathname.match(/^\/api\/cases\/([^/]+)\/documents(?:\/([^/]+)(?:\/(versions(?:\/([^/]+)\/download)?|finalize))?)?$/);
+      const docMatch = pathname.match(/^\/api\/cases\/([^/]+)\/documents(?:\/([^/]+)(?:\/(versions|finalize)(?:\/([^/]+)\/download)?)?)?$/);
       if (docMatch) {
         const [, caseId, docId, action, versionId] = docMatch;
         const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
@@ -750,18 +806,29 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const body = await readJson(req);
           const title = typeof body.title === 'string' ? body.title.trim() : '';
           const source = typeof body.source === 'string' ? body.source.trim() : '';
-          const category = typeof body.category === 'string' ? body.category.trim() : 'GENERAL';
+          const category = typeof body.category === 'string' ? body.category.trim() : 'ETC';
           const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
           const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+          const requestedMime = typeof body.mimeType === 'string' ? body.mimeType : '';
+          const scheduleId = typeof body.scheduleId === 'string' && body.scheduleId ? body.scheduleId : null;
+          const reportSectionId = typeof body.reportSectionId === 'string' && body.reportSectionId ? body.reportSectionId : null;
 
-          if (!title) throw new HttpError(400, 'Document title is required');
+          if (!title || title.length > 200) throw new HttpError(400, 'Document title is required and must be at most 200 characters');
           if (!ALLOWED_DOC_SOURCES.has(source)) throw new HttpError(400, 'Invalid document source. Must be RECEIVED, AUTHORED, or SUBMITTED');
-          if (!filename || !fileBase64) throw new HttpError(400, 'File filename and content (fileBase64) are required');
+          if (!ALLOWED_DOC_CATEGORIES.has(category)) throw new HttpError(400, 'Invalid document category');
+          if (!filename || !fileBase64 || !requestedMime) throw new HttpError(400, 'File filename, MIME type and content are required');
+          if (scheduleId) {
+            const linkedSchedule = await db.schedule.findUnique({ where: { id: scheduleId } });
+            if (!linkedSchedule || linkedSchedule.caseId !== caseId) throw new HttpError(400, 'Linked schedule must belong to the same case');
+          }
+          if (reportSectionId) {
+            const section = await db.reportSection.findUnique({ where: { id: reportSectionId }, include: { report: true } });
+            if (!section || section.report.caseId !== caseId) throw new HttpError(400, 'Linked report section must belong to the same case');
+          }
 
-          const buffer = Buffer.from(fileBase64, 'base64');
-          const { extension } = validateFileSecurity(filename, buffer);
+          const buffer = decodeStrictBase64(fileBase64);
+          const { extension, cleanFilename, mimeType } = validateFileSecurity(filename, requestedMime, buffer);
           const cleanTitle = sanitizeDisplayName(title);
-          const cleanFilename = sanitizeDisplayName(filename);
 
           // Check for duplicate filename or duplicate title in same case
           const existingDocs = await db.document.findMany({
@@ -770,7 +837,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           });
           const isDuplicateFilename = existingDocs.some((d) => {
             if (d.title.toLowerCase() === title.toLowerCase()) return true;
-            return d.versions.some((v) => v.displayName.toLowerCase().includes(cleanFilename.toLowerCase()));
+            return d.versions.some((v) => v.originalName.toLowerCase() === cleanFilename.toLowerCase());
           });
           if (isDuplicateFilename) {
             throw new HttpError(409, 'A file with the exact same name already exists in this case');
@@ -781,21 +848,25 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const storageKey = `storage-${crypto.randomUUID()}${extension}`;
           const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
           const dateStr = getKstDateString(new Date());
-          const displayName = `${caseRow.caseNumber}_${category}_${cleanTitle}_${cleanFilename}_${dateStr}_v01${extension}`;
-          const diskPath = path.join(UPLOAD_DIR, storageKey);
+          const displayName = `${caseRow.caseNumber}_${category}_${cleanTitle}_${dateStr}_v01${extension}`;
+          const diskPath = safeStoragePath(uploadDir, storageKey);
 
           fs.writeFileSync(diskPath, buffer);
 
           try {
             const document = await db.$transaction(async (tx) => {
-              const docItem = await tx.document.create({
+              await tx.document.create({
                 data: {
                   id: newDocId,
                   caseId,
+                  scheduleId,
+                  reportSectionId,
                   title,
                   category,
                   source,
-                  currentVersionId: newVersionId
+                  currentVersionId: null,
+                  finalVersionId: null,
+                  version: 1
                 }
               });
 
@@ -804,19 +875,22 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                   id: newVersionId,
                   documentId: newDocId,
                   versionNumber: 1,
+                  originalName: cleanFilename,
                   displayName,
                   storageKey,
                   fileSize: buffer.length,
-                  mimeType: body.mimeType && typeof body.mimeType === 'string' ? body.mimeType.trim() : 'application/octet-stream',
+                  mimeType,
                   sha256,
                   isFinal: false,
                   uploadedById: context.user.id
                 }
               });
 
+              const docItem = await tx.document.update({ where: { id: newDocId }, data: { currentVersionId: newVersionId } });
+
               await tx.auditLog.create({
                 data: requestAudit(context, 'DOCUMENT_CREATED', 'Document', newDocId, {
-                  title, source, category, versionNumber: 1, storageKey
+                  title, source, category, versionNumber: 1, sha256, scheduleId, reportSectionId
                 })
               });
 
@@ -843,11 +917,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const body = await readJson(req);
           const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
           const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+          const requestedMime = typeof body.mimeType === 'string' ? body.mimeType : '';
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
 
-          if (!filename || !fileBase64) throw new HttpError(400, 'File filename and content (fileBase64) are required');
+          if (!filename || !fileBase64 || !requestedMime) throw new HttpError(400, 'File filename, MIME type and content are required');
 
-          const buffer = Buffer.from(fileBase64, 'base64');
-          const { extension } = validateFileSecurity(filename, buffer);
+          const buffer = decodeStrictBase64(fileBase64);
+          const { extension, cleanFilename, mimeType } = validateFileSecurity(filename, requestedMime, buffer);
           const cleanTitle = sanitizeDisplayName(docRow.title);
 
           const nextVersionNum = (docRow.versions[0]?.versionNumber ?? 0) + 1;
@@ -857,7 +933,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const newVersionId = `DOCVER-${crypto.randomUUID()}`;
           const storageKey = `storage-${crypto.randomUUID()}${extension}`;
           const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-          const diskPath = path.join(UPLOAD_DIR, storageKey);
+          const diskPath = safeStoragePath(uploadDir, storageKey);
 
           fs.writeFileSync(diskPath, buffer);
 
@@ -868,24 +944,26 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                   id: newVersionId,
                   documentId: docId,
                   versionNumber: nextVersionNum,
+                  originalName: cleanFilename,
                   displayName,
                   storageKey,
                   fileSize: buffer.length,
-                  mimeType: body.mimeType && typeof body.mimeType === 'string' ? body.mimeType.trim() : 'application/octet-stream',
+                  mimeType,
                   sha256,
                   isFinal: false,
                   uploadedById: context.user.id
                 }
               });
 
-              await tx.document.update({
-                where: { id: docId },
-                data: { currentVersionId: newVersionId, updatedAt: new Date() }
+              const changed = await tx.document.updateMany({
+                where: { id: docId, version: expectedVersion, deletedAt: null },
+                data: { currentVersionId: newVersionId, version: { increment: 1 }, updatedAt: new Date() }
               });
+              if (changed.count !== 1) throw new HttpError(409, 'Document version conflict');
 
               await tx.auditLog.create({
                 data: requestAudit(context, 'DOCUMENT_VERSION_CREATED', 'DocumentVersion', newVersionId, {
-                  docId, versionNumber: nextVersionNum, storageKey
+                  docId, versionNumber: nextVersionNum, sha256
                 })
               });
 
@@ -908,10 +986,16 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
           const body = await readJson(req);
           const targetVersionId = typeof body.versionId === 'string' ? body.versionId : '';
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
           const targetVer = await db.documentVersion.findUnique({ where: { id: targetVersionId } });
           if (!targetVer || targetVer.documentId !== docId) throw new HttpError(404, 'Document version not found');
 
           await db.$transaction(async (tx) => {
+            const changed = await tx.document.updateMany({
+              where: { id: docId, version: expectedVersion, deletedAt: null },
+              data: { version: { increment: 1 } }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Document finalization conflict');
             await tx.documentVersion.updateMany({
               where: { documentId: docId },
               data: { isFinal: false }
@@ -922,7 +1006,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             });
             await tx.document.update({
               where: { id: docId },
-              data: { currentVersionId: targetVersionId }
+              data: { finalVersionId: targetVersionId }
             });
             await tx.auditLog.create({
               data: requestAudit(context, 'DOCUMENT_FINALIZED', 'Document', docId, { versionId: targetVersionId, versionNumber: targetVer.versionNumber })
@@ -943,21 +1027,25 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             throw new HttpError(404, 'Document file not found');
           }
 
-          const diskPath = path.join(UPLOAD_DIR, versionRow.storageKey);
+          const diskPath = safeStoragePath(uploadDir, versionRow.storageKey);
           if (!fs.existsSync(diskPath)) {
             throw new HttpError(404, 'File on disk not found');
           }
 
+          const stat = fs.statSync(diskPath);
+          const storedBytes = fs.readFileSync(diskPath);
+          const storedSha = crypto.createHash('sha256').update(storedBytes).digest('hex');
+          if (stat.size !== versionRow.fileSize || storedSha !== versionRow.sha256) throw new HttpError(409, 'Stored file integrity check failed');
           await db.auditLog.create({
             data: requestAudit(context, 'DOCUMENT_DOWNLOADED', 'DocumentVersion', versionId, { displayName: versionRow.displayName })
           });
-
-          const stat = fs.statSync(diskPath);
           res.writeHead(200, {
             'Content-Type': versionRow.mimeType || 'application/octet-stream',
             'Content-Length': stat.size,
             'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(versionRow.displayName)}`,
-            'Cache-Control': 'no-store'
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "sandbox"
           });
           fs.createReadStream(diskPath).pipe(res);
           return;
@@ -977,11 +1065,14 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             throw new HttpError(400, 'Finalized documents cannot be deleted');
           }
 
+          const body = await readJson(req);
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
           await db.$transaction(async (tx) => {
-            await tx.document.update({
-              where: { id: docId },
-              data: { deletedAt: new Date() }
+            const changed = await tx.document.updateMany({
+              where: { id: docId, version: expectedVersion, deletedAt: null },
+              data: { deletedAt: new Date(), version: { increment: 1 } }
             });
+            if (changed.count !== 1) throw new HttpError(409, 'Document deletion conflict');
             await tx.auditLog.create({
               data: requestAudit(context, 'DOCUMENT_SOFT_DELETED', 'Document', docId, {})
             });
@@ -1029,6 +1120,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const location = typeof body.location === 'string' ? body.location.trim() : null;
           const attendees = typeof body.attendees === 'string' ? body.attendees.trim() : null;
           const rawText = typeof body.rawText === 'string' ? body.rawText.trim() : null;
+          const rawTextSha256 = rawText ? crypto.createHash('sha256').update(rawText).digest('hex') : null;
           const summary = typeof body.summary === 'string' ? body.summary.trim() : null;
           const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : null;
           const actionItemsInput = Array.isArray(body.actionItems) ? body.actionItems : [];
@@ -1049,6 +1141,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                 location,
                 attendees,
                 rawText,
+                rawTextSha256,
                 summary,
                 decisions,
                 status: 'DRAFT',
@@ -1067,6 +1160,12 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                     throw new HttpError(403, 'Action item assignee must belong to the same organization');
                   }
                 }
+                if (scheduleId) {
+                  const linkedSchedule = await tx.schedule.findUnique({ where: { id: scheduleId } });
+                  if (!linkedSchedule || linkedSchedule.caseId !== caseId) throw new HttpError(403, 'Action item schedule must belong to the same case');
+                }
+                const dueDate = ai.dueDate ? new Date(String(ai.dueDate)) : null;
+                if (dueDate && isNaN(dueDate.getTime())) throw new HttpError(400, 'Invalid action item due date');
                 await tx.meetingActionItem.create({
                   data: {
                     id: `ACT-${crypto.randomUUID()}`,
@@ -1074,7 +1173,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                     title: ai.title.trim(),
                     assigneeId,
                     scheduleId,
-                    dueDate: ai.dueDate && !isNaN(new Date(ai.dueDate).getTime()) ? new Date(ai.dueDate) : null,
+                    dueDate,
                     status: 'PENDING'
                   }
                 });
@@ -1131,11 +1230,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const rawText = typeof body.rawText === 'string' ? body.rawText.trim() : meetingRow.rawText;
           const summary = typeof body.summary === 'string' ? body.summary.trim() : meetingRow.summary;
           const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : meetingRow.decisions;
+          if (meetingRow.rawText !== null && rawText !== meetingRow.rawText) throw new HttpError(400, 'Original meeting transcript cannot be changed');
+          const rawTextSha256 = rawText ? crypto.createHash('sha256').update(rawText).digest('hex') : null;
 
           const updated = await db.$transaction(async (tx) => {
             const result = await tx.meeting.updateMany({
               where: { id: meetingId, status: 'DRAFT', version },
-              data: { title, location, attendees, rawText, summary, decisions, version: { increment: 1 } }
+              data: { title, location, attendees, rawText, rawTextSha256, summary, decisions, version: { increment: 1 } }
             });
             if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict or meeting already finalized');
 
@@ -1159,18 +1260,21 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             sendJson(res, 200, { meeting: meetingRow });
             return;
           }
+          const body = await readJson(req);
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
 
           const finalized = await db.$transaction(async (tx) => {
-            const item = await tx.meeting.update({
-              where: { id: meetingId },
+            const changed = await tx.meeting.updateMany({
+              where: { id: meetingId, status: 'DRAFT', version: expectedVersion },
               data: { status: 'FINAL', version: { increment: 1 } }
             });
+            if (changed.count !== 1) throw new HttpError(409, 'Meeting finalization conflict');
 
             await tx.auditLog.create({
               data: requestAudit(context, 'MEETING_FINALIZED', 'Meeting', meetingId, { title: meetingRow.title })
             });
 
-            return item;
+            return tx.meeting.findUniqueOrThrow({ where: { id: meetingId } });
           });
 
           sendJson(res, 200, { meeting: finalized });
@@ -1182,6 +1286,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           requireAnyRole(context, CASE_EDITOR_ROLES, 'Action item creation forbidden');
           const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
           if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          if (meetingRow.status === 'FINAL') throw new HttpError(400, 'Finalized meeting action items cannot be changed');
 
           const body = await readJson(req);
           const title = typeof body.title === 'string' ? body.title.trim() : '';
@@ -1190,6 +1295,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const dueDateStr = typeof body.dueDate === 'string' ? body.dueDate : null;
 
           if (!title) throw new HttpError(400, 'Action item title is required');
+          const dueDate = dueDateStr ? new Date(dueDateStr) : null;
+          if (dueDate && isNaN(dueDate.getTime())) throw new HttpError(400, 'Invalid action item due date');
 
           const actionItem = await db.$transaction(async (tx) => {
             if (assigneeId) {
@@ -1212,7 +1319,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                 title,
                 assigneeId,
                 scheduleId,
-                dueDate: dueDateStr && !isNaN(new Date(dueDateStr).getTime()) ? new Date(dueDateStr) : null,
+                dueDate,
                 status: 'PENDING'
               }
             });
