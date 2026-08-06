@@ -16,7 +16,9 @@
     },
     "P02": {
       "name": "stitch-ux-ui-design",
-      "status": "IN_PROGRESS"
+      "status": "READY_FOR_REVIEW",
+      "implementationCommit": "28e8699",
+      "reviewReport": "docs/reviews/requests/P02-review-request.md"
     },
     "P03": {
       "name": "app-shell-design-system",
