@@ -104,8 +104,8 @@ test('P04 uses a real SQLite file, six fixed roles, and enforced foreign keys', 
   await assert.rejects(db.$executeRawUnsafe('INSERT INTO "Role" ("id","name") VALUES (?,?)', 'TYPE-07', 'INVALID'), /check constraint/i);
   await assert.rejects(
     db.$executeRawUnsafe(
-      'INSERT INTO "CaseItem" ("id","organizationId","title","claimType","version","createdAt","updatedAt") VALUES (?,?,?,?,?,?,?)',
-      'CASE-BAD-FK', 'ORG-NOT-FOUND', 'Invalid', 'TYPE-01', 1, new Date().toISOString(), new Date().toISOString()
+      'INSERT INTO "CaseItem" ("id","organizationId","caseNumber","title","claimType","version","createdAt","updatedAt") VALUES (?,?,?,?,?,?,?,?)',
+      'CASE-BAD-FK', 'ORG-NOT-FOUND', 'CASE-BAD-FK', 'Invalid', 'TYPE-01', 1, new Date().toISOString(), new Date().toISOString()
     ),
     /foreign key constraint/i
   );

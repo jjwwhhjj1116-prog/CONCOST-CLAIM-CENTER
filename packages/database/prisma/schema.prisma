@@ -18,19 +18,21 @@ model Organization {
 }
 
 model User {
-  id             String           @id
-  email          String           @unique
-  passwordHash   String
-  name           String
-  organizationId String
-  isActive       Boolean          @default(true)
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  roles          UserRole[]
-  sessions       Session[]
-  assignments    CaseAssignment[]
-  auditLogs      AuditLog[]
+  id              String           @id
+  email           String           @unique
+  passwordHash    String
+  name            String
+  organizationId  String
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  roles           UserRole[]
+  sessions        Session[]
+  assignments     CaseAssignment[]
+  assignedCases   CaseItem[]       @relation("AssignedCases")
+  statusHistories StatusHistory[]
+  auditLogs       AuditLog[]
 }
 
 model Role {
@@ -63,17 +65,27 @@ model Session {
 model CaseItem {
   id             String           @id
   organizationId String
+  caseNumber     String           @unique
   title          String
+  description    String?
   claimType      String
+  status         String           @default("REGISTERED")
+  assignedUserId String?
   version        Int              @default(1)
   deletedAt      DateTime?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignedUser   User?            @relation("AssignedCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignments    CaseAssignment[]
+  parties        Party[]
+  schedules      Schedule[]
+  statusHistories StatusHistory[]
   reports        Report[]
 
   @@index([organizationId, deletedAt])
+  @@index([caseNumber])
+  @@index([status])
 }
 
 model CaseAssignment {
@@ -83,6 +95,51 @@ model CaseAssignment {
   user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([caseId, userId])
+}
+
+model Party {
+  id        String   @id
+  caseId    String
+  name      String
+  role      String
+  contact   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  case      CaseItem @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([name])
+}
+
+model Schedule {
+  id          String   @id
+  caseId      String
+  title       String
+  type        String
+  date        DateTime
+  location    String?
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  case        CaseItem @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([date])
+  @@index([type])
+}
+
+model StatusHistory {
+  id          String   @id
+  caseId      String
+  fromStatus  String?
+  toStatus    String
+  changedById String
+  reason      String?
+  createdAt   DateTime @default(now())
+  case        CaseItem @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  changedBy   User     @relation(fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([caseId, createdAt])
 }
 
 model Report {

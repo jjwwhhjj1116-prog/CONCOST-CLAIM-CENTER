@@ -37,24 +37,33 @@ export async function migrateDatabase(databaseUrl = getDatabaseUrl()): Promise<v
   try {
     sqlite.run('PRAGMA foreign_keys = ON');
     sqlite.run('CREATE TABLE IF NOT EXISTS "_P04Migration" ("name" TEXT NOT NULL PRIMARY KEY, "checksum" TEXT NOT NULL, "appliedAt" TEXT NOT NULL)');
-    const migrationName = '20260806070000_p04_baseline';
-    const migrationPath = path.join(packageRoot, 'prisma', 'migrations', migrationName, 'migration.sql');
-    const migrationSql = fs.readFileSync(migrationPath, 'utf8');
-    const checksum = crypto.createHash('sha256').update(migrationSql).digest('hex');
-    const applied = sqlite.exec(`SELECT "checksum" FROM "_P04Migration" WHERE "name" = '${migrationName}'`);
-    if (applied.length === 0) {
-      sqlite.run('BEGIN IMMEDIATE');
-      try {
-        sqlite.run(migrationSql);
-        sqlite.run('INSERT INTO "_P04Migration" ("name", "checksum", "appliedAt") VALUES (?, ?, ?)', [migrationName, checksum, new Date().toISOString()]);
-        sqlite.run('COMMIT');
-      } catch (error) {
-        sqlite.run('ROLLBACK');
-        throw error;
+
+    const migrationsDir = path.join(packageRoot, 'prisma', 'migrations');
+    const migrationDirs = fs.readdirSync(migrationsDir)
+      .filter((dir) => fs.existsSync(path.join(migrationsDir, dir, 'migration.sql')))
+      .sort();
+
+    for (const migrationName of migrationDirs) {
+      const migrationPath = path.join(migrationsDir, migrationName, 'migration.sql');
+      const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+      const checksum = crypto.createHash('sha256').update(migrationSql).digest('hex');
+      const applied = sqlite.exec(`SELECT "checksum" FROM "_P04Migration" WHERE "name" = '${migrationName}'`);
+
+      if (applied.length === 0) {
+        sqlite.run('BEGIN IMMEDIATE');
+        try {
+          sqlite.run(migrationSql);
+          sqlite.run('INSERT INTO "_P04Migration" ("name", "checksum", "appliedAt") VALUES (?, ?, ?)', [migrationName, checksum, new Date().toISOString()]);
+          sqlite.run('COMMIT');
+        } catch (error) {
+          sqlite.run('ROLLBACK');
+          throw error;
+        }
+      } else if (String(applied[0].values[0][0]) !== checksum) {
+        throw new Error(`Migration checksum mismatch: ${migrationName}`);
       }
-    } else if (String(applied[0].values[0][0]) !== checksum) {
-      throw new Error(`Migration checksum mismatch: ${migrationName}`);
     }
+
     fs.writeFileSync(filePath, Buffer.from(sqlite.export()));
   } finally {
     sqlite.close();

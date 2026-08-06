@@ -14,6 +14,19 @@ const DEFAULT_ALLOWED_ORIGINS = [
 const FIXED_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
+const ALLOWED_CLAIM_TYPES = new Set(['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']);
+const ALLOWED_SCHEDULE_TYPES = new Set(['COURT', 'CLIENT', 'INTERNAL']);
+
+const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
+  REGISTERED: ['IN_PROGRESS'],
+  IN_PROGRESS: ['REVIEWING', 'CLOSED'],
+  REVIEWING: ['SUBMITTED', 'IN_PROGRESS'],
+  SUBMITTED: ['JUDGEMENT', 'REVIEWING'],
+  JUDGEMENT: ['SUCCESS_FEE', 'CLOSED'],
+  SUCCESS_FEE: ['CLOSED'],
+  CLOSED: ['IN_PROGRESS']
+};
+
 class HttpError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message);
@@ -113,6 +126,30 @@ async function authenticate(db: PrismaClient, req: http.IncomingMessage, cookies
 async function canAccessCase(db: PrismaClient, context: SessionContext, caseId: string): Promise<boolean> {
   if (context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role))) return true;
   return Boolean(await db.caseAssignment.findUnique({ where: { caseId_userId: { caseId, userId: context.user.id } } }));
+}
+
+export function getKstDateString(date: Date): string {
+  const kstOffsetMs = 9 * 60 * 60 * 1000;
+  const kstDate = new Date(date.getTime() + kstOffsetMs);
+  return kstDate.toISOString().slice(0, 10);
+}
+
+export function calculateDDay(targetDate: Date, nowDate = new Date()): { dDayStr: string; isOverdue: boolean; isToday: boolean; diffDays: number } {
+  const targetKstStr = getKstDateString(targetDate);
+  const todayKstStr = getKstDateString(nowDate);
+
+  const targetUtcMidnight = new Date(`${targetKstStr}T00:00:00.000Z`).getTime();
+  const todayUtcMidnight = new Date(`${todayKstStr}T00:00:00.000Z`).getTime();
+
+  const diffDays = Math.round((targetUtcMidnight - todayUtcMidnight) / 86_400_000);
+
+  if (diffDays === 0) {
+    return { dDayStr: 'D-0', isOverdue: false, isToday: true, diffDays: 0 };
+  } else if (diffDays < 0) {
+    return { dDayStr: `D+${Math.abs(diffDays)}`, isOverdue: true, isToday: false, diffDays };
+  } else {
+    return { dDayStr: `D-${diffDays}`, isOverdue: false, isToday: false, diffDays };
+  }
 }
 
 export function createApiServer(options: ApiServerOptions = {}): ManagedApiServer {
@@ -215,10 +252,373 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
+      // --- P05 Dashboard KPI Endpoint ---
+      if (pathname === '/api/dashboard/kpi' && req.method === 'GET') {
+        const isAdminOrExec = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
+        const orgId = context.user.organizationId;
+        const now = new Date();
+
+        const caseWhere: Prisma.CaseItemWhereInput = {
+          organizationId: orgId,
+          deletedAt: null,
+          ...(!isAdminOrExec ? { assignments: { some: { userId: context.user.id } } } : {})
+        };
+
+        const totalCases = await db.caseItem.count({ where: caseWhere });
+        const inProgressCount = await db.caseItem.count({
+          where: { ...caseWhere, status: { in: ['IN_PROGRESS', 'REVIEWING', 'SUBMITTED', 'JUDGEMENT', 'SUCCESS_FEE'] } }
+        });
+        const reviewingDocsCount = await db.caseItem.count({
+          where: { ...caseWhere, status: 'REVIEWING' }
+        });
+
+        // Schedules calculation (Today tasks vs Delayed tasks)
+        const schedules = await db.schedule.findMany({
+          where: {
+            case: caseWhere
+          }
+        });
+
+        let todayTasksCount = 0;
+        let delayedCount = 0;
+
+        for (const s of schedules) {
+          const dDayInfo = calculateDDay(s.date, now);
+          if (dDayInfo.isToday) {
+            todayTasksCount++;
+          } else if (dDayInfo.isOverdue) {
+            delayedCount++;
+          }
+        }
+
+        sendJson(res, 200, {
+          totalCases,
+          inProgressCount,
+          reviewingDocsCount,
+          todayTasksCount,
+          delayedCount
+        });
+        return;
+      }
+
+      // --- P05 Cases List & Creation Endpoint ---
+      if (pathname === '/api/cases' && req.method === 'GET') {
+        const q = url.searchParams.get('q')?.trim() ?? '';
+        const claimType = url.searchParams.get('claimType')?.trim();
+        const status = url.searchParams.get('status')?.trim();
+        const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+        const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 50)));
+
+        const isAdminOrExec = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
+        const where: Prisma.CaseItemWhereInput = {
+          organizationId: context.user.organizationId,
+          deletedAt: null,
+          ...(!isAdminOrExec ? { assignments: { some: { userId: context.user.id } } } : {}),
+          ...(claimType ? { claimType } : {}),
+          ...(status ? { status } : {}),
+          ...(q
+            ? {
+                OR: [
+                  { title: { contains: q } },
+                  { caseNumber: { contains: q } },
+                  { parties: { some: { name: { contains: q } } } }
+                ]
+              }
+            : {})
+        };
+
+        const [cases, total] = await Promise.all([
+          db.caseItem.findMany({
+            where,
+            include: {
+              assignments: { include: { user: { select: { id: true, name: true, email: true } } } },
+              parties: true,
+              schedules: true,
+              statusHistories: { orderBy: { createdAt: 'desc' }, take: 1 }
+            },
+            orderBy: { createdAt: 'desc' },
+            skip: (page - 1) * limit,
+            take: limit
+          }),
+          db.caseItem.count({ where })
+        ]);
+
+        sendJson(res, 200, { cases, total, page, limit });
+        return;
+      }
+
+      if (pathname === '/api/cases' && req.method === 'POST') {
+        const body = await readJson(req);
+        const title = typeof body.title === 'string' ? body.title.trim() : '';
+        const claimType = typeof body.claimType === 'string' ? body.claimType.trim() : '';
+        const description = typeof body.description === 'string' ? body.description.trim() : null;
+        const assignedUserId = typeof body.assignedUserId === 'string' ? body.assignedUserId : context.user.id;
+
+        if (!title) throw new HttpError(400, 'Title is required');
+        if (!ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType. Must be TYPE-01 to TYPE-06');
+
+        const caseId = `CASE-${crypto.randomUUID()}`;
+        const caseNumber = `CASE-${new Date().getFullYear()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+        const createdCase = await db.$transaction(async (tx) => {
+          const item = await tx.caseItem.create({
+            data: {
+              id: caseId,
+              organizationId: context.user.organizationId,
+              caseNumber,
+              title,
+              description,
+              claimType,
+              status: 'REGISTERED',
+              assignedUserId,
+              version: 1
+            }
+          });
+
+          await tx.statusHistory.create({
+            data: {
+              id: `STHIST-${crypto.randomUUID()}`,
+              caseId,
+              fromStatus: null,
+              toStatus: 'REGISTERED',
+              changedById: context.user.id,
+              reason: '신규 사건 등록'
+            }
+          });
+
+          await tx.caseAssignment.create({
+            data: { caseId, userId: context.user.id }
+          });
+          if (assignedUserId && assignedUserId !== context.user.id) {
+            await tx.caseAssignment.create({
+              data: { caseId, userId: assignedUserId }
+            });
+          }
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'CASE_CREATED', 'CaseItem', caseId, { title, claimType, caseNumber })
+          });
+
+          return item;
+        });
+
+        sendJson(res, 201, { case: createdCase });
+        return;
+      }
+
+      // --- P05 Parties Endpoint ---
+      const partyMatch = pathname.match(/^\/api\/cases\/([^/]+)\/parties(?:\/([^/]+))?$/);
+      if (partyMatch) {
+        const [, caseId, partyId] = partyMatch;
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        if (req.method === 'POST') {
+          const body = await readJson(req);
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          const role = typeof body.role === 'string' ? body.role.trim() : 'OTHER';
+          const contact = typeof body.contact === 'string' ? body.contact.trim() : null;
+
+          if (!name) throw new HttpError(400, 'Party name is required');
+
+          const newPartyId = `PARTY-${crypto.randomUUID()}`;
+          const party = await db.$transaction(async (tx) => {
+            const created = await tx.party.create({
+              data: { id: newPartyId, caseId, name, role, contact }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PARTY_ADDED', 'Party', newPartyId, { caseId, name, role })
+            });
+            return created;
+          });
+
+          sendJson(res, 201, { party });
+          return;
+        }
+
+        if (partyId && req.method === 'PATCH') {
+          const partyRow = await db.party.findUnique({ where: { id: partyId } });
+          if (!partyRow || partyRow.caseId !== caseId) throw new HttpError(404, 'Party not found');
+
+          const body = await readJson(req);
+          const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : partyRow.name;
+          const role = typeof body.role === 'string' && body.role.trim() ? body.role.trim() : partyRow.role;
+          const contact = typeof body.contact === 'string' ? body.contact.trim() : partyRow.contact;
+
+          const updated = await db.$transaction(async (tx) => {
+            const item = await tx.party.update({
+              where: { id: partyId },
+              data: { name, role, contact }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PARTY_UPDATED', 'Party', partyId, { caseId, name, role })
+            });
+            return item;
+          });
+
+          sendJson(res, 200, { party: updated });
+          return;
+        }
+
+        if (partyId && req.method === 'DELETE') {
+          const partyRow = await db.party.findUnique({ where: { id: partyId } });
+          if (!partyRow || partyRow.caseId !== caseId) throw new HttpError(404, 'Party not found');
+
+          await db.$transaction(async (tx) => {
+            await tx.party.delete({ where: { id: partyId } });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PARTY_DELETED', 'Party', partyId, { caseId })
+            });
+          });
+
+          sendJson(res, 200, { message: 'Party deleted' });
+          return;
+        }
+      }
+
+      // --- P05 Schedules Endpoint ---
+      const scheduleMatch = pathname.match(/^\/api\/cases\/([^/]+)\/schedules(?:\/([^/]+))?$/);
+      if (scheduleMatch) {
+        const [, caseId, scheduleId] = scheduleMatch;
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        if (req.method === 'POST') {
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const type = typeof body.type === 'string' ? body.type.trim() : '';
+          const dateStr = typeof body.date === 'string' ? body.date : '';
+          const location = typeof body.location === 'string' ? body.location.trim() : null;
+          const description = typeof body.description === 'string' ? body.description.trim() : null;
+
+          if (!title) throw new HttpError(400, 'Schedule title is required');
+          if (!ALLOWED_SCHEDULE_TYPES.has(type)) throw new HttpError(400, 'Invalid schedule type. Must be COURT, CLIENT, or INTERNAL');
+          const date = new Date(dateStr);
+          if (isNaN(date.getTime())) throw new HttpError(400, 'Invalid schedule date');
+
+          const newSchedId = `SCHED-${crypto.randomUUID()}`;
+          const schedule = await db.$transaction(async (tx) => {
+            const created = await tx.schedule.create({
+              data: { id: newSchedId, caseId, title, type, date, location, description }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'SCHEDULE_ADDED', 'Schedule', newSchedId, { caseId, title, type, date: date.toISOString() })
+            });
+            return created;
+          });
+
+          sendJson(res, 201, { schedule });
+          return;
+        }
+
+        if (scheduleId && req.method === 'PATCH') {
+          const schedRow = await db.schedule.findUnique({ where: { id: scheduleId } });
+          if (!schedRow || schedRow.caseId !== caseId) throw new HttpError(404, 'Schedule not found');
+
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : schedRow.title;
+          const type = typeof body.type === 'string' && ALLOWED_SCHEDULE_TYPES.has(body.type.trim()) ? body.type.trim() : schedRow.type;
+          const date = typeof body.date === 'string' && !isNaN(new Date(body.date).getTime()) ? new Date(body.date) : schedRow.date;
+          const location = typeof body.location === 'string' ? body.location.trim() : schedRow.location;
+          const description = typeof body.description === 'string' ? body.description.trim() : schedRow.description;
+
+          const updated = await db.$transaction(async (tx) => {
+            const item = await tx.schedule.update({
+              where: { id: scheduleId },
+              data: { title, type, date, location, description }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'SCHEDULE_UPDATED', 'Schedule', scheduleId, { caseId, title, type })
+            });
+            return item;
+          });
+
+          sendJson(res, 200, { schedule: updated });
+          return;
+        }
+
+        if (scheduleId && req.method === 'DELETE') {
+          const schedRow = await db.schedule.findUnique({ where: { id: scheduleId } });
+          if (!schedRow || schedRow.caseId !== caseId) throw new HttpError(404, 'Schedule not found');
+
+          await db.$transaction(async (tx) => {
+            await tx.schedule.delete({ where: { id: scheduleId } });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'SCHEDULE_DELETED', 'Schedule', scheduleId, { caseId })
+            });
+          });
+
+          sendJson(res, 200, { message: 'Schedule deleted' });
+          return;
+        }
+      }
+
+      // --- P05 Case Status Transition Endpoint ---
+      const statusMatch = pathname.match(/^\/api\/cases\/([^/]+)\/status$/);
+      if (statusMatch && req.method === 'POST') {
+        const caseId = decodeURIComponent(statusMatch[1]);
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const body = await readJson(req);
+        const toStatus = typeof body.toStatus === 'string' ? body.toStatus.trim() : '';
+        const reason = typeof body.reason === 'string' ? body.reason.trim() : null;
+
+        const allowedNext = VALID_STATUS_TRANSITIONS[caseRow.status] ?? [];
+        if (!allowedNext.includes(toStatus)) {
+          throw new HttpError(400, `Invalid status transition from ${caseRow.status} to ${toStatus}`);
+        }
+
+        const updatedCase = await db.$transaction(async (tx) => {
+          const item = await tx.caseItem.update({
+            where: { id: caseId },
+            data: { status: toStatus, version: { increment: 1 } }
+          });
+
+          await tx.statusHistory.create({
+            data: {
+              id: `STHIST-${crypto.randomUUID()}`,
+              caseId,
+              fromStatus: caseRow.status,
+              toStatus,
+              changedById: context.user.id,
+              reason
+            }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'CASE_STATUS_TRANSITION', 'CaseItem', caseId, {
+              fromStatus: caseRow.status,
+              toStatus,
+              reason
+            })
+          });
+
+          return item;
+        });
+
+        sendJson(res, 200, { case: updatedCase });
+        return;
+      }
+
       const caseMatch = pathname.match(/^\/api\/cases\/([^/]+)$/);
       if (caseMatch) {
         const caseId = decodeURIComponent(caseMatch[1]);
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        const caseRow = await db.caseItem.findUnique({
+          where: { id: caseId },
+          include: {
+            assignments: { include: { user: { select: { id: true, name: true, email: true } } } },
+            parties: true,
+            schedules: { orderBy: { date: 'asc' } },
+            statusHistories: { orderBy: { createdAt: 'desc' }, include: { changedBy: { select: { id: true, name: true } } } }
+          }
+        });
         if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
         if (caseRow.organizationId !== context.user.organizationId) {
           await db.auditLog.create({ data: requestAudit(context, 'IDOR_ATTEMPT_BLOCKED', 'CaseItem', caseId, { boundary: 'organization' }) });
@@ -227,17 +627,24 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
         if (req.method === 'GET') {
-          sendJson(res, 200, { case: caseRow });
+          // Calculate D-day for each schedule
+          const schedulesWithDDay = caseRow.schedules.map((s) => ({
+            ...s,
+            dDayInfo: calculateDDay(s.date)
+          }));
+          sendJson(res, 200, { case: { ...caseRow, schedules: schedulesWithDDay } });
           return;
         }
         if (req.method === 'PATCH') {
           const body = await readJson(req);
           const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : caseRow.title;
+          const description = typeof body.description === 'string' ? body.description.trim() : caseRow.description;
           const version = typeof body.version === 'number' ? body.version : -1;
+
           await db.$transaction(async (tx) => {
             const result = await tx.caseItem.updateMany({
               where: { id: caseId, organizationId: context.user.organizationId, deletedAt: null, version },
-              data: { title, version: { increment: 1 } }
+              data: { title, description, version: { increment: 1 } }
             });
             if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
             await tx.auditLog.create({ data: requestAudit(context, 'CASE_UPDATED', 'CaseItem', caseId, { fromVersion: version, toVersion: version + 1 }) });
