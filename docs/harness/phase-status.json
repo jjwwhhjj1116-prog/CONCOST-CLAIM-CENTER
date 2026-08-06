@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "currentPhase": "P01",
+  "currentPhase": "P02",
   "phases": {
     "P00": {
       "name": "workspace-bootstrap",
@@ -12,13 +12,11 @@
       "name": "product-contract",
       "status": "PASS",
       "implementationCommit": "24b31f1",
-      "reviewedCommit": "24b31f1",
-      "reviewReport": "docs/reviews/P01-codex-review.md",
-      "nextPhaseAllowed": true
+      "reviewReport": "docs/reviews/P01-codex-review.md"
     },
     "P02": {
       "name": "stitch-ux-ui-design",
-      "status": "PLANNED"
+      "status": "IN_PROGRESS"
     },
     "P03": {
       "name": "app-shell-design-system",
