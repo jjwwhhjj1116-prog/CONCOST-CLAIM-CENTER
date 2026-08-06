@@ -1,82 +1,38 @@
 {
   "project": "claim-center-report-studio",
+  "updatedAt": "2026-08-06T05:41:25Z",
   "currentPhase": "P04",
+  "nextPhaseAllowed": false,
   "phases": {
     "P00": {
-      "name": "workspace-bootstrap",
       "status": "PASS",
-      "implementationCommit": "bad2a28",
-      "reviewReport": "docs/reviews/P00-codex-review.md"
+      "updatedAt": "2026-08-06T01:10:00Z"
     },
     "P01": {
-      "name": "product-contract",
       "status": "PASS",
-      "implementationCommit": "24b31f1",
-      "reviewReport": "docs/reviews/P01-codex-review.md"
+      "updatedAt": "2026-08-06T02:00:00Z"
     },
     "P02": {
-      "name": "stitch-ux-ui-design",
       "status": "PASS",
-      "implementationCommit": "9ce31ac",
-      "reviewReport": "docs/reviews/P02-codex-review.md"
+      "updatedAt": "2026-08-06T03:00:00Z"
     },
     "P03": {
-      "name": "app-shell-design-system",
       "status": "PASS",
-      "implementationCommit": "ff23ae4",
-      "reviewReport": "docs/reviews/P03-codex-review.md"
+      "updatedAt": "2026-08-06T04:00:00Z"
     },
     "P04": {
-      "name": "db-auth-permissions-audit",
-      "status": "IN_PROGRESS"
-    },
-    "P05": {
-      "name": "case-management-core",
-      "status": "PLANNED"
-    },
-    "P06": {
-      "name": "workspace-file-version-minutes",
-      "status": "PLANNED"
-    },
-    "P07": {
-      "name": "proposal-template-builder",
-      "status": "PLANNED"
-    },
-    "P08": {
-      "name": "report-template-catalog",
-      "status": "PLANNED"
-    },
-    "P09": {
-      "name": "report-studio-core",
-      "status": "PLANNED"
-    },
-    "P10": {
-      "name": "ai-gateway-config",
-      "status": "PLANNED"
-    },
-    "P11": {
-      "name": "evidence-based-ai-generation",
-      "status": "PLANNED"
-    },
-    "P12": {
-      "name": "review-approval-export",
-      "status": "PLANNED"
-    },
-    "P13": {
-      "name": "cost-success-fee",
-      "status": "PLANNED"
-    },
-    "P14": {
-      "name": "google-workspace-integration",
-      "status": "PLANNED"
-    },
-    "P15": {
-      "name": "integration-security-accessibility",
-      "status": "PLANNED"
-    },
-    "P16": {
-      "name": "demo-release",
-      "status": "PLANNED"
+      "status": "READY_FOR_REVIEW",
+      "updatedAt": "2026-08-06T05:41:25Z",
+      "deliverables": [
+        "docs/adr/0001-p04-database-baseline.md",
+        "packages/database/src/db-engine.ts",
+        "packages/database/src/db-cli.ts",
+        "packages/database/src/seed.ts",
+        "apps/api/src/server.ts",
+        "artifacts/harness/P04/notes.md",
+        "artifacts/harness/P04/commands.log",
+        "artifacts/harness/P04/manifest.json"
+      ]
     }
   }
 }
