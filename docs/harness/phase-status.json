@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-06T06:54:00Z",
+  "updatedAt": "2026-08-06T07:02:00Z",
   "currentPhase": "P05",
   "nextPhaseAllowed": false,
   "phases": {
@@ -25,9 +25,14 @@
       "updatedAt": "2026-08-06T06:36:00Z"
     },
     "P05": {
-      "status": "IN_PROGRESS",
-      "updatedAt": "2026-08-06T06:54:00Z",
-      "deliverables": []
+      "status": "READY_FOR_REVIEW",
+      "updatedAt": "2026-08-06T07:02:00Z",
+      "deliverables": [
+        "artifacts/harness/P05/manifest.json",
+        "artifacts/harness/P05/notes.md",
+        "artifacts/harness/P05/commands.log",
+        "docs/reviews/requests/P05-review-request.md"
+      ]
     }
   }
 }
