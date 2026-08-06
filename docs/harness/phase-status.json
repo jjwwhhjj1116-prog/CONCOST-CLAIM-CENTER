@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "currentPhase": "P03",
+  "currentPhase": "P04",
   "phases": {
     "P00": {
       "name": "workspace-bootstrap",
@@ -18,23 +18,17 @@
       "name": "stitch-ux-ui-design",
       "status": "PASS",
       "implementationCommit": "9ce31ac",
-      "reviewedCommit": "9ce31ac2e59493f864804a52f5736986515311c7",
-      "reviewReport": "docs/reviews/P02-codex-review.md",
-      "nextPhaseAllowed": true
+      "reviewReport": "docs/reviews/P02-codex-review.md"
     },
     "P03": {
       "name": "app-shell-design-system",
       "status": "PASS",
-      "implementationCommit": "d447a13",
-      "correctiveCommit": "ff23ae4436b43de856ae5b7c5ff3ad2dde544731",
-      "reviewedCommit": "ff23ae4436b43de856ae5b7c5ff3ad2dde544731",
-      "reviewReport": "docs/reviews/P03-codex-review.md",
-      "nextPhaseAllowed": true
+      "implementationCommit": "ff23ae4",
+      "reviewReport": "docs/reviews/P03-codex-review.md"
     },
     "P04": {
       "name": "db-auth-permissions-audit",
-      "status": "PLANNED",
-      "handoff": "docs/harness/P04-antigravity-handoff.md"
+      "status": "IN_PROGRESS"
     },
     "P05": {
       "name": "case-management-core",
