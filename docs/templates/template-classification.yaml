@@ -1,0 +1,63 @@
+# 레퍼런스 보고서 템플릿 9개 묶음 폴더의 논리 배치 분류 명세
+# 원본 위치: docs/보고서 템플릿/
+
+mappings:
+  - folder: "01. 감정보완 신청서"
+    primaryType: "TYPE-02"
+    secondaryTypes:
+      - "TYPE-05"
+    status: "REVIEW_REQUIRED"
+
+  - folder: "02. 항소에 대한 의견 보고서"
+    primaryType: "TYPE-02"
+    secondaryTypes:
+      - "TYPE-03"
+    status: "REVIEW_REQUIRED"
+
+  - folder: "03. 설계변경+물가변동+간접비"
+    primaryType: "TYPE-03"
+    secondaryTypes:
+      - "TYPE-06"
+    status: "REVIEW_REQUIRED"
+
+  - folder: "04. 하자검토 보고서"
+    primaryType: "TYPE-01"
+    secondaryTypes:
+      - "TYPE-03"
+    status: "REVIEW_REQUIRED"
+
+  - folder: "05. 설계변경+물가변동"
+    primaryType: "TYPE-06"
+    secondaryTypes:
+      - "TYPE-03"
+    status: "REVIEW_REQUIRED"
+
+  - folder: "06. 공사비 적정성 검토 보고서"
+    primaryType: "TYPE-04"
+    secondaryTypes:
+      - "TYPE-02"
+    status: "REVIEW_REQUIRED"
+
+  - folder: "07. 하자조사 보고서"
+    primaryType: "TYPE-01"
+    secondaryTypes: []
+    status: "REVIEW_REQUIRED"
+
+  - folder: "08. 돌관공사비"
+    primaryType: "TYPE-01"
+    secondaryTypes:
+      - "TYPE-03"
+    status: "REVIEW_REQUIRED"
+    specAlias: "08. 물량공사비"
+    note: "실제 폴더명을 식별키로 사용하고 명세서 후보명은 별칭으로만 보존함 (검토대기열 기록 완료)"
+
+  - folder: "09. 기시공+미시공"
+    primaryType: "TYPE-01"
+    secondaryTypes: []
+    status: "REVIEW_REQUIRED"
+
+missingTypes:
+  - typeId: "TYPE-05"
+    name: "사감정보고서"
+    status: "TEMPLATE_NOT_FOUND"
+    reason: "docs/보고서 템플릿/ 원본 9개 폴더 내 사감정보고서 전용 템플릿 미확보 상태임. 임의 타 템플릿 강제 배정 금지."

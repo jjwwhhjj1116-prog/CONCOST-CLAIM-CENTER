@@ -1,0 +1,326 @@
+{
+  "totalFiles": 32,
+  "scannedAt": "2026-08-06T10:28:43.767528",
+  "files": [
+    {
+      "fileId": "TPL-REF-001",
+      "relativePath": "docs/보고서 템플릿/01. 감정보완 신청서/TPL-REF-001_template_ref.hwp",
+      "filename": "TPL-REF-001_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 136192,
+      "modifiedTime": "2026-07-13T16:54:07.478000",
+      "sha256": "793cf78dd4262af8ddfddc77b85e5052f379e76d9e30f437cb799b9c43cec40a",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-002",
+      "relativePath": "docs/보고서 템플릿/01. 감정보완 신청서/TPL-REF-002_template_ref.pdf",
+      "filename": "TPL-REF-002_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 203934,
+      "modifiedTime": "2026-07-13T16:54:51.616517",
+      "sha256": "07e6483b00146f2aae5440e426e67e0c3a109dfd03b5e4ceb45dd3c1da222863",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-003",
+      "relativePath": "docs/보고서 템플릿/01. 감정보완 신청서/TPL-REF-003_template_ref.hwp",
+      "filename": "TPL-REF-003_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 114688,
+      "modifiedTime": "2026-05-07T11:19:54.697000",
+      "sha256": "33d47c460c30f5df150d0c213e16b02bad32af118932d7509e92521ef3d3656c",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-004",
+      "relativePath": "docs/보고서 템플릿/01. 감정보완 신청서/TPL-REF-004_template_ref.pdf",
+      "filename": "TPL-REF-004_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 174688,
+      "modifiedTime": "2026-08-05T10:15:04.425684",
+      "sha256": "2841c45be4cb33c376196415a942dd67bbc5a4a63ed4167548c50c18ead02818",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-005",
+      "relativePath": "docs/보고서 템플릿/01. 감정보완 신청서/TPL-REF-005_template_ref.hwp",
+      "filename": "TPL-REF-005_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 357376,
+      "modifiedTime": "2026-06-15T11:46:39.276047",
+      "sha256": "79bdd80d6ea68e2bdbe1d5eb79b082c12fbcd7dfc41d8a17f8e0af6cb15bc8b9",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-006",
+      "relativePath": "docs/보고서 템플릿/01. 감정보완 신청서/TPL-REF-006_template_ref.pdf",
+      "filename": "TPL-REF-006_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 269206,
+      "modifiedTime": "2026-06-16T14:06:40.840736",
+      "sha256": "799f600cc28b85a2d9b3de0b4e4e30160f4ca016891346bbdc955d7ba09a48cb",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-007",
+      "relativePath": "docs/보고서 템플릿/02. 항소에 대한 의견 보고서/TPL-REF-007_template_ref.hwp",
+      "filename": "TPL-REF-007_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 44544,
+      "modifiedTime": "2026-05-15T08:16:53.349139",
+      "sha256": "803a7dac76f5dfb641d6ed09545bd8c3e1bc705e70fc3d6c313d9bdcc9a5862a",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-008",
+      "relativePath": "docs/보고서 템플릿/02. 항소에 대한 의견 보고서/TPL-REF-008_template_ref.pdf",
+      "filename": "TPL-REF-008_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 95079,
+      "modifiedTime": "2026-05-15T08:17:06.268769",
+      "sha256": "b5fc68e971e16c0dc10afdad52ade68466d79f49c5c6632c8bd6746b9b3f733c",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-009",
+      "relativePath": "docs/보고서 템플릿/03. 설계변경+물가변동+간접비/TPL-REF-009_template_ref.hwp",
+      "filename": "TPL-REF-009_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 3795968,
+      "modifiedTime": "2025-12-03T12:10:35.900000",
+      "sha256": "54916152527b6669d0b984e1452913369029b749e168396bbf89193174358e73",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-010",
+      "relativePath": "docs/보고서 템플릿/03. 설계변경+물가변동+간접비/TPL-REF-010_template_ref.pdf",
+      "filename": "TPL-REF-010_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 659537,
+      "modifiedTime": "2025-12-03T12:10:45.059903",
+      "sha256": "48e695fc178c9c5ab7e1922accc11085fad8ffa90a83801dc31988a1212392b5",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-011",
+      "relativePath": "docs/보고서 템플릿/04. 하자검토 보고서/TPL-REF-011_template_ref.hwpx",
+      "filename": "TPL-REF-011_template_ref.hwpx",
+      "extension": ".hwpx",
+      "sizeBytes": 15926862,
+      "modifiedTime": "2026-08-04T11:24:30.470595",
+      "sha256": "704d15f89b301236454ff745a320abfd07a9f81dfe59f01ac80c1200a5a3ab08",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-012",
+      "relativePath": "docs/보고서 템플릿/05. 설계변경+물가변동/TPL-REF-012_template_ref.hwp",
+      "filename": "TPL-REF-012_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 46330880,
+      "modifiedTime": "2025-03-24T09:45:16",
+      "sha256": "b2fa6c4b8d73139b362ec7bf8bf3a0830079d546046e186e5fecf4271cce0589",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-013",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-013_template_ref.pdf",
+      "filename": "TPL-REF-013_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 6165350,
+      "modifiedTime": "2023-12-05T15:27:10",
+      "sha256": "cf615ffc0de836aa17238ce06f432efd2054554d24e3adeb3a95d028429073e7",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-014",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-014_template_ref.xlsx",
+      "filename": "TPL-REF-014_template_ref.xlsx",
+      "extension": ".xlsx",
+      "sizeBytes": 36212602,
+      "modifiedTime": "2023-12-05T15:26:36",
+      "sha256": "3cfe73cd7abfd509ecb59c2d01f4d4dd6016d295d504bc7ba83fe268ab2f8912",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-015",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-015_template_ref.hwp",
+      "filename": "TPL-REF-015_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 4432896,
+      "modifiedTime": "2026-08-04T13:11:31.769616",
+      "sha256": "295323489bfccd6b6a87287c2670756cf5f3f6114ce20a6b6863fa28ed709611",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-016",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-016_template_ref.pdf",
+      "filename": "TPL-REF-016_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 1603175,
+      "modifiedTime": "2026-08-04T13:11:47.523659",
+      "sha256": "aae869dd91d5466d7c9553c124efd1cc26da2bfb8543b247c2ad3d5b53a8a54e",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-017",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-017_template_ref.hwpx",
+      "filename": "TPL-REF-017_template_ref.hwpx",
+      "extension": ".hwpx",
+      "sizeBytes": 13027301,
+      "modifiedTime": "2026-07-14T16:06:09.981564",
+      "sha256": "46654b6954f7db138db189e90a256ebaab9721f8089f20536236e0690fa6f538",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-018",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-018_template_ref.pdf",
+      "filename": "TPL-REF-018_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 3343200,
+      "modifiedTime": "2026-07-14T16:06:19.335126",
+      "sha256": "af54833985f8e95683c8fb4c7e5daf07d8c5bef9a5c33187c12c26028cb240e5",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-019",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-019_template_ref.hwp",
+      "filename": "TPL-REF-019_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 1106432,
+      "modifiedTime": "2026-06-09T15:19:46.726000",
+      "sha256": "5b250214112613ba64344bc07fd42c35a8b02658a48c1a0161e85f329e64d175",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-020",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-020_template_ref.pdf",
+      "filename": "TPL-REF-020_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 391445,
+      "modifiedTime": "2026-06-09T15:19:54.275207",
+      "sha256": "4f11c2e0a80a2a48ebc1c9c4d7fd5a7903a1ee7eeec33741969e81fd13dd835b",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-021",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-021_template_ref.hwp",
+      "filename": "TPL-REF-021_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 197120,
+      "modifiedTime": "2026-07-01T14:00:59.092133",
+      "sha256": "c2b08275275061270eeebd87ad2834cdb93686d8f5079805fee1c156d555c22b",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-022",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-022_template_ref.pdf",
+      "filename": "TPL-REF-022_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 308448,
+      "modifiedTime": "2026-07-01T14:01:10.567643",
+      "sha256": "b92bd57ca313180477328c38f1997090662f45851aa1fea8a2080d3410d8840b",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-023",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-023_template_ref.hwp",
+      "filename": "TPL-REF-023_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 2474496,
+      "modifiedTime": "2026-01-30T14:13:44.424598",
+      "sha256": "b46af144ac4530f510b2bb4545bc5060713aa59e58143d56137c50d6843737fa",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-024",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-024_template_ref.pdf",
+      "filename": "TPL-REF-024_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 1065603,
+      "modifiedTime": "2026-01-30T14:13:58.975576",
+      "sha256": "2392e4723cdae1e26e111bffd27f463389de6ef9b0203b5894a7de27a3345534",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-025",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-025_template_ref.hwpx",
+      "filename": "TPL-REF-025_template_ref.hwpx",
+      "extension": ".hwpx",
+      "sizeBytes": 4141103,
+      "modifiedTime": "2026-02-28T13:53:08.378186",
+      "sha256": "281822dcaab11013dbf8a4d05ede709cad9763504cb411319fb6b0db71830dc5",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-026",
+      "relativePath": "docs/보고서 템플릿/06. 공사비 적정성 검토 보고서/TPL-REF-026_template_ref.pdf",
+      "filename": "TPL-REF-026_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 1630464,
+      "modifiedTime": "2026-02-28T13:54:14.590651",
+      "sha256": "036c826bab836a83962c1878bc7c8b5ee18d0120f3bf146ec535fbe7923d68be",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-027",
+      "relativePath": "docs/보고서 템플릿/07. 하자조사 보고서/TPL-REF-027_template_ref.hwp",
+      "filename": "TPL-REF-027_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 2698240,
+      "modifiedTime": "2025-09-12T17:06:35.113000",
+      "sha256": "62bc005ed3a99120cfb631dfac47ce694f68d52a3ad73ee528a2eda6a87abb3b",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-028",
+      "relativePath": "docs/보고서 템플릿/07. 하자조사 보고서/TPL-REF-028_template_ref.pdf",
+      "filename": "TPL-REF-028_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 1128344,
+      "modifiedTime": "2025-09-12T18:11:36.430069",
+      "sha256": "a8c1e0294ead3b86e5e7dc0eff30054d92a501b93dc518ccc559fd4365fcb4b1",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-029",
+      "relativePath": "docs/보고서 템플릿/08. 돌관공사비/TPL-REF-029_template_ref.hwp",
+      "filename": "TPL-REF-029_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 1216000,
+      "modifiedTime": "2025-10-14T10:28:54",
+      "sha256": "a0c647b7892a4078b24cc670f33329007a45877f8e8df3cb43b2516dbe54a644",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-030",
+      "relativePath": "docs/보고서 템플릿/08. 돌관공사비/TPL-REF-030_template_ref.pdf",
+      "filename": "TPL-REF-030_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 856731,
+      "modifiedTime": "2025-10-13T10:28:00",
+      "sha256": "88babe364a7cacfbb1b5e25356f80c0bc6583cfc7a0c215346a5732117665c39",
+      "scanStatus": "REVIEW_REQUIRED"
+    },
+    {
+      "fileId": "TPL-REF-031",
+      "relativePath": "docs/보고서 템플릿/09. 기시공+미시공/TPL-REF-031_template_ref.hwp",
+      "filename": "TPL-REF-031_template_ref.hwp",
+      "extension": ".hwp",
+      "sizeBytes": 15459328,
+      "modifiedTime": "2024-07-05T09:12:42",
+      "sha256": "602861a42ba7ed0e96842eb40c811073942086fb9213ed8c938bef7a5d7a3bf2",
+      "scanStatus": "UNSCANNED"
+    },
+    {
+      "fileId": "TPL-REF-032",
+      "relativePath": "docs/보고서 템플릿/09. 기시공+미시공/TPL-REF-032_template_ref.pdf",
+      "filename": "TPL-REF-032_template_ref.pdf",
+      "extension": ".pdf",
+      "sizeBytes": 1869845,
+      "modifiedTime": "2024-07-05T11:55:04",
+      "sha256": "017b8fb3aac57469b51ee8cc43cca7c58a56e58e49f31c6a38f9beaa42a9f707",
+      "scanStatus": "REVIEW_REQUIRED"
+    }
+  ]
+}

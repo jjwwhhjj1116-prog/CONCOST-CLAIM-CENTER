@@ -1,0 +1,33 @@
+# 템플릿 및 업무 프로세스 오기·명세 충돌 검토 대기열 (Review Queue)
+
+review_items:
+  - id: REV-001
+    source: "Excel 원본 (클레임 업무 프로세스.xlsx) vs 명세서 (03_CLAIM_6_TYPE_TEMPLATE_MAPPING_SPEC.md)"
+    conflict_field: "TYPE-02 용어 오타"
+    excel_value: "공사시 적정성 검토"
+    spec_value: "공사비 적정성 검토"
+    action_status: "REVIEW_REQUIRED"
+    recommendation: "의미상 '공사비 적정성 검토'가 타당하나, 실무 검토자 승인 전 임의 덮어쓰기 금지."
+
+  - id: REV-002
+    source: "Excel 원본 (클레임 업무 프로세스.xlsx) vs 명세서 (03_CLAIM_6_TYPE_TEMPLATE_MAPPING_SPEC.md)"
+    conflict_field: "TYPE-04 구문 문장부호 표현"
+    excel_value: "재건축. 재개발 공사비 협상"
+    spec_value: "재건축·재개발 공사비 협상"
+    action_status: "REVIEW_REQUIRED"
+    recommendation: "가독성을 위한 가운뎃점(·) 표준 표기 채택 검토."
+
+  - id: REV-003
+    source: "실제 원본 08 폴더명 vs 명세서 08 항목명"
+    conflict_field: "08번 템플릿 폴더명 불일치"
+    real_folder_name: "08. 돌관공사비"
+    spec_folder_name: "08. 물량공사비"
+    action_status: "REVIEW_REQUIRED"
+    recommendation: "실제 파일 시스템 물리 폴더명은 '08. 돌관공사비'임. 이동·삭제·이름변경을 불허하므로 논리 참조 레이어에서 맵핑 검토."
+
+  - id: REV-004
+    source: "HWP 바이너리 파일 스캔 파싱 한계"
+    conflict_field: "HWP 확장자 문서 자동 구조 분석 불가"
+    affected_files_count: 14
+    action_status: "UNSCANNED"
+    recommendation: "HWP 바이너리 파일은 자동 파싱 불가하여 scanStatus를 UNSCANNED/REVIEW_REQUIRED로 유지하고, PDF 변환본 또는 사람 검토 승인(HUMAN_APPROVED) 프로세스 적용."

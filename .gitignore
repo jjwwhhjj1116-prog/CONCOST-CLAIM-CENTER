@@ -19,6 +19,17 @@ yarn-error.log*
 # Exclude external reviewer files from implementation commits
 docs/reviews/P00-codex-review.md
 docs/reviews/P00-codex-review.json
+docs/reviews/P01-codex-review.md
+docs/reviews/P01-codex-review.json
+docs/reviews/P02-codex-review.md
+docs/reviews/P02-codex-review.json
+
+# Reference Report Templates Original Storage (Git exclusion for customer privacy)
+/docs/보고서 템플릿/**
+!/docs/보고서 템플릿/README.md
+!/docs/보고서 템플릿/.gitkeep
+/docs/클레임 업무 프로세스.xlsx
+/local-reference/**
 
 # Environment & Secrets (CRITICAL SECURITY)
 .env
