@@ -4,9 +4,9 @@
   "phases": {
     "P00": {
       "name": "workspace-bootstrap",
-      "status": "READY_FOR_REVIEW",
+      "status": "PASS",
       "implementationCommit": "bad2a28",
-      "reviewReport": "docs/reviews/requests/P00-review-request.md"
+      "reviewReport": "docs/reviews/P00-codex-review.md"
     },
     "P01": {
       "name": "product-contract",
