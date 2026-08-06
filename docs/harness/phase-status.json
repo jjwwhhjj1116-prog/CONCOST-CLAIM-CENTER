@@ -1,8 +1,8 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-06T16:48:00+09:00",
-  "currentPhase": "P05",
-  "nextPhaseAllowed": true,
+  "updatedAt": "2026-08-06T08:18:00Z",
+  "currentPhase": "P06",
+  "nextPhaseAllowed": false,
   "phases": {
     "P00": {
       "status": "PASS",
@@ -26,17 +26,12 @@
     },
     "P05": {
       "status": "PASS",
-      "updatedAt": "2026-08-06T16:48:00+09:00",
-      "reviewedCommit": "719ecbc0ba81d98bd47ed14662e599f7da6f98f1",
-      "verdict": "PASS",
-      "nextPhase": "P06",
-      "deliverables": [
-        "artifacts/harness/P05/manifest.json",
-        "artifacts/harness/P05/notes.md",
-        "artifacts/harness/P05/commands.log",
-        "docs/reviews/requests/P05-review-request.md",
-        "docs/harness/P06-antigravity-handoff.md"
-      ]
+      "updatedAt": "2026-08-06T08:10:00Z"
+    },
+    "P06": {
+      "status": "IN_PROGRESS",
+      "updatedAt": "2026-08-06T08:18:00Z",
+      "deliverables": []
     }
   }
 }
