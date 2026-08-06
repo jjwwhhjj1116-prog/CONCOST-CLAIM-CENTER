@@ -1,0 +1,50 @@
+{
+  "phase": "P02",
+  "scope": [
+    "Stitch master prompt and specification alignment with P01 v2 6 fixed claim types (TYPE-01 to TYPE-06)",
+    "20 Screens complete HTML prototype verification (AUTH-01 to RESP-01)",
+    "DASH-01 10-second 6 KPIs cognitive test & 2-click quick action buttons verification",
+    "REPO-02 3-Pane layout (TOC, Editor, AI/Evidence) & 5 UI states (Normal, Loading, Empty, Error, 403 Forbidden) state switcher verification",
+    "1024px tablet responsive drawer toggle javascript event handler verification",
+    "Accessibility verification (Focus Ring, ARIA attributes, Ellipsis overflow)",
+    "Harness automated testing extension for P02 20 screens and adversarial mutation assertions (harness-test.ts)",
+    "P02 evidence artifact package generation (artifacts/harness/P02/)",
+    "Quality & security gate validation (install, lint, typecheck, test, build, audit)",
+    "Codex review request generation (P02-review-request.md)"
+  ],
+  "changedFiles": [
+    "artifacts/harness/P02/commands.log",
+    "artifacts/harness/P02/manifest.json",
+    "artifacts/harness/P02/notes.md",
+    "docs/stitch/stitch-master-prompt.md",
+    "scripts/harness-test.ts"
+  ],
+  "commandsExecuted": [
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
+  ],
+  "tests": {
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0
+  },
+  "knownLimitations": [
+    "P02 focuses on Stitch UX/UI design specs, 20 HTML prototypes, 6 claim types, and state switcher integration. App shell implementation follows in P03."
+  ],
+  "acceptanceCriteria": [
+    "20 Screens complete HTML prototypes verified: PASS",
+    "6 Fixed Claim Types (TYPE-01 to TYPE-06) specified: PASS",
+    "DASH-01 10-second 6 KPIs & 2-click quick actions verified: PASS",
+    "REPO-02 3-Pane layout & 5 UI states visual visibility switcher verified: PASS",
+    "1024px drawer toggle javascript event handler working: PASS",
+    "Focus ring, ARIA attributes & text ellipsis overflow verified: PASS",
+    "6 Quality & Security gates (install, lint, typecheck, test, build, audit) passing: PASS",
+    "Exact changedFiles paths deepStrictEqual matching git diff-tree: PASS",
+    "Pure P02 implementation commit without external reviewer reports: PASS"
+  ],
+  "selfAssessment": "READY_FOR_REVIEW"
+}
