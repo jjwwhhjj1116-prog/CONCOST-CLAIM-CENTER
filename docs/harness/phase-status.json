@@ -1,8 +1,8 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-06T05:41:25Z",
+  "updatedAt": "2026-08-06T06:36:16Z",
   "currentPhase": "P04",
-  "nextPhaseAllowed": false,
+  "nextPhaseAllowed": true,
   "phases": {
     "P00": {
       "status": "PASS",
@@ -21,14 +21,21 @@
       "updatedAt": "2026-08-06T04:00:00Z"
     },
     "P04": {
-      "status": "READY_FOR_REVIEW",
-      "updatedAt": "2026-08-06T05:41:25Z",
+      "status": "PASS",
+      "verdict": "PASS",
+      "updatedAt": "2026-08-06T06:36:16Z",
+      "reviewedCommit": "560236605a925cf62350a3540ea77b1674d597aa",
+      "reviewReport": "docs/reviews/P04-codex-review.md",
       "deliverables": [
         "docs/adr/0001-p04-database-baseline.md",
+        "packages/database/prisma/schema.prisma",
+        "packages/database/prisma/migrations/20260806070000_p04_baseline/migration.sql",
         "packages/database/src/db-engine.ts",
         "packages/database/src/db-cli.ts",
         "packages/database/src/seed.ts",
         "apps/api/src/server.ts",
+        "scripts/p04-contract-test.ts",
+        "scripts/p04-security-test.ts",
         "artifacts/harness/P04/notes.md",
         "artifacts/harness/P04/commands.log",
         "artifacts/harness/P04/manifest.json"
