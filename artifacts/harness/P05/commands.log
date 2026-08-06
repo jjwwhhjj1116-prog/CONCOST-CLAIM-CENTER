@@ -1,11 +1,57 @@
-[2026-08-06T06:55:20Z] cmd /c "npx --yes pnpm@9.15.0 install" -> PASS
-[2026-08-06T06:57:14Z] cmd /c "npx --yes pnpm@9.15.0 db:reset" -> PASS
-[2026-08-06T06:56:37Z] cmd /c "npx --yes pnpm@9.15.0 db:migrate" -> PASS
-[2026-08-06T06:57:21Z] cmd /c "npx --yes pnpm@9.15.0 db:seed" -> PASS
-[2026-08-06T06:59:32Z] cmd /c "npx --yes pnpm@9.15.0 lint" -> PASS (0 warnings)
-[2026-08-06T06:59:43Z] cmd /c "npx --yes pnpm@9.15.0 typecheck" -> PASS (0 errors)
-[2026-08-06T07:01:14Z] cmd /c "npx --yes pnpm@9.15.0 test" -> PASS (39/39 passed)
-[2026-08-06T06:59:52Z] cmd /c "npx --yes pnpm@9.15.0 build" -> PASS
-[2026-08-06T07:00:05Z] cmd /c "npx --yes pnpm@9.15.0 test:e2e" -> PASS (Playwright Chromium)
-[2026-08-06T07:00:59Z] cmd /c "npx --yes pnpm@9.15.0 test:security" -> PASS (9/9 passed)
-[2026-08-06T07:01:10Z] cmd /c "npx --yes pnpm@9.15.0 audit --audit-level high" -> PASS (0 vulnerabilities)
+P05 CODEX CLEAN VERIFICATION
+verifiedAt=2026-08-06T16:48:00+09:00
+checkout=p05-clean-719ecbc
+commit=719ecbc0ba81d98bd47ed14662e599f7da6f98f1
+
+[1/11] npx --yes pnpm@9.15.0 install --frozen-lockfile
+RESULT=PASS
+OBSERVED=Lockfile is up to date; 215 packages linked from clean node_modules; Prisma Client 6.19.3 generated.
+
+[2/11] npx --yes pnpm@9.15.0 db:reset
+RESULT=PASS
+OBSERVED=Database reset and migration SQL applied successfully.
+
+[3/11] npx --yes pnpm@9.15.0 db:migrate
+RESULT=PASS
+OBSERVED=Database migration SQL applied successfully.
+
+[4/11] npx --yes pnpm@9.15.0 db:seed
+RESULT=PASS
+OBSERVED=Database seeded with deterministic synthetic P05 fixtures.
+
+[5/11] npx --yes pnpm@9.15.0 lint
+RESULT=PASS
+OBSERVED=TypeScript preflight, ESLint and JSON validation passed with zero warnings.
+
+[6/11] npx --yes pnpm@9.15.0 typecheck
+RESULT=PASS
+OBSERVED=Scripts, UI, web, database and API workspaces type-checked.
+
+[7/11] npx --yes pnpm@9.15.0 test
+RESULT=PASS
+OBSERVED=tests 46; pass 46; fail 0; skipped 0.
+
+[8/11] npx --yes pnpm@9.15.0 build
+RESULT=PASS
+OBSERVED=Prisma generated; 47 Vite modules transformed; production web/API/database/UI artifacts verified.
+
+[9/11] npx --yes pnpm@9.15.0 test:e2e
+RESULT=PASS
+OBSERVED=Real Chromium against the current production build completed auth/API/DB create, classification, party, schedule, lifecycle, search, KPI, RBAC, history, drawer, focus and 200% zoom flow.
+
+[10/11] npx --yes pnpm@9.15.0 test:security
+RESULT=PASS
+OBSERVED=tests 16; pass 16; fail 0; skipped 0. Includes populated P04-to-P05 upgrade preservation, DB append-only/tenant constraints, role attacks, subresource IDOR, transaction rollback and stale-version rejection.
+NOTE=The two printed Prisma foreign-key errors are deliberately injected audit failures; their surrounding rollback tests passed.
+
+[11/11] npx --yes pnpm@9.15.0 audit --audit-level high
+RESULT=PASS
+OBSERVED=No known vulnerabilities found.
+
+[HYGIENE] tracked file scan
+RESULT=PASS
+OBSERVED=0 private-key/API-token patterns; 0 tracked .env/key/database files; no actual customer data found. Generic UI placeholders were manually classified as non-customer data.
+
+[INTEGRITY] git status -sb; git rev-parse HEAD; git diff --check
+RESULT=PASS
+OBSERVED=Detached clean checkout at 719ecbc0ba81d98bd47ed14662e599f7da6f98f1 with no tracked modifications and no whitespace errors.

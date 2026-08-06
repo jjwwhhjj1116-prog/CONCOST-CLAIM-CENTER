@@ -1,40 +1,70 @@
 {
   "phase": "P05",
-  "status": "READY_FOR_REVIEW",
-  "selfAssessment": "READY_FOR_CODEX_REVIEW",
-  "timestamp": "2026-08-06T07:01:55Z",
-  "commitAHash": "10f21b6",
+  "status": "PASS",
+  "assessment": "CODEX_INDEPENDENT_VERIFIED_AFTER_PATCH",
+  "verifiedAt": "2026-08-06T16:48:00+09:00",
+  "baselineCommit": "92bce5c",
+  "reviewedCommit": "719ecbc0ba81d98bd47ed14662e599f7da6f98f1",
   "changedFiles": [
     "apps/api/src/server.ts",
+    "apps/web/index.html",
+    "apps/web/src/App.tsx",
+    "apps/web/src/api.ts",
+    "apps/web/src/case-management/CaseManagement.tsx",
+    "apps/web/src/layout/AppShell.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "package.json",
     "packages/database/prisma/migrations/20260806080000_p05_case_management/migration.sql",
     "packages/database/prisma/schema.prisma",
-    "packages/database/src/db-engine.ts",
     "packages/database/src/seed.ts",
+    "pnpm-lock.yaml",
     "scripts/harness-test.ts",
-    "scripts/p04-security-test.ts",
-    "scripts/p05-case-test.ts"
+    "scripts/p03-contract-test.ts",
+    "scripts/p04-contract-test.ts",
+    "scripts/p05-case-test.ts",
+    "scripts/p05-contract-test.ts",
+    "scripts/p05-e2e.ts",
+    "scripts/p05-security-test.ts"
   ],
+  "cleanVerification": {
+    "checkout": "p05-clean-719ecbc",
+    "commit": "719ecbc0ba81d98bd47ed14662e599f7da6f98f1",
+    "workingTreeCleanAfterGates": true
+  },
   "commandsExecuted": [
-    "cmd /c \"npx --yes pnpm@9.15.0 install\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 db:reset\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 db:migrate\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 db:seed\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 lint\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 typecheck\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 test\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 build\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 test:e2e\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 test:security\"",
-    "cmd /c \"npx --yes pnpm@9.15.0 audit --audit-level high\""
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 db:reset",
+    "npx --yes pnpm@9.15.0 db:migrate",
+    "npx --yes pnpm@9.15.0 db:seed",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 test:e2e",
+    "npx --yes pnpm@9.15.0 test:security",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
   ],
   "tests": {
-    "passed": 39,
+    "passed": 46,
     "failed": 0,
     "skipped": 0
   },
   "securityTests": {
-    "passed": 9,
+    "passed": 16,
     "failed": 0,
     "skipped": 0
+  },
+  "browserE2E": {
+    "engine": "real installed Chromium",
+    "productionBuildServed": true,
+    "passed": true
+  },
+  "audit": {
+    "highOrGreaterVulnerabilities": 0
+  },
+  "hygiene": {
+    "trackedSecretPatterns": 0,
+    "trackedSensitiveFiles": 0,
+    "realCustomerDataFound": false
   }
 }
