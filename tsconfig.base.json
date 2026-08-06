@@ -9,6 +9,11 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@claim-studio/ui": ["packages/ui/src/index.ts"],
+      "@claim-studio/database": ["packages/database/src/index.ts"]
+    }
   }
 }

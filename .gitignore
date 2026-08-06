@@ -27,6 +27,13 @@ docs/reviews/P*-codex-review.json
 /docs/클레임 업무 프로세스.xlsx
 /local-reference/**
 
+# Database Local SQLite Files
+.data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
 # Environment & Secrets (CRITICAL SECURITY)
 .env
 .env*.local

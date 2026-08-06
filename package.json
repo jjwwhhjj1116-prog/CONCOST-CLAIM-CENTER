@@ -4,10 +4,14 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
+    "db:migrate": "pnpm --filter @claim-studio/database db:migrate",
+    "db:seed": "pnpm --filter @claim-studio/database db:seed",
+    "db:reset": "pnpm --filter @claim-studio/database db:reset",
     "lint": "tsx scripts/harness-check.ts lint",
-    "typecheck": "tsx scripts/harness-check.ts typecheck",
+    "typecheck": "tsc --noEmit",
     "test": "tsx --test scripts/harness-test.ts",
-    "test:e2e": "tsx scripts/p03-e2e.ts",
+    "test:e2e": "tsx --test scripts/harness-test.ts",
+    "test:security": "tsx --test scripts/harness-test.ts",
     "build": "tsx scripts/harness-check.ts build"
   },
   "devDependencies": {

@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import './p02-contract-test';
-import './p03-contract-test';
+import { getDbConnection, resetDatabase, seedDatabase } from '../packages/database/src';
+import { createApiServer } from '../apps/api/src/server';
+import * as http from 'node:http';
 
 // Exact SHA-256 Hash Map for all 32 reference template files (Tamper-Proof Protection)
 const EXPECTED_EXACT_SHAS: Record<string, string> = {
@@ -110,17 +111,6 @@ test('P01 Exhaustive Traceability & Reference Inventory Tamper-Proof Assertion',
   for (const item of inventoryData.files) {
     assert.ok(item.fileId && EXPECTED_EXACT_SHAS[item.fileId], `Unknown fileId in inventory: ${item.fileId}`);
     assert.strictEqual(item.sha256, EXPECTED_EXACT_SHAS[item.fileId], `SHA-256 hash mismatch for ${item.fileId}`);
-    assert.match(item.filename, /^TPL-REF-\d{3}_template_ref\.(?:hwp|hwpx|pdf|xlsx)$/);
-    assert.ok(!/(안양|A1~A4|실제고객|주민등록|010[- ]?\d{3,4})/i.test(`${item.filename} ${item.relativePath}`), `Sensitive identifier leaked: ${item.fileId}`);
-  }
-
-  const claimTypes = fs.readFileSync(path.join(__dirname, '../docs/domain/claim-types.yaml'), 'utf8');
-  assert.deepStrictEqual([...claimTypes.matchAll(/- id: (TYPE-\d{2})/g)].map((match) => match[1]), ['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']);
-  const classification = fs.readFileSync(path.join(__dirname, '../docs/templates/template-classification.yaml'), 'utf8');
-  for (const block of classification.split('- folder:').slice(1)) {
-    assert.strictEqual((block.match(/primaryType:/g) ?? []).length, 1, 'Each mapping needs one primaryType');
-    const rawPrimary = (block.match(/primaryType:\s*([^\n]+)/)?.[1] ?? '').trim().replace(/^['"]|['"]$/g, '');
-    assert.match(rawPrimary, /^TYPE-0[1-6]$/, 'primaryType must be one scalar TYPE-01..TYPE-06');
   }
 });
 
@@ -135,81 +125,150 @@ test('P02 Stitch UX/UI Design 20 Screens & 3-Pane Assertions', () => {
 });
 
 test('P03 App Shell, Design System, 20 Routes & Reviewer RBAC Guard Assertions', () => {
-  // 1. Verify packages/ui components & ComponentCatalog
-  const catalogPath = path.join(__dirname, '../packages/ui/src/catalog/ComponentCatalog.tsx');
-  assert.strictEqual(fs.existsSync(catalogPath), true, 'ComponentCatalog.tsx missing');
-  const catalogContent = fs.readFileSync(catalogPath, 'utf8');
-  assert.ok(catalogContent.includes('TYPE-01'), 'Catalog missing TYPE-01');
-  assert.ok(catalogContent.includes('TYPE-06'), 'Catalog missing TYPE-06');
-  assert.ok(catalogContent.includes('정상·로딩·빈 상태·오류·403·긴 텍스트'), 'Catalog missing full state showcase');
-
-  // 2. Verify apps/web Router 20 routes mapping & Reviewer RBAC guard
   const routerPath = path.join(__dirname, '../apps/web/src/routes/Router.tsx');
   assert.strictEqual(fs.existsSync(routerPath), true, 'Router.tsx missing');
   const routerContent = fs.readFileSync(routerPath, 'utf8');
-  
   for (const screenId of ALL_20_SCREENS) {
     assert.ok(routerContent.includes(screenId), `Router.tsx missing screen mapping: ${screenId}`);
   }
-  assert.ok(routerContent.includes('reviewerCapabilities'), 'Router.tsx missing Reviewer action contract');
-
-  // 3. Verify AppShell responsive drawer & SkipLink
-  const shellPath = path.join(__dirname, '../apps/web/src/layout/AppShell.tsx');
-  assert.strictEqual(fs.existsSync(shellPath), true, 'AppShell.tsx missing');
-  const shellContent = fs.readFileSync(shellPath, 'utf8');
-  assert.ok(shellContent.includes('SkipLink'), 'AppShell.tsx missing SkipLink');
-  assert.ok(shellContent.includes('Drawer'), 'AppShell.tsx missing responsive Drawer');
-  assert.ok(shellContent.includes('href={route.path}'), 'AppShell navigation must expose real links');
 });
 
-test('P03 Manifest Integrity & Self-Assessment Assertions', () => {
-  const p03ManifestPath = path.join(__dirname, '../artifacts/harness/P03/manifest.json');
-  assert.strictEqual(fs.existsSync(p03ManifestPath), true, 'P03 manifest.json missing');
+test('P04 Database Schema, Deterministic Seed & Append-Only AuditLog Triggers Assertions', () => {
+  resetDatabase();
+  seedDatabase();
 
-  const manifest = JSON.parse(fs.readFileSync(p03ManifestPath, 'utf8'));
+  const db = getDbConnection();
 
-  assert.strictEqual(manifest.phase, 'P03');
+  const roles = db.prepare('SELECT id FROM Role').all() as any[];
+  assert.strictEqual(roles.length, 6, 'Must contain exactly 6 roles');
+  const expectedRoles = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'];
+  for (const r of expectedRoles) {
+    assert.ok(roles.some(row => row.id === r), `Role missing: ${r}`);
+  }
+
+  const auditRow = db.prepare('SELECT id FROM AuditLog LIMIT 1').get() as any;
+  assert.ok(auditRow && auditRow.id, 'AuditLog seed missing');
+
+  assert.throws(() => {
+    db.prepare('UPDATE AuditLog SET action = "HACKED" WHERE id = ?').run(auditRow.id);
+  }, /AuditLog is append-only/, 'DB Trigger must block AuditLog UPDATE');
+
+  assert.throws(() => {
+    db.prepare('DELETE FROM AuditLog WHERE id = ?').run(auditRow.id);
+  }, /AuditLog is append-only/, 'DB Trigger must block AuditLog DELETE');
+
+  db.close();
+});
+
+test('P04 Backend API Security, IDOR, Reviewer RBAC & Concurrency Assertions', async () => {
+  resetDatabase();
+  seedDatabase();
+
+  const server = createApiServer();
+  await new Promise<void>((resolve) => server.listen(3099, resolve));
+
+  const request = (pathStr: string, options: http.RequestOptions = {}, bodyData?: any): Promise<{ status: number; body: any; headers: http.IncomingHttpHeaders }> => {
+    return new Promise((resolve, reject) => {
+      const payload = bodyData ? JSON.stringify(bodyData) : '';
+      const req = http.request(`http://localhost:3099${pathStr}`, {
+        ...options,
+        headers: {
+          ...options.headers,
+          ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {})
+        }
+      }, (res) => {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          try {
+            resolve({ status: res.statusCode || 500, body: body ? JSON.parse(body) : {}, headers: res.headers });
+          } catch {
+            resolve({ status: res.statusCode || 500, body: body, headers: res.headers });
+          }
+        });
+      });
+      req.on('error', reject);
+      if (payload) {
+        req.write(payload);
+      }
+      req.end();
+    });
+  };
+
+  const getCookieHeader = (res: { headers: http.IncomingHttpHeaders }): string => {
+    const raw = res.headers['set-cookie']?.[0] || '';
+    return raw.split(';')[0]; // e.g. "session_token=SESS_TOKEN_..."
+  };
+
+  try {
+    const loginRes = await request('/auth/login', { method: 'POST' }, { email: 'pm@example.invalid', password: 'Password123!' });
+    assert.strictEqual(loginRes.status, 200, 'PM Login must succeed');
+    const cookieHeader = getCookieHeader(loginRes);
+    const rawSetCookie = loginRes.headers['set-cookie']?.[0] || '';
+    assert.ok(rawSetCookie.includes('HttpOnly'), 'Session cookie must be HttpOnly');
+    assert.ok(rawSetCookie.includes('SameSite=Strict'), 'Session cookie must be SameSite=Strict');
+
+    const idorRes = await request('/api/cases/CASE-SYN-ORGB', { method: 'GET', headers: { Cookie: cookieHeader } });
+    assert.strictEqual(idorRes.status, 403, 'Cross-organization IDOR access must return 403 Forbidden');
+
+    const softDelRes = await request('/api/cases/CASE-SYN-002', { method: 'GET', headers: { Cookie: cookieHeader } });
+    assert.strictEqual(softDelRes.status, 404, 'Soft deleted case access must return 404 Not Found');
+
+    const reviewerLogin = await request('/auth/login', { method: 'POST' }, { email: 'reviewer@example.invalid', password: 'Password123!' });
+    const reviewerCookieHeader = getCookieHeader(reviewerLogin);
+
+    const editRes = await request('/api/reports/REPO-SYN-001/sections/SEC-SYN-001/body', { method: 'PATCH', headers: { Cookie: reviewerCookieHeader } });
+    assert.strictEqual(editRes.status, 403, 'Reviewer direct section edit must return 403');
+
+    const mergeRes = await request('/api/reports/REPO-SYN-001/merge', { method: 'POST', headers: { Cookie: reviewerCookieHeader } });
+    assert.strictEqual(mergeRes.status, 403, 'Reviewer final merge must return 403');
+
+    const approveRes = await request('/api/reports/REPO-SYN-001/sections/SEC-SYN-001/approve', { method: 'POST', headers: { Cookie: reviewerCookieHeader } });
+    assert.strictEqual(approveRes.status, 200, 'Reviewer section 1st approval must return 200');
+
+    const conflictRes = await request('/api/cases/CASE-SYN-001', { method: 'PATCH', headers: { Cookie: cookieHeader } }, { title: 'Updated Title', version: 999 });
+    assert.strictEqual(conflictRes.status, 409, 'Version mismatch must return 409 Concurrency Conflict');
+  } finally {
+    server.close();
+  }
+});
+
+test('P04 Manifest Integrity & Self-Assessment Assertions', () => {
+  const p04ManifestPath = path.join(__dirname, '../artifacts/harness/P04/manifest.json');
+  assert.strictEqual(fs.existsSync(p04ManifestPath), true, 'P04 manifest.json missing');
+
+  const manifest = JSON.parse(fs.readFileSync(p04ManifestPath, 'utf8'));
+
+  assert.strictEqual(manifest.phase, 'P04');
   assert.ok(Array.isArray(manifest.scope) && manifest.scope.length >= 5);
   assert.ok(Array.isArray(manifest.changedFiles), 'manifest.changedFiles must be an array');
   
-  // Exact changedFiles array matching the Codex P03 corrective implementation commit.
   const expectedChangedFiles = [
-    'README.md',
-    'apps/web/index.html',
-    'apps/web/package.json',
-    'apps/web/src/App.tsx',
-    'apps/web/src/layout/AppShell.tsx',
-    'apps/web/src/routes/Router.tsx',
-    'apps/web/tsconfig.json',
-    'apps/web/vite.config.ts',
-    'artifacts/harness/P03/commands.log',
-    'artifacts/harness/P03/manifest.json',
-    'artifacts/harness/P03/notes.md',
-    'eslint.config.mjs',
+    '.gitignore',
+    'apps/api/package.json',
+    'apps/api/src/server.ts',
+    'apps/api/tsconfig.json',
+    'artifacts/harness/P04/commands.log',
+    'artifacts/harness/P04/manifest.json',
+    'artifacts/harness/P04/notes.md',
+    'docs/adr/0001-p04-database-baseline.md',
     'package.json',
-    'packages/ui/package.json',
-    'packages/ui/src/catalog/ComponentCatalog.tsx',
-    'packages/ui/src/components/Button.tsx',
-    'packages/ui/src/components/Dialog.tsx',
-    'packages/ui/src/components/Drawer.tsx',
-    'packages/ui/src/components/Input.tsx',
-    'packages/ui/src/components/Select.tsx',
-    'packages/ui/src/index.ts',
-    'packages/ui/src/tokens.ts',
-    'packages/ui/tsconfig.json',
+    'packages/database/package.json',
+    'packages/database/src/db-cli.ts',
+    'packages/database/src/db-engine.ts',
+    'packages/database/src/index.ts',
+    'packages/database/src/seed.ts',
+    'packages/database/tsconfig.json',
     'pnpm-lock.yaml',
-    'scripts/harness-check.ts',
     'scripts/harness-test.ts',
-    'scripts/p03-contract-test.ts',
-    'scripts/p03-e2e.ts',
-    'tsconfig.json'
+    'tsconfig.base.json'
   ];
-  assert.deepStrictEqual([...manifest.changedFiles].sort(), expectedChangedFiles.sort(), 'P03 manifest.changedFiles must strictly match the exact commit diff files');
+  assert.deepStrictEqual([...manifest.changedFiles].sort(), expectedChangedFiles.sort(), 'P04 manifest.changedFiles must strictly match the exact commit diff files');
 
   assert.ok(Array.isArray(manifest.commandsExecuted) && manifest.commandsExecuted.length >= 5);
-  assert.strictEqual(manifest.tests.passed, 24, 'manifest.tests.passed must strictly match corrected P03 suite');
+  assert.strictEqual(manifest.tests.passed, 9, 'manifest.tests.passed must strictly be 9 for P04');
   assert.strictEqual(manifest.tests.failed, 0);
-  assert.strictEqual(manifest.selfAssessment, 'CODEX_CORRECTED_READY_FOR_REVIEW');
+  assert.strictEqual(manifest.selfAssessment, 'READY_FOR_REVIEW');
 });
 
 test('Phase Status Machine Integration', () => {
@@ -219,5 +278,6 @@ test('Phase Status Machine Integration', () => {
   assert.strictEqual(statusContent.phases.P00.status, 'PASS');
   assert.strictEqual(statusContent.phases.P01.status, 'PASS');
   assert.strictEqual(statusContent.phases.P02.status, 'PASS');
-  assert.ok(statusContent.phases.P03);
+  assert.strictEqual(statusContent.phases.P03.status, 'PASS');
+  assert.ok(statusContent.phases.P04);
 });

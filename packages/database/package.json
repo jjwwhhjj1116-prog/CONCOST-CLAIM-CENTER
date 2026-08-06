@@ -1,0 +1,14 @@
+{
+  "name": "@claim-studio/database",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "db:migrate": "tsx src/db-cli.ts migrate",
+    "db:seed": "tsx src/seed.ts",
+    "db:reset": "tsx src/db-cli.ts reset"
+  }
+}

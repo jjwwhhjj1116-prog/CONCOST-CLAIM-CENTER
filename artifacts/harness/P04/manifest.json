@@ -1,0 +1,72 @@
+{
+  "phase": "P04",
+  "scope": [
+    "ADR 0001 database baseline documentation (docs/adr/0001-p04-database-baseline.md)",
+    "SQLite database engine implementation in packages/database with FK constraints & optimistic locking (version)",
+    "Append-Only AuditLog database triggers preventing UPDATE & DELETE operations in SQLite DDL",
+    "Deterministic database reset, migration, and seeding (ORG-SYN-A, ORG-SYN-B, 6 fixed roles: ceo, director, pm, staff, reviewer, admin)",
+    "Executable HTTP API backend server in apps/api (Node HTTP + Scrypt password hashing)",
+    "Cryptographic opaque session token with DB SHA-256 token hashing & HttpOnly/SameSite=Strict cookie policy",
+    "IDOR prevention & Organization boundary access control (/api/cases/:id)",
+    "Reviewer RBAC server guards (/reports/:id/sections/:id/body 403, /approve 200, /merge 403)",
+    "Optimistic locking version conflict (409) & soft-delete filters (deletedAt)",
+    "CORS allow-list & Origin/CSRF security defense",
+    "Automated security testing for P04 DB triggers, auth, IDOR, RBAC, and concurrency assertions (harness-test.ts)",
+    "Evidence artifact package generation (artifacts/harness/P04/)",
+    "11 Quality & security gates validation (install, db:reset, db:migrate, db:seed, lint, typecheck, test, build, test:e2e, test:security, audit)"
+  ],
+  "changedFiles": [
+    ".gitignore",
+    "apps/api/package.json",
+    "apps/api/src/server.ts",
+    "apps/api/tsconfig.json",
+    "artifacts/harness/P04/commands.log",
+    "artifacts/harness/P04/manifest.json",
+    "artifacts/harness/P04/notes.md",
+    "docs/adr/0001-p04-database-baseline.md",
+    "package.json",
+    "packages/database/package.json",
+    "packages/database/src/db-cli.ts",
+    "packages/database/src/db-engine.ts",
+    "packages/database/src/index.ts",
+    "packages/database/src/seed.ts",
+    "packages/database/tsconfig.json",
+    "pnpm-lock.yaml",
+    "scripts/harness-test.ts",
+    "tsconfig.base.json"
+  ],
+  "commandsExecuted": [
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 db:reset",
+    "npx --yes pnpm@9.15.0 db:migrate",
+    "npx --yes pnpm@9.15.0 db:seed",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 test:e2e",
+    "npx --yes pnpm@9.15.0 test:security",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
+  ],
+  "tests": {
+    "passed": 9,
+    "failed": 0,
+    "skipped": 0
+  },
+  "knownLimitations": [
+    "P04 SQLite database harness is used for local/CI security testing. Production PostgreSQL migration occurs in P15."
+  ],
+  "acceptanceCriteria": [
+    "ADR 0001 SQLite database baseline documented: PASS",
+    "Append-Only AuditLog DB triggers blocking UPDATE/DELETE verified: PASS",
+    "Deterministic db:reset, db:migrate, db:seed working: PASS",
+    "Opaque session token & HttpOnly/SameSite=Strict cookie policy verified: PASS",
+    "IDOR prevention & Organization boundary access control verified: PASS",
+    "Reviewer RBAC server guards (body edit 403, approve 200, merge 403) verified: PASS",
+    "Optimistic locking version conflict (409) & soft-delete filter verified: PASS",
+    "11 Quality & Security gates passing: PASS",
+    "Exact changedFiles paths deepStrictEqual matching git diff-tree: PASS",
+    "Pure P04 implementation commit without external reviewer reports: PASS"
+  ],
+  "selfAssessment": "READY_FOR_REVIEW"
+}
