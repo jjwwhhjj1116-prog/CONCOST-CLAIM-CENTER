@@ -1,8 +1,8 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-06T06:36:16Z",
-  "currentPhase": "P04",
-  "nextPhaseAllowed": true,
+  "updatedAt": "2026-08-06T06:54:00Z",
+  "currentPhase": "P05",
+  "nextPhaseAllowed": false,
   "phases": {
     "P00": {
       "status": "PASS",
@@ -22,24 +22,12 @@
     },
     "P04": {
       "status": "PASS",
-      "verdict": "PASS",
-      "updatedAt": "2026-08-06T06:36:16Z",
-      "reviewedCommit": "c50d4f272603323c9861bfdf009c7f0acaf28dc1",
-      "reviewReport": "docs/reviews/P04-codex-review.md",
-      "deliverables": [
-        "docs/adr/0001-p04-database-baseline.md",
-        "packages/database/prisma/schema.prisma",
-        "packages/database/prisma/migrations/20260806070000_p04_baseline/migration.sql",
-        "packages/database/src/db-engine.ts",
-        "packages/database/src/db-cli.ts",
-        "packages/database/src/seed.ts",
-        "apps/api/src/server.ts",
-        "scripts/p04-contract-test.ts",
-        "scripts/p04-security-test.ts",
-        "artifacts/harness/P04/notes.md",
-        "artifacts/harness/P04/commands.log",
-        "artifacts/harness/P04/manifest.json"
-      ]
+      "updatedAt": "2026-08-06T06:36:00Z"
+    },
+    "P05": {
+      "status": "IN_PROGRESS",
+      "updatedAt": "2026-08-06T06:54:00Z",
+      "deliverables": []
     }
   }
 }
