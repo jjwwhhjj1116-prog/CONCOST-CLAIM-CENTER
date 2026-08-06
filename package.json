@@ -11,16 +11,18 @@
     "lint": "tsx scripts/harness-check.ts lint",
     "typecheck": "tsx scripts/harness-check.ts typecheck",
     "test": "tsx --test scripts/harness-test.ts",
-    "test:e2e": "tsx scripts/p03-e2e.ts",
-    "test:security": "tsx --test scripts/p04-security-test.ts",
+    "test:e2e": "tsx scripts/p05-e2e.ts",
+    "test:security": "tsx --test scripts/p04-security-test.ts scripts/p05-security-test.ts",
     "build": "tsx scripts/harness-check.ts build"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
+    "@types/sql.js": "1.4.9",
     "@typescript-eslint/eslint-plugin": "^8.24.0",
     "@typescript-eslint/parser": "^8.24.0",
     "eslint": "^9.20.1",
     "playwright-core": "^1.55.0",
+    "sql.js": "1.13.0",
     "tsx": "^4.23.6",
     "typescript": "^5.7.2"
   }

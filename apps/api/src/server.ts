@@ -16,15 +16,27 @@ const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
 const ALLOWED_CLAIM_TYPES = new Set(['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']);
 const ALLOWED_SCHEDULE_TYPES = new Set(['COURT', 'CLIENT', 'INTERNAL']);
+const CASE_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
+const CASE_DELETE_ROLES = new Set(['ceo', 'director', 'admin']);
+
+export const CASE_STATUSES = [
+  'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
+  'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'SUCCESS_FEE', 'CLOSED'
+] as const;
 
 const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
-  REGISTERED: ['IN_PROGRESS'],
-  IN_PROGRESS: ['REVIEWING', 'CLOSED'],
-  REVIEWING: ['SUBMITTED', 'IN_PROGRESS'],
-  SUBMITTED: ['JUDGEMENT', 'REVIEWING'],
-  JUDGEMENT: ['SUCCESS_FEE', 'CLOSED'],
+  INQUIRY: ['PROPOSAL'],
+  PROPOSAL: ['ESTIMATE'],
+  ESTIMATE: ['CONTRACT'],
+  CONTRACT: ['MATERIAL_RECEIVED'],
+  MATERIAL_RECEIVED: ['ANALYSIS'],
+  ANALYSIS: ['REPORT_DRAFTING'],
+  REPORT_DRAFTING: ['SUBMITTED'],
+  SUBMITTED: ['LITIGATION'],
+  LITIGATION: ['JUDGEMENT'],
+  JUDGEMENT: ['SUCCESS_FEE'],
   SUCCESS_FEE: ['CLOSED'],
-  CLOSED: ['IN_PROGRESS']
+  CLOSED: []
 };
 
 class HttpError extends Error {
@@ -126,6 +138,10 @@ async function authenticate(db: PrismaClient, req: http.IncomingMessage, cookies
 async function canAccessCase(db: PrismaClient, context: SessionContext, caseId: string): Promise<boolean> {
   if (context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role))) return true;
   return Boolean(await db.caseAssignment.findUnique({ where: { caseId_userId: { caseId, userId: context.user.id } } }));
+}
+
+function requireAnyRole(context: SessionContext, roles: Set<string>, message: string): void {
+  if (!context.roles.some((role) => roles.has(role))) throw new HttpError(403, message);
 }
 
 export function getKstDateString(date: Date): string {
@@ -266,10 +282,14 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
         const totalCases = await db.caseItem.count({ where: caseWhere });
         const inProgressCount = await db.caseItem.count({
-          where: { ...caseWhere, status: { in: ['IN_PROGRESS', 'REVIEWING', 'SUBMITTED', 'JUDGEMENT', 'SUCCESS_FEE'] } }
+          where: { ...caseWhere, status: { in: CASE_STATUSES.filter((status) => !['INQUIRY', 'CLOSED'].includes(status)) } }
         });
-        const reviewingDocsCount = await db.caseItem.count({
-          where: { ...caseWhere, status: 'REVIEWING' }
+        const reviewingDocsCount = await db.reportSection.count({
+          where: {
+            deletedAt: null,
+            status: { in: ['review', 'review_pending', 'reviewer_review'] },
+            report: { deletedAt: null, case: caseWhere }
+          }
         });
 
         // Schedules calculation (Today tasks vs Delayed tasks)
@@ -306,8 +326,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const q = url.searchParams.get('q')?.trim() ?? '';
         const claimType = url.searchParams.get('claimType')?.trim();
         const status = url.searchParams.get('status')?.trim();
-        const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-        const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 50)));
+        const requestedPage = Number(url.searchParams.get('page') || 1);
+        const requestedLimit = Number(url.searchParams.get('limit') || 50);
+        const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+        const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? Math.min(100, requestedLimit) : 50;
+
+        if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType filter');
+        if (status && !CASE_STATUSES.includes(status as (typeof CASE_STATUSES)[number])) throw new HttpError(400, 'Invalid status filter');
 
         const isAdminOrExec = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
         const where: Prisma.CaseItemWhereInput = {
@@ -332,6 +357,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             where,
             include: {
               assignments: { include: { user: { select: { id: true, name: true, email: true } } } },
+              category: true,
               parties: true,
               schedules: true,
               statusHistories: { orderBy: { createdAt: 'desc' }, take: 1 }
@@ -348,14 +374,28 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       }
 
       if (pathname === '/api/cases' && req.method === 'POST') {
+        requireAnyRole(context, CASE_EDITOR_ROLES, 'Case creation forbidden');
         const body = await readJson(req);
         const title = typeof body.title === 'string' ? body.title.trim() : '';
         const claimType = typeof body.claimType === 'string' ? body.claimType.trim() : '';
         const description = typeof body.description === 'string' ? body.description.trim() : null;
         const assignedUserId = typeof body.assignedUserId === 'string' ? body.assignedUserId : context.user.id;
+        const category = body.category && typeof body.category === 'object' && !Array.isArray(body.category)
+          ? body.category as Record<string, unknown>
+          : {};
+        const major = typeof category.major === 'string' ? category.major.trim() : '';
+        const middle = typeof category.middle === 'string' ? category.middle.trim() : '';
+        const minor = typeof category.minor === 'string' ? category.minor.trim() : '';
 
         if (!title) throw new HttpError(400, 'Title is required');
+        if (title.length > 500) throw new HttpError(400, 'Title must be 500 characters or fewer');
         if (!ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType. Must be TYPE-01 to TYPE-06');
+        if (!major || !middle || !minor) throw new HttpError(400, 'Major, middle, and minor category values are required');
+
+        const assignee = await db.user.findUnique({ where: { id: assignedUserId } });
+        if (!assignee || !assignee.isActive || assignee.organizationId !== context.user.organizationId) {
+          throw new HttpError(403, 'Assignee must be an active user in the same organization');
+        }
 
         const caseId = `CASE-${crypto.randomUUID()}`;
         const caseNumber = `CASE-${new Date().getFullYear()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -369,10 +409,14 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               title,
               description,
               claimType,
-              status: 'REGISTERED',
+              status: 'INQUIRY',
               assignedUserId,
               version: 1
             }
+          });
+
+          await tx.caseCategory.create({
+            data: { id: `CAT-${crypto.randomUUID()}`, caseId, major, middle, minor }
           });
 
           await tx.statusHistory.create({
@@ -380,7 +424,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               id: `STHIST-${crypto.randomUUID()}`,
               caseId,
               fromStatus: null,
-              toStatus: 'REGISTERED',
+              toStatus: 'INQUIRY',
               changedById: context.user.id,
               reason: '신규 사건 등록'
             }
@@ -399,7 +443,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             data: requestAudit(context, 'CASE_CREATED', 'CaseItem', caseId, { title, claimType, caseNumber })
           });
 
-          return item;
+          return { ...item, category: { major, middle, minor } };
         });
 
         sendJson(res, 201, { case: createdCase });
@@ -416,6 +460,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
         if (req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Party modification forbidden');
           const body = await readJson(req);
           const name = typeof body.name === 'string' ? body.name.trim() : '';
           const role = typeof body.role === 'string' ? body.role.trim() : 'OTHER';
@@ -439,6 +484,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         if (partyId && req.method === 'PATCH') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Party modification forbidden');
           const partyRow = await db.party.findUnique({ where: { id: partyId } });
           if (!partyRow || partyRow.caseId !== caseId) throw new HttpError(404, 'Party not found');
 
@@ -463,6 +509,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         if (partyId && req.method === 'DELETE') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Party modification forbidden');
           const partyRow = await db.party.findUnique({ where: { id: partyId } });
           if (!partyRow || partyRow.caseId !== caseId) throw new HttpError(404, 'Party not found');
 
@@ -488,6 +535,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
         if (req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Schedule modification forbidden');
           const body = await readJson(req);
           const title = typeof body.title === 'string' ? body.title.trim() : '';
           const type = typeof body.type === 'string' ? body.type.trim() : '';
@@ -516,10 +564,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         if (scheduleId && req.method === 'PATCH') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Schedule modification forbidden');
           const schedRow = await db.schedule.findUnique({ where: { id: scheduleId } });
           if (!schedRow || schedRow.caseId !== caseId) throw new HttpError(404, 'Schedule not found');
 
           const body = await readJson(req);
+          if (typeof body.type === 'string' && !ALLOWED_SCHEDULE_TYPES.has(body.type.trim())) throw new HttpError(400, 'Invalid schedule type');
+          if (typeof body.date === 'string' && isNaN(new Date(body.date).getTime())) throw new HttpError(400, 'Invalid schedule date');
           const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : schedRow.title;
           const type = typeof body.type === 'string' && ALLOWED_SCHEDULE_TYPES.has(body.type.trim()) ? body.type.trim() : schedRow.type;
           const date = typeof body.date === 'string' && !isNaN(new Date(body.date).getTime()) ? new Date(body.date) : schedRow.date;
@@ -542,6 +593,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         if (scheduleId && req.method === 'DELETE') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Schedule modification forbidden');
           const schedRow = await db.schedule.findUnique({ where: { id: scheduleId } });
           if (!schedRow || schedRow.caseId !== caseId) throw new HttpError(404, 'Schedule not found');
 
@@ -560,6 +612,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       // --- P05 Case Status Transition Endpoint ---
       const statusMatch = pathname.match(/^\/api\/cases\/([^/]+)\/status$/);
       if (statusMatch && req.method === 'POST') {
+        requireAnyRole(context, CASE_EDITOR_ROLES, 'Case status modification forbidden');
         const caseId = decodeURIComponent(statusMatch[1]);
         const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
         if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
@@ -569,6 +622,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const body = await readJson(req);
         const toStatus = typeof body.toStatus === 'string' ? body.toStatus.trim() : '';
         const reason = typeof body.reason === 'string' ? body.reason.trim() : null;
+        const version = typeof body.version === 'number' ? body.version : -1;
 
         const allowedNext = VALID_STATUS_TRANSITIONS[caseRow.status] ?? [];
         if (!allowedNext.includes(toStatus)) {
@@ -576,10 +630,11 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         const updatedCase = await db.$transaction(async (tx) => {
-          const item = await tx.caseItem.update({
-            where: { id: caseId },
+          const result = await tx.caseItem.updateMany({
+            where: { id: caseId, version, status: caseRow.status, deletedAt: null },
             data: { status: toStatus, version: { increment: 1 } }
           });
+          if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
 
           await tx.statusHistory.create({
             data: {
@@ -600,7 +655,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             })
           });
 
-          return item;
+          return tx.caseItem.findUniqueOrThrow({ where: { id: caseId } });
         });
 
         sendJson(res, 200, { case: updatedCase });
@@ -614,6 +669,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           where: { id: caseId },
           include: {
             assignments: { include: { user: { select: { id: true, name: true, email: true } } } },
+            category: true,
             parties: true,
             schedules: { orderBy: { date: 'asc' } },
             statusHistories: { orderBy: { createdAt: 'desc' }, include: { changedBy: { select: { id: true, name: true } } } }
@@ -632,14 +688,26 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             ...s,
             dDayInfo: calculateDDay(s.date)
           }));
-          sendJson(res, 200, { case: { ...caseRow, schedules: schedulesWithDDay } });
+          const activityTimeline = caseRow.statusHistories.map((history) => ({
+            id: history.id,
+            type: 'STATUS_CHANGE',
+            title: `${history.fromStatus ?? 'START'} → ${history.toStatus}`,
+            description: history.reason,
+            actor: history.changedBy,
+            createdAt: history.createdAt
+          }));
+          sendJson(res, 200, { case: { ...caseRow, schedules: schedulesWithDDay, activityTimeline } });
           return;
         }
         if (req.method === 'PATCH') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Case modification forbidden');
           const body = await readJson(req);
           const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : caseRow.title;
           const description = typeof body.description === 'string' ? body.description.trim() : caseRow.description;
           const version = typeof body.version === 'number' ? body.version : -1;
+          const category = body.category && typeof body.category === 'object' && !Array.isArray(body.category)
+            ? body.category as Record<string, unknown>
+            : null;
 
           await db.$transaction(async (tx) => {
             const result = await tx.caseItem.updateMany({
@@ -647,14 +715,32 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               data: { title, description, version: { increment: 1 } }
             });
             if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
+            if (category) {
+              const major = typeof category.major === 'string' ? category.major.trim() : '';
+              const middle = typeof category.middle === 'string' ? category.middle.trim() : '';
+              const minor = typeof category.minor === 'string' ? category.minor.trim() : '';
+              if (!major || !middle || !minor) throw new HttpError(400, 'Major, middle, and minor category values are required');
+              await tx.caseCategory.upsert({
+                where: { caseId },
+                update: { major, middle, minor },
+                create: { id: `CAT-${crypto.randomUUID()}`, caseId, major, middle, minor }
+              });
+            }
             await tx.auditLog.create({ data: requestAudit(context, 'CASE_UPDATED', 'CaseItem', caseId, { fromVersion: version, toVersion: version + 1 }) });
           });
           sendJson(res, 200, { version: version + 1 });
           return;
         }
         if (req.method === 'DELETE') {
+          requireAnyRole(context, CASE_DELETE_ROLES, 'Case deletion forbidden');
+          const body = await readJson(req);
+          const version = typeof body.version === 'number' ? body.version : -1;
           await db.$transaction(async (tx) => {
-            await tx.caseItem.update({ where: { id: caseId }, data: { deletedAt: new Date(), version: { increment: 1 } } });
+            const result = await tx.caseItem.updateMany({
+              where: { id: caseId, deletedAt: null, version },
+              data: { deletedAt: new Date(), version: { increment: 1 } }
+            });
+            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
             await tx.auditLog.create({ data: requestAudit(context, 'CASE_SOFT_DELETED', 'CaseItem', caseId, {}) });
           });
           sendJson(res, 200, { message: 'Case soft deleted' });

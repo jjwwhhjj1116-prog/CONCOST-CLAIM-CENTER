@@ -1,30 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Drawer, Select, SkipLink } from '@claim-studio/ui';
-import { ROUTES, UserRole } from '../routes/Router';
+import { Button, Drawer, SkipLink } from '@claim-studio/ui';
+import { ROUTES, type UserRole } from '../routes/Router';
 
 export interface AppShellProps {
   currentPath: string;
-  userRole: UserRole;
+  roles: UserRole[];
+  userName: string;
   onNavigate: (path: string) => void;
-  onRoleChange: (role: UserRole) => void;
   onExpireSession: () => void;
   children: React.ReactNode;
 }
 
-const roleOptions: Array<{ value: UserRole; label: string }> = [
-  { value: 'ceo', label: '대표 (CEO)' },
-  { value: 'director', label: '본부장/센터장' },
-  { value: 'pm', label: 'PM (Project Manager)' },
-  { value: 'staff', label: '실무자 (Staff)' },
-  { value: 'reviewer', label: '검토자 (Reviewer)' },
-  { value: 'admin', label: '시스템 관리자' }
-];
-
 export const AppShell: React.FC<AppShellProps> = ({
   currentPath,
-  userRole,
+  roles,
+  userName,
   onNavigate,
-  onRoleChange,
   onExpireSession,
   children
 }) => {
@@ -73,13 +64,8 @@ export const AppShell: React.FC<AppShellProps> = ({
           <h1>클레임센터 보고서 스튜디오</h1>
         </div>
         <div className="session-tools">
-          <Select
-            value={userRole}
-            onChange={(event) => onRoleChange(event.target.value as UserRole)}
-            options={roleOptions}
-            aria-label="사용자 역할 선택"
-          />
-          <Button size="sm" variant="ghost" onClick={onExpireSession}>세션 만료 테스트</Button>
+          <span aria-label="현재 사용자 역할">{userName} · {roles.join(', ').toUpperCase()}</span>
+          <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
         </div>
       </header>
 

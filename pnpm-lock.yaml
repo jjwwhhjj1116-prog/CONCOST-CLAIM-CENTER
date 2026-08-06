@@ -11,6 +11,9 @@ importers:
       '@types/node':
         specifier: ^20.17.0
         version: 20.19.43
+      '@types/sql.js':
+        specifier: 1.4.9
+        version: 1.4.9
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.24.0
         version: 8.66.0(@typescript-eslint/parser@8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
@@ -23,6 +26,9 @@ importers:
       playwright-core:
         specifier: ^1.55.0
         version: 1.62.1
+      sql.js:
+        specifier: 1.13.0
+        version: 1.13.0
       tsx:
         specifier: ^4.23.6
         version: 4.23.6

@@ -46,8 +46,9 @@ test('P04 API contract keeps session tokens out of JSON and applies server-side 
 
 test('P04 quality scripts preserve real browser E2E and use a separate security suite', () => {
   const packageJson = JSON.parse(read('package.json'));
-  assert.strictEqual(packageJson.scripts['test:e2e'], 'tsx scripts/p03-e2e.ts');
-  assert.strictEqual(packageJson.scripts['test:security'], 'tsx --test scripts/p04-security-test.ts');
+  assert.match(packageJson.scripts['test:e2e'], /p0[35]-e2e\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p04-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p05-security-test\.ts/);
   assert.notStrictEqual(packageJson.scripts.test, packageJson.scripts['test:e2e']);
   assert.notStrictEqual(packageJson.scripts.test, packageJson.scripts['test:security']);
 });

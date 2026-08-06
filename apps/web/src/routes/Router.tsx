@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Button, Card, ComponentCatalog, Dialog, Input, Select, StateView, StatusBadge } from '@claim-studio/ui';
+import { CaseManagement } from '../case-management/CaseManagement';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -49,7 +50,10 @@ export const ROUTES: RouteConfig[] = [
 ];
 
 export const routeByPath = (path: string): RouteConfig | undefined => ROUTES.find((route) => route.path === path);
-export const canAccessRoute = (route: RouteConfig, role: UserRole): boolean => !route.allowedRoles || route.allowedRoles.includes(role);
+export const canAccessRoute = (route: RouteConfig, roles: UserRole | readonly UserRole[]): boolean => {
+  const activeRoles = Array.isArray(roles) ? roles : [roles];
+  return !route.allowedRoles || activeRoles.some((role) => route.allowedRoles?.includes(role));
+};
 export const isSafeReturnTo = (path: string): boolean => path.startsWith('/') && !path.startsWith('//') && Boolean(routeByPath(path));
 
 export const reviewerCapabilities = {
@@ -61,7 +65,7 @@ export const reviewerCapabilities = {
 
 export interface RouterProps {
   currentPath: string;
-  userRole: UserRole;
+  roles: UserRole[];
   onNavigate: (path: string) => void;
 }
 
@@ -73,9 +77,9 @@ const ForbiddenRoute: React.FC<{ route: RouteConfig; onNavigate: (path: string) 
   </section>
 );
 
-const ReportStudioActions: React.FC<{ role: UserRole }> = ({ role }) => {
+const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
   const [showEditForbidden, setShowEditForbidden] = useState(false);
-  const reviewer = role === 'reviewer';
+  const reviewer = roles.includes('reviewer');
   return (
     <Card title="Reviewer RBAC 행동 계약">
       <p className="muted">Reviewer는 스튜디오를 열람할 수 있지만 본문 편집과 최종 병합은 할 수 없습니다.</p>
@@ -101,7 +105,7 @@ const ReportStudioActions: React.FC<{ role: UserRole }> = ({ role }) => {
   );
 };
 
-export const RouterView: React.FC<RouterProps> = ({ currentPath, userRole, onNavigate }) => {
+export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
   const currentRoute = routeByPath(currentPath);
 
@@ -114,8 +118,12 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, userRole, onNav
       </section>
     );
   }
-  if (!canAccessRoute(currentRoute, userRole)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
+  if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
+
+  if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05'].includes(currentRoute.id)) {
+    return <section className="route-view" aria-labelledby="route-title"><div className="route-heading"><h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2></div><CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} /></section>;
+  }
 
   return (
     <section className="route-view" aria-labelledby="route-title">
@@ -135,10 +143,10 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, userRole, onNav
               <Select label="6대 고정 클레임 유형 선택" options={[...CLAIM_TYPES]} />
               <Input label="사건·문서 검색" placeholder="검색어를 입력하세요" />
               <div className="action-row"><StatusBadge status="approved" /><StatusBadge status="ai_draft" /><StatusBadge status="review" /></div>
-              <p className="muted">현재 역할: <strong>{userRole.toUpperCase()}</strong> · 화면 가드는 P03 계약이며 서버 권한은 P04에서 강제합니다.</p>
+              <p className="muted">현재 서버 역할: <strong>{roles.join(', ').toUpperCase()}</strong> · 화면과 API가 동일한 서버 세션 권한을 사용합니다.</p>
             </div>
           </Card>
-          {currentRoute.id === 'REPO-02' && <ReportStudioActions role={userRole} />}
+          {currentRoute.id === 'REPO-02' && <ReportStudioActions roles={roles} />}
         </div>
       </StateView>
     </section>

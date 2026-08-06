@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import './p02-contract-test';
 import './p03-contract-test';
 import './p04-contract-test';
+import './p05-contract-test';
 import './p05-case-test';
 
 const EXPECTED_EXACT_SHAS: Record<string, string> = {

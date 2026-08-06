@@ -86,21 +86,21 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
 
       // 5. P05 Cases (Fixed 6 types TYPE-01 to TYPE-06, long name, same name, soft deleted, Org B)
       const cases = [
-        { id: 'CASE-SYN-001', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0001', title: 'SYNTHETIC_CASE_01', description: 'Sample case 1 description', claimType: 'TYPE-01', status: 'REGISTERED', assignedUserId: 'USR-PM', deletedAt: null },
-        { id: 'CASE-SYN-002', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0002', title: 'SYNTHETIC_CASE_02_DELETED', description: 'Deleted case', claimType: 'TYPE-02', status: 'IN_PROGRESS', assignedUserId: 'USR-STAFF', deletedAt: now },
-        { id: 'CASE-SYN-003', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0003', title: 'SYNTHETIC_CASE_03_UNASSIGNED_PM', description: 'Sample case 3', claimType: 'TYPE-03', status: 'REVIEWING', assignedUserId: 'USR-PM', deletedAt: null },
+        { id: 'CASE-SYN-001', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0001', title: 'SYNTHETIC_CASE_01', description: 'Sample case 1 description', claimType: 'TYPE-01', status: 'INQUIRY', assignedUserId: 'USR-PM', deletedAt: null },
+        { id: 'CASE-SYN-002', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0002', title: 'SYNTHETIC_CASE_02_DELETED', description: 'Deleted case', claimType: 'TYPE-02', status: 'PROPOSAL', assignedUserId: 'USR-STAFF', deletedAt: now },
+        { id: 'CASE-SYN-003', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0003', title: 'SYNTHETIC_CASE_03_UNASSIGNED_PM', description: 'Sample case 3', claimType: 'TYPE-03', status: 'ANALYSIS', assignedUserId: 'USR-STAFF', deletedAt: null },
         { id: 'CASE-SYN-004', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0004', title: 'SYNTHETIC_CASE_04_TYPE4', description: 'Type 4 case', claimType: 'TYPE-04', status: 'SUBMITTED', assignedUserId: 'USR-PM', deletedAt: null },
         { id: 'CASE-SYN-005', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0005', title: 'SYNTHETIC_CASE_05_TYPE5', description: 'Type 5 case', claimType: 'TYPE-05', status: 'JUDGEMENT', assignedUserId: 'USR-PM', deletedAt: null },
         { id: 'CASE-SYN-006', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0006', title: 'SYNTHETIC_CASE_06_TYPE6', description: 'Type 6 case', claimType: 'TYPE-06', status: 'CLOSED', assignedUserId: 'USR-PM', deletedAt: null },
         // Same Name Cases (Different ID and caseNumber)
-        { id: 'CASE-SYN-SAME-1', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0007', title: '서울시 도로공사 손해배상 청구건', description: '동일 사건명 1차', claimType: 'TYPE-01', status: 'IN_PROGRESS', assignedUserId: 'USR-PM', deletedAt: null },
-        { id: 'CASE-SYN-SAME-2', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0008', title: '서울시 도로공사 손해배상 청구건', description: '동일 사건명 2차', claimType: 'TYPE-02', status: 'IN_PROGRESS', assignedUserId: 'USR-PM', deletedAt: null },
+        { id: 'CASE-SYN-SAME-1', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0007', title: 'SYNTHETIC_DUPLICATE_CASE_TITLE', description: 'Synthetic duplicate case one', claimType: 'TYPE-01', status: 'CONTRACT', assignedUserId: 'USR-PM', deletedAt: null },
+        { id: 'CASE-SYN-SAME-2', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0008', title: 'SYNTHETIC_DUPLICATE_CASE_TITLE', description: 'Synthetic duplicate case two', claimType: 'TYPE-02', status: 'MATERIAL_RECEIVED', assignedUserId: 'USR-PM', deletedAt: null },
         // Very Long Case Title Case (100+ chars)
-        { id: 'CASE-SYN-LONG', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0009', title: 'A'.repeat(120), description: '초장문 사건명 테스트 케이스', claimType: 'TYPE-01', status: 'IN_PROGRESS', assignedUserId: 'USR-PM', deletedAt: null },
+        { id: 'CASE-SYN-LONG', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0009', title: 'A'.repeat(120), description: 'Synthetic long-title boundary fixture', claimType: 'TYPE-01', status: 'REPORT_DRAFTING', assignedUserId: 'USR-PM', deletedAt: null },
         // Stress Case (for 10 parties & 100 schedules testing)
-        { id: 'CASE-SYN-STRESS', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0010', title: '부동산 가처분 및 건설 공사대금 청구 통합 사건', description: '10명 관계자 및 100건 기일 부하 테스트 케이스', claimType: 'TYPE-01', status: 'IN_PROGRESS', assignedUserId: 'USR-PM', deletedAt: null },
+        { id: 'CASE-SYN-STRESS', organizationId: 'ORG-SYN-A', caseNumber: 'CASE-2026-0010', title: 'SYNTHETIC_STRESS_CASE', description: 'Synthetic fixture with 10 parties and 100 schedules', claimType: 'TYPE-01', status: 'LITIGATION', assignedUserId: 'USR-PM', deletedAt: null },
         // Org B Case (for IDOR)
-        { id: 'CASE-SYN-ORGB', organizationId: 'ORG-SYN-B', caseNumber: 'CASE-ORGB-0001', title: 'SYNTHETIC_CASE_ORGB', description: 'Org B private case', claimType: 'TYPE-03', status: 'IN_PROGRESS', assignedUserId: 'USR-ORGB-PM', deletedAt: null }
+        { id: 'CASE-SYN-ORGB', organizationId: 'ORG-SYN-B', caseNumber: 'CASE-ORGB-0001', title: 'SYNTHETIC_CASE_ORGB', description: 'Org B private case', claimType: 'TYPE-03', status: 'ANALYSIS', assignedUserId: 'USR-ORGB-PM', deletedAt: null }
       ];
 
       for (const c of cases) {
@@ -111,7 +111,19 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         });
       }
 
-      // 6. Case Assignments
+      // 6. Exact major/middle/minor classification for every synthetic case.
+      for (const c of cases) {
+        await tx.caseCategory.upsert({
+          where: { caseId: c.id },
+          update: { major: 'SYNTHETIC_MAJOR', middle: `SYNTHETIC_${c.claimType}`, minor: 'SYNTHETIC_MINOR', updatedAt: now },
+          create: {
+            id: `CAT-${c.id}`, caseId: c.id, major: 'SYNTHETIC_MAJOR',
+            middle: `SYNTHETIC_${c.claimType}`, minor: 'SYNTHETIC_MINOR', createdAt: now, updatedAt: now
+          }
+        });
+      }
+
+      // 7. Case Assignments
       for (const [caseId, userId] of [
         ['CASE-SYN-001', 'USR-PM'],
         ['CASE-SYN-001', 'USR-STAFF'],
@@ -127,19 +139,19 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         await tx.caseAssignment.upsert({ where: { caseId_userId: { caseId, userId } }, update: {}, create: { caseId, userId } });
       }
 
-      // 7. Parties (0 for CASE-SYN-001, 1 for CASE-SYN-004, 10 for CASE-SYN-STRESS with duplicate names)
+      // 8. Parties (0 for CASE-SYN-001, 1 for CASE-SYN-004, 10 for CASE-SYN-STRESS with duplicate names)
       const parties = [
-        { id: 'PARTY-SYN-001', caseId: 'CASE-SYN-004', name: '김철수', role: 'CLAIMANT', contact: '010-1234-5678' }
+        { id: 'PARTY-SYN-001', caseId: 'CASE-SYN-004', name: 'SYNTHETIC_PARTY_01', role: 'CLAIMANT', contact: 'party01@example.invalid' }
       ];
       // 10 parties for STRESS case (including duplicate names with distinct IDs)
       for (let i = 1; i <= 10; i++) {
-        const duplicateName = i % 2 === 0 ? '이영희' : `관계자_${i}`;
+        const duplicateName = i % 2 === 0 ? 'SYNTHETIC_DUPLICATE_PARTY' : `SYNTHETIC_PARTY_${i}`;
         parties.push({
           id: `PARTY-STRESS-${i}`,
           caseId: 'CASE-SYN-STRESS',
           name: duplicateName,
           role: i <= 5 ? 'CLAIMANT' : 'RESPONDENT',
-          contact: `010-9999-${1000 + i}`
+          contact: `party${i}@example.invalid`
         });
       }
 
@@ -151,9 +163,9 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         });
       }
 
-      // 8. Schedules (0 for CASE-SYN-001, 1 for CASE-SYN-004, 100 for CASE-SYN-STRESS)
+      // 9. Schedules (0 for CASE-SYN-001, 1 for CASE-SYN-004, 100 for CASE-SYN-STRESS)
       const schedules = [
-        { id: 'SCHED-SYN-001', caseId: 'CASE-SYN-004', title: '1차 변론기일', type: 'COURT', date: new Date('2026-03-01T10:00:00.000Z'), location: '서울중앙지방법원 302호', description: '원고 입증 취지 서면 제출' }
+        { id: 'SCHED-SYN-001', caseId: 'CASE-SYN-004', title: 'SYNTHETIC_COURT_DEADLINE', type: 'COURT', date: new Date('2026-03-01T10:00:00.000Z'), location: 'SYNTHETIC_COURT_ROOM', description: 'Synthetic court schedule' }
       ];
       // 100 schedules for STRESS case (including COURT, CLIENT, INTERNAL, Leap day 2028-02-29, month boundaries, past dates)
       for (let i = 1; i <= 100; i++) {
@@ -172,11 +184,11 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         schedules.push({
           id: `SCHED-STRESS-${i}`,
           caseId: 'CASE-SYN-STRESS',
-          title: `기일 및 회의 ${i}차`,
+          title: `SYNTHETIC_SCHEDULE_${i}`,
           type,
           date: schedDate,
-          location: `회의실 ${i % 5 + 1}`,
-          description: `스트레스 테스팅 기일 ${i}`
+          location: `SYNTHETIC_ROOM_${i % 5 + 1}`,
+          description: `Synthetic schedule boundary fixture ${i}`
         });
       }
 
@@ -188,20 +200,17 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         });
       }
 
-      // 9. Status Histories
+      // 10. Status Histories (append-only: seed never updates an existing row).
       const statusHistories = [
-        { id: 'STHIST-SYN-001', caseId: 'CASE-SYN-001', fromStatus: null, toStatus: 'REGISTERED', changedById: 'USR-PM', reason: '신규 사건 등록' },
-        { id: 'STHIST-SYN-002', caseId: 'CASE-SYN-003', fromStatus: 'REGISTERED', toStatus: 'REVIEWING', changedById: 'USR-PM', reason: '서류 검토 진입' }
+        { id: 'STHIST-SYN-001', caseId: 'CASE-SYN-001', fromStatus: null, toStatus: 'INQUIRY', changedById: 'USR-PM', reason: 'Synthetic case initialized' },
+        { id: 'STHIST-SYN-002', caseId: 'CASE-SYN-003', fromStatus: null, toStatus: 'ANALYSIS', changedById: 'USR-PM', reason: 'Synthetic fixture initialized at analysis' }
       ];
       for (const sh of statusHistories) {
-        await tx.statusHistory.upsert({
-          where: { id: sh.id },
-          update: { ...sh },
-          create: { ...sh, createdAt: now }
-        });
+        const exists = await tx.statusHistory.findUnique({ where: { id: sh.id }, select: { id: true } });
+        if (!exists) await tx.statusHistory.create({ data: { ...sh, createdAt: now } });
       }
 
-      // 10. Reports & Report Sections
+      // 11. Reports & Report Sections
       await tx.report.upsert({
         where: { id: 'REPO-SYN-001' },
         update: { caseId: 'CASE-SYN-001', title: 'SYNTHETIC_REPORT_01', version: 1, deletedAt: null, updatedAt: now },
@@ -213,7 +222,7 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         create: { id: 'SEC-SYN-001', reportId: 'REPO-SYN-001', title: 'Facts', content: 'Synthetic facts only.', status: 'draft', version: 1, createdAt: now, updatedAt: now }
       });
 
-      // 11. Initial Audit Log
+      // 12. Initial Audit Log
       await tx.auditLog.upsert({
         where: { id: 'AUD-SYN-001' },
         update: {},

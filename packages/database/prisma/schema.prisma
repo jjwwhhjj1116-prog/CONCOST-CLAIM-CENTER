@@ -69,7 +69,7 @@ model CaseItem {
   title          String
   description    String?
   claimType      String
-  status         String           @default("REGISTERED")
+  status         String           @default("INQUIRY")
   assignedUserId String?
   version        Int              @default(1)
   deletedAt      DateTime?
@@ -78,6 +78,7 @@ model CaseItem {
   organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   assignedUser   User?            @relation("AssignedCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignments    CaseAssignment[]
+  category       CaseCategory?
   parties        Party[]
   schedules      Schedule[]
   statusHistories StatusHistory[]
@@ -86,6 +87,19 @@ model CaseItem {
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
   @@index([status])
+}
+
+model CaseCategory {
+  id        String   @id
+  caseId    String   @unique
+  major     String
+  middle    String
+  minor     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  case      CaseItem @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([major, middle, minor])
 }
 
 model CaseAssignment {

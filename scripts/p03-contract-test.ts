@@ -86,7 +86,7 @@ test('P03 component catalog covers every shared component and UI state', () => {
 test('P03 quality gates execute production build and a distinct browser E2E', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
   assert.match(packageJson.scripts.build, /harness-check\.ts build/);
-  assert.match(packageJson.scripts['test:e2e'], /p03-e2e\.ts/);
+  assert.match(packageJson.scripts['test:e2e'], /p0[35]-e2e\.ts/);
   assert.notStrictEqual(packageJson.scripts.test, packageJson.scripts['test:e2e']);
   const harness = fs.readFileSync(path.join(root, 'scripts/harness-check.ts'), 'utf8');
   assert.ok(harness.includes("'apps/web/tsconfig.json', '--noEmit'"));
