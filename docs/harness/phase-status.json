@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-06T08:18:00Z",
+  "updatedAt": "2026-08-06T10:15:00Z",
   "currentPhase": "P06",
   "nextPhaseAllowed": false,
   "phases": {
@@ -29,9 +29,20 @@
       "updatedAt": "2026-08-06T08:10:00Z"
     },
     "P06": {
-      "status": "IN_PROGRESS",
-      "updatedAt": "2026-08-06T08:18:00Z",
-      "deliverables": []
+      "status": "READY_FOR_REVIEW",
+      "updatedAt": "2026-08-06T10:15:00Z",
+      "deliverables": [
+        "packages/database/prisma/schema.prisma",
+        "packages/database/prisma/migrations/20260806090000_p06_materials_meetings/migration.sql",
+        "packages/database/src/seed.ts",
+        "apps/api/src/server.ts",
+        "apps/web/src/case-management/CaseManagement.tsx",
+        "apps/web/src/routes/Router.tsx",
+        "scripts/p06-materials-test.ts",
+        "artifacts/harness/P06/manifest.json",
+        "artifacts/harness/P06/notes.md",
+        "artifacts/harness/P06/commands.log"
+      ]
     }
   }
 }
