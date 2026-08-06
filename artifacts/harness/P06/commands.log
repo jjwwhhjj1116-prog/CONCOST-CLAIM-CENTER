@@ -1,10 +1,58 @@
-[2026-08-06T09:05:00.000Z] $ git checkout -b feat/P06-materials-document-versions-meetings 5885243
-[2026-08-06T09:10:00.000Z] $ pnpm db:migrate
-[2026-08-06T09:12:00.000Z] $ pnpm db:seed
-[2026-08-06T09:30:00.000Z] $ pnpm lint -> PASS
-[2026-08-06T09:35:00.000Z] $ pnpm typecheck -> PASS
-[2026-08-06T09:45:00.000Z] $ pnpm test -> 53/53 PASSED
-[2026-08-06T09:55:00.000Z] $ pnpm build -> UI, DB, API, Web dist verified PASS
-[2026-08-06T10:00:00.000Z] $ pnpm audit -> 0 vulnerabilities
-[2026-08-06T10:05:00.000Z] $ npx tsx scripts/p05-security-test.ts -> PASS
-[2026-08-06T10:10:00.000Z] $ npx tsx scripts/p04-browser-e2e.ts -> PASS
+P06 CODEX CLEAN VERIFICATION
+verifiedAt=2026-08-06T18:00:04+09:00
+checkout=p06-clean-7ae66f2
+commit=7ae66f2845712c1f6b4c5fa3012dd5f82c0d4ebc
+
+[1/11] npx --yes pnpm@9.15.0 install --frozen-lockfile
+RESULT=PASS
+OBSERVED=Lockfile is up to date; 215 packages linked into a new node_modules; Prisma Client 6.19.3 generated.
+
+[2/11] npx --yes pnpm@9.15.0 db:reset
+RESULT=PASS
+OBSERVED=Database reset and migration SQL applied successfully.
+
+[3/11] npx --yes pnpm@9.15.0 db:migrate
+RESULT=PASS
+OBSERVED=Database migration SQL applied successfully.
+
+[4/11] npx --yes pnpm@9.15.0 db:seed
+RESULT=PASS
+OBSERVED=Database seeded with deterministic synthetic P06 fixtures.
+
+[5/11] npx --yes pnpm@9.15.0 lint
+RESULT=PASS
+OBSERVED=TypeScript preflight, ESLint and JSON validation passed with zero warnings.
+
+[6/11] npx --yes pnpm@9.15.0 typecheck
+RESULT=PASS
+OBSERVED=Scripts, UI, web, database and API workspaces type-checked.
+
+[7/11] npx --yes pnpm@9.15.0 test
+RESULT=PASS
+OBSERVED=tests 60; pass 60; fail 0; skipped 0; duration 2660.8344ms.
+NOTE=The printed Prisma failure is deliberately injected by the document AuditLog rollback test; the test verified HTTP 500, database rollback and orphan file count 0, then passed.
+
+[8/11] npx --yes pnpm@9.15.0 build
+RESULT=PASS
+OBSERVED=Prisma generated; 47 Vite modules transformed; production JS 187.01 kB; web/API/database/UI artifacts verified.
+
+[9/11] npx --yes pnpm@9.15.0 test:e2e
+RESULT=PASS
+OBSERVED=Real Google Chrome against current production build completed browser-native upload, v02, final assignment, authenticated byte-exact download, schedule/report links, transcript upload, action item, FINAL freeze and Staff RBAC.
+
+[10/11] npx --yes pnpm@9.15.0 test:security
+RESULT=PASS
+OBSERVED=tests 22; pass 22; fail 0; skipped 0; duration 1785.8307ms. Includes P04/P05 regressions, populated P05-to-P06 lossless upgrade, CORS/CSRF/RBAC, file disguise, cross-case/tenant links, storage-key/pointer/final-version and meeting immutability attacks.
+NOTE=The two printed Prisma failures are deliberately injected P04/P05 AuditLog rollback attacks; their rollback tests passed.
+
+[11/11] npx --yes pnpm@9.15.0 audit --audit-level high
+RESULT=PASS
+OBSERVED=No known vulnerabilities found.
+
+[HYGIENE] tracked and candidate file scan
+RESULT=PASS
+OBSERVED=0 private-key/API-token patterns; 0 tracked .env/key/database/customer document files; no actual customer data found. Test identities use example.invalid and synthetic labels.
+
+[INTEGRITY] git status --short; git rev-parse HEAD; git diff --check
+RESULT=PASS
+OBSERVED=Detached clean checkout at 7ae66f2845712c1f6b4c5fa3012dd5f82c0d4ebc with no tracked modifications and no whitespace errors.

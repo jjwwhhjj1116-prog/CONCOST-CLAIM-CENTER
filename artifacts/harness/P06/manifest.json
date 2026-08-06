@@ -1,53 +1,77 @@
 {
   "phase": "P06",
-  "status": "READY_FOR_REVIEW",
-  "nextPhaseAllowed": false,
-  "startedAt": "2026-08-06T09:00:00.000Z",
-  "completedAt": "2026-08-06T10:15:00.000Z",
+  "status": "PASS",
+  "assessment": "CODEX_INDEPENDENT_VERIFIED_AFTER_PATCH",
+  "nextPhaseAllowed": true,
+  "verifiedAt": "2026-08-06T18:00:04+09:00",
   "git": {
     "branch": "feat/P06-materials-document-versions-meetings",
-    "startCommit": "579f5b6"
+    "p05BaselineCommit": "5885243",
+    "antigravityStartCommit": "579f5b6",
+    "antigravityImplementationCommit": "005f24d",
+    "antigravityStatusCommit": "a2fa876",
+    "reviewedCommit": "7ae66f2845712c1f6b4c5fa3012dd5f82c0d4ebc"
   },
-  "selfAssessment": "READY_FOR_REVIEW",
-  "tests": {
-    "total": 53,
-    "passed": 53,
-    "failed": 0,
-    "skipped": 0
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/src/api.ts",
+    "apps/web/src/case-management/CaseManagement.tsx",
+    "package.json",
+    "packages/database/prisma/migrations/20260806090000_p06_materials_meetings/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "packages/database/src/seed.ts",
+    "scripts/harness-test.ts",
+    "scripts/p03-contract-test.ts",
+    "scripts/p04-contract-test.ts",
+    "scripts/p05-contract-test.ts",
+    "scripts/p05-security-test.ts",
+    "scripts/p06-contract-test.ts",
+    "scripts/p06-e2e.ts",
+    "scripts/p06-materials-test.ts",
+    "scripts/p06-security-test.ts"
+  ],
+  "cleanVerification": {
+    "checkout": "p06-clean-7ae66f2",
+    "commit": "7ae66f2845712c1f6b4c5fa3012dd5f82c0d4ebc",
+    "workingTreeCleanAfterGates": true
+  },
+  "commandsExecuted": [
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 db:reset",
+    "npx --yes pnpm@9.15.0 db:migrate",
+    "npx --yes pnpm@9.15.0 db:seed",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 test:e2e",
+    "npx --yes pnpm@9.15.0 test:security",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
+  ],
+  "tests": { "total": 60, "passed": 60, "failed": 0, "skipped": 0 },
+  "securityTests": { "total": 22, "passed": 22, "failed": 0, "skipped": 0 },
+  "browserE2E": {
+    "engine": "Google Chrome via playwright-core",
+    "executable": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "productionBuildServed": true,
+    "passed": true
   },
   "qualityGates": {
     "install": "PASS",
+    "dbReset": "PASS",
+    "dbMigrate": "PASS",
+    "dbSeed": "PASS",
     "lint": "PASS",
     "typecheck": "PASS",
     "test": "PASS",
     "build": "PASS",
-    "audit": "PASS",
-    "security": "PASS",
     "e2e": "PASS",
-    "atomicRollback": "PASS",
-    "immutableMeetings": "PASS",
-    "templateSha256Integrity": "PASS"
+    "security": "PASS",
+    "auditHigh": "PASS"
   },
-  "commandsExecuted": [
-    "pnpm install",
-    "pnpm db:migrate",
-    "pnpm db:seed",
-    "pnpm lint",
-    "pnpm typecheck",
-    "pnpm test",
-    "pnpm build",
-    "pnpm audit",
-    "npx tsx scripts/p05-security-test.ts",
-    "npx tsx scripts/p04-browser-e2e.ts"
-  ],
-  "verificationSummary": {
-    "documentVersioning": "v01 -> v02 -> v03 chain with currentVersionId and isFinal toggle supported",
-    "sourceClassification": "RECEIVED, AUTHORED, SUBMITTED strictly enforced",
-    "fileSecurity": "Sanitized filenames, 10MB limit, allowed extensions and magic-bytes (PDF/PNG/JPEG/Zip-OpenXML) enforced",
-    "atomicRollback": "Compensating disk cleanup on DB/AuditLog failures with zero orphan files guaranteed",
-    "meetingImmutability": "FINAL status meeting and raw text protected by DB triggers P06_prevent_final_meeting_update and P06_prevent_final_meeting_delete",
-    "actionItems": "Action items linked to same-org assignees and case schedules",
-    "rbacEnforcement": "Staff/Reviewer upload/versioning/finalization blocked (403), PM final delete blocked (403), CEO/Director/Admin final delete allowed",
-    "templateIntegrity": "Original 32 template Excel files SHA-256 100% matched"
+  "hygiene": {
+    "trackedSecretPatterns": 0,
+    "trackedSensitiveFiles": 0,
+    "realCustomerDataFound": false
   }
 }
