@@ -5,9 +5,9 @@
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "lint": "tsx scripts/harness-check.ts lint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsx scripts/harness-check.ts typecheck",
     "test": "tsx --test scripts/harness-test.ts",
-    "test:e2e": "tsx --test scripts/harness-test.ts",
+    "test:e2e": "tsx scripts/p03-e2e.ts",
     "build": "tsx scripts/harness-check.ts build"
   },
   "devDependencies": {
@@ -15,6 +15,7 @@
     "@typescript-eslint/eslint-plugin": "^8.24.0",
     "@typescript-eslint/parser": "^8.24.0",
     "eslint": "^9.20.1",
+    "playwright-core": "^1.55.0",
     "tsx": "^4.23.6",
     "typescript": "^5.7.2"
   }

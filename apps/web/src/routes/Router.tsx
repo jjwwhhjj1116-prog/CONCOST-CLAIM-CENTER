@@ -1,20 +1,35 @@
 import React, { useState } from 'react';
-import { Button, Input, Select, StateView, StatusBadge, Card, Drawer } from '@claim-studio/ui';
+import { Button, Card, ComponentCatalog, Dialog, Input, Select, StateView, StatusBadge } from '@claim-studio/ui';
 
-export type UserRole = 'admin' | 'pm' | 'worker' | 'reviewer' | 'legal' | 'guest';
+export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
+export type UserRole = (typeof USER_ROLES)[number];
+
+export const CLAIM_TYPES = [
+  { value: 'TYPE-01', label: 'TYPE-01: 현장조사 및 수량산출 클레임' },
+  { value: 'TYPE-02', label: 'TYPE-02: 분석 보고서 작성 클레임' },
+  { value: 'TYPE-03', label: 'TYPE-03: 일반적인 클레임' },
+  { value: 'TYPE-04', label: 'TYPE-04: 재건축·재개발 공사비 협상' },
+  { value: 'TYPE-05', label: 'TYPE-05: 사감정보고서 (TEMPLATE_NOT_FOUND)' },
+  { value: 'TYPE-06', label: 'TYPE-06: 물가변동' }
+] as const;
 
 export interface RouteConfig {
   id: string;
   path: string;
   name: string;
-  requiresEdit?: boolean;
+  allowedRoles?: readonly UserRole[];
 }
+
+const ADMIN_ONLY: readonly UserRole[] = ['admin'];
+const AUDIT_ROLES: readonly UserRole[] = ['ceo', 'director', 'admin'];
+const FINANCE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm'];
+const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'admin'];
 
 export const ROUTES: RouteConfig[] = [
   { id: 'AUTH-01', path: '/login', name: '로그인' },
   { id: 'DASH-01', path: '/dashboard', name: '메인 대시보드' },
   { id: 'CASE-01', path: '/cases', name: '사건 목록' },
-  { id: 'CASE-02', path: '/cases/new', name: '새 사건 등록' },
+  { id: 'CASE-02', path: '/cases/new', name: '새 사건 등록', allowedRoles: CASE_CREATE_ROLES },
   { id: 'CASE-03', path: '/cases/detail', name: '사건 상세-개요' },
   { id: 'CASE-04', path: '/cases/schedule', name: '사건 상세-일정' },
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
@@ -23,15 +38,26 @@ export const ROUTES: RouteConfig[] = [
   { id: 'PROP-01', path: '/proposals/templates', name: '제안서 템플릿 선택' },
   { id: 'PROP-02', path: '/proposals/editor', name: '제안서 단계형 작성기' },
   { id: 'REPO-01', path: '/reports', name: '보고서 목록' },
-  { id: 'REPO-02', path: '/reports/studio', name: '보고서 스튜디오', requiresEdit: true },
+  { id: 'REPO-02', path: '/reports/studio', name: '보고서 스튜디오' },
   { id: 'APPR-01', path: '/approval', name: '검토·승인함' },
-  { id: 'FEE-01', path: '/success-fee', name: '성공보수' },
+  { id: 'FEE-01', path: '/success-fee', name: '성공보수', allowedRoles: FINANCE_ROLES },
   { id: 'TPL-01', path: '/templates', name: '템플릿 관리' },
-  { id: 'AI-01', path: '/ai-config', name: 'AI 공급자 설정' },
-  { id: 'USER-01', path: '/users', name: '사용자·권한' },
-  { id: 'AUD-01', path: '/audit-logs', name: '감사로그' },
-  { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿 축약 화면' }
+  { id: 'AI-01', path: '/ai-config', name: 'AI 공급자 설정', allowedRoles: ADMIN_ONLY },
+  { id: 'USER-01', path: '/users', name: '사용자·권한', allowedRoles: ADMIN_ONLY },
+  { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: AUDIT_ROLES },
+  { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }
 ];
+
+export const routeByPath = (path: string): RouteConfig | undefined => ROUTES.find((route) => route.path === path);
+export const canAccessRoute = (route: RouteConfig, role: UserRole): boolean => !route.allowedRoles || route.allowedRoles.includes(role);
+export const isSafeReturnTo = (path: string): boolean => path.startsWith('/') && !path.startsWith('//') && Boolean(routeByPath(path));
+
+export const reviewerCapabilities = {
+  uploadEvidence: true,
+  editReportBody: false,
+  approveSection: true,
+  mergeFinalDocument: false
+} as const;
 
 export interface RouterProps {
   currentPath: string;
@@ -39,73 +65,82 @@ export interface RouterProps {
   onNavigate: (path: string) => void;
 }
 
+const ForbiddenRoute: React.FC<{ route: RouteConfig; onNavigate: (path: string) => void }> = ({ route, onNavigate }) => (
+  <section className="route-message" aria-labelledby="forbidden-title">
+    <h2 id="forbidden-title">403 Forbidden</h2>
+    <p>{route.name} 화면에 접근할 권한이 없습니다. 서버/API 권한은 P04에서 별도로 강제됩니다.</p>
+    <Button onClick={() => onNavigate('/dashboard')}>대시보드로 이동</Button>
+  </section>
+);
+
+const ReportStudioActions: React.FC<{ role: UserRole }> = ({ role }) => {
+  const [showEditForbidden, setShowEditForbidden] = useState(false);
+  const reviewer = role === 'reviewer';
+  return (
+    <Card title="Reviewer RBAC 행동 계약">
+      <p className="muted">Reviewer는 스튜디오를 열람할 수 있지만 본문 편집과 최종 병합은 할 수 없습니다.</p>
+      <label htmlFor="report-body">보고서 초안 본문</label>
+      <textarea
+        id="report-body"
+        className="report-editor"
+        defaultValue="합성 테스트 사건의 보고서 초안입니다. 실제 고객정보를 포함하지 않습니다."
+        readOnly={reviewer}
+        aria-readonly={reviewer}
+        onClick={() => reviewer && setShowEditForbidden(true)}
+      />
+      <div className="action-row" aria-label="보고서 권한별 작업">
+        <Button>검토자료 업로드</Button>
+        <Button variant="secondary" disabled={reviewer}>본문 저장</Button>
+        <Button variant="secondary">장 1차 승인</Button>
+        <Button variant="danger" disabled={reviewer}>최종 DOCX/PDF 병합</Button>
+      </div>
+      <Dialog isOpen={showEditForbidden} title="403 본문 편집 권한 없음" onClose={() => setShowEditForbidden(false)}>
+        Reviewer는 댓글과 수정 요청만 작성할 수 있습니다. 본문 변경은 저장되지 않습니다.
+      </Dialog>
+    </Card>
+  );
+};
+
 export const RouterView: React.FC<RouterProps> = ({ currentPath, userRole, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
+  const currentRoute = routeByPath(currentPath);
 
-  const currentRoute = ROUTES.find((r) => r.path === currentPath);
-
-  // 1. Unrecognized route: 404 Not Found
   if (!currentRoute) {
     return (
-      <div style={{ padding: '40px', textAlign: 'center' }}>
-        <h2>404 Not Found</h2>
-        <p>요청하신 라우트({currentPath})를 찾을 수 없습니다.</p>
+      <section className="route-message" aria-labelledby="not-found-title">
+        <h2 id="not-found-title">404 Not Found</h2>
+        <p>요청한 경로({currentPath})를 찾을 수 없습니다.</p>
         <Button onClick={() => onNavigate('/dashboard')}>대시보드로 이동</Button>
-      </div>
+      </section>
     );
   }
-
-  // 2. Reviewer Direct Edit Guard: HTTP 403 Forbidden
-  if (userRole === 'reviewer' && currentRoute.requiresEdit) {
-    return (
-      <div style={{ padding: '32px', background: 'rgba(15,23,42,0.95)', border: '1px solid hsl(346, 87%, 60%)', borderRadius: '8px', textAlign: 'center' }}>
-        <h3 style={{ color: 'hsl(346, 87%, 60%)' }}>🔒 Reviewer 역할 권한 제한 (HTTP 403 Forbidden)</h3>
-        <p style={{ color: '#94a3b8' }}>Reviewer 역할은 보고서 초안 본문 직접 편집 권한이 차단되어 있습니다. (댓글 및 1차 승인만 허용)</p>
-        <Button onClick={() => onNavigate('/approval')}>검토·승인함으로 이동</Button>
-      </div>
-    );
-  }
-
-  const claimTypeOptions = [
-    { value: 'TYPE-01', label: 'TYPE-01: 현장조사 및 수량산출 클레임' },
-    { value: 'TYPE-02', label: 'TYPE-02: 분석 보고서 작성 클레임' },
-    { value: 'TYPE-03', label: 'TYPE-03: 일반적인 클레임' },
-    { value: 'TYPE-04', label: 'TYPE-04: 재건축·재개발 공사비 협상' },
-    { value: 'TYPE-05', label: 'TYPE-05: 사감정보고서 (TEMPLATE_NOT_FOUND)' },
-    { value: 'TYPE-06', label: 'TYPE-06: 물가변동' }
-  ];
+  if (!canAccessRoute(currentRoute, userRole)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
+  if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
 
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <h2>{currentRoute.name} ({currentRoute.id})</h2>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <Button size="sm" variant="secondary" onClick={() => setUiState('normal')}>Normal</Button>
-          <Button size="sm" variant="secondary" onClick={() => setUiState('loading')}>Loading</Button>
-          <Button size="sm" variant="secondary" onClick={() => setUiState('empty')}>Empty</Button>
-          <Button size="sm" variant="secondary" onClick={() => setUiState('error')}>Error</Button>
-          <Button size="sm" variant="secondary" onClick={() => setUiState('forbidden')}>403</Button>
+    <section className="route-view" aria-labelledby="route-title">
+      <div className="route-heading">
+        <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+        <div className="state-controls" aria-label="화면 상태 미리보기">
+          {(['normal', 'loading', 'empty', 'error', 'forbidden'] as const).map((state) => (
+            <Button key={state} size="sm" variant="secondary" onClick={() => setUiState(state)}>{state === 'forbidden' ? '403' : state}</Button>
+          ))}
         </div>
       </div>
 
       <StateView state={uiState} onRetry={() => setUiState('normal')}>
-        <Card title={`Screen Contract: ${currentRoute.id}`}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px' }}>
-            <Select label="6대 고정 클레임 유형 선택 (TYPE-01 ~ TYPE-06)" options={claimTypeOptions} />
-            <Input label="사건/문서 검색" placeholder="검색어를 입력하세요..." />
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <StatusBadge status="approved" />
-              <StatusBadge status="ai_draft" />
-              <StatusBadge status="review" />
+        <div className="content-stack">
+          <Card title={`화면 계약: ${currentRoute.id}`}>
+            <div className="form-stack">
+              <Select label="6대 고정 클레임 유형 선택" options={[...CLAIM_TYPES]} />
+              <Input label="사건·문서 검색" placeholder="검색어를 입력하세요" />
+              <div className="action-row"><StatusBadge status="approved" /><StatusBadge status="ai_draft" /><StatusBadge status="review" /></div>
+              <p className="muted">현재 역할: <strong>{userRole.toUpperCase()}</strong> · 화면 가드는 P03 계약이며 서버 권한은 P04에서 강제합니다.</p>
             </div>
-            <p style={{ fontSize: '14px', color: '#cbd5e1' }}>
-              현재 사용자 역할: <strong style={{ color: '#38bdf8' }}>{userRole.toUpperCase()}</strong>  
-              <br />
-              (P04 서버/API 권한 경계 연결 대상 클라이언트 셸 렌더링 정상)
-            </p>
-          </div>
-        </Card>
+          </Card>
+          {currentRoute.id === 'REPO-02' && <ReportStudioActions role={userRole} />}
+        </div>
       </StateView>
-    </div>
+    </section>
   );
 };

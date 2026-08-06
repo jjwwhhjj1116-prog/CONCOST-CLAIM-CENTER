@@ -12,8 +12,8 @@
 ```text
 claim-center-report-studio/
   apps/
-    web/                   # Next.js Web 프론트엔드
-    api/                   # Node.js API 서버 / Route Handlers
+    web/                   # React 18 + Vite Web 프론트엔드
+    api/                   # P04에서 구현할 Node.js API 경계
   packages/
     ui/                    # 공통 디자인 시스템 UI 컴포넌트
     domain/                # 핵심 데이터 모델 및 비즈니스 로직
@@ -36,12 +36,20 @@ claim-center-report-studio/
 
 ## 개발 및 품질 게이트 명령
 ```powershell
-# 품질 검증 게이트
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
+# pnpm 9.15.0 고정 실행
+npx --yes pnpm@9.15.0 install --frozen-lockfile
+npx --yes pnpm@9.15.0 lint
+npx --yes pnpm@9.15.0 typecheck
+npx --yes pnpm@9.15.0 test
+npx --yes pnpm@9.15.0 build
+npx --yes pnpm@9.15.0 test:e2e
+npx --yes pnpm@9.15.0 audit --audit-level high
+
+# 로컬 개발 서버 (http://localhost:3000)
+npx --yes pnpm@9.15.0 --filter claim-center-report-studio-web dev
 ```
+
+`test:e2e`는 production Vite 빌드를 로컬 preview 서버로 띄운 뒤 설치된 Chrome/Edge를 headless로 실행한다. 비표준 설치 위치에서는 `CHROME_PATH`로 브라우저 실행 파일을 지정한다.
 
 ## 단계 진행 상태
 현재 상태는 `docs/harness/phase-status.json`에서 확인 및 관리됩니다.

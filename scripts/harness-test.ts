@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import './p02-contract-test';
+import './p03-contract-test';
 
 // Exact SHA-256 Hash Map for all 32 reference template files (Tamper-Proof Protection)
 const EXPECTED_EXACT_SHAS: Record<string, string> = {
@@ -108,6 +110,17 @@ test('P01 Exhaustive Traceability & Reference Inventory Tamper-Proof Assertion',
   for (const item of inventoryData.files) {
     assert.ok(item.fileId && EXPECTED_EXACT_SHAS[item.fileId], `Unknown fileId in inventory: ${item.fileId}`);
     assert.strictEqual(item.sha256, EXPECTED_EXACT_SHAS[item.fileId], `SHA-256 hash mismatch for ${item.fileId}`);
+    assert.match(item.filename, /^TPL-REF-\d{3}_template_ref\.(?:hwp|hwpx|pdf|xlsx)$/);
+    assert.ok(!/(안양|A1~A4|실제고객|주민등록|010[- ]?\d{3,4})/i.test(`${item.filename} ${item.relativePath}`), `Sensitive identifier leaked: ${item.fileId}`);
+  }
+
+  const claimTypes = fs.readFileSync(path.join(__dirname, '../docs/domain/claim-types.yaml'), 'utf8');
+  assert.deepStrictEqual([...claimTypes.matchAll(/- id: (TYPE-\d{2})/g)].map((match) => match[1]), ['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']);
+  const classification = fs.readFileSync(path.join(__dirname, '../docs/templates/template-classification.yaml'), 'utf8');
+  for (const block of classification.split('- folder:').slice(1)) {
+    assert.strictEqual((block.match(/primaryType:/g) ?? []).length, 1, 'Each mapping needs one primaryType');
+    const rawPrimary = (block.match(/primaryType:\s*([^\n]+)/)?.[1] ?? '').trim().replace(/^['"]|['"]$/g, '');
+    assert.match(rawPrimary, /^TYPE-0[1-6]$/, 'primaryType must be one scalar TYPE-01..TYPE-06');
   }
 });
 
@@ -128,7 +141,7 @@ test('P03 App Shell, Design System, 20 Routes & Reviewer RBAC Guard Assertions',
   const catalogContent = fs.readFileSync(catalogPath, 'utf8');
   assert.ok(catalogContent.includes('TYPE-01'), 'Catalog missing TYPE-01');
   assert.ok(catalogContent.includes('TYPE-06'), 'Catalog missing TYPE-06');
-  assert.ok(catalogContent.includes('5 Standard UI States'), 'Catalog missing 5 UI states showcase');
+  assert.ok(catalogContent.includes('정상·로딩·빈 상태·오류·403·긴 텍스트'), 'Catalog missing full state showcase');
 
   // 2. Verify apps/web Router 20 routes mapping & Reviewer RBAC guard
   const routerPath = path.join(__dirname, '../apps/web/src/routes/Router.tsx');
@@ -138,7 +151,7 @@ test('P03 App Shell, Design System, 20 Routes & Reviewer RBAC Guard Assertions',
   for (const screenId of ALL_20_SCREENS) {
     assert.ok(routerContent.includes(screenId), `Router.tsx missing screen mapping: ${screenId}`);
   }
-  assert.ok(routerContent.includes('Reviewer 역할 권한 제한 (HTTP 403 Forbidden)'), 'Router.tsx missing Reviewer RBAC 403 guard');
+  assert.ok(routerContent.includes('reviewerCapabilities'), 'Router.tsx missing Reviewer action contract');
 
   // 3. Verify AppShell responsive drawer & SkipLink
   const shellPath = path.join(__dirname, '../apps/web/src/layout/AppShell.tsx');
@@ -146,6 +159,7 @@ test('P03 App Shell, Design System, 20 Routes & Reviewer RBAC Guard Assertions',
   const shellContent = fs.readFileSync(shellPath, 'utf8');
   assert.ok(shellContent.includes('SkipLink'), 'AppShell.tsx missing SkipLink');
   assert.ok(shellContent.includes('Drawer'), 'AppShell.tsx missing responsive Drawer');
+  assert.ok(shellContent.includes('href={route.path}'), 'AppShell navigation must expose real links');
 });
 
 test('P03 Manifest Integrity & Self-Assessment Assertions', () => {
@@ -158,45 +172,44 @@ test('P03 Manifest Integrity & Self-Assessment Assertions', () => {
   assert.ok(Array.isArray(manifest.scope) && manifest.scope.length >= 5);
   assert.ok(Array.isArray(manifest.changedFiles), 'manifest.changedFiles must be an array');
   
-  // Exact changedFiles array matching git diff-tree target files for P03 (30 files)
+  // Exact changedFiles array matching the Codex P03 corrective implementation commit.
   const expectedChangedFiles = [
+    'README.md',
     'apps/web/index.html',
     'apps/web/package.json',
     'apps/web/src/App.tsx',
     'apps/web/src/layout/AppShell.tsx',
-    'apps/web/src/main.tsx',
     'apps/web/src/routes/Router.tsx',
     'apps/web/tsconfig.json',
     'apps/web/vite.config.ts',
     'artifacts/harness/P03/commands.log',
     'artifacts/harness/P03/manifest.json',
     'artifacts/harness/P03/notes.md',
+    'eslint.config.mjs',
     'package.json',
     'packages/ui/package.json',
     'packages/ui/src/catalog/ComponentCatalog.tsx',
     'packages/ui/src/components/Button.tsx',
-    'packages/ui/src/components/Card.tsx',
-    'packages/ui/src/components/DDay.tsx',
+    'packages/ui/src/components/Dialog.tsx',
     'packages/ui/src/components/Drawer.tsx',
     'packages/ui/src/components/Input.tsx',
     'packages/ui/src/components/Select.tsx',
-    'packages/ui/src/components/SkipLink.tsx',
-    'packages/ui/src/components/StateView.tsx',
-    'packages/ui/src/components/StatusBadge.tsx',
-    'packages/ui/src/components/Table.tsx',
-    'packages/ui/src/components/Timeline.tsx',
     'packages/ui/src/index.ts',
     'packages/ui/src/tokens.ts',
     'packages/ui/tsconfig.json',
     'pnpm-lock.yaml',
-    'scripts/harness-test.ts'
+    'scripts/harness-check.ts',
+    'scripts/harness-test.ts',
+    'scripts/p03-contract-test.ts',
+    'scripts/p03-e2e.ts',
+    'tsconfig.json'
   ];
   assert.deepStrictEqual([...manifest.changedFiles].sort(), expectedChangedFiles.sort(), 'P03 manifest.changedFiles must strictly match the exact commit diff files');
 
   assert.ok(Array.isArray(manifest.commandsExecuted) && manifest.commandsExecuted.length >= 5);
-  assert.strictEqual(manifest.tests.passed, 7, 'manifest.tests.passed must strictly be 7 for P03');
+  assert.strictEqual(manifest.tests.passed, 24, 'manifest.tests.passed must strictly match corrected P03 suite');
   assert.strictEqual(manifest.tests.failed, 0);
-  assert.strictEqual(manifest.selfAssessment, 'READY_FOR_REVIEW');
+  assert.strictEqual(manifest.selfAssessment, 'CODEX_CORRECTED_READY_FOR_REVIEW');
 });
 
 test('Phase Status Machine Integration', () => {

@@ -1,4 +1,5 @@
 import React from 'react';
+import { borderRadius, color, spacing, typography } from '../tokens';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
@@ -16,9 +17,9 @@ export const Button: React.FC<ButtonProps> = ({
   ...props
 }) => {
   const baseStyle: React.CSSProperties = {
-    fontFamily: 'Inter, sans-serif',
+    fontFamily: typography.fontFamily.primary,
     fontWeight: 600,
-    borderRadius: '6px',
+    borderRadius: borderRadius.md,
     border: 'none',
     cursor: disabled || isLoading ? 'not-allowed' : 'pointer',
     display: 'inline-flex',
@@ -30,20 +31,21 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   const variantStyles: Record<string, React.CSSProperties> = {
-    primary: { background: 'hsl(217, 91%, 60%)', color: '#ffffff' },
-    secondary: { background: 'hsl(217, 33%, 25%)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.2)' },
-    danger: { background: 'hsl(346, 87%, 60%)', color: '#ffffff' },
-    ghost: { background: 'transparent', color: '#94a3b8' }
+    primary: { background: color.primary.main, color: color.text.primary },
+    secondary: { background: color.background.tertiary, color: color.text.primary, border: `1px solid ${color.glass.border}` },
+    danger: { background: color.status.danger, color: color.text.primary },
+    ghost: { background: 'transparent', color: color.text.secondary }
   };
 
   const sizeStyles: Record<string, React.CSSProperties> = {
-    sm: { padding: '6px 12px', fontSize: '12px' },
-    md: { padding: '10px 16px', fontSize: '14px' },
-    lg: { padding: '14px 24px', fontSize: '16px' }
+    sm: { padding: `${spacing.xs} ${spacing.sm}`, fontSize: typography.fontSize.xs },
+    md: { padding: `${spacing.sm} ${spacing.md}`, fontSize: typography.fontSize.sm },
+    lg: { padding: `${spacing.md} ${spacing.lg}`, fontSize: typography.fontSize.lg }
   };
 
   return (
     <button
+      className={className}
       style={{
         ...baseStyle,
         ...variantStyles[variant],

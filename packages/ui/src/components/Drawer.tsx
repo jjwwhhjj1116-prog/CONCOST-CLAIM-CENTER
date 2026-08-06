@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useId, useRef } from 'react';
+import { color, spacing } from '../tokens';
 
 export interface DrawerProps {
   isOpen: boolean;
@@ -8,54 +9,61 @@ export interface DrawerProps {
 }
 
 export const Drawer: React.FC<DrawerProps> = ({ isOpen, onClose, title, children }) => {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    returnFocusRef.current = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const focusableSelector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    panel?.querySelector<HTMLElement>(focusableSelector)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      returnFocusRef.current?.focus();
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.75)',
-        zIndex: 1000,
-        display: 'flex',
-        justifyContent: 'flex-start'
-      }}
-      onClick={onClose}
-    >
+    <div className="modal-backdrop" onMouseDown={onClose}>
       <div
-        style={{
-          width: '280px',
-          height: '100%',
-          backgroundColor: '#0f172a',
-          borderRight: '1px solid rgba(255, 255, 255, 0.2)',
-          padding: '20px',
-          boxSizing: 'border-box',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px'
-        }}
-        onClick={(e) => e.stopPropagation()}
+        ref={panelRef}
+        className="drawer-panel"
+        onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-labelledby={titleId}
+        style={{ background: color.background.primary, padding: spacing.lg }}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ margin: 0, color: '#f8fafc', fontSize: '16px' }}>{title}</h3>
-          <button
-            onClick={onClose}
-            aria-label="드로어 닫기"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#94a3b8',
-              fontSize: '20px',
-              cursor: 'pointer'
-            }}
-          >
-            ✕
-          </button>
+        <div className="drawer-header">
+          <h2 id={titleId}>{title}</h2>
+          <button type="button" onClick={onClose} aria-label="드로어 닫기" className="icon-button">✕</button>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto' }}>{children}</div>
+        <div className="drawer-content">{children}</div>
       </div>
     </div>
   );

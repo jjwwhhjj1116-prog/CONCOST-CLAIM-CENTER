@@ -1,20 +1,52 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>클레임센터 보고서 스튜디오 - Claim Center Report Studio</title>
+    <title>클레임센터 보고서 스튜디오</title>
     <style>
-      body {
-        margin: 0;
-        background-color: hsl(222, 47%, 11%);
-        color: hsl(210, 40%, 98%);
-        font-family: Inter, system-ui, sans-serif;
-      }
-      *:focus-visible {
-        outline: 2px solid hsl(217, 91%, 60%);
-        outline-offset: 2px;
-      }
+      :root { color-scheme: dark; font-family: Inter, Pretendard, system-ui, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-width: 320px; background: hsl(222,47%,11%); color: hsl(210,40%,98%); }
+      button, input, select, textarea { font: inherit; }
+      *:focus-visible { outline: 3px solid hsl(38,92%,50%); outline-offset: 3px; }
+      .app-shell { min-height: 100vh; background: hsl(222,47%,11%); }
+      .topbar { min-height: 64px; padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; background: hsl(217,33%,17%); border-bottom: 1px solid hsla(215,20%,65%,.25); }
+      .brand-group, .session-tools, .action-row, .route-heading, .drawer-header { display: flex; align-items: center; gap: 12px; }
+      .brand-group h1 { margin: 0; font-size: clamp(1rem, 2vw, 1.2rem); }
+      .session-tools { min-width: min(100%, 360px); }
+      .shell-body { display: flex; min-height: calc(100vh - 64px); }
+      .sidebar { width: 260px; flex: 0 0 260px; padding: 16px; background: hsl(217,33%,17%); border-right: 1px solid hsla(215,20%,65%,.25); }
+      .navigation-list { display: flex; flex-direction: column; gap: 5px; }
+      .navigation-link { min-height: 40px; padding: 9px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; border-radius: 8px; color: hsl(215,20%,75%); text-decoration: none; }
+      .navigation-link[aria-current="page"] { background: hsl(217,91%,60%); color: white; }
+      .navigation-link:hover { background: hsl(215,25%,27%); }
+      .navigation-link small { flex: 0 0 auto; }
+      .text-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .main-content { min-width: 0; flex: 1; overflow: auto; }
+      .route-view, .route-message { padding: clamp(16px, 3vw, 32px); }
+      .route-message { max-width: 720px; margin: 40px auto; text-align: center; }
+      .route-heading { justify-content: space-between; align-items: flex-start; flex-wrap: wrap; margin-bottom: 20px; }
+      .route-heading h2 { margin: 0; }
+      .route-heading small, .muted { color: hsl(215,20%,70%); }
+      .state-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+      .content-stack, .form-stack { display: grid; gap: 16px; }
+      .form-stack { max-width: 680px; }
+      .action-row { flex-wrap: wrap; }
+      .report-editor { width: 100%; min-height: 160px; margin: 8px 0 16px; padding: 12px; color: inherit; background: hsl(222,47%,11%); border: 1px solid hsla(215,20%,65%,.4); border-radius: 8px; resize: vertical; }
+      .report-editor[readonly] { cursor: not-allowed; opacity: .75; }
+      .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: stretch; justify-content: flex-start; background: rgba(0,0,0,.72); }
+      .drawer-panel { width: min(340px, 88vw); height: 100%; display: flex; flex-direction: column; gap: 16px; box-shadow: 12px 0 32px rgba(0,0,0,.4); }
+      .drawer-header { justify-content: space-between; }
+      .drawer-header h2 { margin: 0; font-size: 1.1rem; }
+      .drawer-content { min-height: 0; flex: 1; overflow: auto; }
+      .icon-button { min-width: 44px; min-height: 44px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+      .dialog-panel { width: min(520px, 90vw); margin: auto; padding: 24px; border: 1px solid hsla(215,20%,65%,.35); border-radius: 12px; background: hsl(217,33%,17%); box-shadow: 0 20px 60px rgba(0,0,0,.55); }
+      .dialog-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
+      .login-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+      .login-page > * { width: min(480px, 100%); }
+      @media (max-width: 1024px) { .session-tools { flex: 1 1 100%; } .topbar { align-items: stretch; } }
+      @media (max-width: 560px) { .route-view, .route-message { padding: 12px; } .state-controls > button { flex: 1 1 30%; } }
     </style>
   </head>
   <body>

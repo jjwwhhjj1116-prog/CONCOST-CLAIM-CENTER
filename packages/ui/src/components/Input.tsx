@@ -1,4 +1,5 @@
 import React from 'react';
+import { borderRadius, color, typography } from '../tokens';
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -11,26 +12,27 @@ export const Input: React.FC<InputProps> = ({ label, error, className = '', id, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
       {label && (
-        <label htmlFor={inputId} style={{ fontSize: '14px', color: '#94a3b8', fontWeight: 500 }}>
+        <label htmlFor={inputId} style={{ fontSize: typography.fontSize.sm, color: color.text.secondary, fontWeight: 500 }}>
           {label}
         </label>
       )}
       <input
         id={inputId}
+        className={className}
         style={{
           padding: '10px 12px',
-          background: 'rgba(15, 23, 42, 0.8)',
-          border: error ? '1px solid hsl(346, 87%, 60%)' : '1px solid rgba(255, 255, 255, 0.2)',
-          borderRadius: '6px',
-          color: '#f8fafc',
-          fontSize: '14px',
+          background: color.background.primary,
+          border: `1px solid ${error ? color.status.danger : color.glass.border}`,
+          borderRadius: borderRadius.md,
+          color: color.text.primary,
+          fontSize: typography.fontSize.sm,
           outlineOffset: '2px',
           boxSizing: 'border-box',
           width: '100%'
         }}
         {...props}
       />
-      {error && <span style={{ fontSize: '12px', color: 'hsl(346, 87%, 60%)' }}>{error}</span>}
+      {error && <span role="alert" style={{ fontSize: typography.fontSize.xs, color: color.status.danger }}>{error}</span>}
     </div>
   );
 };
