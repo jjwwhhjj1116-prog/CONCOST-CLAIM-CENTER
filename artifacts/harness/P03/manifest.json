@@ -1,0 +1,79 @@
+{
+  "phase": "P03",
+  "scope": [
+    "Design system package building in packages/ui (Button, Input, Select, Drawer, Table, Card, StatusBadge, DDay, Timeline, StateView, SkipLink)",
+    "Design tokens binding from docs/stitch/design-tokens.json to code tokens.ts",
+    "Executable Web App Shell in apps/web (Vite + React 18)",
+    "20 Screens complete route mapping (AUTH-01 to RESP-01) & 404 handler",
+    "Reviewer RBAC client route guard (HTTP 403 Forbidden on direct edit routes)",
+    "6 Fixed Claim Types (TYPE-01 to TYPE-06) selector UI integration",
+    "1440px desktop sidebar & 1024px tablet responsive drawer navigation",
+    "Accessibility features (SkipLink, focus-visible, text ellipsis overflow)",
+    "Static component catalog (ComponentCatalog.tsx)",
+    "Automated harness testing for P03 app shell, router, design system, and RBAC assertions",
+    "Evidence artifact package generation (artifacts/harness/P03/)",
+    "Quality & security gate validation (install, lint, typecheck, test, build, test:e2e, audit)"
+  ],
+  "changedFiles": [
+    "apps/web/index.html",
+    "apps/web/package.json",
+    "apps/web/src/App.tsx",
+    "apps/web/src/layout/AppShell.tsx",
+    "apps/web/src/main.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "apps/web/tsconfig.json",
+    "apps/web/vite.config.ts",
+    "artifacts/harness/P03/commands.log",
+    "artifacts/harness/P03/manifest.json",
+    "artifacts/harness/P03/notes.md",
+    "package.json",
+    "packages/ui/package.json",
+    "packages/ui/src/catalog/ComponentCatalog.tsx",
+    "packages/ui/src/components/Button.tsx",
+    "packages/ui/src/components/Card.tsx",
+    "packages/ui/src/components/DDay.tsx",
+    "packages/ui/src/components/Drawer.tsx",
+    "packages/ui/src/components/Input.tsx",
+    "packages/ui/src/components/Select.tsx",
+    "packages/ui/src/components/SkipLink.tsx",
+    "packages/ui/src/components/StateView.tsx",
+    "packages/ui/src/components/StatusBadge.tsx",
+    "packages/ui/src/components/Table.tsx",
+    "packages/ui/src/components/Timeline.tsx",
+    "packages/ui/src/index.ts",
+    "packages/ui/src/tokens.ts",
+    "packages/ui/tsconfig.json",
+    "pnpm-lock.yaml",
+    "scripts/harness-test.ts"
+  ],
+  "commandsExecuted": [
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 test:e2e",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
+  ],
+  "tests": {
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0
+  },
+  "knownLimitations": [
+    "P03 implements client-side app shell, routes, RBAC guards, and UI design system. Server-side DB, Auth, and Audit log security enforcement follows in P04."
+  ],
+  "acceptanceCriteria": [
+    "Executable Web App Shell in apps/web: PASS",
+    "Design system package in packages/ui with design-tokens.json binding: PASS",
+    "20 Screens complete route mapping & 404 handler: PASS",
+    "Reviewer RBAC client route guard (HTTP 403) verified: PASS",
+    "6 Fixed Claim Types (TYPE-01 to TYPE-06) selector UI verified: PASS",
+    "1440px desktop & 1024px responsive drawer navigation verified: PASS",
+    "Accessibility (SkipLink, focus-visible, text ellipsis overflow) verified: PASS",
+    "7 Quality & Security gates (install, lint, typecheck, test, build, test:e2e, audit) passing: PASS",
+    "Exact changedFiles paths deepStrictEqual matching git diff-tree: PASS",
+    "Pure P03 implementation commit without external reviewer reports: PASS"
+  ],
+  "selfAssessment": "READY_FOR_REVIEW"
+}
