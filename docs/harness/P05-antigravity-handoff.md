@@ -1,6 +1,6 @@
 # P05 Antigravity 실행 지시서 — 사건관리 코어
 
-P04는 Codex 보정 커밋 `5602366` 기준 `PASS`다. Antigravity는 이 커밋과 P04 PASS 상태 커밋을 포함한 `feat/P04-db-auth-permissions-audit` 브랜치에서 P05를 시작한다. Codex가 P04에서 구축한 실제 DB·인증·권한·감사 경계를 우회하거나 모의 구현으로 되돌리면 안 된다.
+P04는 원본 저장소 Codex 보정 커밋 `c50d4f2` 기준 `PASS`다. Antigravity는 이 커밋과 P04 PASS 상태 커밋을 포함한 `feat/P04-db-auth-permissions-audit` 브랜치에서 P05를 시작한다. Codex가 P04에서 구축한 실제 DB·인증·권한·감사 경계를 우회하거나 모의 구현으로 되돌리면 안 된다.
 
 ## 1. 시작 절차
 

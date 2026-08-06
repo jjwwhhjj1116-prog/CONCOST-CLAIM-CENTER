@@ -24,7 +24,7 @@
       "status": "PASS",
       "verdict": "PASS",
       "updatedAt": "2026-08-06T06:36:16Z",
-      "reviewedCommit": "560236605a925cf62350a3540ea77b1674d597aa",
+      "reviewedCommit": "c50d4f272603323c9861bfdf009c7f0acaf28dc1",
       "reviewReport": "docs/reviews/P04-codex-review.md",
       "deliverables": [
         "docs/adr/0001-p04-database-baseline.md",
