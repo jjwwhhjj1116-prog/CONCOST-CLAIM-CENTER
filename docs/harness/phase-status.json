@@ -18,17 +18,23 @@
       "name": "stitch-ux-ui-design",
       "status": "PASS",
       "implementationCommit": "9ce31ac",
-      "reviewReport": "docs/reviews/P02-codex-review.md"
+      "reviewedCommit": "9ce31ac2e59493f864804a52f5736986515311c7",
+      "reviewReport": "docs/reviews/P02-codex-review.md",
+      "nextPhaseAllowed": true
     },
     "P03": {
       "name": "app-shell-design-system",
-      "status": "READY_FOR_REVIEW",
+      "status": "PASS",
       "implementationCommit": "d447a13",
-      "reviewReport": "docs/reviews/requests/P03-review-request.md"
+      "correctiveCommit": "ff23ae4436b43de856ae5b7c5ff3ad2dde544731",
+      "reviewedCommit": "ff23ae4436b43de856ae5b7c5ff3ad2dde544731",
+      "reviewReport": "docs/reviews/P03-codex-review.md",
+      "nextPhaseAllowed": true
     },
     "P04": {
       "name": "db-auth-permissions-audit",
-      "status": "PLANNED"
+      "status": "PLANNED",
+      "handoff": "docs/harness/P04-antigravity-handoff.md"
     },
     "P05": {
       "name": "case-management-core",

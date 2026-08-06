@@ -17,12 +17,8 @@ yarn-error.log*
 !artifacts/harness/**/*.log
 
 # Exclude external reviewer files from implementation commits
-docs/reviews/P00-codex-review.md
-docs/reviews/P00-codex-review.json
-docs/reviews/P01-codex-review.md
-docs/reviews/P01-codex-review.json
-docs/reviews/P02-codex-review.md
-docs/reviews/P02-codex-review.json
+docs/reviews/P*-codex-review.md
+docs/reviews/P*-codex-review.json
 
 # Reference Report Templates Original Storage (Git exclusion for customer privacy)
 /docs/보고서 템플릿/**
