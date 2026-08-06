@@ -6,9 +6,18 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm run generate && tsc -b",
     "db:migrate": "tsx src/db-cli.ts migrate",
     "db:seed": "tsx src/seed.ts",
-    "db:reset": "tsx src/db-cli.ts reset"
+    "db:reset": "tsx src/db-cli.ts reset",
+    "generate": "prisma generate --schema prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "sql.js": "1.13.0"
+  },
+  "devDependencies": {
+    "@types/sql.js": "1.4.9",
+    "prisma": "6.19.3"
   }
 }

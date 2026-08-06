@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:../.data/dev.db"
+}
+
+model Organization {
+  id        String     @id
+  name      String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  users     User[]
+  cases     CaseItem[]
+  auditLogs AuditLog[]
+}
+
+model User {
+  id             String           @id
+  email          String           @unique
+  passwordHash   String
+  name           String
+  organizationId String
+  isActive       Boolean          @default(true)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  roles          UserRole[]
+  sessions       Session[]
+  assignments    CaseAssignment[]
+  auditLogs      AuditLog[]
+}
+
+model Role {
+  id    String     @id
+  name  String     @unique
+  users UserRole[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+}
+
+model Session {
+  id        String    @id
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model CaseItem {
+  id             String           @id
+  organizationId String
+  title          String
+  claimType      String
+  version        Int              @default(1)
+  deletedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignments    CaseAssignment[]
+  reports        Report[]
+
+  @@index([organizationId, deletedAt])
+}
+
+model CaseAssignment {
+  caseId String
+  userId String
+  case   CaseItem @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, userId])
+}
+
+model Report {
+  id        String          @id
+  caseId    String
+  title     String
+  version   Int             @default(1)
+  deletedAt DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  case      CaseItem        @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sections  ReportSection[]
+
+  @@index([caseId, deletedAt])
+}
+
+model ReportSection {
+  id        String    @id
+  reportId  String
+  title     String
+  content   String
+  status    String
+  version   Int       @default(1)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  report    Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId, deletedAt])
+}
+
+model AuditLog {
+  id             String        @id
+  organizationId String?
+  userId         String?
+  action         String
+  targetEntity   String
+  targetId       String
+  metadataJson   String
+  createdAt      DateTime      @default(now())
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+}

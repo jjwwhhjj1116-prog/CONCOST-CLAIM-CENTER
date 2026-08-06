@@ -1,13 +1,20 @@
-import { initDatabaseSchema, resetDatabase } from './db-engine';
+import { getDatabaseUrl, migrateDatabase, resetDatabase } from './db-engine';
 
-const action = process.argv[2];
-
-if (action === 'reset') {
-  resetDatabase();
-  console.log('✓ Database reset successfully.');
-} else if (action === 'migrate') {
-  initDatabaseSchema();
-  console.log('✓ Database schema migrated successfully.');
-} else {
-  console.log('Usage: tsx src/db-cli.ts [migrate|reset]');
+async function main(): Promise<void> {
+  const action = process.argv[2];
+  const databaseUrl = getDatabaseUrl();
+  if (action === 'reset') {
+    await resetDatabase(databaseUrl);
+    console.log('Database reset and migration SQL applied successfully.');
+  } else if (action === 'migrate') {
+    await migrateDatabase(databaseUrl);
+    console.log('Database migration SQL applied successfully.');
+  } else {
+    throw new Error('Usage: tsx src/db-cli.ts [migrate|reset]');
+  }
 }
+
+void main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});

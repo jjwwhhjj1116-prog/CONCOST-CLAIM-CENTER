@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
-    "build": "tsc"
+    "build": "tsc -b"
   },
   "dependencies": {
     "@claim-studio/database": "workspace:*"

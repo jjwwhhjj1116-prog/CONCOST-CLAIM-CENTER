@@ -89,6 +89,7 @@ test('P03 quality gates execute production build and a distinct browser E2E', ()
   assert.match(packageJson.scripts['test:e2e'], /p03-e2e\.ts/);
   assert.notStrictEqual(packageJson.scripts.test, packageJson.scripts['test:e2e']);
   const harness = fs.readFileSync(path.join(root, 'scripts/harness-check.ts'), 'utf8');
-  assert.ok(harness.includes("'claim-center-report-studio-web', 'build'"));
-  assert.ok(harness.includes("'@claim-studio/ui', 'build'"));
+  assert.ok(harness.includes("'apps/web/tsconfig.json', '--noEmit'"));
+  assert.ok(harness.includes("'packages/ui/tsconfig.json'"));
+  assert.ok(harness.includes("runNode(viteCli, ['build']"));
 });
