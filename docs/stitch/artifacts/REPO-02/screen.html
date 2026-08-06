@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="stitch-provenance" content="https://stitch.withgoogle.com/projects/proj_claim_studio_v1/screens/screen_repo_02">
+  <title>REPO-02: 3단 보고서 스튜디오 - 클레임센터 보고서 스튜디오</title>
+  <style>
+    :root { --bg-dark: hsl(222, 47%, 11%); --glass: hsla(217, 33%, 17%, 0.75); --primary: hsl(217, 91%, 60%); --ai-accent: hsl(270, 91%, 65%); --text: hsl(210, 40%, 98%); --danger: hsl(346, 87%, 60%); }
+    body { background: var(--bg-dark); color: var(--text); font-family: Inter, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    .state-controls { display: flex; gap: 8px; padding: 8px 16px; background: rgba(0,0,0,0.8); border-bottom: 1px solid rgba(255,255,255,0.1); z-index: 200; }
+    .state-controls button { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .state-controls button:hover { background: var(--primary); }
+    .studio-container { display: flex; flex: 1; height: calc(100vh - 45px); overflow: hidden; position: relative; }
+    input, textarea { background: rgba(15,23,42,0.8); color: var(--text); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 10px; box-sizing: border-box; }
+    input:focus, textarea:focus, button:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sidebar { width: 260px; background: rgba(15,23,42,0.9); border-right: 1px solid rgba(255,255,255,0.1); padding: 16px; display: block; }
+    .drawer-toggle { display: none; background: var(--primary); color: white; border: none; padding: 8px 12px; border-radius: 4px; font-weight: bold; cursor: pointer; }
+    .sidebar-drawer { display: none; position: fixed; inset: 45px auto 0 0; width: 280px; background: rgba(15,23,42,0.98); z-index: 150; border-right: 1px solid rgba(255,255,255,0.2); padding: 16px; box-shadow: 4px 0 16px rgba(0,0,0,0.5); }
+    .sidebar-drawer.open { display: block !important; }
+    .editor-main { flex: 1; padding: 24px; overflow-y: auto; position: relative; }
+    .ai-panel { width: 320px; background: var(--glass); border-left: 1px solid rgba(255,255,255,0.1); padding: 16px; }
+    textarea { width: 100%; height: 300px; }
+    button { background: linear-gradient(135deg, var(--ai-accent), var(--primary)); color: white; border: none; padding: 12px; border-radius: 6px; width: 100%; font-weight: bold; cursor: pointer; }
+    
+    /* 중앙 에디터 영역 및 AI 패널 전용 시각적 상태 노드 */
+    .editor-loading { display: none; height: 200px; background: rgba(255,255,255,0.05); border-radius: 8px; animation: pulse 1.5s infinite; margin-top: 20px; }
+    .editor-empty { display: none; padding: 40px; text-align: center; background: var(--glass); border-radius: 8px; border: 1px dashed rgba(255,255,255,0.2); margin-top: 20px; }
+    .editor-error { display: none; padding: 20px; background: var(--danger); color: white; border-radius: 8px; text-align: center; margin-top: 20px; }
+    .skeleton-loader { display: none; height: 100px; background: rgba(255,255,255,0.05); margin-top: 12px; animation: pulse 1.5s infinite; }
+    .empty-state { display: none; padding: 24px; text-align: center; background: var(--glass); border-radius: 8px; }
+    .error-toast { display: none; padding: 12px; background: var(--danger); color: white; border-radius: 6px; }
+    .forbidden-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; z-index: 1000; }
+    @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 0.2; } 100% { opacity: 0.6; } }
+    @media (max-width: 1024px) {
+      .sidebar { display: none; }
+      .drawer-toggle { display: inline-block; margin-bottom: 12px; }
+      .ai-panel { position: fixed; bottom: 0; right: 0; left: 0; width: 100%; height: 200px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="state-controls" role="toolbar" aria-label="화면 상태 시뮬레이터">
+    <button onclick="setUIState('normal')">정상상태</button>
+    <button onclick="setUIState('loading')">로딩상태</button>
+    <button onclick="setUIState('empty')">빈상태</button>
+    <button onclick="setUIState('error')">오류상태</button>
+    <button onclick="setUIState('forbidden')">403권한없음</button>
+  </div>
+
+  <div class="studio-container">
+    <!-- 데스크톱 260px 목차 -->
+    <aside class="sidebar" aria-label="보고서 장 목차 트리">
+      <h3 class="text-ellipsis">7대 정규 장 목차</h3>
+      <ul><li>1장. 사실관계 (🟢 승인)</li><li>2장. 하자원인 (🟣 AI초안)</li></ul>
+    </aside>
+
+    <!-- 태블릿 1024px 전용 복구 슬라이드 오버 Drawer 목차 -->
+    <aside id="sidebarDrawer" class="sidebar-drawer" aria-label="1024px 반응형 목차 드로어">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3>7대 정규 장 목차 (드로어)</h3>
+        <button id="closeDrawerBtn" style="background:transparent; color:white; border:none; font-size:18px; cursor:pointer; width:auto; padding:0;">✕</button>
+      </div>
+      <ul><li>1장. 사실관계 (🟢 승인)</li><li>2장. 하자원인 (🟣 AI초안)</li></ul>
+    </aside>
+
+    <!-- 중앙 리치 에디터 영역 -->
+    <main class="editor-main" role="main">
+      <button type="button" id="drawerToggleBtn" class="drawer-toggle" aria-label="목차 드로어 열기" aria-expanded="false">☰ 목차 열기</button>
+      
+      <div id="editorContent">
+        <h2 class="text-ellipsis">2장. 하자원인 및 손해분석 (REPO-02)</h2>
+        <input type="text" placeholder="장 제목 수정..." aria-label="장 제목 수정" style="margin-bottom:12px; width:100%;">
+        <label for="editor">문단 에디터</label>
+        <textarea id="editor" aria-label="보고서 본문 에디터"></textarea>
+      </div>
+
+      <!-- 중앙 메인 영역 시각적 상태 노드 (High 1 완전 수정) -->
+      <div id="editorLoading" class="editor-loading" aria-live="polite" aria-label="메인 에디터 콘텐츠 로딩중"></div>
+      <div id="editorEmpty" class="editor-empty" aria-label="메인 에디터 빈 상태">선택한 보고서 장의 작성된 본문 문단이 존재하지 않습니다.</div>
+      <div id="editorError" class="editor-error" aria-label="메인 에디터 오류 상태">보고서 장 문단 데이터를 불러오는 중 에러가 발생했습니다.</div>
+    </main>
+
+    <!-- 우측 320px AI 패널 -->
+    <aside id="aiPanel" class="ai-panel" aria-label="AI 제어 패널">
+      <h3>증거 및 AI 초안 제어</h3>
+      <button aria-label="AI 초안 생성 실행">[AI 초안 생성]</button>
+      <div id="emptyState" class="empty-state" aria-label="빈 상태">선택된 증거 문서가 존재하지 않습니다.</div>
+      <div id="errorState" class="error-toast" aria-label="오류 상태">AI 초안 파이프라인 생성 오류.</div>
+      <div id="loadingState" class="skeleton-loader" aria-live="polite" aria-label="AI 생성 중"></div>
+    </aside>
+  </div>
+
+  <div id="forbiddenState" class="forbidden-modal" aria-label="403 권한 없음 모달">
+    <div style="background:var(--glass); padding:24px; border-radius:8px; text-align:center;">
+      <h3>스튜디오 접근 권한이 없습니다 (HTTP 403)</h3>
+      <button onclick="setUIState('normal')" style="background:var(--primary); color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; margin-top:12px;">닫기</button>
+    </div>
+  </div>
+
+  <script>
+    // 1. 드로어 토글 자바스크립트 핸들러
+    const drawerToggleBtn = document.getElementById('drawerToggleBtn');
+    const closeDrawerBtn = document.getElementById('closeDrawerBtn');
+    const sidebarDrawer = document.getElementById('sidebarDrawer');
+
+    if (drawerToggleBtn && sidebarDrawer) {
+      drawerToggleBtn.addEventListener('click', function() {
+        const isOpen = sidebarDrawer.classList.toggle('open');
+        drawerToggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      });
+    }
+
+    if (closeDrawerBtn && sidebarDrawer) {
+      closeDrawerBtn.addEventListener('click', function() {
+        sidebarDrawer.classList.remove('open');
+        if (drawerToggleBtn) drawerToggleBtn.setAttribute('aria-expanded', 'false');
+      });
+    }
+
+    // 2. 중앙 메인 에디터 영역 시각적 상태 완전 반영 스위처 (High 1 완전 해결)
+    function setUIState(state) {
+      const editorContent = document.getElementById('editorContent');
+      const editorLoading = document.getElementById('editorLoading');
+      const editorEmpty = document.getElementById('editorEmpty');
+      const editorError = document.getElementById('editorError');
+      const aiPanel = document.getElementById('aiPanel');
+      const forbiddenState = document.getElementById('forbiddenState');
+
+      // normal
+      editorContent.style.display = (state === 'normal') ? 'block' : 'none';
+      aiPanel.style.display = (state === 'normal') ? 'block' : 'none';
+
+      // loading
+      editorLoading.style.display = (state === 'loading') ? 'block' : 'none';
+      document.getElementById('loadingState').style.display = (state === 'loading') ? 'block' : 'none';
+
+      // empty
+      editorEmpty.style.display = (state === 'empty') ? 'block' : 'none';
+      document.getElementById('emptyState').style.display = (state === 'empty') ? 'block' : 'none';
+
+      // error
+      editorError.style.display = (state === 'error') ? 'block' : 'none';
+      document.getElementById('errorState').style.display = (state === 'error') ? 'block' : 'none';
+
+      // forbidden
+      forbiddenState.style.display = (state === 'forbidden') ? 'flex' : 'none';
+    }
+  </script>
+</body>
+</html>

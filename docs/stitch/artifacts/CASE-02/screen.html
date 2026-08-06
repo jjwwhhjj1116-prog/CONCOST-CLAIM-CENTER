@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="stitch-provenance" content="https://stitch.withgoogle.com/projects/proj_claim_studio_v1/screens/screen_case_02">
+  <title>CASE-02: 새 사건 등록 모달 - 클레임센터 보고서 스튜디오</title>
+  <style>
+    :root { --bg-dark: hsl(222, 47%, 11%); --glass: hsla(217, 33%, 17%, 0.75); --primary: hsl(217, 91%, 60%); --text: hsl(210, 40%, 98%); --danger: hsl(346, 87%, 60%); }
+    body { background: var(--bg-dark); color: var(--text); font-family: Inter, sans-serif; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+    .state-controls { display: flex; gap: 8px; margin-bottom: 16px; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); }
+    .state-controls button { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .state-controls button:hover { background: var(--primary); }
+    .modal { background: var(--glass); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 32px; width: 560px; box-shadow: 0 12px 32px rgba(0,0,0,0.5); box-sizing: border-box; }
+    .stepper { display: flex; justify-content: space-between; margin-bottom: 24px; }
+    .step { font-size: 14px; font-weight: 600; color: var(--primary); }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; margin-bottom: 6px; font-size: 14px; }
+    input, select { width: 100%; padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid rgba(255,255,255,0.2); color: var(--text); border-radius: 6px; box-sizing: border-box; }
+    input:focus, button:focus, select:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .btn-group { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+    button { padding: 10px 20px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; }
+    .btn-next { background: var(--primary); color: white; }
+    .btn-cancel { background: rgba(255,255,255,0.1); color: var(--text); }
+    .skeleton-loader { height: 4px; background: var(--primary); animation: pulse 1.5s infinite; display: none; margin-top: 12px; }
+    .empty-state { display: none; padding: 16px; text-align: center; }
+    .error-toast { display: none; padding: 12px; background: var(--danger); color: white; border-radius: 6px; margin-top: 12px; }
+    .forbidden-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; z-index: 1000; }
+    @keyframes pulse { 0% { opacity: 0.2; } 50% { opacity: 1; } 100% { opacity: 0.2; } }
+    @media (max-width: 1024px) { .modal { width: 90%; padding: 20px; } }
+  </style>
+</head>
+<body>
+  <div class="state-controls" role="toolbar" aria-label="화면 상태 시뮬레이터">
+    <button onclick="setUIState('normal')">정상상태</button>
+    <button onclick="setUIState('loading')">로딩상태</button>
+    <button onclick="setUIState('empty')">빈상태</button>
+    <button onclick="setUIState('error')">오류상태</button>
+    <button onclick="setUIState('forbidden')">403권한없음</button>
+  </div>
+
+  <main class="modal" role="dialog" aria-labelledby="modal-title">
+    <h2 id="modal-title" class="text-ellipsis">신규 사건 등록 (CASE-02)</h2>
+    <div class="stepper">
+      <div class="step">Step 1. 기본정보</div>
+      <div class="step">Step 2. 분류지정</div>
+      <div class="step">Step 3. 담당배정</div>
+    </div>
+    <form id="caseForm" aria-label="사건 등록 폼">
+      <div class="form-group">
+        <label for="caseName">사건명</label>
+        <input type="text" id="caseName" name="caseName" required placeholder="사건명을 입력하세요" aria-required="true">
+      </div>
+      <div class="form-group">
+        <label for="category">대분류 카테고리</label>
+        <select id="category" name="category" aria-label="대분류 선택"><option>건설 클레임</option><option>제조물 책임</option></select>
+      </div>
+      <div class="btn-group">
+        <button type="button" class="btn-cancel" aria-label="취소">취소</button>
+        <button type="submit" class="btn-next" aria-label="다음 단계">다음 단계</button>
+      </div>
+    </form>
+    <div id="emptyState" class="empty-state" aria-label="빈 상태">입력 항목이 비어 있습니다.</div>
+    <div id="errorState" class="error-toast" aria-label="오류 상태">신규 사건 등록 저장에 실패했습니다.</div>
+    <div id="loadingState" class="skeleton-loader" aria-live="polite" aria-label="저장 처리 중"></div>
+  </main>
+
+  <div id="forbiddenState" class="forbidden-modal" aria-label="403 권한 없음 모달">
+    <div style="background:var(--glass); padding:24px; border-radius:8px; text-align:center;">
+      <h3>사건 등록 권한이 없습니다 (HTTP 403)</h3>
+      <button onclick="setUIState('normal')" style="background:var(--primary); color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; margin-top:12px;">닫기</button>
+    </div>
+  </div>
+
+  <script>
+    function setUIState(state) {
+      document.getElementById('caseForm').style.display = (state === 'normal') ? 'block' : 'none';
+      document.getElementById('loadingState').style.display = (state === 'loading') ? 'block' : 'none';
+      document.getElementById('emptyState').style.display = (state === 'empty') ? 'block' : 'none';
+      document.getElementById('errorState').style.display = (state === 'error') ? 'block' : 'none';
+      document.getElementById('forbiddenState').style.display = (state === 'forbidden') ? 'flex' : 'none';
+    }
+  </script>
+</body>
+</html>

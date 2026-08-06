@@ -1,0 +1,65 @@
+{
+  "name": "Claim Center Report Studio Design Tokens",
+  "version": "1.0.0",
+  "color": {
+    "background": {
+      "primary": "hsl(222, 47%, 11%)",
+      "secondary": "hsl(217, 33%, 17%)",
+      "tertiary": "hsl(215, 25%, 27%)"
+    },
+    "glass": {
+      "surface": "hsla(217, 33%, 17%, 0.75)",
+      "border": "hsla(215, 20%, 65%, 0.15)",
+      "blur": "blur(16px)"
+    },
+    "primary": {
+      "main": "hsl(217, 91%, 60%)",
+      "hover": "hsl(221, 83%, 53%)",
+      "glow": "hsla(217, 91%, 60%, 0.25)"
+    },
+    "ai": {
+      "accent": "hsl(270, 91%, 65%)",
+      "gradient": "linear-gradient(135deg, hsl(270, 91%, 65%) 0%, hsl(217, 91%, 60%) 100%)",
+      "glow": "hsla(270, 91%, 65%, 0.3)"
+    },
+    "status": {
+      "draft": "hsl(215, 16%, 47%)",
+      "aiDraft": "hsl(270, 91%, 65%)",
+      "review": "hsl(38, 92%, 50%)",
+      "approved": "hsl(142, 71%, 45%)",
+      "danger": "hsl(346, 87%, 60%)"
+    },
+    "text": {
+      "primary": "hsl(210, 40%, 98%)",
+      "secondary": "hsl(215, 20%, 65%)",
+      "muted": "hsl(215, 16%, 47%)"
+    }
+  },
+  "typography": {
+    "fontFamily": {
+      "primary": "Inter, -apple-system, BlinkMacSystemFont, Pretendard, sans-serif",
+      "mono": "Fira Code, JetBrains Mono, monospace"
+    },
+    "fontSize": {
+      "xs": "12px",
+      "sm": "14px",
+      "md": "15px",
+      "lg": "18px",
+      "xl": "24px",
+      "xxl": "32px"
+    }
+  },
+  "spacing": {
+    "xs": "4px",
+    "sm": "8px",
+    "md": "16px",
+    "lg": "24px",
+    "xl": "32px"
+  },
+  "borderRadius": {
+    "sm": "4px",
+    "md": "8px",
+    "lg": "12px",
+    "full": "9999px"
+  }
+}

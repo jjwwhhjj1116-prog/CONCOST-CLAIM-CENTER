@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="stitch-provenance" content="https://stitch.withgoogle.com/projects/proj_claim_studio_v1/screens/screen_appr_01">
+  <title>APPR-01: 검토 승인함 - 클레임센터 보고서 스튜디오</title>
+  <style>
+    :root { --bg-dark: hsl(222, 47%, 11%); --glass: hsla(217, 33%, 17%, 0.75); --primary: hsl(217, 91%, 60%); --success: hsl(142, 71%, 45%); --text: hsl(210, 40%, 98%); --danger: hsl(346, 87%, 60%); }
+    body { background: var(--bg-dark); color: var(--text); font-family: Inter, sans-serif; padding: 24px; }
+    .state-controls { display: flex; gap: 8px; margin-bottom: 16px; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); width: fit-content; }
+    .state-controls button { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .state-controls button:hover { background: var(--primary); }
+    input { background: rgba(15,23,42,0.8); color: var(--text); border: 1px solid rgba(255,255,255,0.2); padding: 8px; border-radius: 4px; }
+    input:focus, button:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .diff-box { background: var(--glass); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+    button { background: var(--success); color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    .skeleton-loader { display: none; height: 80px; background: rgba(255,255,255,0.05); margin-top: 12px; animation: pulse 1.5s infinite; }
+    .empty-state { display: none; padding: 24px; text-align: center; background: var(--glass); border-radius: 8px; }
+    .error-toast { display: none; padding: 12px; background: var(--danger); color: white; border-radius: 6px; }
+    .forbidden-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; z-index: 1000; }
+    @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 0.2; } 100% { opacity: 0.6; } }
+    @media (max-width: 1024px) { body { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <div class="state-controls" role="toolbar" aria-label="화면 상태 시뮬레이터">
+    <button onclick="setUIState('normal')">정상상태</button>
+    <button onclick="setUIState('loading')">로딩상태</button>
+    <button onclick="setUIState('empty')">빈상태</button>
+    <button onclick="setUIState('error')">오류상태</button>
+    <button onclick="setUIState('forbidden')">403권한없음</button>
+  </div>
+
+  <h2 class="text-ellipsis">검토 및 승인함 (APPR-01)</h2>
+  <input type="text" placeholder="결재건 검색..." aria-label="결재건 검색">
+
+  <main id="mainContent" class="diff-box" role="main">
+    <h3>Diff 변경 사항 비교 패널</h3>
+    <p>수정 전: 하자 보수비 5천만원</p>
+    <p style="color: var(--success);" class="text-ellipsis">수정 후: 하자 보수비 7천5백만원 산출</p>
+    <button aria-label="1차 승인 실행">[1차 승인]</button>
+  </main>
+
+  <div id="emptyState" class="empty-state" aria-label="빈 상태">대기 중인 검토/승인 요청 항목이 없습니다.</div>
+  <div id="errorState" class="error-toast" aria-label="오류 상태">승인 결재 처리 중 트랜잭션 실패.</div>
+  <div id="loadingState" class="skeleton-loader" aria-live="polite" aria-label="결재 정보 로딩중"></div>
+
+  <div id="forbiddenState" class="forbidden-modal" aria-label="403 권한 없음 모달">
+    <div style="background:var(--glass); padding:24px; border-radius:8px; text-align:center;">
+      <h3>접근 권한이 없습니다 (HTTP 403)</h3>
+      <button onclick="setUIState('normal')" style="background:var(--primary); color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; margin-top:12px;">닫기</button>
+    </div>
+  </div>
+
+  <script>
+    function setUIState(state) {
+      document.getElementById('mainContent').style.display = (state === 'normal') ? 'block' : 'none';
+      document.getElementById('loadingState').style.display = (state === 'loading') ? 'block' : 'none';
+      document.getElementById('emptyState').style.display = (state === 'empty') ? 'block' : 'none';
+      document.getElementById('errorState').style.display = (state === 'error') ? 'block' : 'none';
+      document.getElementById('forbiddenState').style.display = (state === 'forbidden') ? 'flex' : 'none';
+    }
+  </script>
+</body>
+</html>

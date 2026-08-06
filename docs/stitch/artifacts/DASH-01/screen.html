@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="stitch-provenance" content="https://stitch.withgoogle.com/projects/proj_claim_studio_v1/screens/screen_dash_01">
+  <title>DASH-01: 메인 대시보드 - 클레임센터 보고서 스튜디오</title>
+  <style>
+    :root {
+      --bg-dark-primary: hsl(222, 47%, 11%);
+      --bg-dark-secondary: hsl(217, 33%, 17%);
+      --primary-500: hsl(217, 91%, 60%);
+      --text-primary: hsl(210, 40%, 98%);
+      --text-secondary: hsl(215, 20%, 65%);
+      --glass-surface: hsla(217, 33%, 17%, 0.75);
+      --danger: hsl(346, 87%, 60%);
+      --warning: hsl(38, 92%, 50%);
+      --success: hsl(142, 71%, 45%);
+    }
+    body { background: var(--bg-dark-primary); color: var(--text-primary); font-family: Inter, sans-serif; margin: 0; padding: 24px; }
+    .state-controls { display: flex; gap: 8px; margin-bottom: 16px; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.2); width: fit-content; }
+    .state-controls button { background: rgba(255,255,255,0.1); color: white; border: 1px solid rgba(255,255,255,0.2); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+    .state-controls button:hover { background: var(--primary-500); }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    input[type="text"] { padding: 10px; background: rgba(15,23,42,0.8); border: 1px solid rgba(255,255,255,0.2); color: var(--text-primary); border-radius: 6px; }
+    input:focus, button:focus { outline: 2px solid var(--primary-500); outline-offset: 2px; }
+    .text-ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-actions button { background: var(--primary-500); color: white; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; margin-left: 8px; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .kpi-card { background: var(--glass-surface); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 20px; }
+    .kpi-title { font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; }
+    .kpi-value { font-size: 28px; font-weight: 700; color: var(--primary-500); }
+    .skeleton-loader { display: none; height: 180px; background: rgba(255,255,255,0.05); border-radius: 8px; animation: pulse 1.5s infinite; }
+    .empty-state { display: none; padding: 32px; text-align: center; background: var(--glass-surface); border-radius: 8px; }
+    .error-toast { display: none; padding: 16px; background: var(--danger); color: white; border-radius: 6px; text-align: center; }
+    .forbidden-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; z-index: 1000; }
+    @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 0.3; } 100% { opacity: 0.6; } }
+    @media (max-width: 1024px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <div class="state-controls" role="toolbar" aria-label="화면 상태 시뮬레이터">
+    <button onclick="setUIState('normal')">정상상태</button>
+    <button onclick="setUIState('loading')">로딩상태</button>
+    <button onclick="setUIState('empty')">빈상태</button>
+    <button onclick="setUIState('error')">오류상태</button>
+    <button onclick="setUIState('forbidden')">403권한없음</button>
+  </div>
+
+  <header class="toolbar">
+    <h1 class="text-ellipsis">메인 대시보드 (DASH-01)</h1>
+    <input type="text" placeholder="통합 사건 검색..." aria-label="통합 사건 검색">
+    <div class="quick-actions">
+      <button aria-label="새 사건 등록 실행">[새 사건 등록]</button>
+      <button aria-label="제안서 작성 실행">[제안서 작성]</button>
+      <button aria-label="보고서 작성 실행">[보고서 작성]</button>
+      <button aria-label="자료 업로드 실행">[자료 업로드]</button>
+    </div>
+  </header>
+
+  <main id="kpiGrid" class="kpi-grid" role="main" aria-label="대시보드 10초 인지 테스트 6대 지표">
+    <section class="kpi-card"><div class="kpi-title">1. 진행 중인 사건 총 개수</div><div class="kpi-value">42건</div></section>
+    <section class="kpi-card"><div class="kpi-title">2. 오늘/곧 마감되는 일</div><div class="kpi-value" style="color: var(--danger);">3건 (D-3)</div></section>
+    <section class="kpi-card"><div class="kpi-title">3. 내가 오늘 해야 할 일</div><div class="kpi-value">8건</div></section>
+    <section class="kpi-card"><div class="kpi-title">4. 작성·검토·승인 진행 문서</div><div class="kpi-value" style="color: var(--warning);">12건</div></section>
+    <section class="kpi-card"><div class="kpi-title">5. 기한 지연 업무</div><div class="kpi-value" style="color: var(--danger);">2건</div></section>
+    <section class="kpi-card"><div class="kpi-title">6. 미수 성공보수 총액</div><div class="kpi-value" style="color: var(--success);">₩45,000,000</div></section>
+  </main>
+
+  <div id="emptyState" class="empty-state" aria-label="빈 상태">등록된 사건이 없습니다. [새 사건 등록] 버튼을 눌러 시작하세요.</div>
+  <div id="errorState" class="error-toast" aria-label="오류 상태">대시보드 KPI 데이터를 서버에서 가져오는 중 오류가 발생했습니다.</div>
+  <div id="loadingState" class="skeleton-loader" aria-live="polite" aria-label="대시보드 데이터 로딩 중"></div>
+
+  <div id="forbiddenState" class="forbidden-modal" aria-label="403 권한 없음 모달">
+    <div style="background:var(--bg-dark-secondary); padding:24px; border-radius:8px; text-align:center;">
+      <h3>대시보드 접근 권한이 없습니다 (HTTP 403)</h3>
+      <p>대시보드 열람 권한이 필요합니다.</p>
+      <button onclick="setUIState('normal')" style="background:var(--primary-500); color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer;">닫기</button>
+    </div>
+  </div>
+
+  <script>
+    function setUIState(state) {
+      document.getElementById('kpiGrid').style.display = (state === 'normal') ? 'grid' : 'none';
+      document.getElementById('loadingState').style.display = (state === 'loading') ? 'block' : 'none';
+      document.getElementById('emptyState').style.display = (state === 'empty') ? 'block' : 'none';
+      document.getElementById('errorState').style.display = (state === 'error') ? 'block' : 'none';
+      document.getElementById('forbiddenState').style.display = (state === 'forbidden') ? 'flex' : 'none';
+    }
+  </script>
+</body>
+</html>
