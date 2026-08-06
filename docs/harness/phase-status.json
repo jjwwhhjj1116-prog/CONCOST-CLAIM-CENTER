@@ -22,7 +22,9 @@
     },
     "P03": {
       "name": "app-shell-design-system",
-      "status": "IN_PROGRESS"
+      "status": "READY_FOR_REVIEW",
+      "implementationCommit": "d447a13",
+      "reviewReport": "docs/reviews/requests/P03-review-request.md"
     },
     "P04": {
       "name": "db-auth-permissions-audit",
