@@ -1,0 +1,77 @@
+P09 CODEX INDEPENDENT CLEAN VERIFICATION
+verifiedAt=2026-08-07T12:58:55+09:00
+branch=feat/P09-report-studio
+submittedCommit=8db5895c357a6716fa112f132240ce9333a16e28
+reviewedCommit=ceadc14e2cceba18697d6eacc62391b4218b3f8f
+cleanCheckout=p09-clean-verify
+nodeModulesPresentBeforeInstall=false
+
+[01] node --version
+exit=0
+v24.16.0
+
+[02] npx --yes pnpm@9.15.0 --version
+exit=0
+9.15.0
+
+[03] npx --yes pnpm@9.15.0 install --frozen-lockfile
+exit=0
+Lockfile is up to date; 6 workspace projects installed; Prisma Client generated.
+
+[04] npx --yes pnpm@9.15.0 db:reset
+exit=0
+Database reset and migration SQL applied successfully.
+
+[05] npx --yes pnpm@9.15.0 db:migrate
+exit=0
+Database migration SQL applied successfully.
+
+[06] npx --yes pnpm@9.15.0 db:seed
+exit=0
+Database seeded with deterministic synthetic P08 fixtures.
+
+[07] npx --yes pnpm@9.15.0 lint
+exit=0
+[Harness] Lint and JSON validation passed with zero warnings.
+
+[08] npx --yes pnpm@9.15.0 typecheck
+exit=0
+[Harness] Type-checking scripts, UI, web, database, and API workspaces completed.
+
+[09] npx --yes pnpm@9.15.0 test
+exit=0
+tests=85 pass=85 fail=0 skipped=0
+P09: immutable migration, production seed provenance, optimistic revision/evidence/approval/merge, 100-section boundary PASS.
+
+[10] npx --yes pnpm@9.15.0 build
+exit=0
+Vite production build PASS: index.html 8.87 kB; CSS 5.29 kB; JS 233.94 kB.
+[Harness] UI, database, API, and production web build artifacts verified.
+
+[11] npx --yes pnpm@9.15.0 test:e2e
+exit=0
+P06 browser E2E PASSED
+P07 browser E2E PASSED
+P08 browser E2E PASSED
+P09 browser E2E PASSED: 3 panes, real autosave, lossless 409 conflict, reviewer lock, approved-only merge, 1024px, 100 sections, keyboard focus, 200% zoom.
+
+[12] npx --yes pnpm@9.15.0 test:security
+exit=0
+tests=40 pass=40 fail=0 skipped=0
+P09 security: RBAC, Origin/CSRF, tenant and case IDOR, strict input, immutable provenance, self/cross approval, append-only events, audit rollback PASS.
+Note: Prisma error stacks printed by rollback tests are expected injected audit failures; their assertions passed and orphan count remained zero.
+
+[13] npx --yes pnpm@9.15.0 audit --audit-level high
+exit=0
+No known vulnerabilities found.
+
+[14] git diff --name-only 8db5895c357a6716fa112f132240ce9333a16e28..ceadc14e2cceba18697d6eacc62391b4218b3f8f
+exit=0
+14 paths; exact match with manifest.changedFiles.
+
+[15] tracked credential, raw template, secret token/private-key, and Korean resident-id pattern scans
+exit=0
+NO_TRACKED_CREDENTIAL_FILES
+NO_RAW_TEMPLATE_FILES_TRACKED
+NO_SECRET_PATTERNS
+NO_RESIDENT_ID_PATTERNS

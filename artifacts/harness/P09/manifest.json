@@ -1,42 +1,76 @@
 {
   "phase": "P09",
-  "status": "SUBMITTED_FOR_REVIEW",
-  "nextPhaseAllowed": false,
-  "submittedAt": "2026-08-07T03:00:00.000Z",
+  "status": "REVIEWED",
+  "verdict": "PASS_WITH_NOTES",
+  "nextPhaseAllowed": true,
+  "nextPhase": "P10",
+  "verifiedAt": "2026-08-07T12:58:55+09:00",
   "branch": "feat/P09-report-studio",
-  "commit": "HEAD",
+  "antigravitySubmittedCommit": "8db5895c357a6716fa112f132240ce9333a16e28",
+  "codexCorrectionCommits": [
+    "e2f1efaba9081d8b4d0f37e559b6034fb9444fcd",
+    "edc9f8a847e83ad73665c549fcd543c6ff55f63d",
+    "ceadc14e2cceba18697d6eacc62391b4218b3f8f"
+  ],
+  "reviewedCommit": "ceadc14e2cceba18697d6eacc62391b4218b3f8f",
+  "changedFilesBasis": "git diff --name-only 8db5895c357a6716fa112f132240ce9333a16e28..ceadc14e2cceba18697d6eacc62391b4218b3f8f",
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/src/api.ts",
+    "apps/web/src/main.tsx",
+    "apps/web/src/reports/ReportStudio.css",
+    "apps/web/src/reports/ReportStudio.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "apps/web/src/templates/ReportTemplateCatalog.tsx",
+    "packages/database/prisma/migrations/20260807110000_p09_report_studio/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "packages/database/src/seed.ts",
+    "scripts/p09-contract-test.ts",
+    "scripts/p09-e2e.ts",
+    "scripts/p09-security-test.ts",
+    "scripts/p09-test-support.ts"
+  ],
   "verification": {
-    "install": "PASS",
-    "reset": "PASS",
-    "seed": "PASS",
-    "lint": "PASS",
+    "installFrozenLockfile": "PASS",
+    "dbReset": "PASS",
+    "dbMigrate": "PASS",
+    "dbSeed": "PASS",
+    "lintZeroWarnings": "PASS",
     "typecheck": "PASS",
     "test": "PASS",
     "build": "PASS",
-    "e2e": "PASS",
+    "browserE2E": "PASS",
     "security": "PASS",
-    "audit": "PASS",
-    "manifestIntegrity": "PASS"
+    "auditHigh": "PASS",
+    "manifestIntegrity": "PASS",
+    "secretAndCustomerDataScan": "PASS"
   },
   "metrics": {
-    "unitIntegrationTests": 82,
-    "securityTests": 45,
-    "e2eSuites": 4,
+    "qualityGatesPassed": 11,
+    "qualityGatesTotal": 11,
+    "unitIntegrationTestsPassed": 85,
+    "unitIntegrationTestsFailed": 0,
+    "securityTestsPassed": 40,
+    "securityTestsFailed": 0,
+    "browserE2ESuitesPassed": 4,
+    "browserE2ESuitesFailed": 0,
     "highCriticalVulnerabilities": 0,
-    "unapprovedTemplatesActiveCount": 0
+    "trackedCredentialFiles": 0,
+    "trackedRawTemplateFiles": 0,
+    "realCustomerDataPatterns": 0
   },
-  "manifestFiles": [
-    "docs/harness/phase-status.json",
-    "packages/database/prisma/schema.prisma",
-    "packages/database/prisma/migrations/20260807110000_p09_report_studio/migration.sql",
-    "packages/database/src/seed.ts",
-    "apps/api/src/server.ts",
-    "apps/web/src/reports/ReportStudio.tsx",
-    "apps/web/src/routes/Router.tsx",
-    "package.json",
-    "scripts/p09-contract-test.ts",
-    "scripts/p09-security-test.ts",
-    "scripts/p09-e2e.ts",
-    "artifacts/harness/P09/manifest.json"
-  ]
+  "cleanVerification": {
+    "checkout": "p09-clean-verify",
+    "nodeModulesPresentBeforeInstall": false,
+    "node": "v24.16.0",
+    "pnpm": "9.15.0",
+    "workingTreeTrackedChangesAfterGates": 0
+  },
+  "evidence": {
+    "commands": "artifacts/harness/P09/commands.log",
+    "notes": "artifacts/harness/P09/notes.md",
+    "reviewRequest": "docs/reviews/requests/P09-review-request.md",
+    "reviewMarkdown": "docs/reviews/P09-codex-review.md",
+    "reviewJson": "docs/reviews/P09-codex-review.json"
+  }
 }
