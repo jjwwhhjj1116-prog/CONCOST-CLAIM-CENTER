@@ -131,6 +131,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
   const [busyAction, setBusyAction] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [createdStudioPath, setCreatedStudioPath] = useState('');
 
   const [code, setCode] = useState('RPT-TYPE01-001');
   const [name, setName] = useState('현장조사 표준 보고서');
@@ -317,6 +318,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
     setBusyAction('instance');
     setError('');
     setNotice('');
+    setCreatedStudioPath('');
     try {
       const result = await apiRequest<{ caseVersion: number; instance: { id: string; snapshotSha256: string }; report: { id: string } }>(
         `/api/cases/${encodeURIComponent(target.id)}/report-instances`,
@@ -327,7 +329,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
       );
       setCases((current) => current.map((item) => item.id === target.id ? { ...item, version: result.caseVersion } : item));
       setNotice(`사건 보고서 snapshot을 생성했습니다: ${result.instance.id} / SHA-256 ${result.instance.snapshotSha256.slice(0, 12)}…`);
-      onNavigate?.(`/cases/${encodeURIComponent(target.id)}/reports/${encodeURIComponent(result.report.id)}/studio`);
+      setCreatedStudioPath(`/cases/${encodeURIComponent(target.id)}/reports/${encodeURIComponent(result.report.id)}/studio`);
     } catch (reason) {
       handleApiError(reason);
     } finally {
@@ -368,7 +370,14 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
       </div>
 
       {error && <div className="p08-alert p08-alert--error" role="alert">{error}</div>}
-      {notice && <div className="p08-alert p08-alert--success" role="status">{notice}</div>}
+      {notice && (
+        <div className="p08-alert p08-alert--success" role="status">
+          <span>{notice}</span>
+          {createdStudioPath && onNavigate && (
+            <Button size="sm" onClick={() => onNavigate(createdStudioPath)}>보고서 스튜디오 열기</Button>
+          )}
+        </div>
+      )}
       {loading && <div className="p08-skeleton" role="status" aria-live="polite">템플릿 카탈로그를 불러오는 중입니다…</div>}
 
       {!loading && selectedType === 'TYPE-05' && (
