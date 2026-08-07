@@ -106,8 +106,24 @@
       ]
     },
     "P10": {
-      "status": "IN_PROGRESS",
-      "startedAt": "2026-08-07T13:13:00+09:00"
+      "status": "SUBMITTED",
+      "startedAt": "2026-08-07T13:13:00+09:00",
+      "submittedAt": "2026-08-07T14:10:00+09:00",
+      "deliverables": [
+        "packages/database/prisma/migrations/20260807140000_p10_ai_gateway/migration.sql",
+        "packages/database/prisma/schema.prisma",
+        "packages/database/src/seed.ts",
+        "apps/api/src/server.ts",
+        "apps/api/src/ai/gateway-engine.ts",
+        "apps/api/src/ai/secret-resolver.ts",
+        "apps/api/src/ai/ssrf-guard.ts",
+        "apps/api/src/ai/fake-adapter.ts",
+        "apps/web/src/ai/AiConfigManager.tsx",
+        "apps/web/src/reports/ReportStudio.tsx",
+        "scripts/p10-contract-test.ts",
+        "scripts/p10-security-test.ts",
+        "scripts/p10-e2e.ts"
+      ]
     }
   }
 }
