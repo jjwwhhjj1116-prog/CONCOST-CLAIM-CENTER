@@ -60,4 +60,4 @@ OBSERVED=0 tracked private-key/API-token patterns; 0 tracked .env/key/database/u
 
 [INTEGRITY]
 RESULT=PASS
-OBSERVED=Clean checkout at 186449b120953f39fa0941761f2c24e3e89d908a; git status empty after gates; manifest changedFiles equals all 26 paths from git show --name-only.
+OBSERVED=Clean source checkout at 186449b120953f39fa0941761f2c24e3e89d908a; git status empty after gates. Its 26-file tree is identical to final E integration commit b9fb97eef4961a5a309d731f122b61b831802863; manifest changedFiles equals git show --name-only for both commits.

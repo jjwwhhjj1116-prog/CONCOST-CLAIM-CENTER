@@ -10,8 +10,9 @@
     "p06StatusCommit": "73ee5a5",
     "antigravityStartCommit": "dc5a8f6",
     "antigravityImplementationCommit": null,
-    "codexPatchCommit": "186449b120953f39fa0941761f2c24e3e89d908a",
-    "reviewedCommit": "186449b120953f39fa0941761f2c24e3e89d908a"
+    "codexPatchCommit": "b9fb97eef4961a5a309d731f122b61b831802863",
+    "reviewedCommit": "b9fb97eef4961a5a309d731f122b61b831802863",
+    "verifiedSourceCommit": "186449b120953f39fa0941761f2c24e3e89d908a"
   },
   "changedFiles": [
     "apps/api/package.json",
@@ -44,6 +45,7 @@
   "cleanVerification": {
     "checkout": "p07-clean-gates",
     "commit": "186449b120953f39fa0941761f2c24e3e89d908a",
+    "contentIdenticalIntegratedCommit": "b9fb97eef4961a5a309d731f122b61b831802863",
     "nodeModulesPresentBeforeInstall": false,
     "workingTreeCleanAfterGates": true
   },

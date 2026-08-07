@@ -3,8 +3,8 @@
 ## 0. 진입 조건과 기준 커밋
 
 - P07 최종 판정: `PASS_WITH_NOTES` (`phase-status.json` 상태는 `PASS`)
-- P07 구현 커밋: `186449b120953f39fa0941761f2c24e3e89d908a`
-- P07 판정·증거 커밋: `b3de7bed4f5adda4497ecc987bbea5f0df949d4f`
+- P07 구현 커밋: `b9fb97eef4961a5a309d731f122b61b831802863`
+- P07 판정·증거 커밋: `8d52c6ea59a7fcae002a519f861c07dc8a9a7a3b`
 - 원본 E 저장소에서 위 커밋을 포함한 최신 커밋을 확인한 뒤 `feat/P08-report-template-catalog` 브랜치를 만든다.
 - 시작 커밋에서 `currentPhase: P08`, `P08.status: IN_PROGRESS`, `nextPhaseAllowed: false`로 바꾼다.
 - P07 일반 71개·보안 30개·P06/P07 실제 Chrome E2E를 삭제·완화·skip하지 않는다.

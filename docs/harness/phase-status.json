@@ -38,7 +38,7 @@
       "verdict": "PASS_WITH_NOTES",
       "updatedAt": "2026-08-07T09:53:21+09:00",
       "reviewReport": "docs/reviews/P07-codex-review.md",
-      "reviewedCommit": "186449b120953f39fa0941761f2c24e3e89d908a",
+      "reviewedCommit": "b9fb97eef4961a5a309d731f122b61b831802863",
       "reviewer": "Codex",
       "nextPhase": "P08",
       "deliverables": [
