@@ -131,7 +131,7 @@ test('P09 API enforces optimistic revisions, paragraph evidence, independent app
       revisionPayload(3, '수정 요청을 반영한 사실관계 문단입니다.'), fixture.pm, testOrigin);
     assert.strictEqual(secondSave2.status, 201);
 
-    const longContent = Array.from({ length: 11 }, () => '가'.repeat(9000)).join('\n\n');
+    const longContent = ['가'.repeat(10_000), ...Array.from({ length: 9 }, () => '가'.repeat(9_998))].join('\n\n');
     const thirdSave = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section3}/revisions`, 'POST',
       revisionPayload(1, longContent), fixture.staff, testOrigin);
     assert.strictEqual(thirdSave.status, 201);
