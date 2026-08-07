@@ -21,6 +21,7 @@ export type AiAuditEvent = 'STARTED' | 'COMPLETED' | 'FAILED' | 'CANCELED' | 'PO
 export interface AiGatewayExecutionOptions {
   abortSignal?: AbortSignal;
   onRequestKnown?: (requestId: string, status: string) => void;
+  persistResultText?: boolean;
 }
 
 export interface AiGatewayResult {
@@ -332,7 +333,11 @@ export async function processAiGenerationRequest(
         status: finalStatus,
         actualCostMicros,
         totalTokens: actualTokens,
-        responseMetadataJson: response.status === 'SUCCESS' ? JSON.stringify({ resultText: response.resultText }) : '{}',
+        responseMetadataJson: response.status === 'SUCCESS'
+          ? JSON.stringify(options.persistResultText === false
+            ? { resultSha256: crypto.createHash('sha256').update(response.resultText ?? '', 'utf8').digest('hex') }
+            : { resultText: response.resultText })
+          : '{}',
         redactedErrorMessage
       }
     });
@@ -363,5 +368,8 @@ export async function processAiGenerationRequest(
 
   const stored = await db.aiGenerationRequest.findUnique({ where: { id: requestId }, include: { attempts: true } });
   if (!stored) throw new AiGatewayError(500, 'Generation request disappeared during reconciliation');
-  return resultFromStored(stored);
+  const result = resultFromStored(stored);
+  return options.persistResultText === false && response.status === 'SUCCESS'
+    ? { ...result, resultText: response.resultText }
+    : result;
 }

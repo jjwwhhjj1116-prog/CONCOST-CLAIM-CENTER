@@ -716,7 +716,8 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
                   sourceType: 'MATERIAL',
                   sourceId: 'DOC-SYN-001',
                   sourceVersionId: 'DOCVER-SYN-001',
-                  sourceSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                  sourceVersionNumber: 1,
+                  sourceSha256: 'a'.repeat(64),
                   allowedAnchorsJson: '[0,1]',
                   orderIndex: 0
                 }
@@ -745,41 +746,6 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
           }
         });
 
-        await tx.aiDraftSuggestion.upsert({
-          where: { id: 'SUGG-SYN-001' },
-          update: {},
-          create: {
-            id: 'SUGG-SYN-001',
-            selectionId: 'GSEL-SYN-001',
-            requestId: 'REQ-SYN-001',
-            organizationId: 'ORG-SYN-A',
-            caseId: 'CASE-SYN-001',
-            reportId: 'RPT-SYN-001',
-            sectionId: 'SEC-SYN-001',
-            actorId: 'USR-PM',
-            status: 'GENERATED',
-            summaryText: 'Synthetic draft suggestion summary',
-            promptMode: 'grounded_success',
-            idempotencyKey: 'IDEMP-SYN-001',
-            idempotencyFingerprint: 'FINGERPRINT-SYN-001',
-            citations: {
-              create: [
-                {
-                  id: 'CIT-SYN-001',
-                  targetClaimIndex: 0,
-                  claimText: 'Synthetic claim text',
-                  sourceType: 'MATERIAL',
-                  sourceId: 'DOC-SYN-001',
-                  sourceVersionId: 'DOCVER-SYN-001',
-                  sourceSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-                  anchorIndex: 0,
-                  anchorText: 'Synthetic anchor text',
-                  status: 'VALID'
-                }
-              ]
-            }
-          }
-        });
       } catch {
         // P11 tables not yet present in earlier phase test isolated DBs
       }

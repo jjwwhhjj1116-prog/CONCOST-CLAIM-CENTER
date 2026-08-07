@@ -29,6 +29,7 @@ CREATE TABLE "AiGroundingItem" (
     "sourceType" TEXT NOT NULL,
     "sourceId" TEXT NOT NULL,
     "sourceVersionId" TEXT NOT NULL,
+    "sourceVersionNumber" INTEGER NOT NULL,
     "sourceSha256" TEXT NOT NULL,
     "allowedAnchorsJson" TEXT NOT NULL DEFAULT '[]',
     "orderIndex" INTEGER NOT NULL DEFAULT 0,
@@ -45,14 +46,18 @@ CREATE TABLE "AiDraftSuggestion" (
     "reportId" TEXT NOT NULL,
     "sectionId" TEXT NOT NULL,
     "actorId" TEXT NOT NULL,
-    "status" TEXT NOT NULL DEFAULT 'GENERATED',
-    "summaryText" TEXT NOT NULL,
-    "promptMode" TEXT NOT NULL DEFAULT 'grounded_success',
+    "status" TEXT NOT NULL DEFAULT 'PROCESSING',
+    "schemaVersion" TEXT NOT NULL DEFAULT 'P11_SUGGESTION_V1',
+    "summaryText" TEXT NOT NULL DEFAULT '',
+    "outputSha256" TEXT,
+    "promptMode" TEXT NOT NULL DEFAULT 'PRODUCTION',
     "idempotencyKey" TEXT NOT NULL,
     "idempotencyFingerprint" TEXT NOT NULL,
     "appliedRevisionId" TEXT,
     "appliedAt" DATETIME,
     "appliedActorId" TEXT,
+    "applyIdempotencyKey" TEXT,
+    "applyFingerprint" TEXT,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "AiDraftSuggestion_selectionId_fkey" FOREIGN KEY ("selectionId") REFERENCES "AiGroundingSelection" ("id") ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -84,9 +89,6 @@ CREATE TABLE "AiCitation" (
     CONSTRAINT "AiCitation_suggestionId_fkey" FOREIGN KEY ("suggestionId") REFERENCES "AiDraftSuggestion" ("id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
--- AlterTable ReportSectionRevision
-ALTER TABLE "ReportSectionRevision" ADD COLUMN "appliedSuggestionId" TEXT;
-
 -- CreateIndex
 CREATE INDEX "AiGroundingSelection_organizationId_caseId_idx" ON "AiGroundingSelection"("organizationId", "caseId");
 CREATE INDEX "AiGroundingSelection_sectionId_idx" ON "AiGroundingSelection"("sectionId");
@@ -107,66 +109,150 @@ CREATE INDEX "AiDraftSuggestion_sectionId_idx" ON "AiDraftSuggestion"("sectionId
 -- CreateIndex
 CREATE INDEX "AiCitation_suggestionId_idx" ON "AiCitation"("suggestionId");
 
--- CreateIndex
-CREATE UNIQUE INDEX "ReportSectionRevision_appliedSuggestionId_key" ON "ReportSectionRevision"("appliedSuggestionId");
-
 -- ----------------------------------------------------
 -- DB Triggers for P11 Immutability & Security Guards
 -- ----------------------------------------------------
 
-CREATE TRIGGER P11_grounding_selection_immutable_update
-BEFORE UPDATE ON AiGroundingSelection
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiGroundingSelection records are immutable and cannot be updated');
+CREATE TRIGGER "P11_grounding_selection_insert_guard"
+BEFORE INSERT ON "AiGroundingSelection"
+FOR EACH ROW BEGIN
+  SELECT CASE WHEN NEW."status" <> 'LOCKED'
+    OR length(NEW."manifestSha256") <> 64 OR length(NEW."policyHash") <> 64 OR length(NEW."instructionHash") <> 64
+    OR NOT EXISTS (
+      SELECT 1 FROM "Report" r
+      JOIN "ReportSection" s ON s."reportId" = r."id"
+      JOIN "CaseItem" c ON c."id" = r."caseId"
+      JOIN "User" u ON u."id" = NEW."actorId"
+      WHERE r."id" = NEW."reportId" AND s."id" = NEW."sectionId" AND c."id" = NEW."caseId"
+        AND c."organizationId" = NEW."organizationId" AND u."organizationId" = NEW."organizationId"
+        AND r."deletedAt" IS NULL AND s."deletedAt" IS NULL AND c."deletedAt" IS NULL
+        AND EXISTS (SELECT 1 FROM "UserRole" ur WHERE ur."userId" = u."id" AND ur."roleId" IN ('admin','pm','staff'))
+        AND (EXISTS (SELECT 1 FROM "UserRole" ur WHERE ur."userId" = u."id" AND ur."roleId" = 'admin')
+          OR EXISTS (SELECT 1 FROM "CaseAssignment" ca WHERE ca."caseId" = c."id" AND ca."userId" = u."id"))
+    ) THEN RAISE(ABORT, 'P11_GROUNDING_SELECTION_SCOPE_INVALID') END;
 END;
 
-CREATE TRIGGER P11_grounding_selection_immutable_delete
-BEFORE DELETE ON AiGroundingSelection
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiGroundingSelection records are immutable and cannot be deleted');
+CREATE TRIGGER "P11_grounding_selection_immutable_update" BEFORE UPDATE ON "AiGroundingSelection"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_GROUNDING_SELECTION_IMMUTABLE'); END;
+CREATE TRIGGER "P11_grounding_selection_immutable_delete" BEFORE DELETE ON "AiGroundingSelection"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_GROUNDING_SELECTION_IMMUTABLE'); END;
+
+CREATE TRIGGER "P11_grounding_item_insert_guard"
+BEFORE INSERT ON "AiGroundingItem"
+FOR EACH ROW BEGIN
+  SELECT CASE WHEN NEW."sourceType" NOT IN ('MATERIAL','MEETING')
+    OR json_valid(NEW."allowedAnchorsJson") = 0 OR json_type(NEW."allowedAnchorsJson") <> 'array'
+    OR json_array_length(NEW."allowedAnchorsJson") < 1 OR json_array_length(NEW."allowedAnchorsJson") > 50
+    OR EXISTS (SELECT 1 FROM json_each(NEW."allowedAnchorsJson") WHERE type <> 'integer' OR value < 0)
+    THEN RAISE(ABORT, 'P11_GROUNDING_ANCHORS_INVALID') END;
+  SELECT CASE WHEN NEW."sourceType" = 'MATERIAL' AND NOT EXISTS (
+    SELECT 1 FROM "AiGroundingSelection" gs
+    JOIN "Document" d ON d."id" = NEW."sourceId"
+    JOIN "DocumentVersion" dv ON dv."id" = NEW."sourceVersionId" AND dv."documentId" = d."id"
+    WHERE gs."id" = NEW."selectionId" AND d."caseId" = gs."caseId" AND d."deletedAt" IS NULL
+      AND dv."versionNumber" = NEW."sourceVersionNumber" AND dv."sha256" = NEW."sourceSha256"
+  ) THEN RAISE(ABORT, 'P11_DOCUMENT_SOURCE_PROVENANCE_INVALID') END;
+  SELECT CASE WHEN NEW."sourceType" = 'MEETING' AND NOT EXISTS (
+    SELECT 1 FROM "AiGroundingSelection" gs JOIN "Meeting" m ON m."id" = NEW."sourceId"
+    WHERE gs."id" = NEW."selectionId" AND m."caseId" = gs."caseId" AND m."status" = 'FINAL'
+      AND m."rawTextSha256" IS NOT NULL AND m."version" = NEW."sourceVersionNumber"
+      AND NEW."sourceVersionId" = m."id" || ':v' || m."version" AND m."rawTextSha256" = NEW."sourceSha256"
+  ) THEN RAISE(ABORT, 'P11_MEETING_SOURCE_PROVENANCE_INVALID') END;
 END;
 
-CREATE TRIGGER P11_grounding_item_immutable_update
-BEFORE UPDATE ON AiGroundingItem
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiGroundingItem records are immutable and cannot be updated');
+CREATE TRIGGER "P11_grounding_item_immutable_update" BEFORE UPDATE ON "AiGroundingItem"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_GROUNDING_ITEM_IMMUTABLE'); END;
+CREATE TRIGGER "P11_grounding_item_immutable_delete" BEFORE DELETE ON "AiGroundingItem"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_GROUNDING_ITEM_IMMUTABLE'); END;
+
+CREATE TRIGGER "P11_draft_suggestion_insert_guard"
+BEFORE INSERT ON "AiDraftSuggestion"
+FOR EACH ROW BEGIN
+  SELECT CASE WHEN NEW."status" <> 'PROCESSING' OR NEW."schemaVersion" <> 'P11_SUGGESTION_V1'
+    OR NEW."summaryText" <> '' OR NEW."outputSha256" IS NOT NULL
+    OR NOT EXISTS (
+      SELECT 1 FROM "AiGroundingSelection" gs JOIN "AiGenerationRequest" ar ON ar."id" = NEW."requestId"
+      WHERE gs."id" = NEW."selectionId" AND gs."organizationId" = NEW."organizationId"
+        AND gs."caseId" = NEW."caseId" AND gs."reportId" = NEW."reportId" AND gs."sectionId" = NEW."sectionId"
+        AND gs."actorId" = NEW."actorId" AND ar."organizationId" = NEW."organizationId"
+        AND ar."caseId" = NEW."caseId" AND ar."userId" = NEW."actorId"
+        AND ar."providerConfigId" = gs."providerId" AND ar."modelCode" = gs."modelCode"
+    ) THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_SCOPE_INVALID') END;
 END;
 
-CREATE TRIGGER P11_grounding_item_immutable_delete
-BEFORE DELETE ON AiGroundingItem
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiGroundingItem records are immutable and cannot be deleted');
+CREATE TRIGGER "P11_draft_suggestion_update_guard"
+BEFORE UPDATE ON "AiDraftSuggestion"
+FOR EACH ROW BEGIN
+  SELECT CASE WHEN NEW."selectionId" <> OLD."selectionId" OR NEW."requestId" <> OLD."requestId"
+    OR NEW."organizationId" <> OLD."organizationId" OR NEW."caseId" <> OLD."caseId"
+    OR NEW."reportId" <> OLD."reportId" OR NEW."sectionId" <> OLD."sectionId" OR NEW."actorId" <> OLD."actorId"
+    OR NEW."schemaVersion" <> OLD."schemaVersion" OR NEW."promptMode" <> OLD."promptMode"
+    OR NEW."idempotencyKey" <> OLD."idempotencyKey" OR NEW."idempotencyFingerprint" <> OLD."idempotencyFingerprint"
+    THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_PROVENANCE_IMMUTABLE') END;
+  SELECT CASE WHEN OLD."status" <> 'PROCESSING' AND (
+      NEW."summaryText" <> OLD."summaryText" OR COALESCE(NEW."outputSha256", '') <> COALESCE(OLD."outputSha256", '')
+    ) THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_OUTPUT_IMMUTABLE') END;
+  SELECT CASE WHEN NOT (
+      (OLD."status" = 'PROCESSING' AND NEW."status" IN ('GENERATED','BLOCKED','FAILED','CANCELED'))
+      OR (OLD."status" = 'GENERATED' AND NEW."status" IN ('APPLIED','DISCARDED'))
+      OR (OLD."status" = 'BLOCKED' AND NEW."status" = 'DISCARDED')
+      OR (OLD."status" = 'FAILED' AND NEW."status" = 'DISCARDED')
+      OR (OLD."status" = 'CANCELED' AND NEW."status" = 'DISCARDED')
+    ) THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_STATE_INVALID') END;
+  SELECT CASE WHEN NEW."status" IN ('GENERATED','BLOCKED')
+      AND (length(NEW."summaryText") < 1 OR length(NEW."outputSha256") <> 64)
+    THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_OUTPUT_INVALID') END;
+  SELECT CASE WHEN NEW."status" = 'APPLIED' AND (
+      NEW."appliedRevisionId" IS NULL OR NEW."appliedActorId" IS NULL OR NEW."appliedAt" IS NULL
+      OR NEW."applyIdempotencyKey" IS NULL OR length(NEW."applyFingerprint") <> 64
+      OR NOT EXISTS (
+        SELECT 1 FROM "ReportSectionRevision" rv JOIN "User" u ON u."id" = NEW."appliedActorId"
+        WHERE rv."id" = NEW."appliedRevisionId" AND rv."sectionId" = NEW."sectionId" AND rv."authorId" = NEW."appliedActorId"
+          AND u."organizationId" = NEW."organizationId"
+      )
+    ) THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_APPLY_INVALID') END;
+  SELECT CASE WHEN NEW."status" <> 'APPLIED' AND (NEW."appliedRevisionId" IS NOT NULL OR NEW."appliedActorId" IS NOT NULL OR NEW."appliedAt" IS NOT NULL
+      OR NEW."applyIdempotencyKey" IS NOT NULL OR NEW."applyFingerprint" IS NOT NULL)
+    THEN RAISE(ABORT, 'P11_DRAFT_SUGGESTION_APPLY_PROVENANCE_INVALID') END;
 END;
 
-CREATE TRIGGER P11_draft_suggestion_immutable_delete
-BEFORE DELETE ON AiDraftSuggestion
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiDraftSuggestion records are immutable and cannot be deleted');
+CREATE TRIGGER "P11_draft_suggestion_immutable_delete" BEFORE DELETE ON "AiDraftSuggestion"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_DRAFT_SUGGESTION_IMMUTABLE'); END;
+
+CREATE TRIGGER "P11_citation_insert_guard"
+BEFORE INSERT ON "AiCitation"
+FOR EACH ROW BEGIN
+  SELECT CASE WHEN NEW."status" NOT IN ('VALID','REVIEW_REQUIRED','CONFLICT')
+    OR NEW."targetClaimIndex" < 0 OR NEW."anchorIndex" < 0
+    OR NOT EXISTS (
+      SELECT 1 FROM "AiDraftSuggestion" ds JOIN "AiGroundingItem" gi ON gi."selectionId" = ds."selectionId"
+      WHERE ds."id" = NEW."suggestionId" AND ds."status" IN ('GENERATED','BLOCKED')
+        AND gi."sourceType" = NEW."sourceType" AND gi."sourceId" = NEW."sourceId"
+        AND gi."sourceVersionId" = NEW."sourceVersionId" AND gi."sourceSha256" = NEW."sourceSha256"
+        AND EXISTS (SELECT 1 FROM json_each(gi."allowedAnchorsJson") WHERE value = NEW."anchorIndex")
+    ) THEN RAISE(ABORT, 'P11_CITATION_PROVENANCE_INVALID') END;
 END;
 
-CREATE TRIGGER P11_citation_immutable_update
-BEFORE UPDATE ON AiCitation
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiCitation records are immutable and cannot be updated');
-END;
+CREATE TRIGGER "P11_citation_immutable_update" BEFORE UPDATE ON "AiCitation"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_CITATION_IMMUTABLE'); END;
+CREATE TRIGGER "P11_citation_immutable_delete" BEFORE DELETE ON "AiCitation"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P11_CITATION_IMMUTABLE'); END;
 
-CREATE TRIGGER P11_citation_immutable_delete
-BEFORE DELETE ON AiCitation
-FOR EACH ROW
-BEGIN
-    SELECT RAISE(FAIL, 'P11: AiCitation records are immutable and cannot be deleted');
-END;
+CREATE TRIGGER "P11_draft_suggestion_secret_insert_guard"
+BEFORE INSERT ON "AiDraftSuggestion"
+FOR EACH ROW WHEN lower(NEW."summaryText") GLOB '*sk-*' OR lower(NEW."summaryText") GLOB '*bearer *'
+  OR lower(NEW."summaryText") GLOB '*api_key*' OR lower(NEW."summaryText") GLOB '*apikey*'
+BEGIN SELECT RAISE(ABORT, 'P11_SECRET_MATERIAL_FORBIDDEN'); END;
 
-CREATE TRIGGER P11_draft_suggestion_raw_secret_guard
-BEFORE INSERT ON AiDraftSuggestion
-FOR EACH ROW
-WHEN NEW.summaryText LIKE '%sk-%' OR NEW.summaryText LIKE '%key-%' OR NEW.summaryText LIKE '%Bearer %'
-BEGIN
-    SELECT RAISE(FAIL, 'P11: Raw secret or API key string cannot be stored in suggestion summaryText');
-END;
+CREATE TRIGGER "P11_draft_suggestion_secret_update_guard"
+BEFORE UPDATE ON "AiDraftSuggestion"
+FOR EACH ROW WHEN lower(NEW."summaryText") GLOB '*sk-*' OR lower(NEW."summaryText") GLOB '*bearer *'
+  OR lower(NEW."summaryText") GLOB '*api_key*' OR lower(NEW."summaryText") GLOB '*apikey*'
+BEGIN SELECT RAISE(ABORT, 'P11_SECRET_MATERIAL_FORBIDDEN'); END;
+
+CREATE TRIGGER "P11_citation_secret_guard"
+BEFORE INSERT ON "AiCitation"
+FOR EACH ROW WHEN lower(NEW."claimText" || ' ' || NEW."anchorText") GLOB '*sk-*'
+  OR lower(NEW."claimText" || ' ' || NEW."anchorText") GLOB '*bearer *'
+  OR lower(NEW."claimText" || ' ' || NEW."anchorText") GLOB '*api_key*'
+BEGIN SELECT RAISE(ABORT, 'P11_SECRET_MATERIAL_FORBIDDEN'); END;

@@ -139,6 +139,7 @@
 }
 .p11-cit-valid .p11-cit-badge { color: #15803d; }
 .p11-cit-ungrounded .p11-cit-badge { color: #b45309; }
+.p11-cit-review_required .p11-cit-badge { color: #b45309; }
 .p11-cit-conflict .p11-cit-badge { color: #b91c1c; }
 .p11-cit-malformed .p11-cit-badge { color: #6b21a8; }
 .p11-cit-alert {

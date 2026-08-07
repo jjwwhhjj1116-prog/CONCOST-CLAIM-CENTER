@@ -1,100 +1,133 @@
-import * as assert from 'node:assert/strict';
-import * as path from 'node:path';
-import * as fs from 'node:fs';
-import { type AddressInfo } from 'node:net';
-import { createPrismaClient, seedDatabase, resetDatabase, type PrismaClient } from '@claim-studio/database';
-import { createApiServer, type ManagedApiServer } from '../apps/api/src/server';
-import { login, requestJson, createP09Fixture, P09_TEST_ORIGIN } from './p09-test-support';
+import assert from 'node:assert/strict';
+import * as crypto from 'node:crypto';
+import { closeP11Isolated, createMeetingSelection, createSuggestion, P11_INSTRUCTION, startP11Isolated } from './p11-test-support';
+import { createP09Fixture, requestJson } from './p09-test-support';
 
-const root = path.resolve(__dirname, '..');
-
-async function startIsolated(name: string): Promise<{
-  db: PrismaClient;
-  api: ManagedApiServer;
-  origin: string;
-  databasePath: string;
-  uploadDir: string;
-}> {
-  const databasePath = path.join(root, 'packages/database/.data', `${name}-${process.pid}-${Date.now()}.db`);
-  const uploadDir = path.join(root, 'packages/database/.data', `${name}-uploads-${process.pid}-${Date.now()}`);
-  const databaseUrl = `file:${databasePath}`;
-  await resetDatabase(databaseUrl);
-  await seedDatabase(databaseUrl);
-  const db = createPrismaClient(databaseUrl);
-  const api = createApiServer({ databaseUrl, allowedOrigins: [P09_TEST_ORIGIN], secureCookies: false, uploadDir });
-  await new Promise<void>((resolve, reject) => api.once('error', reject).listen(0, '127.0.0.1', resolve));
-  return { db, api, origin: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, databasePath, uploadDir };
-}
-
-async function closeIsolated(context: Awaited<ReturnType<typeof startIsolated>>): Promise<void> {
-  await new Promise<void>((resolve) => context.api.close(() => resolve()));
-  await context.api.waitForDatabaseClose();
-  await context.db.$disconnect();
-  fs.rmSync(context.uploadDir, { recursive: true, force: true });
-  for (const suffix of ['', '-journal', '-shm', '-wal']) fs.rmSync(`${context.databasePath}${suffix}`, { force: true });
-}
-
-async function runP11SecurityTests() {
-  console.log('[P11 Security Test] Initializing database and API server...');
-  const ctx = await startIsolated('p11-security-test');
-
+async function main(): Promise<void> {
+  console.log('P11 security: assignment, IDOR, DB provenance, secret redaction, terminal state and cancellation');
+  const context = await startP11Isolated('p11-security');
   try {
-    const fx = await createP09Fixture(ctx.origin, ctx.db);
-    const pmSession = fx.pm;
-    const reviewerSession = fx.reviewer;
-    const reportId = fx.reportId;
-    const sectionId = fx.sectionIds[0];
+    const { db, fixture } = context;
+    const reportId = fixture.reportId;
+    const sectionId = fixture.sectionIds[0];
 
-    // 1. Scenario 4 & Cross-Case / Cross-Tenant Source Selection Check
-    console.log('[P11 Security Test] 1. Cross-Case Grounding Source Injection Block...');
-    const crossCaseRes = await requestJson(ctx.origin, `/api/reports/${reportId}/sections/${sectionId}/grounding/selections`, 'POST', {
-      providerId: 'CFG-LOCAL-FAKE-01',
-      modelCode: 'fake-claim-v1',
-      sources: [
-        { sourceType: 'MATERIAL', sourceId: 'DOC-SYN-003', sourceVersionId: 'DOCVER-SYN-003', allowedAnchors: [0] } // DOC-SYN-003 belongs to another case
-      ]
-    }, pmSession);
-    assert.equal(crossCaseRes.status, 403);
+    const reviewerDenied = await createMeetingSelection(context, fixture.reviewer);
+    assert.equal(reviewerDenied.status, 403);
 
-    // 2. Reviewer Authoring Block (Scenario 11: Reviewer cannot create or apply suggestion)
-    console.log('[P11 Security Test] 2. Reviewer Authoring Privilege Guard...');
-    const reviewerCreateRes = await requestJson(ctx.origin, `/api/reports/${reportId}/sections/${sectionId}/grounding/selections`, 'POST', {
-      providerId: 'CFG-LOCAL-FAKE-01',
-      modelCode: 'fake-claim-v1',
-      sources: [
-        { sourceType: 'MATERIAL', sourceId: 'DOC-SYN-001', sourceVersionId: 'DOCVER-SYN-001', allowedAnchors: [0] }
-      ]
-    }, reviewerSession);
-    assert.equal(reviewerCreateRes.status, 403);
+    await db.caseAssignment.delete({ where: { caseId_userId: { caseId: 'CASE-SYN-001', userId: 'USR-STAFF' } } });
+    const unassignedDenied = await createMeetingSelection(context, fixture.staff);
+    assert.equal(unassignedDenied.status, 403);
+    await db.caseAssignment.create({ data: { caseId: 'CASE-SYN-001', userId: 'USR-STAFF' } });
 
-    // 3. DB Trigger Raw Secret Guard in Suggestion Summary
-    console.log('[P11 Security Test] 3. DB Trigger Block Raw Secret in Suggestion...');
-    await assert.rejects(async () => {
-      await ctx.db.$executeRawUnsafe(
-        `INSERT INTO AiDraftSuggestion (id, selectionId, requestId, organizationId, caseId, reportId, sectionId, actorId, status, summaryText, promptMode, idempotencyKey, idempotencyFingerprint, createdAt, updatedAt) ` +
-        `VALUES ('SUGG-BAD-${Date.now()}', 'GSEL-001', 'REQ-001', 'ORG-SYN-A', 'CASE-SYN-001', 'RPT-001', 'SEC-001', 'USR-PM', 'GENERATED', 'Leaked key sk-proj-raw-secret-key-12345', 'grounded_success', 'IDEMP-BAD', 'FINGERPRINT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-      );
-    }, /P11: Raw secret or API key string cannot be stored in suggestion summaryText/);
+    const crossCaseSource = await requestJson(context.origin, `/api/reports/${reportId}/sections/${sectionId}/grounding/selections`, 'POST', {
+      providerId: 'CFG-LOCAL-FAKE-01', modelCode: 'fake-claim-v1', instruction: P11_INSTRUCTION,
+      sources: [{ sourceType: 'MATERIAL', sourceId: 'DOC-SYN-002', sourceVersionId: 'DOCVER-SYN-003', allowedAnchors: [0] }]
+    }, fixture.pm);
+    assert.equal(crossCaseSource.status, 403);
 
-    // 4. DB Trigger Immutability of Selection and Citation
-    console.log('[P11 Security Test] 4. DB Trigger Immutability of Selection and Citation...');
-    await assert.rejects(async () => {
-      await ctx.db.$executeRawUnsafe(`UPDATE AiGroundingSelection SET status = 'DISCARDED' WHERE id = 'GSEL-SYN-001'`);
-    }, /P11: AiGroundingSelection records are immutable/);
+    const draftMeeting = await requestJson(context.origin, `/api/reports/${reportId}/sections/${sectionId}/grounding/selections`, 'POST', {
+      providerId: 'CFG-LOCAL-FAKE-01', modelCode: 'fake-claim-v1', instruction: P11_INSTRUCTION,
+      sources: [{ sourceType: 'MEETING', sourceId: 'MEET-SYN-001', sourceVersionId: 'MEET-SYN-001:v1', allowedAnchors: [0] }]
+    }, fixture.pm);
+    assert.equal(draftMeeting.status, 409);
 
-    await assert.rejects(async () => {
-      await ctx.db.$executeRawUnsafe(`DELETE FROM AiGroundingSelection WHERE id = 'GSEL-SYN-001'`);
-    }, /P11: AiGroundingSelection records are immutable/);
+    const selectionResponse = await createMeetingSelection(context);
+    assert.equal(selectionResponse.status, 201);
+    const selectionId = selectionResponse.body.selection.id;
+    const grounded = await createSuggestion(context, selectionId, 'GROUNDED_SUCCESS', 'P11-SEC-GROUNDED');
+    assert.equal(grounded.status, 201);
+    assert.equal(grounded.body.suggestion.status, 'GENERATED');
+    const suggestionId = grounded.body.suggestion.id as string;
 
-    console.log('[P11 Security Test] PASS 100%!');
+    await db.caseAssignment.delete({ where: { caseId_userId: { caseId: 'CASE-SYN-001', userId: 'USR-STAFF' } } });
+    const unassignedApply = await requestJson(context.origin, `/api/reports/${reportId}/sections/${sectionId}/ai/suggestions/${suggestionId}/apply`, 'POST', {
+      expectedVersion: 1, idempotencyKey: 'P11-SEC-UNASSIGNED-APPLY'
+    }, fixture.staff);
+    assert.equal(unassignedApply.status, 403);
+    assert.equal(await db.reportSectionRevision.count({ where: { sectionId } }), 0);
+    await db.caseAssignment.create({ data: { caseId: 'CASE-SYN-001', userId: 'USR-STAFF' } });
+
+    const staffSelection = await createMeetingSelection(context, fixture.staff);
+    assert.equal(staffSelection.status, 201);
+    const staffBlocked = await createSuggestion(context, staffSelection.body.selection.id, 'UNGROUNDED_VALUE', 'P11-SEC-STAFF-DISCARD', fixture.staff);
+    assert.equal(staffBlocked.status, 201);
+    assert.equal(staffBlocked.body.suggestion.status, 'BLOCKED');
+    await db.caseAssignment.delete({ where: { caseId_userId: { caseId: 'CASE-SYN-001', userId: 'USR-STAFF' } } });
+    const unassignedDiscard = await requestJson(context.origin, `/api/reports/${reportId}/sections/${sectionId}/ai/suggestions/${staffBlocked.body.suggestion.id}`, 'DELETE', undefined, fixture.staff);
+    assert.equal(unassignedDiscard.status, 403);
+    assert.equal((await db.aiDraftSuggestion.findUniqueOrThrow({ where: { id: staffBlocked.body.suggestion.id } })).status, 'BLOCKED');
+    await db.caseAssignment.create({ data: { caseId: 'CASE-SYN-001', userId: 'USR-STAFF' } });
+
+    const secondFixture = await createP09Fixture(context.origin, db, { sectionCount: 1 });
+    const listIdor = await requestJson(context.origin, `/api/reports/${reportId}/sections/${secondFixture.sectionIds[0]}/ai/suggestions`, 'GET', undefined, fixture.pm);
+    assert.equal(listIdor.status, 404);
+    const discardIdor = await requestJson(context.origin, `/api/reports/${reportId}/sections/${secondFixture.sectionIds[0]}/ai/suggestions/${suggestionId}`, 'DELETE', undefined, fixture.pm);
+    assert.equal(discardIdor.status, 404);
+
+    await assert.rejects(db.$executeRawUnsafe(
+      `INSERT INTO AiGroundingSelection (id,organizationId,caseId,reportId,sectionId,actorId,status,policyHash,providerId,modelCode,instructionHash,manifestSha256,createdAt) ` +
+      `VALUES ('GSEL-CROSS-TENANT','ORG-SYN-B','CASE-SYN-001','${reportId}','${sectionId}','USR-ORGB-PM','LOCKED','${'a'.repeat(64)}','CFG-LOCAL-FAKE-01','fake-claim-v1','${'b'.repeat(64)}','${'c'.repeat(64)}',CURRENT_TIMESTAMP)`
+    ), /P11_GROUNDING_SELECTION_SCOPE_INVALID/);
+
+    const badText = 'P11 security second source';
+    await db.meeting.create({ data: {
+      id: 'MEET-P11-SEC', caseId: 'CASE-SYN-001', title: 'P11 security source', meetingDate: new Date(), rawText: badText,
+      rawTextSha256: crypto.createHash('sha256').update(badText).digest('hex'), status: 'FINAL', version: 1, createdById: 'USR-PM'
+    } });
+    await assert.rejects(db.$executeRawUnsafe(
+      `INSERT INTO AiGroundingItem (id,selectionId,sourceType,sourceId,sourceVersionId,sourceVersionNumber,sourceSha256,allowedAnchorsJson,orderIndex) ` +
+      `VALUES ('GITM-BAD-HASH','${selectionId}','MEETING','MEET-P11-SEC','MEET-P11-SEC:v1',1,'${'0'.repeat(64)}','[0]',9)`
+    ), /P11_MEETING_SOURCE_PROVENANCE_INVALID/);
+
+    const exactCitation = grounded.body.suggestion.citations[0];
+    await assert.rejects(db.$executeRawUnsafe(
+      `INSERT INTO AiCitation (id,suggestionId,targetClaimIndex,claimText,sourceType,sourceId,sourceVersionId,sourceSha256,anchorIndex,anchorText,status,createdAt) ` +
+      `VALUES ('CIT-BAD-ANCHOR','${suggestionId}',99,'bad anchor','${exactCitation.sourceType}','${exactCitation.sourceId}','${exactCitation.sourceVersionId}','${exactCitation.sourceSha256}',999,'missing','VALID',CURRENT_TIMESTAMP)`
+    ), /P11_CITATION_PROVENANCE_INVALID/);
+    await assert.rejects(db.$executeRawUnsafe(
+      `INSERT INTO AiCitation (id,suggestionId,targetClaimIndex,claimText,sourceType,sourceId,sourceVersionId,sourceSha256,anchorIndex,anchorText,status,createdAt) ` +
+      `VALUES ('CIT-SECRET','${suggestionId}',100,'Bearer raw-secret-token','${exactCitation.sourceType}','${exactCitation.sourceId}','${exactCitation.sourceVersionId}','${exactCitation.sourceSha256}',0,'${exactCitation.anchorText}','VALID',CURRENT_TIMESTAMP)`
+    ), /P11_SECRET_MATERIAL_FORBIDDEN/);
+    await assert.rejects(db.$executeRawUnsafe(`UPDATE AiDraftSuggestion SET status='PROCESSING' WHERE id='${suggestionId}'`), /P11_DRAFT_SUGGESTION_STATE_INVALID/);
+    await assert.rejects(db.$executeRawUnsafe(`UPDATE AiDraftSuggestion SET status='DISCARDED', summaryText='sk-raw-secret-value' WHERE id='${suggestionId}'`), /P11_(?:SECRET_MATERIAL_FORBIDDEN|DRAFT_SUGGESTION_OUTPUT_IMMUTABLE)/);
+    await assert.rejects(db.$executeRawUnsafe(`UPDATE AiGroundingSelection SET status='DISCARDED' WHERE id='${selectionId}'`), /P11_GROUNDING_SELECTION_IMMUTABLE/);
+
+    const rawRequest = await db.aiGenerationRequest.findUniqueOrThrow({ where: { id: grounded.body.suggestion.requestId } });
+    assert.doesNotMatch(rawRequest.responseMetadataJson, /resultText|Synthetic final raw transcript text|Bearer|sk-/i);
+    const auditDump = JSON.stringify(await db.auditLog.findMany({ where: { action: { startsWith: 'AI_' } } }));
+    assert.doesNotMatch(auditDump, /Synthetic final raw transcript text|Bearer\s|sk-[A-Za-z0-9]/i);
+
+    const slow = await createSuggestion(context, selectionId, 'SLOW_SUCCESS', 'P11-SEC-CANCEL', fixture.pm, { waitForCompletion: false });
+    assert.equal(slow.status, 202);
+    assert.equal(slow.body.suggestion.status, 'PROCESSING');
+    const canceled = await requestJson(context.origin, `/api/reports/${reportId}/sections/${sectionId}/ai/suggestions/${slow.body.suggestion.id}/cancel`, 'POST', {}, fixture.pm);
+    assert.equal(canceled.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    const canceledSuggestion = await db.aiDraftSuggestion.findUniqueOrThrow({ where: { id: slow.body.suggestion.id } });
+    assert.equal(canceledSuggestion.status, 'CANCELED');
+    assert.equal(await db.reportSectionRevision.count({ where: { sectionId } }), 0);
+    const cancellationLedger = await db.aiUsageLedger.aggregate({ where: { requestId: slow.body.suggestion.requestId }, _sum: { costMicros: true } });
+    assert.equal(cancellationLedger._sum.costMicros, 0);
+
+    const requestCount = await db.aiGenerationRequest.count();
+    await db.aiCasePolicy.update({ where: { caseId: 'CASE-SYN-001' }, data: { externalAiAllowed: false } });
+    const policyBlocked = await createMeetingSelection(context);
+    assert.equal(policyBlocked.status, 403);
+    assert.equal(await db.aiGenerationRequest.count(), requestCount);
+    console.log('P11 security: PASSED (assignment/IDOR/DB guards/redaction/cancel/policy side effects)');
   } finally {
-    await closeIsolated(ctx);
+    await closeP11Isolated(context);
+  }
+
+  const productionLike = await startP11Isolated('p11-testmode-disabled', false);
+  try {
+    const selection = await createMeetingSelection(productionLike);
+    assert.equal(selection.status, 201);
+    const forbiddenMode = await createSuggestion(productionLike, selection.body.selection.id, 'CROSS_CASE', 'P11-FORBIDDEN-TESTMODE');
+    assert.equal(forbiddenMode.status, 400);
+  } finally {
+    await closeP11Isolated(productionLike);
   }
 }
 
-if (require.main === module) {
-  runP11SecurityTests().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
-}
+void main().catch((error: unknown) => { console.error(error); process.exitCode = 1; });

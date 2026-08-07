@@ -84,7 +84,7 @@ interface ReportDetail {
     documents: Array<{
       id: string;
       title: string;
-      versions: Array<{ id: string; versionNumber: number; displayName: string; sha256: string; fileSize: number; isFinal: boolean }>;
+      versions: Array<{ id: string; versionNumber: number; displayName: string; sha256: string; fileSize: number; mimeType: string; isFinal: boolean }>;
     }>;
     meetings: Array<{ id: string; title: string; status: string; version: number; rawTextSha256?: string | null }>;
   };
@@ -159,12 +159,12 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const [aiResultMsg, setAiResultMsg] = useState<string | null>(null);
 
   // P11 Grounded AI Authoring State
-  const [selectedSources, setSelectedSources] = useState<Array<{ sourceType: 'MATERIAL' | 'MEETING'; sourceId: string; sourceVersionId: string }>>([]);
+  const [selectedSources, setSelectedSources] = useState<Array<{ sourceType: 'MATERIAL' | 'MEETING'; sourceId: string; sourceVersionId: string; allowedAnchors: number[] }>>([]);
   const [activeSelection, setActiveSelection] = useState<{ id: string; manifestSha256: string; items: any[] } | null>(null);
   const [showCostModal, setShowCostModal] = useState<boolean>(false);
-  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [, setSuggestions] = useState<any[]>([]);
   const [activeSuggestion, setActiveSuggestion] = useState<any | null>(null);
-  const [applyPromptMode, setApplyPromptMode] = useState<string>('grounded_success');
+  const [authoringInstruction, setAuthoringInstruction] = useState('선택한 근거만 사용하여 이 장의 사실관계 검토 초안을 작성하세요.');
 
   const canEdit = roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
   const canApprove = roles.some((role) => ['admin', 'director', 'reviewer'].includes(role));
@@ -177,6 +177,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
       setSuggestions(res.suggestions);
       if (res.suggestions.length > 0) {
         setActiveSuggestion(res.suggestions[0]);
+        setAiStatus(res.suggestions[0].status === 'PROCESSING' ? 'loading' : res.suggestions[0].status === 'GENERATED' ? 'success' : 'error');
       } else {
         setActiveSuggestion(null);
       }
@@ -190,14 +191,20 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
       setNotice('최소 하나 이상의 근거 자료를 선택해야 합니다.');
       return;
     }
+    const selectedModel = aiModels.find((model) => `${model.providerId}::${model.modelCode}` === selectedAiModel);
+    if (!selectedModel) {
+      setNotice('사건 정책에서 허용된 AI 공급자와 모델을 먼저 선택해야 합니다.');
+      return;
+    }
     try {
       const res = await apiRequest<{ selection: { id: string; manifestSha256: string; items: any[] } }>(
         `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/grounding/selections`,
         {
           method: 'POST',
           body: JSON.stringify({
-            providerId: 'CFG-LOCAL-FAKE-01',
-            modelCode: selectedAiModel,
+            providerId: selectedModel.providerId,
+            modelCode: selectedModel.modelCode,
+            instruction: authoringInstruction,
             sources: selectedSources
           })
         }
@@ -210,12 +217,11 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
     }
   };
 
-  const generateGroundedSuggestion = async (overrideMode?: string) => {
+  const generateGroundedSuggestion = async () => {
     if (!reportId || !activeSection || !activeSelection) return;
     setShowCostModal(false);
     setAiStatus('loading');
     setAiResultMsg(null);
-    const mode = overrideMode || applyPromptMode;
     try {
       const res = await apiRequest<{ suggestion: any }>(
         `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/ai/suggestions`,
@@ -223,15 +229,16 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
           method: 'POST',
           body: JSON.stringify({
             selectionId: activeSelection.id,
-            promptMode: mode,
-            idempotencyKey: `IDEMP-STUDIO-${Date.now()}`
+            instruction: authoringInstruction,
+            idempotencyKey: `P11-STUDIO-${activeSelection.id}`,
+            waitForCompletion: false
           })
         }
       );
-      setAiStatus(res.suggestion.status === 'GENERATED' ? 'success' : 'error');
+      setAiStatus(res.suggestion.status === 'PROCESSING' ? 'loading' : res.suggestion.status === 'GENERATED' ? 'success' : 'error');
       setActiveSuggestion(res.suggestion);
       await loadSuggestions(activeSection.id);
-      setNotice(res.suggestion.status === 'GENERATED' ? 'AI 근거 초안 생성 완료' : 'AI 인용 검증 실패 (BLOCKED)');
+      setNotice(res.suggestion.status === 'PROCESSING' ? 'AI 근거 초안 생성 요청이 시작되었습니다.' : res.suggestion.status === 'GENERATED' ? 'AI 근거 초안 생성 완료' : 'AI 인용 검증 실패');
     } catch (err) {
       setAiStatus('error');
       setNotice(err instanceof Error ? err.message : 'AI 초안 생성 실패');
@@ -241,31 +248,43 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const applySuggestionToContent = async (suggestionId: string) => {
     if (!reportId || !activeSection) return;
     try {
-      const res = await apiRequest<{ revision: any; suggestion: any }>(
+      const res = await apiRequest<{ revision: any; suggestion: any; sectionVersion: number }>(
         `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/ai/suggestions/${encodeURIComponent(suggestionId)}/apply`,
         {
           method: 'POST',
-          body: JSON.stringify({ expectedVersion: activeSection.version })
+          body: JSON.stringify({ expectedVersion: activeSection.version, idempotencyKey: `P11-APPLY-${suggestionId}-${activeSection.version}` })
         }
       );
       setDrafts((current) => ({
         ...current,
         [activeSection.id]: {
           content: res.revision.content,
-          baseVersion: res.revision.revisionNumber,
+          baseVersion: res.sectionVersion,
           dirty: false,
           state: 'saved'
         }
       }));
       updateSection(activeSection.id, (sec) => ({
         ...sec,
-        version: res.revision.revisionNumber,
+        version: res.sectionVersion,
         revisions: [res.revision, ...sec.revisions]
       }));
       await loadSuggestions(activeSection.id);
       setNotice('AI 초안이 본문에 새 DRAFT 개정본으로 적용되었습니다.');
     } catch (err) {
       setNotice(err instanceof Error ? err.message : '본문 적용 실패');
+    }
+  };
+
+  const cancelGroundedSuggestion = async (suggestionId: string) => {
+    if (!reportId || !activeSection) return;
+    try {
+      await apiRequest(`/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/ai/suggestions/${encodeURIComponent(suggestionId)}/cancel`, { method: 'POST' });
+      setAiStatus('error');
+      await loadSuggestions(activeSection.id);
+      setNotice('AI 근거 초안 생성 요청이 취소되었습니다.');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '초안 생성 취소 실패');
     }
   };
 
@@ -406,6 +425,18 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const activeConflict = activeSection ? conflicts[activeSection.id] : undefined;
   const activeRevision = activeSection?.revisions[0];
   const validationErrors = parsedValidationErrors(activeRevision);
+
+  useEffect(() => {
+    setSelectedSources([]);
+    setActiveSelection(null);
+    if (selectedSectionId) void loadSuggestions(selectedSectionId);
+  }, [selectedSectionId, loadSuggestions]);
+
+  useEffect(() => {
+    if (!activeSection || activeSuggestion?.status !== 'PROCESSING') return;
+    const timer = window.setInterval(() => { void loadSuggestions(activeSection.id); }, 200);
+    return () => window.clearInterval(timer);
+  }, [activeSection, activeSuggestion?.status, loadSuggestions]);
 
   const updateSection = useCallback((sectionId: string, updater: (section: ReportSection) => ReportSection) => {
     setReport((current) => current ? { ...current, sections: current.sections.map((section) => section.id === sectionId ? updater(section) : section) } : current);
@@ -665,7 +696,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                       checked={isChecked}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedSources((curr) => [...curr, { sourceType: 'MATERIAL', sourceId: doc.id, sourceVersionId: latestVer.id }]);
+                          setSelectedSources((curr) => [...curr, { sourceType: 'MATERIAL', sourceId: doc.id, sourceVersionId: latestVer.id, allowedAnchors: [0] }]);
                         } else {
                           setSelectedSources((curr) => curr.filter((s) => !(s.sourceType === 'MATERIAL' && s.sourceId === doc.id)));
                         }
@@ -675,7 +706,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                   </label>
                 );
               })}
-              {report.case.meetings.map((mtg) => {
+              {report.case.meetings.filter((meeting) => meeting.status === 'FINAL' && meeting.rawTextSha256).map((mtg) => {
                 const isChecked = selectedSources.some((s) => s.sourceType === 'MEETING' && s.sourceId === mtg.id);
                 return (
                   <label key={mtg.id} className="p11-source-item">
@@ -684,7 +715,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                       checked={isChecked}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedSources((curr) => [...curr, { sourceType: 'MEETING', sourceId: mtg.id, sourceVersionId: mtg.id }]);
+                          setSelectedSources((curr) => [...curr, { sourceType: 'MEETING', sourceId: mtg.id, sourceVersionId: `${mtg.id}:v${mtg.version}`, allowedAnchors: [0] }]);
                         } else {
                           setSelectedSources((curr) => curr.filter((s) => !(s.sourceType === 'MEETING' && s.sourceId === mtg.id)));
                         }
@@ -696,8 +727,15 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
               })}
             </div>
 
+            <label htmlFor="p11-authoring-instruction">작성 지시</label>
+            <textarea id="p11-authoring-instruction" rows={3} maxLength={4000} value={authoringInstruction} onChange={(event) => {
+              setAuthoringInstruction(event.target.value);
+              setActiveSelection(null);
+            }} />
+            {!aiPolicy?.externalAiAllowed && <p className="p11-cit-alert" role="alert">이 사건은 외부 AI 전송이 허용되지 않았습니다.</p>}
+
             <div className="p11-grounding-actions">
-              <Button disabled={!canEdit || selectedSources.length === 0} onClick={lockGroundingSelection}>
+              <Button disabled={!canEdit || !aiPolicy?.externalAiAllowed || aiModels.length === 0 || selectedSources.length === 0 || !authoringInstruction.trim()} onClick={lockGroundingSelection}>
                 1. 근거 Manifest 고정
               </Button>
             </div>
@@ -705,16 +743,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
             {activeSelection && (
               <div className="p11-selection-status" role="status">
                 <p>✓ Manifest 고정됨: <code>{activeSelection.manifestSha256.slice(0, 12)}</code> ({activeSelection.items.length}개 항목)</p>
-                <label>테스트 모드 선택
-                  <select value={applyPromptMode} onChange={(e) => setApplyPromptMode(e.target.value)}>
-                    <option value="grounded_success">Grounded Success (정상 인용)</option>
-                    <option value="TRIGGER_P11_UNGROUNDED">Ungrounded Value (근거 부족 [확인 필요])</option>
-                    <option value="TRIGGER_P11_CONFLICT">Conflict (상충 근거 경고)</option>
-                    <option value="TRIGGER_P11_MALFORMED_CITATION">Malformed Citation (앵커 오류 BLOCKED)</option>
-                    <option value="TRIGGER_P11_PROMPT_INJECTION">Prompt Injection (격리 처리)</option>
-                  </select>
-                </label>
-                <Button disabled={!canEdit} variant="secondary" onClick={() => generateGroundedSuggestion()}>
+                <Button disabled={!canEdit || aiStatus === 'loading'} variant="secondary" onClick={() => generateGroundedSuggestion()}>
                   2. AI 초안 생성 시작
                 </Button>
               </div>
@@ -752,12 +781,15 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                     본문에 적용 (새 Revision 생성)
                   </Button>
                   <Button
-                    disabled={!canEdit || activeSuggestion.status === 'APPLIED'}
+                    disabled={!canEdit || ['PROCESSING', 'APPLIED', 'DISCARDED'].includes(activeSuggestion.status)}
                     variant="secondary"
                     onClick={() => discardSuggestion(activeSuggestion.id)}
                   >
                     초안 폐기
                   </Button>
+                  {activeSuggestion.status === 'PROCESSING' && (
+                    <Button variant="secondary" onClick={() => cancelGroundedSuggestion(activeSuggestion.id)}>생성 요청 취소</Button>
+                  )}
                 </div>
               </div>
             )}
@@ -774,7 +806,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                 <li><strong>선택 자료 수:</strong> {activeSelection.items.length}개</li>
                 <li><strong>Manifest Hash:</strong> <code>{activeSelection.manifestSha256}</code></li>
                 <li><strong>선택 모델:</strong> {selectedAiModel}</li>
-                <li><strong>최대 예상 비용:</strong> $0.0020 USD (2,000 micros)</li>
+                <li><strong>최대 예상 비용:</strong> ${((aiPolicy?.maxCostMicrosPerRequest ?? 0) / 1_000_000).toFixed(4)} USD ({aiPolicy?.maxCostMicrosPerRequest ?? 0} micros)</li>
               </ul>
               <div className="p09-modal-actions">
                 <Button onClick={() => generateGroundedSuggestion()}>전송 및 AI 초안 생성 시작</Button>
