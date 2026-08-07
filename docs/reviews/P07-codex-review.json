@@ -1,0 +1,30 @@
+{
+  "phase": "P07",
+  "verdict": "PASS_WITH_NOTES",
+  "nextPhaseAllowed": true,
+  "reviewedCommit": "b9fb97eef4961a5a309d731f122b61b831802863",
+  "verifiedSourceCommit": "186449b120953f39fa0941761f2c24e3e89d908a",
+  "reviewedAt": "2026-08-07T09:53:21+09:00",
+  "reviewMode": "patch",
+  "findings": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1
+  },
+  "resolvedSubmissionFindings": {
+    "critical": 0,
+    "high": 5,
+    "medium": 2,
+    "low": 0
+  },
+  "requiredFixes": [],
+  "notes": [
+    "PDF Unicode CJK generation and Korean text extraction pass; optional future font embedding would improve cross-viewer visual consistency."
+  ],
+  "evidence": {
+    "manifest": "artifacts/harness/P07/manifest.json",
+    "commands": "artifacts/harness/P07/commands.log",
+    "notes": "artifacts/harness/P07/notes.md"
+  }
+}
