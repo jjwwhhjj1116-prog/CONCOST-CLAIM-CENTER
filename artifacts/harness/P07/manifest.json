@@ -1,0 +1,100 @@
+{
+  "phase": "P07",
+  "status": "PASS_WITH_NOTES",
+  "assessment": "CODEX_INDEPENDENT_VERIFIED_AFTER_PATCH",
+  "nextPhaseAllowed": true,
+  "verifiedAt": "2026-08-07T09:53:21+09:00",
+  "git": {
+    "branch": "feat/P07-proposal-template-writer",
+    "p06ImplementationCommit": "7ae66f2845712c1f6b4c5fa3012dd5f82c0d4ebc",
+    "p06StatusCommit": "73ee5a5",
+    "antigravityStartCommit": "dc5a8f6",
+    "antigravityImplementationCommit": null,
+    "codexPatchCommit": "186449b120953f39fa0941761f2c24e3e89d908a",
+    "reviewedCommit": "186449b120953f39fa0941761f2c24e3e89d908a"
+  },
+  "changedFiles": [
+    "apps/api/package.json",
+    "apps/api/src/server.ts",
+    "apps/api/tsconfig.json",
+    "apps/web/src/api.ts",
+    "apps/web/src/proposals/ProposalView.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "package.json",
+    "packages/database/prisma/migrations/20260807090000_p07_proposal_templates/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "packages/database/src/seed.ts",
+    "packages/document-engine/package.json",
+    "packages/document-engine/src/docx-engine.ts",
+    "packages/document-engine/src/index.ts",
+    "packages/document-engine/src/pdf-engine.ts",
+    "packages/document-engine/tsconfig.json",
+    "packages/ui/src/components/StatusBadge.tsx",
+    "pnpm-lock.yaml",
+    "scripts/harness-test.ts",
+    "scripts/p03-contract-test.ts",
+    "scripts/p04-contract-test.ts",
+    "scripts/p05-contract-test.ts",
+    "scripts/p06-contract-test.ts",
+    "scripts/p07-e2e.ts",
+    "scripts/p07-proposal-test.ts",
+    "scripts/p07-security-test.ts",
+    "tsconfig.base.json"
+  ],
+  "cleanVerification": {
+    "checkout": "p07-clean-gates",
+    "commit": "186449b120953f39fa0941761f2c24e3e89d908a",
+    "nodeModulesPresentBeforeInstall": false,
+    "workingTreeCleanAfterGates": true
+  },
+  "commandsExecuted": [
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 db:reset",
+    "npx --yes pnpm@9.15.0 db:migrate",
+    "npx --yes pnpm@9.15.0 db:seed",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 test:e2e",
+    "npx --yes pnpm@9.15.0 test:security",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
+  ],
+  "tests": { "total": 71, "passed": 71, "failed": 0, "skipped": 0 },
+  "securityTests": { "total": 30, "passed": 30, "failed": 0, "skipped": 0 },
+  "browserE2E": {
+    "engine": "Google Chrome via playwright-core",
+    "productionBuildServed": true,
+    "p06RegressionPassed": true,
+    "p07Passed": true,
+    "responsive1024Passed": true,
+    "keyboardFocusPassed": true,
+    "zoom200Passed": true
+  },
+  "documentOutput": {
+    "docxOoxmlZipParsed": true,
+    "pdfXrefParsed": true,
+    "pdfKoreanTextRoundTrip": true,
+    "tamperRejected": true,
+    "approvedVersionOnly": true
+  },
+  "qualityGates": {
+    "install": "PASS",
+    "dbReset": "PASS",
+    "dbMigrate": "PASS",
+    "dbSeed": "PASS",
+    "lint": "PASS",
+    "typecheck": "PASS",
+    "test": "PASS",
+    "build": "PASS",
+    "e2e": "PASS",
+    "security": "PASS",
+    "auditHigh": "PASS"
+  },
+  "hygiene": {
+    "trackedSecretPatterns": 0,
+    "trackedSensitiveFiles": 0,
+    "realCustomerDataFound": false,
+    "referenceTemplateSourceFilesTracked": 0
+  }
+}

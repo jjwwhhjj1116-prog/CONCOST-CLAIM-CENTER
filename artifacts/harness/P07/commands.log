@@ -1,0 +1,63 @@
+P07 CODEX CLEAN VERIFICATION
+verifiedAt=2026-08-07T09:53:21+09:00
+checkout=p07-clean-gates
+commit=186449b120953f39fa0941761f2c24e3e89d908a
+nodeModulesPresentBeforeInstall=false
+
+[1/11] npx --yes pnpm@9.15.0 install --frozen-lockfile
+RESULT=PASS
+OBSERVED=Lockfile up to date; 215 packages linked into a new node_modules; Prisma Client 6.19.3 generated.
+
+[2/11] npx --yes pnpm@9.15.0 db:reset
+RESULT=PASS
+OBSERVED=Database reset and all additive migration SQL applied successfully.
+
+[3/11] npx --yes pnpm@9.15.0 db:migrate
+RESULT=PASS
+OBSERVED=Database migration SQL applied successfully to the reset database.
+
+[4/11] npx --yes pnpm@9.15.0 db:seed
+RESULT=PASS
+OBSERVED=Database seeded with deterministic synthetic P07 fixtures and exactly six proposal templates.
+
+[5/11] npx --yes pnpm@9.15.0 lint
+RESULT=PASS
+OBSERVED=TypeScript preflight, ESLint and JSON validation passed with zero warnings.
+
+[6/11] npx --yes pnpm@9.15.0 typecheck
+RESULT=PASS
+OBSERVED=Scripts, UI, web, database, API and document-engine workspaces type-checked.
+
+[7/11] npx --yes pnpm@9.15.0 test
+RESULT=PASS
+OBSERVED=tests 71; pass 71; fail 0; skipped 0; duration 3936.2771ms.
+NOTE=Printed Prisma foreign-key failures are deliberately injected AuditLog rollback attacks. Each test verified the request failed and DB/file orphans remained zero, then passed.
+
+[8/11] npx --yes pnpm@9.15.0 build
+RESULT=PASS
+OBSERVED=Prisma generated; 48 Vite modules transformed; production JS 200.36 kB; UI/web/database/API/document-engine artifacts verified.
+
+[9/11] npx --yes pnpm@9.15.0 test:e2e
+RESULT=PASS
+OBSERVED=Actual Chrome ran preserved P06 E2E and P07 production flow: login, case/template, five inputs, manual version, Director approval, parser-valid DOCX/PDF downloads, histories and Staff denial. P07 also passed 1024px reflow, keyboard focus and 200% zoom checks.
+
+[10/11] npx --yes pnpm@9.15.0 test:security
+RESULT=PASS
+OBSERVED=tests 30; pass 30; fail 0; skipped 0; duration 2035.1875ms. Includes P04/P05/P06 regressions plus P07 Origin/CSRF/RBAC, IDOR, credential/source tamper, self-approval, DB pointer/snapshot/review/output immutability and populated migration attacks.
+NOTE=Printed Prisma errors are expected rollback-injection evidence; the surrounding adversarial tests passed.
+
+[11/11] npx --yes pnpm@9.15.0 audit --audit-level high
+RESULT=PASS
+OBSERVED=No known vulnerabilities found.
+
+[DOCUMENT OUTPUT]
+RESULT=PASS
+OBSERVED=DOCX OOXML ZIP entries/relationships/XML/CRC parsed; PDF xref/object/stream offsets parsed; Korean title, author and body round-tripped; modified DOCX/PDF rejected.
+
+[HYGIENE]
+RESULT=PASS
+OBSERVED=0 tracked private-key/API-token patterns; 0 tracked .env/key/database/upload/output files; 0 docs/보고서 템플릿 source files tracked; no actual customer data. Credential-looking apiKey literal occurs only in a negative test that verifies rejection.
+
+[INTEGRITY]
+RESULT=PASS
+OBSERVED=Clean checkout at 186449b120953f39fa0941761f2c24e3e89d908a; git status empty after gates; manifest changedFiles equals all 26 paths from git show --name-only.
