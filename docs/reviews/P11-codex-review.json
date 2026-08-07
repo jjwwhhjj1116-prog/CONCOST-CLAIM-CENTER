@@ -1,0 +1,19 @@
+{
+  "phase": "P11",
+  "verdict": "PASS_WITH_NOTES",
+  "nextPhaseAllowed": true,
+  "findings": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 2,
+    "resolvedHigh": 5
+  },
+  "requiredFixes": [],
+  "notes": [
+    "Binary PDF/HWP grounding is limited to immutable P09 human-verified evidence quotes; full extraction is not inferred.",
+    "All gates passed; Node 24 emitted a dependency DEP0169 deprecation warning."
+  ],
+  "reviewedCommit": "2b883aa819888c6c58a160f2fddc7eff84354dfa",
+  "reviewReport": "docs/reviews/P11-codex-review.md"
+}
