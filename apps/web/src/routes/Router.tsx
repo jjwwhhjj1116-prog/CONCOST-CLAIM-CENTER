@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Card, ComponentCatalog, Dialog, Input, Select, StateView, StatusBadge } from '@claim-studio/ui';
 import { CaseManagement } from '../case-management/CaseManagement';
 import { ProposalView } from '../proposals/ProposalView';
+import { ReportTemplateCatalog } from '../templates/ReportTemplateCatalog';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -140,6 +141,17 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
           <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
         </div>
         <ProposalView routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
+      </section>
+    );
+  }
+
+  if (currentRoute.id === 'TPL-01') {
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <div className="route-heading">
+          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+        </div>
+        <ReportTemplateCatalog routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
       </section>
     );
   }

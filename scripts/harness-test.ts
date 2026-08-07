@@ -10,6 +10,7 @@ import './p05-case-test';
 import './p06-contract-test';
 import './p06-materials-test';
 import './p07-proposal-test';
+import './p08-contract-test';
 
 const EXPECTED_EXACT_SHAS: Record<string, string> = {
   'TPL-REF-001': '793cf78dd4262af8ddfddc77b85e5052f379e76d9e30f437cb799b9c43cec40a',
@@ -117,17 +118,20 @@ test('Phase Status Machine Integration', () => {
   assert.ok(['IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'].includes(status.phases.P07.status));
 });
 
-test('P07 keeps real E2E/security gates and DB-enforced immutable proposal history', () => {
+test('P08 keeps real E2E/security gates and DB-enforced immutable report template history', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
-  assert.match(packageJson.scripts['test:e2e'], /p07-e2e\.ts/);
-  assert.match(packageJson.scripts['test:security'], /p04-security-test\.ts/);
-  assert.match(packageJson.scripts['test:security'], /p05-security-test\.ts/);
-  assert.match(packageJson.scripts['test:security'], /p06-security-test\.ts/);
-  assert.match(packageJson.scripts['test:security'], /p07-security-test\.ts/);
-  const migration = fs.readFileSync(path.join(__dirname, '../packages/database/prisma/migrations/20260807090000_p07_proposal_templates/migration.sql'), 'utf8');
+  assert.match(packageJson.scripts['test:e2e'], /p08-e2e\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p08-security-test\.ts/);
+
+  const migration = fs.readFileSync(path.join(__dirname, '../packages/database/prisma/migrations/20260807100000_p08_report_template_catalog/migration.sql'), 'utf8');
   for (const trigger of [
-    'P07_proposal_integrity_update', 'P07_proposal_version_update_guard', 'P07_proposal_version_delete_guard',
-    'P07_proposal_review_insert_guard', 'P07_proposal_review_update_guard', 'P07_output_document_delete_guard'
-  ]) assert.ok(migration.includes(trigger), `P07 DB guard missing: ${trigger}`);
+    'P08_report_template_version_no_update',
+    'P08_report_template_version_no_delete',
+    'P08_report_template_version_no_self_approval',
+    'P08_template_type_mapping_single_primary',
+    'P08_report_instance_no_snapshot_update'
+  ]) {
+    assert.ok(migration.includes(trigger), `P08 DB guard missing: ${trigger}`);
+  }
   assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
 });
