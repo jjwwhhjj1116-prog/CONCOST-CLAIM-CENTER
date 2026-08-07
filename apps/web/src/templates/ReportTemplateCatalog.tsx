@@ -112,7 +112,7 @@ function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ routeId, roles }) => {
+export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ routeId, roles, onNavigate }) => {
   const isAdmin = roles.includes('admin');
   const isApprover = roles.some((role) => role === 'ceo' || role === 'director');
   const canCreateInstance = roles.some((role) => ['admin', 'ceo', 'director', 'pm'].includes(role));
@@ -318,7 +318,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
     setError('');
     setNotice('');
     try {
-      const result = await apiRequest<{ caseVersion: number; instance: { id: string; snapshotSha256: string } }>(
+      const result = await apiRequest<{ caseVersion: number; instance: { id: string; snapshotSha256: string }; report: { id: string } }>(
         `/api/cases/${encodeURIComponent(target.id)}/report-instances`,
         {
           method: 'POST',
@@ -327,6 +327,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
       );
       setCases((current) => current.map((item) => item.id === target.id ? { ...item, version: result.caseVersion } : item));
       setNotice(`사건 보고서 snapshot을 생성했습니다: ${result.instance.id} / SHA-256 ${result.instance.snapshotSha256.slice(0, 12)}…`);
+      onNavigate?.(`/cases/${encodeURIComponent(target.id)}/reports/${encodeURIComponent(result.report.id)}/studio`);
     } catch (reason) {
       handleApiError(reason);
     } finally {

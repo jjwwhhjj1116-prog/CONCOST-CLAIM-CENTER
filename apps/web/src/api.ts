@@ -13,7 +13,7 @@ const configuredApiOrigin = typeof window === 'undefined' ? undefined : window._
 export const API_ORIGIN = (configuredApiOrigin ?? defaultApiOrigin).replace(/\/$/, '');
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(public readonly status: number, message: string, public readonly payload: Record<string, unknown> = {}) {
     super(message);
   }
 }
@@ -39,8 +39,8 @@ export async function apiRequest<T>(pathname: string, init: RequestInit = {}): P
   const headers = requestHeaders(init);
 
   const response = await fetch(`${API_ORIGIN}${pathname}`, { ...init, method, headers, credentials: 'include' });
-  const payload = await response.json().catch(() => ({})) as { error?: string };
-  if (!response.ok) throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`);
+  const payload = await response.json().catch(() => ({})) as { error?: string } & Record<string, unknown>;
+  if (!response.ok) throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`, payload);
   return payload as T;
 }
 
@@ -48,7 +48,7 @@ export async function apiDownload(pathname: string): Promise<{ blob: Blob; filen
   const response = await fetch(`${API_ORIGIN}${pathname}`, { credentials: 'include', headers: requestHeaders({}) });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { error?: string };
-    throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`);
+    throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`, payload);
   }
   const disposition = response.headers.get('Content-Disposition') ?? '';
   const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
@@ -63,7 +63,7 @@ export async function apiDownloadPost(pathname: string, body: unknown): Promise<
   const response = await fetch(`${API_ORIGIN}${pathname}`, { credentials: 'include', headers: requestHeaders(init), method: 'POST', body: JSON.stringify(body) });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { error?: string };
-    throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`);
+    throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`, payload);
   }
   const disposition = response.headers.get('Content-Disposition') ?? '';
   const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];

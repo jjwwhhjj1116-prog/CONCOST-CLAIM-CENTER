@@ -1,120 +1,162 @@
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { createPrismaClient, resetDatabase, seedDatabase } from '@claim-studio/database';
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { AddressInfo } from 'node:net';
+import { test } from 'node:test';
+import { createPrismaClient, databaseUrlFor, resetDatabase, seedDatabase } from '@claim-studio/database';
 import { createApiServer } from '../apps/api/src/server';
+import { createP09Fixture, login, requestJson, revisionPayload } from './p09-test-support';
 
-async function main() {
-  console.log('[P09 Security Test] Initializing database and API server...');
-  await resetDatabase();
-  await seedDatabase();
-  const db = createPrismaClient();
+const root = path.resolve(__dirname, '..');
+const testOrigin = 'http://127.0.0.1:43180';
 
-  const server = createApiServer({ db });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : 0;
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const origin = 'http://localhost:3000';
-
-  async function request(path: string, options: { method?: string; headers?: Record<string, string>; body?: any } = {}) {
-    const url = new URL(path, baseUrl);
-    const method = options.method || 'GET';
-    const bodyStr = options.body ? JSON.stringify(options.body) : undefined;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Origin': origin,
-      ...options.headers
-    };
-
-    return new Promise<{ status: number; data: any; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
-      const req = http.request(url, { method, headers }, (res) => {
-        let raw = '';
-        res.on('data', (chunk) => { raw += chunk; });
-        res.on('end', () => {
-          try {
-            const data = raw ? JSON.parse(raw) : null;
-            resolve({ status: res.statusCode || 500, data, headers: res.headers });
-          } catch {
-            resolve({ status: res.statusCode || 500, data: raw, headers: res.headers });
-          }
-        });
-      });
-      req.on('error', reject);
-      if (bodyStr) req.write(bodyStr);
-      req.end();
-    });
-  }
-
-  async function loginAs(email: string) {
-    const res = await request('/auth/login', { method: 'POST', body: { email, password: 'Password123!' } });
-    assert.equal(res.status, 200, `Login failed for ${email}`);
-    const setCookies = res.headers['set-cookie'] || [];
-    const cookieHeader = setCookies.map((c) => c.split(';')[0]).join('; ');
-    const csrfToken = res.data.csrfToken;
-    return {
-      'Cookie': cookieHeader,
-      'X-CSRF-Token': csrfToken
-    };
-  }
+test('P09 security rejects role, tenant, provenance, lifecycle, mutation, and rollback attacks', async () => {
+  const databasePath = path.join(root, 'packages/database/.data', `p09-security-${process.pid}.db`);
+  const uploadDir = path.join(root, 'packages/database/.data', `p09-security-uploads-${process.pid}`);
+  const databaseUrl = databaseUrlFor(databasePath);
+  await resetDatabase(databaseUrl);
+  await seedDatabase(databaseUrl);
+  const db = createPrismaClient(databaseUrl);
+  const api = createApiServer({ databaseUrl, allowedOrigins: [testOrigin], secureCookies: false, uploadDir });
+  await new Promise<void>((resolve, reject) => api.once('error', reject).listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
 
   try {
-    console.log('[P09 Security Test] 1. Login as Reviewer & PM...');
-    const pmHeaders = await loginAs('pm@example.invalid');
-    const revHeaders = await loginAs('reviewer@example.invalid');
+    const fixture = await createP09Fixture(origin, db, { requestOrigin: testOrigin });
+    const [section1, section2] = fixture.sectionIds;
+    const orgB = await login(origin, 'pm_b@example.invalid', testOrigin);
 
-    console.log('[P09 Security Test] 2. Reviewer Revision Creation Attempt -> 403 Forbidden...');
-    const revEditRes = await request('/api/reports/RPT-001/sections/SEC-002/revisions', {
-      method: 'POST',
-      headers: revHeaders,
-      body: { title: 'Reviewer Edit Attempt', content: 'Forbidden' }
+    const reviewerEdit = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(1, 'Reviewer direct edit'), fixture.reviewer, testOrigin);
+    assert.strictEqual(reviewerEdit.status, 403);
+    const staffApproval = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/approve`, 'POST', {
+      revisionId: 'unknown', expectedVersion: 1
+    }, fixture.staff, testOrigin);
+    assert.strictEqual(staffApproval.status, 403);
+    const reviewerMerge = await requestJson(origin, `/api/reports/${fixture.reportId}/merge`, 'POST', { expectedReportVersion: 1 }, fixture.reviewer, testOrigin);
+    assert.strictEqual(reviewerMerge.status, 403);
+
+    const missingCsrf = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(1, 'CSRF bypass'), { cookie: fixture.pm.cookie, csrf: '' }, testOrigin);
+    assert.strictEqual(missingCsrf.status, 403);
+    const crossTenant = await requestJson(origin, `/api/reports/${fixture.reportId}/studio`, 'GET', undefined, orgB, testOrigin);
+    assert.strictEqual(crossTenant.status, 403);
+
+    const unknownField = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST', {
+      ...revisionPayload(1, 'Unknown input'), apiKey: 'must-not-be-accepted'
+    }, fixture.pm, testOrigin);
+    assert.strictEqual(unknownField.status, 400);
+    const invalidSourceType = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST', {
+      ...revisionPayload(1, 'Invalid evidence'),
+      evidenceLinks: [{ sourceType: 'URL', sourceId: 'https://example.invalid', targetParagraphIndex: 0, quoteText: 'x', anchorPosition: 'x' }]
+    }, fixture.pm, testOrigin);
+    assert.strictEqual(invalidSourceType.status, 400);
+    const draftMeeting = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST', {
+      ...revisionPayload(1, '계약금액 100원'),
+      evidenceLinks: [{ sourceType: 'MEETING', sourceId: 'MEET-SYN-001', targetParagraphIndex: 0, quoteText: 'draft', anchorPosition: 'p1' }]
+    }, fixture.pm, testOrigin);
+    assert.strictEqual(draftMeeting.status, 409);
+
+    const save = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(1, '계약금액 100원은 최종 회의에서 확인했습니다.', { withMeetingEvidence: true }), fixture.pm, testOrigin);
+    assert.strictEqual(save.status, 201);
+    const beforeConflictRevisionCount = await db.reportSectionRevision.count({ where: { sectionId: section1 } });
+    const beforeConflictAuditCount = await db.auditLog.count({ where: { action: 'REPORT_SECTION_REVISION_CREATED', targetEntity: 'ReportSectionRevision' } });
+    const conflict = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(1, 'stale revision'), fixture.staff, testOrigin);
+    assert.strictEqual(conflict.status, 409);
+    assert.strictEqual(await db.reportSectionRevision.count({ where: { sectionId: section1 } }), beforeConflictRevisionCount);
+    assert.strictEqual(await db.auditLog.count({ where: { action: 'REPORT_SECTION_REVISION_CREATED', targetEntity: 'ReportSectionRevision' } }), beforeConflictAuditCount);
+
+    const section2Save = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section2}/revisions`, 'POST',
+      revisionPayload(1, '독립 검토 대상 문단입니다.'), fixture.staff, testOrigin);
+    assert.strictEqual(section2Save.status, 201);
+    assert.strictEqual((await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section2}/approve`, 'POST', {
+      revisionId: save.body.revision.id, expectedVersion: 2
+    }, fixture.reviewer, testOrigin)).status, 400);
+    assert.strictEqual((await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/approve`, 'POST', {
+      revisionId: save.body.revision.id, expectedVersion: 2
+    }, fixture.pm, testOrigin)).status, 403);
+
+    await db.meeting.create({
+      data: {
+        id: 'MEET-P09-ORGB',
+        caseId: 'CASE-SYN-ORGB',
+        title: 'ORG B FINAL',
+        meetingDate: new Date('2026-08-07T00:00:00Z'),
+        rawText: 'ORG B private transcript',
+        rawTextSha256: crypto.createHash('sha256').update('ORG B private transcript').digest('hex'),
+        status: 'FINAL',
+        version: 1,
+        createdById: 'USR-ORGB-PM'
+      }
     });
-    assert.equal(revEditRes.status, 403);
+    const crossCaseEvidence = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section2}/revisions`, 'POST', {
+      ...revisionPayload(2, 'Cross-case source attempt'),
+      evidenceLinks: [{ sourceType: 'MEETING', sourceId: 'MEET-P09-ORGB', targetParagraphIndex: 0, quoteText: 'private', anchorPosition: 'p1' }]
+    }, fixture.staff, testOrigin);
+    assert.strictEqual(crossCaseEvidence.status, 403);
 
-    console.log('[P09 Security Test] 3. Reviewer Merge Attempt -> 403 Forbidden...');
-    const revMergeRes = await request('/api/reports/RPT-001/merge', {
-      method: 'POST',
-      headers: revHeaders
-    });
-    assert.equal(revMergeRes.status, 403);
+    await assert.rejects(db.reportEvidenceLink.create({
+      data: {
+        id: 'P09-EVID-CROSS-CASE',
+        revisionId: save.body.revision.id,
+        sourceType: 'MEETING',
+        sourceId: 'MEET-P09-ORGB',
+        sourceDocumentVersionId: null,
+        sourceMeetingId: 'MEET-P09-ORGB',
+        sourceSha256: crypto.createHash('sha256').update('ORG B private transcript').digest('hex'),
+        sourceVersion: 1,
+        targetParagraphIndex: 0,
+        quoteText: 'private',
+        anchorPosition: 'p1'
+      }
+    }));
+    await assert.rejects(db.reportSectionApproval.create({
+      data: {
+        id: 'P09-APPR-SELF',
+        sectionId: section1,
+        approvedRevisionId: save.body.revision.id,
+        approverId: 'USR-PM',
+        eventNumber: 1,
+        status: 'APPROVED'
+      }
+    }));
+    await assert.rejects(db.reportSectionApproval.create({
+      data: {
+        id: 'P09-APPR-CROSS-SECTION',
+        sectionId: section2,
+        approvedRevisionId: save.body.revision.id,
+        approverId: 'USR-REVIEWER',
+        eventNumber: 1,
+        status: 'APPROVED'
+      }
+    }));
 
-    console.log('[P09 Security Test] 4. Self-Approval Prohibition (Author approving own revision) -> 403 Forbidden...');
-    // pmUser created SECREV-002-1. If pmUser tries to approve SEC-002:
-    const selfApprRes = await request('/api/reports/RPT-001/sections/SEC-002/approve', {
-      method: 'POST',
-      headers: pmHeaders,
-      body: { revisionId: 'SECREV-002-1', comment: 'Self approval' }
-    });
-    assert.equal(selfApprRes.status, 403);
-    assert(selfApprRes.data && typeof selfApprRes.data.error === 'string');
-    assert(selfApprRes.data.error.includes('Self-approval'));
+    const comment = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/comments`, 'POST', {
+      commentType: 'COMMENT', content: 'append-only comment', revisionId: save.body.revision.id
+    }, fixture.reviewer, testOrigin);
+    assert.strictEqual(comment.status, 201);
+    await assert.rejects(db.reportSectionComment.update({ where: { id: comment.body.comment.id }, data: { content: 'tamper' } }));
+    await assert.rejects(db.reportSectionComment.delete({ where: { id: comment.body.comment.id } }));
 
-    console.log('[P09 Security Test] 5. Self-Approval DB Trigger Layer Check...');
-    let triggerCaught = false;
-    try {
-      await db.$executeRawUnsafe(`
-        INSERT INTO ReportSectionApproval (id, sectionId, approvedRevisionId, approverId, status, createdAt)
-        VALUES ('APPR-SELF-TEST', 'SEC-002', 'SECREV-002-1', 'USR-PM', 'APPROVED', datetime('now'))
-      `);
-    } catch (e: any) {
-      triggerCaught = true;
-      assert(e.message.includes('P09: Self-approval is strictly forbidden') || e.message.includes('FAIL'));
-    }
-    assert.equal(triggerCaught, true, 'DB trigger did not block self-approval!');
+    const approval = await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/approve`, 'POST', {
+      revisionId: save.body.revision.id, expectedVersion: 2
+    }, fixture.reviewer, testOrigin);
+    assert.strictEqual(approval.status, 200);
+    await assert.rejects(db.reportSectionApproval.update({ where: { id: approval.body.approval.id }, data: { comment: 'tamper' } }));
+    await assert.rejects(db.reportSectionApproval.delete({ where: { id: approval.body.approval.id } }));
+    assert.strictEqual((await requestJson(origin, `/api/reports/${fixture.reportId}/sections/${section1}/comments`, 'POST', {
+      commentType: 'REVISION_REQUEST', content: 'approved bypass', revisionId: save.body.revision.id, expectedVersion: 3
+    }, fixture.reviewer, testOrigin)).status, 409);
 
-    console.log('[P09 Security Test] 6. Cross-Organization (ORG-B) Access Attempt -> 403 Forbidden...');
-    const orgBHeaders = await loginAs('orgb-pm@example.invalid');
-
-    const crossOrgStudio = await request('/api/reports/RPT-001/studio', { headers: orgBHeaders });
-    assert.equal(crossOrgStudio.status, 403);
-
-    console.log('[P09 Security Test] PASS 100%!');
+    console.log('P09 security: RBAC, CSRF, tenant isolation, strict input, provenance, self/cross approval, immutable events, rollback PASSED');
   } finally {
-    server.close();
+    await new Promise<void>((resolve) => api.close(() => resolve()));
+    await api.waitForDatabaseClose();
     await db.$disconnect();
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+    for (const suffix of ['', '-journal', '-shm', '-wal']) fs.rmSync(`${databasePath}${suffix}`, { force: true });
   }
-}
-
-void main().catch((e) => {
-  console.error('[P09 Security Test Failed]', e);
-  process.exitCode = 1;
 });

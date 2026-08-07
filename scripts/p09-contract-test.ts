@@ -1,173 +1,234 @@
 import assert from 'node:assert/strict';
-import http from 'node:http';
-import { createPrismaClient, resetDatabase, seedDatabase } from '@claim-studio/database';
-import { createApiServer } from '../apps/api/src/server';
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { AddressInfo } from 'node:net';
+import { test } from 'node:test';
+import {
+  createPrismaClient, databaseUrlFor, resetDatabase, seedDatabase, type PrismaClient
+} from '@claim-studio/database';
+import { createApiServer, type ManagedApiServer } from '../apps/api/src/server';
+import { createP09Fixture, requestJson, revisionPayload } from './p09-test-support';
 
-async function main() {
-  console.log('[P09 Contract Test] Initializing database and API server...');
-  await resetDatabase();
-  await seedDatabase();
-  const db = createPrismaClient();
+const root = path.resolve(__dirname, '..');
+const migrationPath = path.join(root, 'packages/database/prisma/migrations/20260807110000_p09_report_studio/migration.sql');
+const schemaPath = path.join(root, 'packages/database/prisma/schema.prisma');
+const testOrigin = 'http://127.0.0.1:43179';
 
-  const server = createApiServer({ db });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : 0;
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const origin = 'http://localhost:3000';
-
-  async function request(path: string, options: { method?: string; headers?: Record<string, string>; body?: any } = {}) {
-    const url = new URL(path, baseUrl);
-    const method = options.method || 'GET';
-    const bodyStr = options.body ? JSON.stringify(options.body) : undefined;
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Origin': origin,
-      ...options.headers
-    };
-
-    return new Promise<{ status: number; data: any; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
-      const req = http.request(url, { method, headers }, (res) => {
-        let raw = '';
-        res.on('data', (chunk) => { raw += chunk; });
-        res.on('end', () => {
-          try {
-            const data = raw ? JSON.parse(raw) : null;
-            resolve({ status: res.statusCode || 500, data, headers: res.headers });
-          } catch {
-            resolve({ status: res.statusCode || 500, data: raw, headers: res.headers });
-          }
-        });
-      });
-      req.on('error', reject);
-      if (bodyStr) req.write(bodyStr);
-      req.end();
-    });
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
   }
-
-  async function loginAs(email: string) {
-    const res = await request('/auth/login', { method: 'POST', body: { email, password: 'Password123!' } });
-    assert.equal(res.status, 200, `Login failed for ${email}`);
-    const setCookies = res.headers['set-cookie'] || [];
-    const cookieHeader = setCookies.map((c) => c.split(';')[0]).join('; ');
-    const csrfToken = res.data.csrfToken;
-    return {
-      'Cookie': cookieHeader,
-      'X-CSRF-Token': csrfToken
-    };
-  }
-
-  try {
-    console.log('[P09 Contract Test] 1. Login as PM user...');
-    const pmHeaders = await loginAs('pm@example.invalid');
-
-    console.log('[P09 Contract Test] 2. GET /api/reports/RPT-001/studio...');
-    const studioRes = await request('/api/reports/RPT-001/studio', { headers: pmHeaders });
-    assert.equal(studioRes.status, 200);
-    assert.equal(studioRes.data.report.id, 'RPT-001');
-    assert.equal(studioRes.data.report.sections.length, 3);
-
-    console.log('[P09 Contract Test] 3. POST /api/reports/RPT-001/sections/SEC-002/revisions (Save Revision v2)...');
-    const rev2Res = await request('/api/reports/RPT-001/sections/SEC-002/revisions', {
-      method: 'POST',
-      headers: pmHeaders,
-      body: {
-        title: '제2장 손실액 및 공사비 산출근거 (수정본)',
-        content: '수정된 내용: 현장 재실측 결과 피해 면적 480㎡, 손실비용 135,000,000원.',
-        expectedVersion: 1
-      }
-    });
-    assert.equal(rev2Res.status, 201);
-    assert.equal(rev2Res.data.revision.revisionNumber, 2);
-    assert.equal(rev2Res.data.sectionVersion, 2);
-
-    console.log('[P09 Contract Test] 4. Concurrency Conflict 409 Check (stale expectedVersion: 1)...');
-    const conflictRes = await request('/api/reports/RPT-001/sections/SEC-002/revisions', {
-      method: 'POST',
-      headers: pmHeaders,
-      body: {
-        title: '동시 수정 시도',
-        content: '충돌 데이터',
-        expectedVersion: 1
-      }
-    });
-    assert.equal(conflictRes.status, 409);
-    assert.equal(conflictRes.data.currentVersion, 2);
-
-    console.log('[P09 Contract Test] 5. Comment & Revision Request Creation...');
-    const commentRes = await request('/api/reports/RPT-001/sections/SEC-002/comments', {
-      method: 'POST',
-      headers: pmHeaders,
-      body: {
-        commentType: 'REVISION_REQUEST',
-        content: '재실측 항목 구체적 산출 단가 첨부 바람'
-      }
-    });
-    assert.equal(commentRes.status, 201);
-    assert.equal(commentRes.data.comment.commentType, 'REVISION_REQUEST');
-
-    console.log('[P09 Contract Test] 6. Comment Resolve...');
-    const resolveRes = await request(`/api/reports/RPT-001/sections/SEC-002/comments/${commentRes.data.comment.id}/resolve`, {
-      method: 'PATCH',
-      headers: pmHeaders
-    });
-    assert.equal(resolveRes.status, 200);
-    assert.equal(resolveRes.data.comment.isResolved, true);
-
-    console.log('[P09 Contract Test] 7. Unapproved Section Report Merge 400 Check...');
-    const unapprovedMergeRes = await request('/api/reports/RPT-001/merge', {
-      method: 'POST',
-      headers: pmHeaders
-    });
-    assert.equal(unapprovedMergeRes.status, 400);
-
-    console.log('[P09 Contract Test] 8. Approve SEC-002 and SEC-003 as Director...');
-    const dirHeaders = await loginAs('director@example.invalid');
-
-    const apprSec2 = await request('/api/reports/RPT-001/sections/SEC-002/approve', {
-      method: 'POST',
-      headers: dirHeaders,
-      body: { comment: '제2장 승인 완료' }
-    });
-    assert.equal(apprSec2.status, 200);
-
-    const apprSec3 = await request('/api/reports/RPT-001/sections/SEC-003/approve', {
-      method: 'POST',
-      headers: dirHeaders,
-      body: { comment: '제3장 승인 완료' }
-    });
-    assert.equal(apprSec3.status, 200);
-
-    console.log('[P09 Contract Test] 9. Report Merge Snapshot Creation after all sections APPROVED...');
-    const mergeRes = await request('/api/reports/RPT-001/merge', {
-      method: 'POST',
-      headers: pmHeaders
-    });
-    assert.equal(mergeRes.status, 201);
-    assert.equal(mergeRes.data.snapshot.snapshotVersion, 1);
-    assert(mergeRes.data.snapshot.mergedBodyText.includes('제1장'));
-    assert(mergeRes.data.snapshot.mergedBodyText.includes('제2장'));
-    assert(mergeRes.data.snapshot.mergedBodyText.includes('제3장'));
-
-    console.log('[P09 Contract Test] 10. DB Trigger Immutability Verification...');
-    const snapshotId = mergeRes.data.snapshot.id;
-    let dbErrorCaught = false;
-    try {
-      await db.$executeRawUnsafe(`UPDATE ReportMergeSnapshot SET mergedBodyText = 'MUTATED' WHERE id = '${snapshotId}'`);
-    } catch (e: any) {
-      dbErrorCaught = true;
-      assert(e.message.includes('P09: ReportMergeSnapshot rows are DB-immutable') || e.message.includes('FAIL'));
-    }
-    assert.equal(dbErrorCaught, true, 'DB trigger did not block ReportMergeSnapshot mutation!');
-
-    console.log('[P09 Contract Test] PASS 100%!');
-  } finally {
-    server.close();
-    await db.$disconnect();
-  }
+  return JSON.stringify(value);
 }
 
-void main().catch((e) => {
-  console.error('[P09 Contract Test Failed]', e);
-  process.exitCode = 1;
+async function startIsolated(name: string): Promise<{
+  db: PrismaClient;
+  api: ManagedApiServer;
+  origin: string;
+  databasePath: string;
+  uploadDir: string;
+}> {
+  const databasePath = path.join(root, 'packages/database/.data', `${name}-${process.pid}-${Date.now()}.db`);
+  const uploadDir = path.join(root, 'packages/database/.data', `${name}-uploads-${process.pid}-${Date.now()}`);
+  const databaseUrl = databaseUrlFor(databasePath);
+  await resetDatabase(databaseUrl);
+  await seedDatabase(databaseUrl);
+  const db = createPrismaClient(databaseUrl);
+  const api = createApiServer({ databaseUrl, allowedOrigins: [testOrigin], secureCookies: false, uploadDir });
+  await new Promise<void>((resolve, reject) => api.once('error', reject).listen(0, '127.0.0.1', resolve));
+  return { db, api, origin: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, databasePath, uploadDir };
+}
+
+async function closeIsolated(context: Awaited<ReturnType<typeof startIsolated>>): Promise<void> {
+  await new Promise<void>((resolve) => context.api.close(() => resolve()));
+  await context.api.waitForDatabaseClose();
+  await context.db.$disconnect();
+  fs.rmSync(context.uploadDir, { recursive: true, force: true });
+  for (const suffix of ['', '-journal', '-shm', '-wal']) fs.rmSync(`${context.databasePath}${suffix}`, { force: true });
+}
+
+test('P09 migration is additive and declares every history/provenance guard', () => {
+  const migration = fs.readFileSync(migrationPath, 'utf8');
+  const schema = fs.readFileSync(schemaPath, 'utf8');
+  for (const model of ['ReportSectionRevision', 'ReportEvidenceLink', 'ReportSectionComment', 'ReportSectionApproval', 'ReportMergeSnapshot']) {
+    assert.match(schema, new RegExp(`model ${model} \\{`));
+  }
+  for (const guard of [
+    'P09_revision_insert_guard', 'P09_revision_immutable_update', 'P09_revision_immutable_delete',
+    'P09_evidence_insert_guard', 'P09_evidence_immutable_update', 'P09_evidence_immutable_delete',
+    'P09_comment_resolution_only', 'P09_comment_resolver_scope', 'P09_comment_delete_guard', 'P09_approval_insert_guard',
+    'P09_approval_immutable_update', 'P09_approval_immutable_delete', 'P09_report_section_content_guard',
+    'P09_report_section_status_transition_guard', 'P09_merge_snapshot_insert_guard',
+    'P09_merge_snapshot_immutable_update', 'P09_merge_snapshot_immutable_delete', 'P09_report_history_delete_guard'
+  ]) assert.ok(migration.includes(guard), `Missing P09 DB guard: ${guard}`);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
+  assert.match(migration, /ON DELETE RESTRICT/);
+  assert.doesNotMatch(migration, /ON DELETE SET NULL|ON DELETE CASCADE/);
+});
+
+test('P09 production seed does not bypass P08 ReportInstance provenance', async () => {
+  const context = await startIsolated('p09-seed');
+  try {
+    assert.strictEqual(await context.db.reportInstance.count(), 0);
+    assert.strictEqual(await context.db.report.count({ where: { reportInstanceId: { not: null } } }), 0);
+    assert.strictEqual(await context.db.reportSectionRevision.count(), 0);
+  } finally {
+    await closeIsolated(context);
+  }
+});
+
+test('P09 API enforces optimistic revisions, paragraph evidence, independent approval, unlock, and deterministic merge', async () => {
+  const context = await startIsolated('p09-contract');
+  try {
+    const fixture = await createP09Fixture(context.origin, context.db, { requestOrigin: testOrigin });
+    const [section1, section2, section3] = fixture.sectionIds;
+    const studio = await requestJson(context.origin, `/api/reports/${fixture.reportId}/studio`, 'GET', undefined, fixture.pm, testOrigin);
+    assert.strictEqual(studio.status, 200);
+    assert.strictEqual(studio.body.report.reportInstanceId, fixture.reportInstanceId);
+    assert.strictEqual(studio.body.report.sections.length, 3);
+    assert.doesNotMatch(JSON.stringify(studio.body), /storageKey|originalName|rawText\"/);
+
+    const firstSave = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(1, '계약금액 100원은 최종 회의록에서 확인되었습니다.', { withMeetingEvidence: true, saveMode: 'AUTO' }), fixture.pm, testOrigin);
+    assert.strictEqual(firstSave.status, 201);
+    assert.strictEqual(firstSave.body.revision.validationStatus, 'VALID');
+    assert.strictEqual(firstSave.body.sectionVersion, 2);
+    assert.match(firstSave.body.revision.sha256, /^[0-9a-f]{64}$/);
+    assert.strictEqual(firstSave.body.revision.evidenceLinks[0].targetParagraphIndex, 0);
+
+    const stale = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(1, '동시 편집에서 유실되어서는 안 되는 초안입니다.'), fixture.staff, testOrigin);
+    assert.strictEqual(stale.status, 409);
+    assert.strictEqual(stale.body.currentVersion, 2);
+    assert.strictEqual(stale.body.latestRevision.id, firstSave.body.revision.id);
+
+    const directPatch = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/body`, 'PATCH',
+      { content: '승인 우회', version: 2 }, fixture.pm, testOrigin);
+    assert.strictEqual(directPatch.status, 410);
+
+    const secondSave1 = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section2}/revisions`, 'POST',
+      revisionPayload(1, '초기 사실관계 검토 문단입니다.'), fixture.pm, testOrigin);
+    assert.strictEqual(secondSave1.status, 201);
+    const revisionRequest = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section2}/comments`, 'POST', {
+      commentType: 'REVISION_REQUEST',
+      content: '표현을 더 명확하게 수정해 주세요.',
+      revisionId: secondSave1.body.revision.id,
+      expectedVersion: 2
+    }, fixture.reviewer, testOrigin);
+    assert.strictEqual(revisionRequest.status, 201);
+    const unresolvedApproval = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section2}/approve`, 'POST', {
+      revisionId: secondSave1.body.revision.id,
+      expectedVersion: 3
+    }, fixture.reviewer, testOrigin);
+    assert.strictEqual(unresolvedApproval.status, 409);
+    assert.strictEqual((await requestJson(context.origin,
+      `/api/reports/${fixture.reportId}/sections/${section2}/comments/${revisionRequest.body.comment.id}/resolve`,
+      'PATCH', {}, fixture.pm, testOrigin)).status, 200);
+    const secondSave2 = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section2}/revisions`, 'POST',
+      revisionPayload(3, '수정 요청을 반영한 사실관계 문단입니다.'), fixture.pm, testOrigin);
+    assert.strictEqual(secondSave2.status, 201);
+
+    const longContent = Array.from({ length: 11 }, () => '가'.repeat(9000)).join('\n\n');
+    const thirdSave = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section3}/revisions`, 'POST',
+      revisionPayload(1, longContent), fixture.staff, testOrigin);
+    assert.strictEqual(thirdSave.status, 201);
+    assert.strictEqual(thirdSave.body.revision.content.length, longContent.length);
+
+    const warningSave = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section3}/revisions`, 'POST',
+      revisionPayload(2, '근거 없이 청구액 500원을 확정한 문단입니다.'), fixture.staff, testOrigin);
+    assert.strictEqual(warningSave.status, 201);
+    assert.strictEqual(warningSave.body.revision.validationStatus, 'WARNING');
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section3}/approve`, 'POST', {
+      revisionId: warningSave.body.revision.id, expectedVersion: 3
+    }, fixture.director, testOrigin)).status, 409);
+    const thirdValid = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section3}/revisions`, 'POST',
+      revisionPayload(3, '근거가 필요한 확정 표현을 제거한 결론 문단입니다.'), fixture.staff, testOrigin);
+    assert.strictEqual(thirdValid.status, 201);
+
+    const selfApproval = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/approve`, 'POST', {
+      revisionId: firstSave.body.revision.id, expectedVersion: 2
+    }, fixture.pm, testOrigin);
+    assert.strictEqual(selfApproval.status, 403);
+    const crossSectionApproval = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section2}/approve`, 'POST', {
+      revisionId: firstSave.body.revision.id, expectedVersion: 4
+    }, fixture.reviewer, testOrigin);
+    assert.strictEqual(crossSectionApproval.status, 400);
+
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/approve`, 'POST', {
+      revisionId: firstSave.body.revision.id, expectedVersion: 2, comment: '독립 검토 승인'
+    }, fixture.reviewer, testOrigin)).status, 200);
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section2}/approve`, 'POST', {
+      revisionId: secondSave2.body.revision.id, expectedVersion: 4
+    }, fixture.reviewer, testOrigin)).status, 200);
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section3}/approve`, 'POST', {
+      revisionId: thirdValid.body.revision.id, expectedVersion: 4
+    }, fixture.director, testOrigin)).status, 200);
+
+    const merge = await requestJson(context.origin, `/api/reports/${fixture.reportId}/merge`, 'POST', { expectedReportVersion: 1 }, fixture.pm, testOrigin);
+    assert.strictEqual(merge.status, 201);
+    assert.match(merge.body.snapshot.snapshotSha256, /^[0-9a-f]{64}$/);
+    const sectionsSnapshot = JSON.parse(merge.body.snapshot.sectionsSnapshotJson);
+    const evidenceSnapshot = JSON.parse(merge.body.snapshot.evidenceSnapshotJson);
+    const expectedSnapshotHash = crypto.createHash('sha256').update(canonicalJson({
+      reportId: fixture.reportId,
+      reportInstanceId: fixture.reportInstanceId,
+      snapshotVersion: 1,
+      sections: sectionsSnapshot,
+      evidence: evidenceSnapshot,
+      mergedBodyText: merge.body.snapshot.mergedBodyText
+    })).digest('hex');
+    assert.strictEqual(merge.body.snapshot.snapshotSha256, expectedSnapshotHash);
+    assert.ok(merge.body.snapshot.mergedBodyText.includes('수정 요청을 반영한 사실관계'));
+    assert.ok(!merge.body.snapshot.mergedBodyText.includes('초기 사실관계 검토'));
+
+    await assert.rejects(context.db.reportSectionRevision.update({ where: { id: firstSave.body.revision.id }, data: { content: 'tamper' } }));
+    await assert.rejects(context.db.reportSectionRevision.delete({ where: { id: firstSave.body.revision.id } }));
+    await assert.rejects(context.db.reportEvidenceLink.update({ where: { id: firstSave.body.revision.evidenceLinks[0].id }, data: { quoteText: 'tamper' } }));
+    await assert.rejects(context.db.reportEvidenceLink.delete({ where: { id: firstSave.body.revision.evidenceLinks[0].id } }));
+    await assert.rejects(context.db.reportSection.update({ where: { id: section1 }, data: { content: 'direct tamper' } }));
+    await assert.rejects(context.db.reportMergeSnapshot.update({ where: { id: merge.body.snapshot.id }, data: { mergedBodyText: 'tamper' } }));
+    await assert.rejects(context.db.reportMergeSnapshot.delete({ where: { id: merge.body.snapshot.id } }));
+    await assert.rejects(context.db.report.delete({ where: { id: fixture.reportId } }));
+
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/unlock`, 'POST', {
+      expectedVersion: 3, comment: 'PM cannot unlock'
+    }, fixture.pm, testOrigin)).status, 403);
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/unlock`, 'POST', {
+      expectedVersion: 3, comment: '근거 문구 보완을 위한 명시적 잠금 해제'
+    }, fixture.reviewer, testOrigin)).status, 200);
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/merge`, 'POST', {
+      expectedReportVersion: 2
+    }, fixture.pm, testOrigin)).status, 409);
+    const newRevision = await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/revisions`, 'POST',
+      revisionPayload(4, '잠금 해제 후 생성한 새로운 개정 문단입니다.'), fixture.pm, testOrigin);
+    assert.strictEqual(newRevision.status, 201);
+    assert.strictEqual((await requestJson(context.origin, `/api/reports/${fixture.reportId}/sections/${section1}/approve`, 'POST', {
+      revisionId: newRevision.body.revision.id, expectedVersion: 5
+    }, fixture.reviewer, testOrigin)).status, 200);
+    const merge2 = await requestJson(context.origin, `/api/reports/${fixture.reportId}/merge`, 'POST', { expectedReportVersion: 2 }, fixture.director, testOrigin);
+    assert.strictEqual(merge2.status, 201);
+    assert.strictEqual(merge2.body.snapshot.snapshotVersion, 2);
+
+    const actions = (await context.db.auditLog.findMany({ where: { targetId: { in: [firstSave.body.revision.id, merge.body.snapshot.id] } } })).map((row) => row.action);
+    assert.ok(actions.includes('REPORT_SECTION_REVISION_CREATED'));
+    assert.ok(actions.includes('REPORT_MERGE_SNAPSHOT_CREATED'));
+  } finally {
+    await closeIsolated(context);
+  }
+});
+
+test('P09 ReportInstance and studio load the 100-section boundary without truncation', async () => {
+  const context = await startIsolated('p09-100-sections');
+  try {
+    const fixture = await createP09Fixture(context.origin, context.db, { sectionCount: 100, requestOrigin: testOrigin });
+    const studio = await requestJson(context.origin, `/api/reports/${fixture.reportId}/studio`, 'GET', undefined, fixture.pm, testOrigin);
+    assert.strictEqual(studio.status, 200);
+    assert.strictEqual(studio.body.report.sections.length, 100);
+    assert.strictEqual(studio.body.report.sections[99].sectionNumber, 100);
+  } finally {
+    await closeIsolated(context);
+  }
 });

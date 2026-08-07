@@ -52,7 +52,22 @@ export const ROUTES: RouteConfig[] = [
   { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }
 ];
 
-export const routeByPath = (path: string): RouteConfig | undefined => ROUTES.find((route) => route.path === path);
+export interface ResolvedRoute {
+  route: RouteConfig;
+  params: Record<string, string>;
+}
+
+export const resolveRoute = (path: string): ResolvedRoute | undefined => {
+  const exact = ROUTES.find((route) => route.path === path);
+  if (exact) return { route: exact, params: {} };
+  const studio = path.match(/^\/cases\/([^/]+)\/reports\/([^/]+)\/studio$/);
+  if (studio) {
+    const route = ROUTES.find((entry) => entry.id === 'REPO-02');
+    if (route) return { route, params: { caseId: decodeURIComponent(studio[1]), reportId: decodeURIComponent(studio[2]) } };
+  }
+  return undefined;
+};
+export const routeByPath = (path: string): RouteConfig | undefined => resolveRoute(path)?.route;
 export const canAccessRoute = (route: RouteConfig, roles: UserRole | readonly UserRole[]): boolean => {
   const activeRoles = Array.isArray(roles) ? roles : [roles];
   return !route.allowedRoles || activeRoles.some((role) => route.allowedRoles?.includes(role));
@@ -110,7 +125,8 @@ const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
 
 export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
-  const currentRoute = routeByPath(currentPath);
+  const resolvedRoute = resolveRoute(currentPath);
+  const currentRoute = resolvedRoute?.route;
 
   if (!currentRoute) {
     return (
@@ -163,7 +179,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
         <div className="route-heading">
           <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
         </div>
-        <ReportStudio roles={roles} onNavigate={onNavigate} />
+        <ReportStudio reportId={resolvedRoute?.params.reportId} roles={roles} onNavigate={onNavigate} />
       </section>
     );
   }

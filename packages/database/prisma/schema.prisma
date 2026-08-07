@@ -605,7 +605,7 @@ model ReportSectionRevision {
   sha256                String
   authorId              String
   createdAt             DateTime              @default(now())
-  section               ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  section               ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
   author                User                  @relation("SectionRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
   evidenceLinks         ReportEvidenceLink[]
   comments              ReportSectionComment[]
@@ -625,13 +625,15 @@ model ReportEvidenceLink {
   sourceMeetingId         String?
   sourceSha256            String
   sourceVersion           Int                   @default(1)
+  targetParagraphIndex    Int
   quoteText               String?
   anchorPosition          String?
   createdAt               DateTime              @default(now())
-  revision                ReportSectionRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
-  documentVersion         DocumentVersion?      @relation(fields: [sourceDocumentVersionId], references: [id], onDelete: SetNull)
-  meeting                 Meeting?              @relation(fields: [sourceMeetingId], references: [id], onDelete: SetNull)
+  revision                ReportSectionRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  documentVersion         DocumentVersion?      @relation(fields: [sourceDocumentVersionId], references: [id], onDelete: Restrict)
+  meeting                 Meeting?              @relation(fields: [sourceMeetingId], references: [id], onDelete: Restrict)
 
+  @@unique([revisionId, sourceType, sourceId, targetParagraphIndex])
   @@index([revisionId])
   @@index([sourceDocumentVersionId])
   @@index([sourceMeetingId])
@@ -648,10 +650,10 @@ model ReportSectionComment {
   resolvedById  String?
   resolvedAt    DateTime?
   createdAt     DateTime               @default(now())
-  section       ReportSection          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  revision      ReportSectionRevision? @relation(fields: [revisionId], references: [id], onDelete: SetNull)
+  section       ReportSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  revision      ReportSectionRevision? @relation(fields: [revisionId], references: [id], onDelete: Restrict)
   author        User                   @relation("SectionCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-  resolvedBy    User?                  @relation("SectionCommentResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedBy    User?                  @relation("SectionCommentResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
 
   @@index([sectionId])
   @@index([revisionId])
@@ -663,13 +665,15 @@ model ReportSectionApproval {
   sectionId          String
   approvedRevisionId String
   approverId         String
-  status             String                @default("APPROVED") // APPROVED, REJECTED, UNLOCKED
+  eventNumber        Int
+  status             String                @default("APPROVED") // APPROVED, UNLOCKED
   comment            String?
   createdAt          DateTime              @default(now())
-  section            ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  section            ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
   approvedRevision   ReportSectionRevision @relation(fields: [approvedRevisionId], references: [id], onDelete: Restrict)
   approver           User                  @relation("SectionApprovalApprover", fields: [approverId], references: [id], onDelete: Restrict)
 
+  @@unique([sectionId, eventNumber])
   @@index([sectionId])
   @@index([approvedRevisionId])
   @@index([approverId])
@@ -682,9 +686,10 @@ model ReportMergeSnapshot {
   mergedBodyText        String
   sectionsSnapshotJson  String
   evidenceSnapshotJson  String
+  snapshotSha256        String
   createdById           String
   createdAt             DateTime @default(now())
-  report                Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  report                Report   @relation(fields: [reportId], references: [id], onDelete: Restrict)
   createdBy             User     @relation("ReportMergeSnapshotCreator", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@unique([reportId, snapshotVersion])

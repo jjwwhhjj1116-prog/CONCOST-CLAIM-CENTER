@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Dialog, Input, Select, StatusBadge } from '@claim-studio/ui';
-import { apiRequest } from '../api';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Card } from '@claim-studio/ui';
+import { ApiError, apiRequest } from '../api';
 import type { UserRole } from '../routes/Router';
 
 export interface ReportStudioProps {
@@ -13,613 +13,519 @@ interface EvidenceLink {
   id: string;
   sourceType: 'DOCUMENT' | 'MEETING';
   sourceId: string;
-  sourceDocumentVersionId?: string | null;
-  sourceMeetingId?: string | null;
   sourceSha256: string;
   sourceVersion: number;
-  quoteText?: string | null;
-  anchorPosition?: string | null;
-  documentVersion?: { id: string; displayName: string; sha256: string; versionNumber: number };
-  meeting?: { id: string; title: string; status: string; version: number };
+  targetParagraphIndex: number;
+  quoteText: string;
+  anchorPosition: string;
+  documentVersion?: { displayName: string; versionNumber: number } | null;
+  meeting?: { title: string; version: number } | null;
 }
 
-interface SectionRevision {
+interface Revision {
   id: string;
-  sectionId: string;
+  authorId: string;
   revisionNumber: number;
   title: string;
   content: string;
-  structuredDataJson: string;
-  validationStatus: string;
+  validationStatus: 'VALID' | 'WARNING' | 'INVALID';
+  validationErrorsJson: string;
   sha256: string;
   createdAt: string;
   author: { id: string; name: string; email: string };
   evidenceLinks: EvidenceLink[];
 }
 
-interface SectionComment {
+interface CommentRow {
   id: string;
-  sectionId: string;
   revisionId?: string | null;
-  authorId: string;
   commentType: 'COMMENT' | 'REVISION_REQUEST';
   content: string;
   isResolved: boolean;
-  resolvedAt?: string | null;
   createdAt: string;
-  author: { id: string; name: string; email: string };
+  author: { id: string; name: string };
   resolvedBy?: { id: string; name: string } | null;
 }
 
-interface SectionApproval {
+interface ApprovalEvent {
   id: string;
-  sectionId: string;
+  eventNumber: number;
   approvedRevisionId: string;
-  approverId: string;
-  status: 'APPROVED' | 'REJECTED' | 'UNLOCKED';
+  status: 'APPROVED' | 'UNLOCKED';
   comment?: string | null;
   createdAt: string;
-  approver: { id: string; name: string; email: string };
+  approver: { id: string; name: string };
 }
 
 interface ReportSection {
   id: string;
-  reportId: string;
   sectionNumber: number;
   title: string;
-  content: string;
-  status: string;
+  status: 'DRAFT' | 'IN_REVIEW' | 'REJECTED' | 'APPROVED';
   version: number;
-  revisions: SectionRevision[];
-  comments: SectionComment[];
-  approvals: SectionApproval[];
-}
-
-interface CaseDocumentVersion {
-  id: string;
-  versionNumber: number;
-  originalName: string;
-  displayName: string;
-  sha256: string;
-  fileSize: number;
-}
-
-interface CaseDocument {
-  id: string;
-  title: string;
-  category: string;
-  versions: CaseDocumentVersion[];
-}
-
-interface CaseMeeting {
-  id: string;
-  title: string;
-  meetingDate: string;
-  rawText?: string | null;
-  summary?: string | null;
-  status: string;
-  version: number;
+  isRequired: boolean;
+  revisions: Revision[];
+  comments: CommentRow[];
+  approvals: ApprovalEvent[];
 }
 
 interface ReportDetail {
   id: string;
   caseId: string;
+  reportInstanceId: string;
   title: string;
   version: number;
+  reportInstance: { id: string; snapshotSha256: string; templateCodeSnapshot: string; templateVersionNumberSnapshot: number };
   case: {
     id: string;
     title: string;
     caseNumber: string;
     claimType: string;
-    documents: CaseDocument[];
-    meetings: CaseMeeting[];
+    documents: Array<{
+      id: string;
+      title: string;
+      versions: Array<{ id: string; versionNumber: number; displayName: string; sha256: string; fileSize: number; isFinal: boolean }>;
+    }>;
+    meetings: Array<{ id: string; title: string; status: string; version: number; rawTextSha256?: string | null }>;
   };
   sections: ReportSection[];
-  mergeSnapshots: Array<{
-    id: string;
-    snapshotVersion: number;
-    mergedBodyText: string;
-    createdAt: string;
-    createdBy: { id: string; name: string };
-  }>;
+  mergeSnapshots: Array<{ id: string; snapshotVersion: number; snapshotSha256: string; createdAt: string; createdBy: { name: string } }>;
 }
 
-export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId: propReportId, roles, onNavigate: _onNavigate }) => {
+interface DraftState {
+  content: string;
+  baseVersion: number;
+  dirty: boolean;
+  state: 'idle' | 'saving' | 'saved' | 'conflict' | 'error';
+  lastSavedAt?: string;
+}
+
+interface PendingEvidence {
+  sourceType: 'DOCUMENT' | 'MEETING';
+  sourceId: string;
+  targetParagraphIndex: number;
+  quoteText: string;
+  anchorPosition: string;
+}
+
+interface ConflictState {
+  currentVersion: number;
+  latestRevision?: Revision | null;
+}
+
+const statusLabel: Record<ReportSection['status'], string> = {
+  DRAFT: '초안', IN_REVIEW: '검토 중', REJECTED: '수정 요청', APPROVED: '승인 잠금'
+};
+
+function latestContent(section: ReportSection): string {
+  return section.revisions[0]?.content ?? '';
+}
+
+function parsedValidationErrors(revision?: Revision): Array<{ code: string; paragraphIndex: number; message: string }> {
+  if (!revision) return [];
+  try {
+    const parsed = JSON.parse(revision.validationErrorsJson) as unknown;
+    return Array.isArray(parsed) ? parsed as Array<{ code: string; paragraphIndex: number; message: string }> : [];
+  } catch {
+    return [{ code: 'CORRUPT_VALIDATION', paragraphIndex: 0, message: '검증 결과를 읽을 수 없습니다.' }];
+  }
+}
+
+export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onNavigate }) => {
   const [report, setReport] = useState<ReportDetail | null>(null);
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, DraftState>>({});
+  const [pendingEvidence, setPendingEvidence] = useState<Record<string, PendingEvidence[]>>({});
+  const [conflicts, setConflicts] = useState<Record<string, ConflictState | undefined>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Active section editing state
-  const [editedTitle, setEditedTitle] = useState('');
-  const [editedContent, setEditedContent] = useState('');
-  const [stagedEvidence, setStagedEvidence] = useState<EvidenceLink[]>([]);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'conflict' | 'error'>('idle');
-  const [conflictData, setConflictData] = useState<{ currentVersion: number; latestRevision?: SectionRevision } | null>(null);
-
-  // Tab & Comments state
-  const [leftTab, setLeftTab] = useState<'SECTIONS' | 'EVIDENCE'>('SECTIONS');
-  const [newCommentContent, setNewCommentContent] = useState('');
-  const [newCommentType, setNewCommentType] = useState<'COMMENT' | 'REVISION_REQUEST'>('COMMENT');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [mobilePane, setMobilePane] = useState<'outline' | 'editor' | 'review'>('editor');
+  const [commentType, setCommentType] = useState<'COMMENT' | 'REVISION_REQUEST'>('COMMENT');
+  const [commentContent, setCommentContent] = useState('');
   const [approvalComment, setApprovalComment] = useState('');
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [sourceType, setSourceType] = useState<'DOCUMENT' | 'MEETING'>('MEETING');
+  const [sourceId, setSourceId] = useState('');
+  const [targetParagraphIndex, setTargetParagraphIndex] = useState(0);
+  const [quoteText, setQuoteText] = useState('');
+  const [anchorPosition, setAnchorPosition] = useState('');
 
-  // Quote-Anchor Staging
-  const [selectedQuoteText, setSelectedQuoteText] = useState('');
-  const [quoteSourceType, setQuoteSourceType] = useState<'DOCUMENT' | 'MEETING'>('DOCUMENT');
-  const [quoteSourceId, setQuoteSourceId] = useState('');
+  const canEdit = roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
+  const canApprove = roles.some((role) => ['admin', 'director', 'reviewer'].includes(role));
+  const canMerge = roles.some((role) => ['admin', 'director', 'pm'].includes(role));
 
-  // Revisions Modal & Snapshot Modal
-  const [showRevisionHistory, setShowRevisionHistory] = useState(false);
-  const [showMergeModal, setShowMergeModal] = useState(false);
-
-  const isReviewer = roles.includes('reviewer');
-
-  const fetchStudio = useCallback(async (id: string) => {
-    setLoading(true);
-    setError(null);
+  const loadStudio = useCallback(async () => {
+    if (!reportId) {
+      setError('사건에서 생성된 ReportInstance 경로로 스튜디오를 열어야 합니다.');
+      setLoading(false);
+      return;
+    }
     try {
-      const data = await apiRequest<{ report: ReportDetail }>(`/reports/${id}/studio`);
-      setReport(data.report);
-      if (data.report.sections.length > 0 && !selectedSectionId) {
-        const firstSec = data.report.sections[0];
-        setSelectedSectionId(firstSec.id);
-        setEditedTitle(firstSec.title);
-        setEditedContent(firstSec.revisions[0]?.content || firstSec.content);
-        setStagedEvidence(firstSec.revisions[0]?.evidenceLinks || []);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setLoading(true);
+      const response = await apiRequest<{ report: ReportDetail }>(`/api/reports/${encodeURIComponent(reportId)}/studio`);
+      setReport(response.report);
+      setSelectedSectionId((current) => current && response.report.sections.some((section) => section.id === current)
+        ? current
+        : response.report.sections[0]?.id ?? null);
+      setDrafts((current) => Object.fromEntries(response.report.sections.map((section) => {
+        const existing = current[section.id];
+        return [section.id, existing?.dirty || existing?.state === 'conflict'
+          ? existing
+          : { content: latestContent(section), baseVersion: section.version, dirty: false, state: 'idle' as const }];
+      })));
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '보고서 스튜디오를 불러오지 못했습니다.');
     } finally {
       setLoading(false);
     }
-  }, [selectedSectionId]);
+  }, [reportId]);
 
-  useEffect(() => {
-    // Default fallback or provided reportId
-    const activeReportId = propReportId || 'RPT-001';
-    void fetchStudio(activeReportId);
-  }, [propReportId, fetchStudio]);
+  useEffect(() => { void loadStudio(); }, [loadStudio]);
 
-  const activeSection = report?.sections.find((s) => s.id === selectedSectionId);
+  const activeSection = useMemo(
+    () => report?.sections.find((section) => section.id === selectedSectionId) ?? null,
+    [report, selectedSectionId]
+  );
+  const activeDraft = activeSection ? drafts[activeSection.id] : undefined;
+  const activeEvidence = activeSection ? pendingEvidence[activeSection.id] ?? [] : [];
+  const activeConflict = activeSection ? conflicts[activeSection.id] : undefined;
+  const activeRevision = activeSection?.revisions[0];
+  const validationErrors = parsedValidationErrors(activeRevision);
 
-  const handleSelectSection = (sec: ReportSection) => {
-    setSelectedSectionId(sec.id);
-    setEditedTitle(sec.title);
-    setEditedContent(sec.revisions[0]?.content || sec.content);
-    setStagedEvidence(sec.revisions[0]?.evidenceLinks || []);
-    setSaveStatus('idle');
-    setConflictData(null);
-    setActionError(null);
-  };
+  const updateSection = useCallback((sectionId: string, updater: (section: ReportSection) => ReportSection) => {
+    setReport((current) => current ? { ...current, sections: current.sections.map((section) => section.id === sectionId ? updater(section) : section) } : current);
+  }, []);
 
-  const handleSaveRevision = async () => {
-    if (!report || !activeSection) return;
-    if (isReviewer) {
-      setActionError('Reviewer는 본문을 수정할 수 없습니다 (403 Forbidden).');
-      return;
-    }
-    if (activeSection.status === 'APPROVED') {
-      setActionError('승인 완료(APPROVED)된 장은 직통 수정이 잠겨있습니다. 먼저 승인 해제(Unlock)를 요청하세요.');
-      return;
-    }
-
-    setSaveStatus('saving');
-    setActionError(null);
+  const saveSection = useCallback(async (mode: 'AUTO' | 'MANUAL', targetSectionId?: string) => {
+    if (!reportId || !report) return;
+    const sectionId = targetSectionId ?? selectedSectionId;
+    const section = report.sections.find((entry) => entry.id === sectionId);
+    const draft = sectionId ? drafts[sectionId] : undefined;
+    if (!section || !draft || !canEdit || section.status === 'APPROVED' || !draft.dirty || draft.state === 'saving' || draft.state === 'conflict') return;
+    setDrafts((current) => ({ ...current, [section.id]: { ...current[section.id], state: 'saving' } }));
     try {
-      const expectedVersion = activeSection.revisions.length;
-      await apiRequest<{ revision: SectionRevision; sectionVersion: number }>(
-        `/reports/${report.id}/sections/${activeSection.id}/revisions`,
+      const response = await apiRequest<{ revision: Revision; sectionVersion: number }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(section.id)}/revisions`,
         {
           method: 'POST',
           body: JSON.stringify({
-            title: editedTitle,
-            content: editedContent,
-            expectedVersion,
-            evidenceLinks: stagedEvidence
+            title: section.title,
+            content: draft.content,
+            structuredDataJson: '{}',
+            expectedVersion: draft.baseVersion,
+            saveMode: mode,
+            evidenceLinks: pendingEvidence[section.id] ?? []
           })
         }
       );
-      setSaveStatus('saved');
-      await fetchStudio(report.id);
-    } catch (err: any) {
-      if (err.status === 409 || (err.message && err.message.includes('Concurrency conflict'))) {
-        setSaveStatus('conflict');
-        setConflictData({
-          currentVersion: err.currentVersion || activeSection.revisions.length,
-          latestRevision: err.latestRevision || activeSection.revisions[0]
-        });
+      const savedAt = new Date().toISOString();
+      setDrafts((current) => ({
+        ...current,
+        [section.id]: { content: draft.content, baseVersion: response.sectionVersion, dirty: false, state: 'saved', lastSavedAt: savedAt }
+      }));
+      setPendingEvidence((current) => ({ ...current, [section.id]: [] }));
+      setConflicts((current) => ({ ...current, [section.id]: undefined }));
+      updateSection(section.id, (current) => ({
+        ...current,
+        status: 'DRAFT',
+        version: response.sectionVersion,
+        revisions: [response.revision, ...current.revisions]
+      }));
+      setNotice(mode === 'AUTO' ? '자동저장으로 새 개정본을 생성했습니다.' : '수동저장으로 새 개정본을 생성했습니다.');
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409 && typeof caught.payload.currentVersion === 'number') {
+        setConflicts((current) => ({
+          ...current,
+          [section.id]: {
+            currentVersion: caught.payload.currentVersion as number,
+            latestRevision: (caught.payload.latestRevision as Revision | null | undefined) ?? null
+          }
+        }));
+        setDrafts((current) => ({ ...current, [section.id]: { ...current[section.id], state: 'conflict' } }));
       } else {
-        setSaveStatus('error');
-        setActionError(err instanceof Error ? err.message : String(err));
+        setDrafts((current) => ({ ...current, [section.id]: { ...current[section.id], state: 'error' } }));
+        setNotice(caught instanceof Error ? caught.message : '저장에 실패했습니다.');
       }
     }
+  }, [canEdit, drafts, pendingEvidence, report, reportId, selectedSectionId, updateSection]);
+
+  useEffect(() => {
+    if (!activeSection || !activeDraft?.dirty || activeDraft.state !== 'idle' || !canEdit || activeSection.status === 'APPROVED') return;
+    const timer = window.setTimeout(() => { void saveSection('AUTO', activeSection.id); }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [activeDraft?.content, activeDraft?.dirty, activeDraft?.state, activeSection, canEdit, saveSection]);
+
+  const selectSection = (sectionId: string) => {
+    setSelectedSectionId(sectionId);
+    setMobilePane('editor');
+    setNotice(null);
   };
 
-  const handleAddEvidence = () => {
-    if (!quoteSourceId) return;
-    const newLink: EvidenceLink = {
-      id: `STAGED-${Date.now()}`,
-      sourceType: quoteSourceType,
-      sourceId: quoteSourceId,
-      sourceSha256: 'DYNAMIC_VERIFY',
-      sourceVersion: 1,
-      quoteText: selectedQuoteText ? selectedQuoteText : undefined,
-      anchorPosition: `OFFSET-${Date.now()}`
-    };
-    setStagedEvidence([...stagedEvidence, newLink]);
-    setSelectedQuoteText('');
+  const addEvidence = () => {
+    if (!activeSection || !sourceId || !quoteText.trim() || !anchorPosition.trim()) {
+      setNotice('근거 자료, 인용문, 원문 위치를 모두 입력해 주세요.');
+      return;
+    }
+    const paragraphCount = (activeDraft?.content ?? '').split(/\r?\n\s*\r?\n/).map((value) => value.trim()).filter(Boolean).length;
+    if (targetParagraphIndex < 0 || targetParagraphIndex >= paragraphCount) {
+      setNotice('연결할 보고서 문단 번호가 현재 본문 범위를 벗어났습니다.');
+      return;
+    }
+    const next: PendingEvidence = { sourceType, sourceId, targetParagraphIndex, quoteText: quoteText.trim(), anchorPosition: anchorPosition.trim() };
+    setPendingEvidence((current) => ({ ...current, [activeSection.id]: [...(current[activeSection.id] ?? []), next] }));
+    setSourceId('');
+    setQuoteText('');
+    setAnchorPosition('');
+    setDrafts((current) => ({ ...current, [activeSection.id]: { ...current[activeSection.id], dirty: true, state: 'idle' } }));
   };
 
-  const handleAddComment = async () => {
-    if (!report || !activeSection || !newCommentContent.trim()) return;
-    setActionError(null);
+  const postComment = async () => {
+    if (!reportId || !activeSection || !commentContent.trim()) return;
     try {
-      await apiRequest(`/reports/${report.id}/sections/${activeSection.id}/comments`, {
-        method: 'POST',
-        body: JSON.stringify({
-          commentType: newCommentType,
-          content: newCommentContent,
-          revisionId: activeSection.revisions[0]?.id
-        })
-      });
-      setNewCommentContent('');
-      await fetchStudio(report.id);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      const response = await apiRequest<{ comment: CommentRow; sectionVersion: number }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/comments`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            commentType,
+            content: commentContent,
+            revisionId: activeRevision?.id ?? null,
+            ...(commentType === 'REVISION_REQUEST' ? { expectedVersion: activeSection.version } : {})
+          })
+        }
+      );
+      updateSection(activeSection.id, (section) => ({
+        ...section,
+        comments: [response.comment, ...section.comments],
+        status: commentType === 'REVISION_REQUEST' ? 'REJECTED' : section.status,
+        version: commentType === 'REVISION_REQUEST' ? response.sectionVersion : section.version
+      }));
+      if (commentType === 'REVISION_REQUEST') {
+        setDrafts((current) => ({ ...current, [activeSection.id]: { ...current[activeSection.id], baseVersion: response.sectionVersion } }));
+      }
+      setCommentContent('');
+      setNotice(commentType === 'REVISION_REQUEST' ? '수정 요청을 기록했습니다.' : '댓글을 기록했습니다.');
+    } catch (caught) {
+      setNotice(caught instanceof Error ? caught.message : '댓글 등록에 실패했습니다.');
     }
   };
 
-  const handleResolveComment = async (commentId: string) => {
-    if (!report || !activeSection) return;
+  const resolveComment = async (commentId: string) => {
+    if (!reportId || !activeSection) return;
     try {
-      await apiRequest(`/reports/${report.id}/sections/${activeSection.id}/comments/${commentId}/resolve`, {
-        method: 'PATCH'
+      await apiRequest(`/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/comments/${encodeURIComponent(commentId)}/resolve`, {
+        method: 'PATCH', body: '{}'
       });
-      await fetchStudio(report.id);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    }
+      updateSection(activeSection.id, (section) => ({
+        ...section,
+        comments: section.comments.map((comment) => comment.id === commentId ? { ...comment, isResolved: true } : comment)
+      }));
+    } catch (caught) { setNotice(caught instanceof Error ? caught.message : '댓글 해결 처리에 실패했습니다.'); }
   };
 
-  const handleApproveSection = async () => {
-    if (!report || !activeSection) return;
-    setActionError(null);
+  const approveSection = async () => {
+    if (!reportId || !activeSection || !activeRevision) return;
     try {
-      await apiRequest(`/reports/${report.id}/sections/${activeSection.id}/approve`, {
-        method: 'POST',
-        body: JSON.stringify({
-          revisionId: activeSection.revisions[0]?.id,
-          comment: approvalComment
-        })
-      });
+      const response = await apiRequest<{ approval: ApprovalEvent; sectionVersion: number }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/approve`,
+        { method: 'POST', body: JSON.stringify({ revisionId: activeRevision.id, expectedVersion: activeSection.version, comment: approvalComment }) }
+      );
+      updateSection(activeSection.id, (section) => ({
+        ...section, status: 'APPROVED', version: response.sectionVersion, approvals: [response.approval, ...section.approvals]
+      }));
+      setDrafts((current) => ({ ...current, [activeSection.id]: { ...current[activeSection.id], baseVersion: response.sectionVersion, dirty: false } }));
       setApprovalComment('');
-      await fetchStudio(report.id);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    }
+      setNotice('최신 VALID 개정본을 승인하고 잠갔습니다.');
+    } catch (caught) { setNotice(caught instanceof Error ? caught.message : '승인에 실패했습니다.'); }
   };
 
-  const handleUnlockSection = async () => {
-    if (!report || !activeSection) return;
-    setActionError(null);
+  const unlockSection = async () => {
+    if (!reportId || !activeSection || !approvalComment.trim()) {
+      setNotice('잠금 해제 사유를 입력해 주세요.');
+      return;
+    }
     try {
-      await apiRequest(`/reports/${report.id}/sections/${activeSection.id}/unlock`, {
-        method: 'POST',
-        body: JSON.stringify({ comment: '수정 작업을 위한 승인 해제' })
-      });
-      await fetchStudio(report.id);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    }
+      const response = await apiRequest<{ unlock: ApprovalEvent; sectionVersion: number }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/unlock`,
+        { method: 'POST', body: JSON.stringify({ expectedVersion: activeSection.version, comment: approvalComment }) }
+      );
+      updateSection(activeSection.id, (section) => ({
+        ...section, status: 'DRAFT', version: response.sectionVersion, approvals: [response.unlock, ...section.approvals]
+      }));
+      setDrafts((current) => ({ ...current, [activeSection.id]: { ...current[activeSection.id], baseVersion: response.sectionVersion } }));
+      setApprovalComment('');
+      setNotice('승인 이력을 보존한 채 새 개정 작성을 허용했습니다.');
+    } catch (caught) { setNotice(caught instanceof Error ? caught.message : '잠금 해제에 실패했습니다.'); }
   };
 
-  const handleMergeReport = async () => {
-    if (!report) return;
-    setActionError(null);
+  const mergeReport = async () => {
+    if (!reportId || !report) return;
     try {
-      await apiRequest(`/reports/${report.id}/merge`, { method: 'POST' });
-      setShowMergeModal(true);
-      await fetchStudio(report.id);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    }
+      const response = await apiRequest<{ snapshot: ReportDetail['mergeSnapshots'][number]; reportVersion: number }>(
+        `/api/reports/${encodeURIComponent(reportId)}/merge`,
+        { method: 'POST', body: JSON.stringify({ expectedReportVersion: report.version }) }
+      );
+      setReport((current) => current ? { ...current, version: response.reportVersion, mergeSnapshots: [response.snapshot, ...current.mergeSnapshots] } : current);
+      setNotice('승인된 최신 개정본만으로 결정적 병합 스냅샷을 생성했습니다. DOCX/PDF 출력은 P12 범위입니다.');
+    } catch (caught) { setNotice(caught instanceof Error ? caught.message : '병합 스냅샷 생성에 실패했습니다.'); }
   };
 
-  if (loading) {
-    return <p role="status" className="muted">보고서 스튜디오 데이터를 불러오는 중입니다...</p>;
+  if (!reportId) {
+    return <Card title="보고서 스튜디오 진입 필요"><p>사건의 ACTIVE 템플릿으로 ReportInstance를 먼저 만든 뒤 동적 경로로 진입하세요.</p><Button onClick={() => onNavigate('/templates')}>템플릿 관리로 이동</Button></Card>;
   }
+  if (loading) return <div className="p09-state" role="status" aria-live="polite">보고서 스냅샷과 개정 이력을 불러오는 중…</div>;
+  if (error || !report) return <div className="p09-state p09-error" role="alert"><p>{error ?? '보고서를 찾을 수 없습니다.'}</p><Button onClick={() => void loadStudio()}>다시 시도</Button></div>;
+  if (!activeSection || !activeDraft) return <div className="p09-state">보고서 장이 없습니다. P08 템플릿 계약을 확인하세요.</div>;
 
-  if (error || !report) {
-    return (
-      <Card title="보고서 스튜디오 에러">
-        <p className="error-box" role="alert">{error || '보고서 정보를 찾을 수 없습니다.'}</p>
-        <Button onClick={() => void fetchStudio(propReportId || 'RPT-001')}>다시 시도</Button>
-      </Card>
-    );
-  }
+  const documentOptions = report.case.documents.flatMap((document) => document.versions.map((version) => ({
+    id: version.id, label: `${document.title} · v${version.versionNumber} · ${version.sha256.slice(0, 10)}`
+  })));
+  const meetingOptions = report.case.meetings.filter((meeting) => meeting.status === 'FINAL' && meeting.rawTextSha256).map((meeting) => ({
+    id: meeting.id, label: `${meeting.title} · FINAL v${meeting.version}`
+  }));
+  const sourceOptions = sourceType === 'DOCUMENT' ? documentOptions : meetingOptions;
 
   return (
-    <div className="report-studio-container" style={{ display: 'grid', gridTemplateColumns: '340px 1fr 380px', gap: '1rem', minHeight: '80vh' }}>
-      
-      {/* 1단 패널: 목차 및 증빙 자료실 */}
-      <aside className="studio-left-panel" style={{ borderRight: '1px solid #e0e0e0', paddingRight: '0.75rem' }}>
-        <Card title={`사건: ${report.case.caseNumber}`}>
-          <h4>{report.title} <small>v{report.version}</small></h4>
-          <p className="muted">유형: {report.case.claimType}</p>
-        </Card>
-
-        <div className="tab-controls" style={{ display: 'flex', gap: '0.5rem', margin: '0.75rem 0' }}>
-          <Button size="sm" variant={leftTab === 'SECTIONS' ? 'primary' : 'secondary'} onClick={() => setLeftTab('SECTIONS')}>장 목차</Button>
-          <Button size="sm" variant={leftTab === 'EVIDENCE' ? 'primary' : 'secondary'} onClick={() => setLeftTab('EVIDENCE')}>증빙 자료실</Button>
+    <div className="p09-studio" data-report-id={report.id}>
+      <header className="p09-header">
+        <div>
+          <p className="p09-eyebrow">{report.case.caseNumber} · {report.case.claimType} · P08 snapshot {report.reportInstance.snapshotSha256.slice(0, 12)}</p>
+          <h3>{report.title}</h3>
         </div>
+        <div className="p09-header-actions">
+          <span className={`p09-save-state p09-${activeDraft.state}`} role="status" aria-live="polite">
+            {activeDraft.state === 'saving' ? '저장 중…' : activeDraft.state === 'saved' ? `저장됨 ${activeDraft.lastSavedAt ? new Date(activeDraft.lastSavedAt).toLocaleTimeString() : ''}` : activeDraft.state === 'conflict' ? '동시 편집 충돌' : activeDraft.dirty ? '저장 대기' : '변경 없음'}
+          </span>
+          <Button disabled={!canEdit || activeSection.status === 'APPROVED' || !activeDraft.dirty} onClick={() => void saveSection('MANUAL')}>지금 저장</Button>
+        </div>
+      </header>
 
-        {leftTab === 'SECTIONS' ? (
-          <div className="section-tree-list">
-            {report.sections.map((sec) => (
-              <div
-                key={sec.id}
-                onClick={() => handleSelectSection(sec)}
-                style={{
-                  padding: '0.75rem',
-                  marginBottom: '0.5rem',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  border: selectedSectionId === sec.id ? '2px solid #0052cc' : '1px solid #ddd',
-                  backgroundColor: selectedSectionId === sec.id ? '#f0f5ff' : '#ffffff'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong>제 {sec.sectionNumber} 장: {sec.title}</strong>
-                  <StatusBadge status={sec.status === 'APPROVED' ? 'approved' : sec.status === 'REJECTED' ? 'review' : 'ai_draft'} />
-                </div>
-                <small className="muted">개정: {sec.revisions.length}회 | 댓글: {sec.comments.length}개</small>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="evidence-vault">
-            <h5>사건 첨부 문서</h5>
-            {report.case.documents.map((doc) => (
-              <div key={doc.id} style={{ fontSize: '0.85rem', padding: '0.4rem', borderBottom: '1px solid #eee' }}>
-                <div>📄 {doc.title} <small>({doc.category})</small></div>
-                {doc.versions.map((v) => (
-                  <div key={v.id} style={{ display: 'flex', justifyContent: 'space-between', margin: '0.2rem 0' }}>
-                    <small>v{v.versionNumber} - {v.displayName}</small>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        setQuoteSourceType('DOCUMENT');
-                        setQuoteSourceId(v.id);
-                      }}
-                    >
-                      선택
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ))}
+      <div className="p09-pane-tabs" role="tablist" aria-label="1024px 보고서 패널 선택">
+        {([['outline', '목차·근거'], ['editor', '본문 편집'], ['review', '검토·승인']] as const).map(([pane, label]) => (
+          <button key={pane} role="tab" aria-selected={mobilePane === pane} onClick={() => setMobilePane(pane)}>{label}</button>
+        ))}
+      </div>
+      {notice && <div className="p09-notice" role="status"><span>{notice}</span><button aria-label="알림 닫기" onClick={() => setNotice(null)}>×</button></div>}
 
-            <h5 style={{ marginTop: '1rem' }}>회의록</h5>
-            {report.case.meetings.map((m) => (
-              <div key={m.id} style={{ fontSize: '0.85rem', padding: '0.4rem', borderBottom: '1px solid #eee' }}>
-                <div>🗣️ {m.title} ({m.meetingDate})</div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => {
-                    setQuoteSourceType('MEETING');
-                    setQuoteSourceId(m.id);
-                  }}
-                >
-                  선택
-                </Button>
-              </div>
-            ))}
-
-            {quoteSourceId && (
-              <div style={{ marginTop: '1rem', padding: '0.5rem', background: '#fafafa', borderRadius: '4px' }}>
-                <small>선택된 증빙: {quoteSourceType} ({quoteSourceId})</small>
-                <Input
-                  label="인용-앵커 문구 (Option)"
-                  placeholder="예: 3페이지 제2항 금액 1,200만원"
-                  value={selectedQuoteText}
-                  onChange={(e) => setSelectedQuoteText(e.target.value)}
-                />
-                <Button size="sm" onClick={handleAddEvidence}>현재 장에 근거 연결</Button>
-              </div>
-            )}
-          </div>
-        )}
-      </aside>
-
-      {/* 2단 패널: 장 실시간 편집기 & Revision 관리 */}
-      <main className="studio-center-panel">
-        {activeSection ? (
-          <Card title={`제 ${activeSection.sectionNumber} 장 본문 편집기 (${activeSection.status})`}>
-            {actionError && <p role="alert" className="error-box" style={{ color: 'red' }}>{actionError}</p>}
-
-            {saveStatus === 'conflict' && conflictData && (
-              <div style={{ backgroundColor: '#fffbe6', border: '1px solid #ffe58f', padding: '0.75rem', marginBottom: '1rem', borderRadius: '6px' }}>
-                <strong style={{ color: '#d48800' }}>⚠️ 409 동시성 충돌 발생!</strong>
-                <p>다른 사용자가 이미 새 개정본(v{conflictData.currentVersion})을 저장했습니다.</p>
-                <Button size="sm" onClick={() => setShowRevisionHistory(true)}>충돌 내역 비교하기</Button>
-              </div>
-            )}
-
-            <div className="form-stack">
-              <Input
-                label="장 제목"
-                value={editedTitle}
-                readOnly={isReviewer || activeSection.status === 'APPROVED'}
-                onChange={(e) => setEditedTitle(e.target.value)}
-              />
-
-              <label htmlFor="section-content-editor">장 본문 내용 (마크다운 지원)</label>
-              <textarea
-                id="section-content-editor"
-                className="report-editor"
-                rows={14}
-                style={{ width: '100%', fontFamily: 'monospace', padding: '0.5rem' }}
-                value={editedContent}
-                readOnly={isReviewer || activeSection.status === 'APPROVED'}
-                onChange={(e) => setEditedContent(e.target.value)}
-              />
-
-              {/* 연결된 증빙 리스트 */}
-              <div className="staged-evidence-list">
-                <h5>연결된 증빙 근거 ({stagedEvidence.length}개)</h5>
-                {stagedEvidence.map((ev, idx) => (
-                  <div key={ev.id || idx} style={{ fontSize: '0.8rem', background: '#f5f5f5', padding: '0.3rem 0.5rem', marginBottom: '0.2rem', borderRadius: '4px' }}>
-                    📌 [{ev.sourceType}] ID: {ev.sourceId} | {ev.quoteText ? `"${ev.quoteText}"` : '전체 참조'}
-                  </div>
-                ))}
-              </div>
-
-              <div className="action-row" style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
-                <Button
-                  onClick={() => void handleSaveRevision()}
-                  disabled={isReviewer || activeSection.status === 'APPROVED' || saveStatus === 'saving'}
-                >
-                  {saveStatus === 'saving' ? '저장 중...' : '개정본 저장 (Append Revision)'}
-                </Button>
-
-                <Button variant="secondary" onClick={() => setShowRevisionHistory(true)}>
-                  개정 이력 (v{activeSection.revisions.length})
-                </Button>
-              </div>
-            </div>
-          </Card>
-        ) : (
-          <p className="muted">좌측 목차에서 편집할 장을 선택하십시오.</p>
-        )}
-      </main>
-
-      {/* 3단 패널: 댓글 / 수정요청 / 승인 / 통합 병합 */}
-      <aside className="studio-right-panel" style={{ borderLeft: '1px solid #e0e0e0', paddingLeft: '0.75rem' }}>
-        <Card title="검토·승인 & 댓글 타임라인">
-          {activeSection ? (
-            <div>
-              <div className="approval-controls" style={{ marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid #eee' }}>
-                {activeSection.status === 'APPROVED' ? (
-                  <div>
-                    <StatusBadge status="approved" />
-                    <p className="muted" style={{ fontSize: '0.85rem' }}>이 장은 최종 승인되었습니다.</p>
-                    {!isReviewer && (
-                      <Button size="sm" variant="secondary" onClick={() => void handleUnlockSection()}>
-                        승인 해제 (Unlock for Edit)
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <div>
-                    <Input
-                      label="승인/검토 코멘트"
-                      placeholder="승인 또는 수정요청 시 사유 작성"
-                      value={approvalComment}
-                      onChange={(e) => setApprovalComment(e.target.value)}
-                    />
-                    <Button size="sm" onClick={() => void handleApproveSection()}>
-                      장 승인 (Approve Section)
-                    </Button>
-                  </div>
-                )}
-              </div>
-
-              {/* 댓글 작성 폼 */}
-              <div className="comment-form" style={{ marginBottom: '1rem' }}>
-                <Select
-                  label="댓글 구분"
-                  options={[
-                    { value: 'COMMENT', label: '일반 의견 (COMMENT)' },
-                    { value: 'REVISION_REQUEST', label: '수정 요청 (REVISION_REQUEST)' }
-                  ]}
-                  value={newCommentType}
-                  onChange={(e) => setNewCommentType(e.target.value as any)}
-                />
-                <Input
-                  label="의견 내용"
-                  placeholder="댓글 입력..."
-                  value={newCommentContent}
-                  onChange={(e) => setNewCommentContent(e.target.value)}
-                />
-                <Button size="sm" variant="secondary" onClick={() => void handleAddComment()}>의견 등록</Button>
-              </div>
-
-              {/* 댓글 목록 */}
-              <div className="comments-timeline" style={{ maxHeight: '350px', overflowY: 'auto' }}>
-                {activeSection.comments.map((cmt) => (
-                  <div
-                    key={cmt.id}
-                    style={{
-                      padding: '0.5rem',
-                      marginBottom: '0.5rem',
-                      borderRadius: '6px',
-                      background: cmt.commentType === 'REVISION_REQUEST' ? '#fff2f0' : '#fafafa',
-                      border: cmt.commentType === 'REVISION_REQUEST' ? '1px solid #ffccc7' : '1px solid #eee'
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem' }}>
-                      <strong>{cmt.author.name} ({cmt.commentType})</strong>
-                      <small>{new Date(cmt.createdAt).toLocaleTimeString()}</small>
-                    </div>
-                    <p style={{ margin: '0.3rem 0', fontSize: '0.85rem' }}>{cmt.content}</p>
-                    {cmt.isResolved ? (
-                      <small style={{ color: 'green' }}>✓ 해결됨 ({cmt.resolvedBy?.name})</small>
-                    ) : (
-                      <Button size="sm" variant="secondary" onClick={() => void handleResolveComment(cmt.id)}>해결 완료 처리</Button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <p className="muted">장을 선택하면 댓글 및 승인 도구가 표시됩니다.</p>
-          )}
-        </Card>
-
-        {/* 전체 보고서 병합 Snapshot 실행 */}
-        <Card title="최종 보고서 병합">
-          <p className="muted" style={{ fontSize: '0.85rem' }}>모든 장이 APPROVED 상태일 때 최종 Merge Snapshot을 생성합니다.</p>
-          <Button disabled={isReviewer} variant="danger" onClick={() => void handleMergeReport()}>
-            최종 DOCX/PDF 병합 Snapshot 생성
-          </Button>
-
-          {report.mergeSnapshots.length > 0 && (
-            <div style={{ marginTop: '0.75rem', fontSize: '0.8rem' }}>
-              <strong>생성된 병합 이력 ({report.mergeSnapshots.length}개):</strong>
-              {report.mergeSnapshots.map((m) => (
-                <div key={m.id}>- v{m.snapshotVersion} ({new Date(m.createdAt).toLocaleDateString()}) - {m.createdBy.name}</div>
+      <div className="p09-studio-grid">
+        <aside className={`p09-pane p09-outline ${mobilePane === 'outline' ? 'is-active' : ''}`} aria-label="보고서 목차와 사건 근거">
+          <section>
+            <h4>보고서 목차 <small>{report.sections.length}장</small></h4>
+            <div className="p09-section-list">
+              {report.sections.map((section) => (
+                <button key={section.id} className={section.id === activeSection.id ? 'is-selected' : ''} onClick={() => selectSection(section.id)}>
+                  <span>{section.sectionNumber}. {section.title}</span>
+                  <span className={`p09-status p09-status-${section.status.toLowerCase()}`}>{statusLabel[section.status]}</span>
+                </button>
               ))}
             </div>
-          )}
-        </Card>
-      </aside>
+          </section>
+          <section>
+            <h4>문단 근거 연결</h4>
+            <label>근거 유형<select value={sourceType} onChange={(event) => { setSourceType(event.target.value as 'DOCUMENT' | 'MEETING'); setSourceId(''); }}><option value="MEETING">최종 회의록</option><option value="DOCUMENT">문서 버전</option></select></label>
+            <label>근거 자료<select value={sourceId} onChange={(event) => setSourceId(event.target.value)}><option value="">선택</option>{sourceOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+            <label>보고서 문단 번호(0부터)<input type="number" min={0} value={targetParagraphIndex} onChange={(event) => setTargetParagraphIndex(Number(event.target.value))} /></label>
+            <label>원문 인용<textarea rows={3} value={quoteText} onChange={(event) => setQuoteText(event.target.value)} /></label>
+            <label>원문 위치<input value={anchorPosition} placeholder="page:3 또는 transcript:paragraph-2" onChange={(event) => setAnchorPosition(event.target.value)} /></label>
+            <Button disabled={!canEdit || activeSection.status === 'APPROVED'} variant="secondary" onClick={addEvidence}>이 개정본에 근거 추가</Button>
+            <ul className="p09-evidence-list">
+              {activeEvidence.map((evidence, index) => <li key={`${evidence.sourceType}-${evidence.sourceId}-${index}`}>문단 {evidence.targetParagraphIndex + 1} · {evidence.sourceType} · {evidence.anchorPosition}<button aria-label="대기 근거 제거" onClick={() => setPendingEvidence((current) => ({ ...current, [activeSection.id]: (current[activeSection.id] ?? []).filter((_, itemIndex) => itemIndex !== index) }))}>×</button></li>)}
+              {activeEvidence.length === 0 && <li className="p09-muted">새 근거 연결 없음</li>}
+            </ul>
+          </section>
+        </aside>
 
-      {/* Revision History Modal */}
-      <Dialog isOpen={showRevisionHistory} title="개정 이력 및 버전을 비교합니다" onClose={() => setShowRevisionHistory(false)}>
-        {activeSection && (
-          <div>
-            <h4>장: {activeSection.title} (총 {activeSection.revisions.length}개 개정본)</h4>
-            {activeSection.revisions.map((rev) => (
-              <div key={rev.id} style={{ border: '1px solid #ddd', padding: '0.5rem', margin: '0.5rem 0', borderRadius: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <strong>Revision #{rev.revisionNumber} ({rev.author.name})</strong>
-                  <small>{new Date(rev.createdAt).toLocaleString()}</small>
-                </div>
-                <pre style={{ background: '#f5f5f5', padding: '0.4rem', fontSize: '0.8rem', overflowX: 'auto' }}>{rev.content}</pre>
-                <small className="muted">SHA-256: {rev.sha256.slice(0, 16)}...</small>
-              </div>
-            ))}
+        <main className={`p09-pane p09-editor ${mobilePane === 'editor' ? 'is-active' : ''}`} aria-label="구조화 보고서 본문 편집기">
+          <div className="p09-section-heading">
+            <div><p>제{activeSection.sectionNumber}장 · row version {activeSection.version}</p><h4>{activeSection.title}</h4></div>
+            <span className={`p09-status p09-status-${activeSection.status.toLowerCase()}`}>{statusLabel[activeSection.status]}</span>
           </div>
-        )}
-      </Dialog>
+          <label className="p09-editor-label" htmlFor="p09-report-content">본문 · 빈 줄로 문단 구분</label>
+          <textarea
+            id="p09-report-content"
+            className="p09-body-editor"
+            value={activeDraft.content}
+            readOnly={!canEdit || activeSection.status === 'APPROVED'}
+            aria-readonly={!canEdit || activeSection.status === 'APPROVED'}
+            onChange={(event) => setDrafts((current) => ({
+              ...current,
+              [activeSection.id]: { ...current[activeSection.id], content: event.target.value, dirty: true, state: 'idle' }
+            }))}
+          />
+          {!canEdit && <p className="p09-muted">현재 역할은 본문을 편집할 수 없습니다. 댓글·수정 요청·승인 기능만 사용할 수 있습니다.</p>}
+          {activeSection.status === 'APPROVED' && <div className="p09-lock" role="status">승인된 장은 잠겨 있습니다. 승인권자의 명시적 잠금 해제 후 새 개정본을 작성할 수 있습니다.</div>}
 
-      {/* Merge Success Modal */}
-      <Dialog isOpen={showMergeModal} title="최종 보고서 병합 완료" onClose={() => setShowMergeModal(false)}>
-        <p>승인된 모든 장이 손실 없이 하나로 결합되어 ReportMergeSnapshot에 저장되었습니다.</p>
-      </Dialog>
+          {activeConflict && <section className="p09-conflict" role="alert" aria-labelledby="p09-conflict-title">
+            <h4 id="p09-conflict-title">동시 편집 충돌 — 로컬 초안을 보존했습니다</h4>
+            <div className="p09-compare">
+              <div><strong>서버 최신 v{activeConflict.currentVersion}</strong><pre>{activeConflict.latestRevision?.content ?? '(서버 개정 없음)'}</pre></div>
+              <div><strong>내 로컬 초안</strong><pre>{activeDraft.content}</pre></div>
+            </div>
+            <div className="p09-action-row">
+              <Button variant="secondary" onClick={() => {
+                setDrafts((current) => ({ ...current, [activeSection.id]: { ...current[activeSection.id], content: activeConflict.latestRevision?.content ?? '', baseVersion: activeConflict.currentVersion, dirty: false, state: 'idle' } }));
+                setConflicts((current) => ({ ...current, [activeSection.id]: undefined }));
+              }}>서버 최신본 불러오기</Button>
+              <Button onClick={() => {
+                setDrafts((current) => ({ ...current, [activeSection.id]: { ...current[activeSection.id], baseVersion: activeConflict.currentVersion, dirty: true, state: 'idle' } }));
+                setConflicts((current) => ({ ...current, [activeSection.id]: undefined }));
+              }}>로컬 초안으로 새 개정 생성</Button>
+            </div>
+          </section>}
+
+          <details className="p09-history">
+            <summary>개정 이력과 버전 비교 ({activeSection.revisions.length})</summary>
+            {activeSection.revisions.map((revision, index) => (
+              <article key={revision.id}>
+                <header><strong>v{revision.revisionNumber} · {revision.author.name}</strong><span>{new Date(revision.createdAt).toLocaleString()}</span></header>
+                <pre>{revision.content}</pre>
+                <small>SHA-256 {revision.sha256} · {revision.validationStatus} · 근거 {revision.evidenceLinks.length}개{index === 0 ? ' · 최신' : ''}</small>
+              </article>
+            ))}
+            {activeSection.revisions.length === 0 && <p className="p09-muted">아직 저장된 개정본이 없습니다.</p>}
+          </details>
+        </main>
+
+        <aside className={`p09-pane p09-review ${mobilePane === 'review' ? 'is-active' : ''}`} aria-label="검증 댓글 승인 패널">
+          <section>
+            <h4>검증 결과</h4>
+            <div className={`p09-validation p09-validation-${(activeRevision?.validationStatus ?? 'INVALID').toLowerCase()}`}>
+              최신 개정: {activeRevision?.validationStatus ?? '미저장'}
+            </div>
+            {validationErrors.map((item) => <p key={`${item.code}-${item.paragraphIndex}`} className="p09-validation-item">문단 {item.paragraphIndex + 1}: {item.message}</p>)}
+            <div className="p09-ai-placeholder" aria-disabled="true"><strong>AI 보조 검토</strong><p>P10 AI Gateway 전까지 비활성 상태입니다. 외부 공급자 전송은 발생하지 않습니다.</p><button disabled>AI 검토 실행(비활성)</button></div>
+          </section>
+          <section>
+            <h4>댓글·수정 요청</h4>
+            <label>유형<select value={commentType} onChange={(event) => setCommentType(event.target.value as 'COMMENT' | 'REVISION_REQUEST')}><option value="COMMENT">댓글</option><option value="REVISION_REQUEST">수정 요청</option></select></label>
+            <label>내용<textarea rows={3} value={commentContent} onChange={(event) => setCommentContent(event.target.value)} /></label>
+            <Button variant="secondary" onClick={() => void postComment()}>기록</Button>
+            <div className="p09-comments">
+              {activeSection.comments.map((comment) => <article key={comment.id} className={comment.commentType === 'REVISION_REQUEST' ? 'is-request' : ''}>
+                <header><strong>{comment.author.name} · {comment.commentType}</strong><span>{new Date(comment.createdAt).toLocaleString()}</span></header>
+                <p>{comment.content}</p>
+                {comment.isResolved ? <small>해결됨 {comment.resolvedBy?.name ? `· ${comment.resolvedBy.name}` : ''}</small> : <button onClick={() => void resolveComment(comment.id)}>해결 처리</button>}
+              </article>)}
+              {activeSection.comments.length === 0 && <p className="p09-muted">댓글이 없습니다.</p>}
+            </div>
+          </section>
+          <section>
+            <h4>승인 잠금</h4>
+            <label>승인 또는 잠금 해제 의견<textarea rows={3} value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} /></label>
+            {canApprove && activeSection.status !== 'APPROVED' && <Button disabled={!activeRevision || activeRevision.validationStatus !== 'VALID'} onClick={() => void approveSection()}>최신 VALID 개정 승인</Button>}
+            {canApprove && activeSection.status === 'APPROVED' && <Button variant="secondary" onClick={() => void unlockSection()}>사유 기록 후 잠금 해제</Button>}
+            {!canApprove && <p className="p09-muted">Reviewer·Director·Admin만 승인 및 잠금 해제를 할 수 있습니다.</p>}
+            <ol className="p09-event-list">{activeSection.approvals.map((event) => <li key={event.id}>#{event.eventNumber} {event.status} · {event.approver.name}</li>)}</ol>
+          </section>
+          <section>
+            <h4>결정적 병합 스냅샷</h4>
+            <p className="p09-muted">모든 장의 최신 VALID 개정이 승인된 경우에만 생성합니다. DOCX/PDF는 P12에서 출력합니다.</p>
+            {canMerge ? <Button onClick={() => void mergeReport()}>승인본 병합 스냅샷 생성</Button> : <p className="p09-muted">현재 역할은 병합할 수 없습니다.</p>}
+            <ul className="p09-snapshots">{report.mergeSnapshots.map((snapshot) => <li key={snapshot.id}>v{snapshot.snapshotVersion} · {snapshot.snapshotSha256.slice(0, 12)} · {snapshot.createdBy.name}</li>)}</ul>
+          </section>
+        </aside>
+      </div>
     </div>
   );
 };

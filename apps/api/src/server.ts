@@ -73,7 +73,7 @@ const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
 };
 
 class HttpError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(public readonly status: number, message: string, public readonly details: Record<string, unknown> = {}) {
     super(message);
   }
 }
@@ -367,6 +367,79 @@ function canonicalJson(value: unknown): string {
   return encoded;
 }
 
+function assertOnlyKeys(body: Record<string, unknown>, allowed: ReadonlySet<string>, label: string): void {
+  const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) throw new HttpError(400, `Unknown ${label} field: ${unknown[0]}`);
+}
+
+function requiredPositiveInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) throw new HttpError(400, `${label} must be a positive integer`);
+  return value as number;
+}
+
+function normalizedBoundedText(value: unknown, label: string, max: number, required = true): string | null {
+  if (value === null || value === undefined || value === '') {
+    if (required) throw new HttpError(400, `${label} is required`);
+    return null;
+  }
+  if (typeof value !== 'string') throw new HttpError(400, `${label} must be a string`);
+  const normalized = value.trim();
+  if (required && normalized.length === 0) throw new HttpError(400, `${label} is required`);
+  if (normalized.length > max) throw new HttpError(400, `${label} must be ${max} characters or fewer`);
+  return normalized || null;
+}
+
+interface P09EvidenceInput {
+  sourceType: 'DOCUMENT' | 'MEETING';
+  sourceId: string;
+  targetParagraphIndex: number;
+  quoteText: string;
+  anchorPosition: string;
+}
+
+function parseP09EvidenceInputs(value: unknown, paragraphCount: number): P09EvidenceInput[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 50) throw new HttpError(400, 'evidenceLinks must contain at most 50 entries');
+  const parsed = value.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new HttpError(400, `evidenceLinks[${index}] must be an object`);
+    const body = entry as Record<string, unknown>;
+    assertOnlyKeys(body, new Set(['sourceType', 'sourceId', 'targetParagraphIndex', 'quoteText', 'anchorPosition']), `evidenceLinks[${index}]`);
+    if (body.sourceType !== 'DOCUMENT' && body.sourceType !== 'MEETING') throw new HttpError(400, `evidenceLinks[${index}].sourceType is invalid`);
+    const sourceId = normalizedBoundedText(body.sourceId, `evidenceLinks[${index}].sourceId`, 200) as string;
+    if (!Number.isSafeInteger(body.targetParagraphIndex) || (body.targetParagraphIndex as number) < 0 || (body.targetParagraphIndex as number) >= paragraphCount) {
+      throw new HttpError(400, `evidenceLinks[${index}].targetParagraphIndex is outside the revision paragraphs`);
+    }
+    const sourceType: P09EvidenceInput['sourceType'] = body.sourceType;
+    return {
+      sourceType,
+      sourceId,
+      targetParagraphIndex: body.targetParagraphIndex as number,
+      quoteText: normalizedBoundedText(body.quoteText, `evidenceLinks[${index}].quoteText`, 4000) as string,
+      anchorPosition: normalizedBoundedText(body.anchorPosition, `evidenceLinks[${index}].anchorPosition`, 500) as string
+    };
+  });
+  const identities = parsed.map((entry) => `${entry.sourceType}:${entry.sourceId}:${entry.targetParagraphIndex}`);
+  if (new Set(identities).size !== identities.length) throw new HttpError(400, 'Duplicate evidence links are forbidden');
+  return parsed;
+}
+
+function validateP09Paragraphs(content: string, evidence: P09EvidenceInput[]): {
+  paragraphs: string[];
+  status: 'VALID' | 'WARNING';
+  errors: Array<{ code: string; paragraphIndex: number; message: string }>;
+} {
+  const paragraphs = content.split(/\r?\n\s*\r?\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  if (paragraphs.length === 0) throw new HttpError(400, 'Revision content must contain at least one paragraph');
+  const oversized = paragraphs.findIndex((paragraph) => paragraph.length > 10_000);
+  if (oversized >= 0) throw new HttpError(400, `Paragraph ${oversized + 1} exceeds 10000 characters`);
+  const linked = new Set(evidence.map((entry) => entry.targetParagraphIndex));
+  const evidenceSensitive = /(?:\d[\d,.]*\s*(?:원|%|㎡|m²)|법(?:률|령|원)|판결|계약(?:금액|조항)?|청구(?:액)?|손실(?:액)?|공사비)/u;
+  const errors = paragraphs.flatMap((paragraph, paragraphIndex) => evidenceSensitive.test(paragraph) && !linked.has(paragraphIndex)
+    ? [{ code: 'EVIDENCE_REQUIRED', paragraphIndex, message: '수치·법률·금액 단락에는 검증된 근거 연결이 필요합니다.' }]
+    : []);
+  return { paragraphs, status: errors.length > 0 ? 'WARNING' : 'VALID', errors };
+}
+
 function strictStringArray(value: unknown, label: string, options: { min?: number; max?: number } = {}): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.trim().length > 0)) {
     throw new HttpError(400, `${label} must be an array of non-empty strings`);
@@ -408,8 +481,8 @@ function parseReportTemplateDraft(body: Record<string, unknown>, requireCode: bo
   }
   if (secondaryTypes.includes(primaryType)) throw new HttpError(400, 'primaryType cannot also be a secondaryType');
 
-  const tocStructure = strictStringArray(body.tocStructure, 'tocStructure', { min: 1, max: 50 });
-  const requiredSections = strictStringArray(body.requiredSections, 'requiredSections', { min: 1, max: 50 });
+  const tocStructure = strictStringArray(body.tocStructure, 'tocStructure', { min: 1, max: 100 });
+  const requiredSections = strictStringArray(body.requiredSections, 'requiredSections', { min: 1, max: 100 });
   if (requiredSections.some((title) => !tocStructure.includes(title))) {
     throw new HttpError(400, 'Every required section must exist in tocStructure');
   }
@@ -1204,7 +1277,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                   sectionNumber: section.sectionNumber,
                   title: section.title,
                   content: '',
-                  status: 'draft',
+                  status: 'DRAFT',
                   isRequired: section.isRequired,
                   blockSchemaSnapshotJson: section.blockSchemaSnapshotJson,
                   version: 1
@@ -1247,27 +1320,41 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
-      // --- P09 Report Studio Endpoints ---
-      const isStudioRoute = pathname.startsWith('/api/reports/');
-      if (isStudioRoute) {
-        const studioSubMatch = pathname.match(/^\/api\/reports\/([^/]+)(?:\/(studio|merge|sections\/([^/]+)\/(revisions|comments|approve|unlock|body)))?$/);
-        const resolveMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/comments\/([^/]+)\/resolve$/);
-
-        const reportId = studioSubMatch?.[1] || resolveMatch?.[1];
-        if (!reportId) throw new HttpError(404, 'Endpoint not found');
-
-        const report = await db.report.findUnique({
-          where: { id: reportId },
+      // --- P09 Report Studio (P08 ReportInstance only) ---
+      const p09Route = pathname.match(/^\/api\/reports\/([^/]+)(?:\/(studio|merge)|\/sections\/([^/]+)\/(revisions|comments|approve|unlock|body)(?:\/([^/]+)\/(resolve))?)$/);
+      if (p09Route) {
+        const [, p09ReportId, reportAction, p09SectionId, sectionAction, childId, childAction] = p09Route;
+        const p09Report = await db.report.findUnique({
+          where: { id: p09ReportId },
           include: {
+            reportInstance: true,
             case: {
-              include: {
-                parties: true,
-                schedules: true,
-                documents: { where: { deletedAt: null }, include: { versions: { orderBy: { versionNumber: 'desc' } } } },
-                meetings: { include: { actionItems: true } }
+              select: {
+                id: true,
+                organizationId: true,
+                title: true,
+                caseNumber: true,
+                claimType: true,
+                deletedAt: true,
+                documents: {
+                  where: { deletedAt: null },
+                  orderBy: { createdAt: 'asc' },
+                  select: {
+                    id: true,
+                    title: true,
+                    category: true,
+                    versions: {
+                      orderBy: { versionNumber: 'desc' },
+                      select: { id: true, versionNumber: true, displayName: true, sha256: true, fileSize: true, isFinal: true }
+                    }
+                  }
+                },
+                meetings: {
+                  orderBy: { meetingDate: 'desc' },
+                  select: { id: true, title: true, meetingDate: true, rawTextSha256: true, status: true, version: true }
+                }
               }
             },
-            reportInstance: true,
             sections: {
               where: { deletedAt: null },
               orderBy: { sectionNumber: 'asc' },
@@ -1277,6 +1364,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                   include: {
                     author: { select: { id: true, name: true, email: true } },
                     evidenceLinks: {
+                      orderBy: [{ targetParagraphIndex: 'asc' }, { sourceType: 'asc' }, { sourceId: 'asc' }],
                       include: {
                         documentVersion: { select: { id: true, displayName: true, sha256: true, versionNumber: true } },
                         meeting: { select: { id: true, title: true, status: true, version: true } }
@@ -1292,7 +1380,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                   }
                 },
                 approvals: {
-                  orderBy: { createdAt: 'desc' },
+                  orderBy: { eventNumber: 'desc' },
                   include: {
                     approver: { select: { id: true, name: true, email: true } },
                     approvedRevision: { select: { id: true, revisionNumber: true, sha256: true } }
@@ -1300,425 +1388,441 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                 }
               }
             },
-            mergeSnapshots: { orderBy: { snapshotVersion: 'desc' }, include: { createdBy: { select: { id: true, name: true } } } }
+            mergeSnapshots: {
+              orderBy: { snapshotVersion: 'desc' },
+              include: { createdBy: { select: { id: true, name: true } } }
+            }
           }
         });
-        if (!report || report.deletedAt || report.case.deletedAt) throw new HttpError(404, 'Report not found');
-        if (report.case.organizationId !== context.user.organizationId) throw new HttpError(403, 'Report access forbidden');
-        if (!(await canAccessCase(db, context, report.caseId))) throw new HttpError(403, 'Case assignment required');
+        if (!p09Report || p09Report.deletedAt || p09Report.case.deletedAt) throw new HttpError(404, 'Report not found');
+        if (p09Report.case.organizationId !== context.user.organizationId) throw new HttpError(403, 'Report access forbidden');
+        if (!(await canAccessCase(db, context, p09Report.caseId))) throw new HttpError(403, 'Case assignment required');
 
-        const routeKind = studioSubMatch?.[2];
-        const sectionId = studioSubMatch?.[3] || resolveMatch?.[2];
-        const sectionAction = studioSubMatch?.[4];
-        const commentId = resolveMatch?.[3];
-
-        // GET /api/reports/:id/studio
-        if (routeKind === 'studio' && req.method === 'GET') {
-          sendJson(res, 200, { report });
-          return;
-        }
-
-        // PATCH /api/reports/:id/sections/:sectionId/body (P04 Legacy body patch compatibility)
-        if (sectionId && sectionAction === 'body' && req.method === 'PATCH') {
-          requireAnyRole(context, new Set(['admin', 'pm', 'staff']), 'Section editing forbidden for Reviewer or Client');
-          const section = report.sections.find((s) => s.id === sectionId);
-          if (!section) throw new HttpError(404, 'Report section not found');
-          const body = await readJson(req);
-          const updated = await db.reportSection.update({
-            where: { id: sectionId },
-            data: { content: typeof body.content === 'string' ? body.content : section.content, status: 'approved' }
-          });
-          sendJson(res, 200, { section: updated });
-          return;
-        }
-
-        // POST /api/reports/:id/sections/:sectionId/revisions (Save section revision)
-        if (sectionId && sectionAction === 'revisions' && req.method === 'POST') {
-          requireAnyRole(context, new Set(['admin', 'pm', 'staff']), 'Section editing forbidden for Reviewer or Client');
-          const section = report.sections.find((s) => s.id === sectionId);
-          if (!section) throw new HttpError(404, 'Report section not found');
-
-          if (section.status === 'APPROVED') {
-            throw new HttpError(409, 'APPROVED section is locked from direct edits. Request unlock first.');
-          }
-
-          const body = await readJson(req);
-          const title = typeof body.title === 'string' ? body.title.trim() : section.title;
-          const content = typeof body.content === 'string' ? body.content : '';
-          const structuredDataJson = typeof body.structuredDataJson === 'string' ? body.structuredDataJson : '{}';
-          const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : -1;
-          const evidenceInputs = Array.isArray(body.evidenceLinks) ? body.evidenceLinks : [];
-
-          const currentRevCount = section.revisions.length;
-          const latestRevision = section.revisions[0];
-
-          if (expectedVersion > 0 && currentRevCount !== expectedVersion) {
-            sendJson(res, 409, {
-              error: 'Concurrency conflict: section has been modified by another user',
-              currentVersion: currentRevCount,
-              latestRevision: latestRevision ?? null
-            });
+        if (!p09Report.reportInstanceId) {
+          const p09Only = reportAction === 'studio' || sectionAction === 'revisions' || sectionAction === 'comments'
+            || sectionAction === 'unlock' || childAction === 'resolve';
+          if (p09Only) throw new HttpError(409, 'P09 studio requires a P08 ReportInstance snapshot');
+          // P04 compatibility body/approve/merge routes intentionally fall through below.
+        } else {
+          if (reportAction === 'studio' && req.method === 'GET') {
+            sendJson(res, 200, { report: p09Report });
             return;
           }
 
-          const sha256 = crypto.createHash('sha256').update(`${title}\n${content}\n${structuredDataJson}`).digest('hex');
-          const inputSha256 = crypto.createHash('sha256').update(JSON.stringify({ title, content, structuredDataJson, evidenceInputs })).digest('hex');
-          const nextRevNum = currentRevCount + 1;
-          const newRevisionId = `SECREV-${crypto.randomUUID()}`;
-
-          // Validate evidence links
-          const validatedLinks: Array<{
-            id: string;
-            sourceType: string;
-            sourceId: string;
-            sourceDocumentVersionId: string | null;
-            sourceMeetingId: string | null;
-            sourceSha256: string;
-            sourceVersion: number;
-            quoteText: string | null;
-            anchorPosition: string | null;
-          }> = [];
-
-          for (const ev of evidenceInputs) {
-            if (!ev || typeof ev !== 'object') continue;
-            const sourceType = ev.sourceType === 'MEETING' ? 'MEETING' : 'DOCUMENT';
-            const sourceId = typeof ev.sourceId === 'string' ? ev.sourceId.trim() : '';
-            const quoteText = typeof ev.quoteText === 'string' ? ev.quoteText.trim() : null;
-            const anchorPosition = typeof ev.anchorPosition === 'string' ? ev.anchorPosition.trim() : null;
-
-            if (sourceType === 'DOCUMENT') {
-              const docVer = await db.documentVersion.findUnique({
-                where: { id: sourceId },
-                include: { document: true }
-              });
-              if (!docVer || docVer.document.deletedAt || docVer.document.caseId !== report.caseId) {
-                throw new HttpError(403, `Document version ${sourceId} does not belong to this case`);
-              }
-              const diskPath = path.join(uploadDir, docVer.storageKey);
-              if (fs.existsSync(diskPath)) {
-                const diskSha = crypto.createHash('sha256').update(fs.readFileSync(diskPath)).digest('hex');
-                if (diskSha !== docVer.sha256) {
-                  throw new HttpError(409, `Document version ${sourceId} file integrity verification failed`);
-                }
-              }
-              validatedLinks.push({
-                id: `EVID-${crypto.randomUUID()}`,
-                sourceType: 'DOCUMENT',
-                sourceId: docVer.id,
-                sourceDocumentVersionId: docVer.id,
-                sourceMeetingId: null,
-                sourceSha256: docVer.sha256,
-                sourceVersion: docVer.versionNumber,
-                quoteText,
-                anchorPosition
-              });
-            } else {
-              const meeting = await db.meeting.findUnique({ where: { id: sourceId } });
-              if (!meeting || meeting.caseId !== report.caseId) {
-                throw new HttpError(403, `Meeting ${sourceId} does not belong to this case`);
-              }
-              validatedLinks.push({
-                id: `EVID-${crypto.randomUUID()}`,
-                sourceType: 'MEETING',
-                sourceId: meeting.id,
-                sourceDocumentVersionId: null,
-                sourceMeetingId: meeting.id,
-                sourceSha256: meeting.rawTextSha256 || 'N/A',
-                sourceVersion: meeting.version,
-                quoteText,
-                anchorPosition
-              });
-            }
+          if (p09SectionId && sectionAction === 'body' && req.method === 'PATCH') {
+            throw new HttpError(410, 'Direct report body mutation is disabled. Create an immutable revision instead.');
           }
 
-          const createdRevision = await db.$transaction(async (tx) => {
-            await tx.reportSectionRevision.create({
-              data: {
-                id: newRevisionId,
-                sectionId,
-                revisionNumber: nextRevNum,
-                title,
-                content,
-                structuredDataJson,
-                validationStatus: 'VALID',
-                validationErrorsJson: '[]',
-                inputSha256,
-                sha256,
-                authorId: context.user.id
-              }
-            });
+          if (p09SectionId && sectionAction === 'revisions' && req.method === 'POST') {
+            requireAnyRole(context, new Set(['admin', 'pm', 'staff']), 'Section editing forbidden');
+            const section = p09Report.sections.find((entry) => entry.id === p09SectionId);
+            if (!section) throw new HttpError(404, 'Report section not found');
+            if (section.status === 'APPROVED') throw new HttpError(409, 'APPROVED section is locked. An approver must unlock it first.');
 
-            for (const link of validatedLinks) {
-              await tx.reportEvidenceLink.create({
+            const body = await readJson(req);
+            assertOnlyKeys(body, new Set(['title', 'content', 'structuredDataJson', 'expectedVersion', 'evidenceLinks', 'saveMode']), 'revision');
+            const expectedVersion = requiredPositiveInteger(body.expectedVersion, 'expectedVersion');
+            const title = body.title === undefined ? section.title : normalizedBoundedText(body.title, 'title', 300) as string;
+            if (title !== section.title) throw new HttpError(409, 'P08 template section title is immutable');
+            const content = normalizedBoundedText(body.content, 'content', 100_000) as string;
+            const rawStructured = body.structuredDataJson === undefined ? '{}' : body.structuredDataJson;
+            if (typeof rawStructured !== 'string' || rawStructured.length > 50_000) throw new HttpError(400, 'structuredDataJson must be a JSON string of 50000 characters or fewer');
+            let structuredValue: unknown;
+            try { structuredValue = JSON.parse(rawStructured); } catch { throw new HttpError(400, 'structuredDataJson is invalid JSON'); }
+            if (!structuredValue || typeof structuredValue !== 'object' || Array.isArray(structuredValue)) throw new HttpError(400, 'structuredDataJson must encode an object');
+            const structuredDataJson = canonicalJson(structuredValue);
+            const paragraphPreview = content.split(/\r?\n\s*\r?\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+            const evidenceInputs = parseP09EvidenceInputs(body.evidenceLinks, paragraphPreview.length);
+            const validation = validateP09Paragraphs(content, evidenceInputs);
+
+            const validatedLinks: Array<P09EvidenceInput & {
+              id: string;
+              sourceDocumentVersionId: string | null;
+              sourceMeetingId: string | null;
+              sourceSha256: string;
+              sourceVersion: number;
+            }> = [];
+            for (const evidence of evidenceInputs) {
+              if (evidence.sourceType === 'DOCUMENT') {
+                const version = await db.documentVersion.findUnique({ where: { id: evidence.sourceId }, include: { document: true } });
+                if (!version || version.document.deletedAt || version.document.caseId !== p09Report.caseId) {
+                  throw new HttpError(403, 'Document evidence does not belong to this case');
+                }
+                const storedPath = safeStoragePath(uploadDir, version.storageKey);
+                if (!fs.existsSync(storedPath) || !fs.statSync(storedPath).isFile()) throw new HttpError(409, 'Document evidence storage object is missing');
+                const stored = fs.readFileSync(storedPath);
+                const storedSha256 = crypto.createHash('sha256').update(stored).digest('hex');
+                if (stored.length !== version.fileSize || storedSha256 !== version.sha256) throw new HttpError(409, 'Document evidence integrity verification failed');
+                validatedLinks.push({
+                  ...evidence,
+                  id: `EVID-${crypto.randomUUID()}`,
+                  sourceDocumentVersionId: version.id,
+                  sourceMeetingId: null,
+                  sourceSha256: version.sha256,
+                  sourceVersion: version.versionNumber
+                });
+              } else {
+                const meeting = await db.meeting.findUnique({ where: { id: evidence.sourceId } });
+                if (!meeting || meeting.caseId !== p09Report.caseId) throw new HttpError(403, 'Meeting evidence does not belong to this case');
+                if (meeting.status !== 'FINAL' || !meeting.rawText || !meeting.rawTextSha256) throw new HttpError(409, 'Meeting evidence must be a finalized transcript');
+                const actualSha256 = crypto.createHash('sha256').update(meeting.rawText).digest('hex');
+                if (actualSha256 !== meeting.rawTextSha256) throw new HttpError(409, 'Meeting evidence integrity verification failed');
+                validatedLinks.push({
+                  ...evidence,
+                  id: `EVID-${crypto.randomUUID()}`,
+                  sourceDocumentVersionId: null,
+                  sourceMeetingId: meeting.id,
+                  sourceSha256: meeting.rawTextSha256,
+                  sourceVersion: meeting.version
+                });
+              }
+            }
+
+            const evidenceMaterial = validatedLinks.map((entry) => ({
+              sourceType: entry.sourceType,
+              sourceId: entry.sourceId,
+              sourceSha256: entry.sourceSha256,
+              sourceVersion: entry.sourceVersion,
+              targetParagraphIndex: entry.targetParagraphIndex,
+              quoteText: entry.quoteText,
+              anchorPosition: entry.anchorPosition
+            })).sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+            const revisionMaterial = { title, content, structuredData: structuredValue, evidence: evidenceMaterial };
+            const revisionSha256 = crypto.createHash('sha256').update(canonicalJson(revisionMaterial)).digest('hex');
+            const inputSha256 = crypto.createHash('sha256').update(canonicalJson({ ...revisionMaterial, expectedVersion })).digest('hex');
+            const revisionId = `SECREV-${crypto.randomUUID()}`;
+
+            const created = await db.$transaction(async (tx) => {
+              const lock = await tx.reportSection.updateMany({
+                where: { id: p09SectionId, reportId: p09ReportId, deletedAt: null, version: expectedVersion, status: { not: 'APPROVED' } },
+                data: { version: { increment: 1 }, status: 'DRAFT', updatedAt: new Date() }
+              });
+              if (lock.count !== 1) {
+                const current = await tx.reportSection.findUnique({
+                  where: { id: p09SectionId },
+                  include: { revisions: { orderBy: { revisionNumber: 'desc' }, take: 1 } }
+                });
+                throw new HttpError(409, 'Concurrency conflict: section has changed', {
+                  currentVersion: current?.version ?? null,
+                  latestRevision: current?.revisions[0] ?? null
+                });
+              }
+              const latest = await tx.reportSectionRevision.findFirst({ where: { sectionId: p09SectionId }, orderBy: { revisionNumber: 'desc' } });
+              const revisionNumber = (latest?.revisionNumber ?? 0) + 1;
+              await tx.reportSectionRevision.create({
                 data: {
-                  id: link.id,
-                  revisionId: newRevisionId,
-                  sourceType: link.sourceType,
-                  sourceId: link.sourceId,
-                  sourceDocumentVersionId: link.sourceDocumentVersionId,
-                  sourceMeetingId: link.sourceMeetingId,
-                  sourceSha256: link.sourceSha256,
-                  sourceVersion: link.sourceVersion,
-                  quoteText: link.quoteText,
-                  anchorPosition: link.anchorPosition
+                  id: revisionId,
+                  sectionId: p09SectionId,
+                  revisionNumber,
+                  title,
+                  content,
+                  structuredDataJson,
+                  validationStatus: validation.status,
+                  validationErrorsJson: JSON.stringify(validation.errors),
+                  inputSha256,
+                  sha256: revisionSha256,
+                  authorId: context.user.id
                 }
               });
-            }
-
-            await tx.reportSection.update({
-              where: { id: sectionId },
-              data: {
-                title,
-                content,
-                version: { increment: 1 },
-                status: 'DRAFT',
-                updatedAt: new Date()
+              for (const evidence of validatedLinks) {
+                await tx.reportEvidenceLink.create({
+                  data: {
+                    id: evidence.id,
+                    revisionId,
+                    sourceType: evidence.sourceType,
+                    sourceId: evidence.sourceId,
+                    sourceDocumentVersionId: evidence.sourceDocumentVersionId,
+                    sourceMeetingId: evidence.sourceMeetingId,
+                    sourceSha256: evidence.sourceSha256,
+                    sourceVersion: evidence.sourceVersion,
+                    targetParagraphIndex: evidence.targetParagraphIndex,
+                    quoteText: evidence.quoteText,
+                    anchorPosition: evidence.anchorPosition
+                  }
+                });
               }
-            });
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'REPORT_SECTION_REVISION_CREATED', 'ReportSectionRevision', newRevisionId, {
-                reportId,
-                sectionId,
-                revisionNumber: nextRevNum,
-                sha256,
-                evidenceCount: validatedLinks.length
-              })
-            });
-
-            return tx.reportSectionRevision.findUniqueOrThrow({
-              where: { id: newRevisionId },
-              include: {
-                author: { select: { id: true, name: true, email: true } },
-                evidenceLinks: true
-              }
-            });
-          });
-
-          sendJson(res, 201, { revision: createdRevision, sectionVersion: currentRevCount + 1 });
-          return;
-        }
-
-        // POST /api/reports/:id/sections/:sectionId/comments (Add comment or revision request)
-        if (sectionId && sectionAction === 'comments' && !commentId && req.method === 'POST') {
-          const section = report.sections.find((s) => s.id === sectionId);
-          if (!section) throw new HttpError(404, 'Report section not found');
-
-          const body = await readJson(req);
-          const commentType = body.commentType === 'REVISION_REQUEST' ? 'REVISION_REQUEST' : 'COMMENT';
-          const content = typeof body.content === 'string' ? body.content.trim() : '';
-          const revisionId = typeof body.revisionId === 'string' ? body.revisionId : null;
-
-          if (!content) throw new HttpError(400, 'Comment content is required');
-
-          const comment = await db.$transaction(async (tx) => {
-            const created = await tx.reportSectionComment.create({
-              data: {
-                id: `CMT-${crypto.randomUUID()}`,
-                sectionId,
-                revisionId,
-                authorId: context.user.id,
-                commentType,
-                content
-              }
-            });
-
-            if (commentType === 'REVISION_REQUEST') {
-              await tx.reportSection.update({
-                where: { id: sectionId },
-                data: { status: 'REJECTED' }
-              });
-            }
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'REPORT_SECTION_COMMENT_CREATED', 'ReportSectionComment', created.id, {
-                reportId, sectionId, commentType
-              })
-            });
-
-            return tx.reportSectionComment.findUniqueOrThrow({
-              where: { id: created.id },
-              include: { author: { select: { id: true, name: true, email: true } } }
-            });
-          });
-
-          sendJson(res, 201, { comment });
-          return;
-        }
-
-        // PATCH /api/reports/:id/sections/:sectionId/comments/:commentId/resolve
-        if (sectionId && commentId && req.method === 'PATCH') {
-          const commentRow = await db.reportSectionComment.findUnique({ where: { id: commentId } });
-          if (!commentRow || commentRow.sectionId !== sectionId) throw new HttpError(404, 'Comment not found');
-
-          const resolved = await db.$transaction(async (tx) => {
-            const updated = await tx.reportSectionComment.update({
-              where: { id: commentId },
-              data: { isResolved: true, resolvedById: context.user.id, resolvedAt: new Date() }
-            });
-            await tx.auditLog.create({
-              data: requestAudit(context, 'REPORT_SECTION_COMMENT_RESOLVED', 'ReportSectionComment', commentId, { reportId, sectionId })
-            });
-            return updated;
-          });
-
-          sendJson(res, 200, { comment: resolved });
-          return;
-        }
-
-        // POST /api/reports/:id/sections/:sectionId/approve (Approve section)
-        if (sectionId && sectionAction === 'approve' && req.method === 'POST') {
-          requireAnyRole(context, new Set(['admin', 'director', 'reviewer']), 'Section approval requires Approver or Director role');
-          const section = report.sections.find((s) => s.id === sectionId);
-          if (!section) throw new HttpError(404, 'Report section not found');
-
-          const body = await readJson(req);
-          const revisionId = typeof body.revisionId === 'string' && body.revisionId.trim() ? body.revisionId : (section.revisions[0]?.id ?? null);
-          const commentText = typeof body.comment === 'string' ? body.comment.trim() : null;
-
-          if (revisionId) {
-            const targetRevision = section.revisions.find((r) => r.id === revisionId);
-            if (targetRevision && targetRevision.authorId === context.user.id) {
-              throw new HttpError(403, 'Self-approval is strictly forbidden. Section author cannot approve their own revision.');
-            }
-          }
-
-          const approval = await db.$transaction(async (tx) => {
-            let created = null;
-            if (revisionId) {
-              created = await tx.reportSectionApproval.create({
-                data: {
-                  id: `APPR-${crypto.randomUUID()}`,
-                  sectionId,
-                  approvedRevisionId: revisionId,
-                  approverId: context.user.id,
-                  status: 'APPROVED',
-                  comment: commentText
-                }
-              });
-            }
-
-            const newStatus = sectionId === 'SEC-SYN-001' ? 'approved' : 'APPROVED';
-            await tx.reportSection.update({
-              where: { id: sectionId },
-              data: { status: newStatus, updatedAt: new Date() }
-            });
-
-            if (created) {
               await tx.auditLog.create({
-                data: requestAudit(context, 'REPORT_SECTION_APPROVED', 'ReportSectionApproval', created.id, {
-                  reportId, sectionId, revisionId
+                data: requestAudit(context, 'REPORT_SECTION_REVISION_CREATED', 'ReportSectionRevision', revisionId, {
+                  reportId: p09ReportId,
+                  sectionId: p09SectionId,
+                  revisionNumber,
+                  revisionSha256,
+                  validationStatus: validation.status,
+                  evidenceCount: validatedLinks.length,
+                  saveMode: body.saveMode === 'AUTO' ? 'AUTO' : 'MANUAL'
                 })
               });
-            }
-
-            return created;
-          });
-
-          sendJson(res, 200, { approval, sectionStatus: 'APPROVED' });
-          return;
-        }
-
-        // POST /api/reports/:id/sections/:sectionId/unlock (Unlock approved section for revision)
-        if (sectionId && sectionAction === 'unlock' && req.method === 'POST') {
-          requireAnyRole(context, new Set(['admin', 'director', 'pm']), 'Section unlock forbidden');
-          const section = report.sections.find((s) => s.id === sectionId);
-          if (!section) throw new HttpError(404, 'Report section not found');
-
-          const body = await readJson(req);
-          const commentText = typeof body.comment === 'string' ? body.comment.trim() : null;
-
-          const unlockResult = await db.$transaction(async (tx) => {
-            await tx.reportSectionApproval.create({
-              data: {
-                id: `UNLK-${crypto.randomUUID()}`,
-                sectionId,
-                approvedRevisionId: section.revisions[0]?.id || `SECREV-DUMMY`,
-                approverId: context.user.id,
-                status: 'UNLOCKED',
-                comment: commentText
-              }
+              return tx.reportSectionRevision.findUniqueOrThrow({
+                where: { id: revisionId },
+                include: { author: { select: { id: true, name: true, email: true } }, evidenceLinks: true }
+              });
             });
-
-            await tx.reportSection.update({
-              where: { id: sectionId },
-              data: { status: 'DRAFT', updatedAt: new Date() }
-            });
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'REPORT_SECTION_UNLOCKED', 'ReportSection', sectionId, {
-                reportId, reason: commentText
-              })
-            });
-
-            return { sectionId, status: 'DRAFT' };
-          });
-
-          sendJson(res, 200, { unlock: unlockResult });
-          return;
-        }
-
-        // POST /api/reports/:id/merge (Merge approved sections into snapshot)
-        if (routeKind === 'merge' && req.method === 'POST') {
-          requireAnyRole(context, new Set(['admin', 'pm', 'director']), 'Report merge forbidden');
-
-          const unapproved = report.sections.filter((s) => s.status !== 'APPROVED');
-          if (unapproved.length > 0) {
-            throw new HttpError(400, `Cannot merge report: ${unapproved.length} section(s) are not APPROVED (${unapproved.map((s) => s.title).join(', ')})`);
+            sendJson(res, 201, { revision: created, sectionVersion: expectedVersion + 1 });
+            return;
           }
 
-          const approvedSectionsData = report.sections.map((sec) => {
-            const latestApproval = sec.approvals.find((a) => a.status === 'APPROVED');
-            const approvedRev = sec.revisions.find((r) => r.id === latestApproval?.approvedRevisionId) || sec.revisions[0];
-            return {
-              sectionId: sec.id,
-              sectionNumber: sec.sectionNumber,
-              title: sec.title,
-              content: approvedRev ? approvedRev.content : sec.content,
-              revisionNumber: approvedRev ? approvedRev.revisionNumber : 1,
-              sha256: approvedRev ? approvedRev.sha256 : 'N/A',
-              evidenceLinks: approvedRev ? approvedRev.evidenceLinks : []
-            };
-          });
+          if (p09SectionId && sectionAction === 'comments' && !childId && req.method === 'POST') {
+            const section = p09Report.sections.find((entry) => entry.id === p09SectionId);
+            if (!section) throw new HttpError(404, 'Report section not found');
+            const body = await readJson(req);
+            assertOnlyKeys(body, new Set(['commentType', 'content', 'revisionId', 'expectedVersion']), 'comment');
+            if (body.commentType !== 'COMMENT' && body.commentType !== 'REVISION_REQUEST') throw new HttpError(400, 'commentType is invalid');
+            const commentType = body.commentType;
+            const content = normalizedBoundedText(body.content, 'content', 4000) as string;
+            const revisionId = body.revisionId === undefined || body.revisionId === null
+              ? null
+              : normalizedBoundedText(body.revisionId, 'revisionId', 200) as string;
+            if (revisionId && !section.revisions.some((revision) => revision.id === revisionId)) throw new HttpError(400, 'Comment revision does not belong to the section');
+            if (commentType === 'REVISION_REQUEST' && section.status === 'APPROVED') throw new HttpError(409, 'Unlock an approved section before requesting a revision');
+            const expectedVersion = commentType === 'REVISION_REQUEST' ? requiredPositiveInteger(body.expectedVersion, 'expectedVersion') : null;
 
-          const mergedBodyText = approvedSectionsData
-            .map((s) => `## ${s.sectionNumber}. ${s.title}\n\n${s.content}`)
-            .join('\n\n---\n\n');
-
-          const currentMergeCount = report.mergeSnapshots.length;
-          const nextMergeVersion = currentMergeCount + 1;
-
-          const snapshot = await db.$transaction(async (tx) => {
-            const created = await tx.reportMergeSnapshot.create({
-              data: {
-                id: `MRGSNAP-${crypto.randomUUID()}`,
-                reportId,
-                snapshotVersion: nextMergeVersion,
-                mergedBodyText,
-                sectionsSnapshotJson: JSON.stringify(approvedSectionsData),
-                evidenceSnapshotJson: JSON.stringify(approvedSectionsData.flatMap((s) => s.evidenceLinks)),
-                createdById: context.user.id
+            const comment = await db.$transaction(async (tx) => {
+              if (commentType === 'REVISION_REQUEST') {
+                const updated = await tx.reportSection.updateMany({
+                  where: { id: p09SectionId, reportId: p09ReportId, version: expectedVersion as number, status: { not: 'APPROVED' } },
+                  data: { status: 'REJECTED', version: { increment: 1 } }
+                });
+                if (updated.count !== 1) throw new HttpError(409, 'Concurrency conflict while requesting revision');
               }
+              const created = await tx.reportSectionComment.create({
+                data: { id: `CMT-${crypto.randomUUID()}`, sectionId: p09SectionId, revisionId, authorId: context.user.id, commentType, content }
+              });
+              await tx.auditLog.create({
+                data: requestAudit(context, 'REPORT_SECTION_COMMENT_CREATED', 'ReportSectionComment', created.id, {
+                  reportId: p09ReportId, sectionId: p09SectionId, commentType, revisionId
+                })
+              });
+              return tx.reportSectionComment.findUniqueOrThrow({
+                where: { id: created.id }, include: { author: { select: { id: true, name: true, email: true } } }
+              });
             });
+            sendJson(res, 201, { comment, sectionVersion: expectedVersion === null ? section.version : expectedVersion + 1 });
+            return;
+          }
 
-            await tx.report.update({
-              where: { id: reportId },
-              data: { version: { increment: 1 }, updatedAt: new Date() }
+          if (p09SectionId && sectionAction === 'comments' && childId && childAction === 'resolve' && req.method === 'PATCH') {
+            requireAnyRole(context, new Set(['admin', 'director', 'reviewer', 'pm', 'staff']), 'Comment resolution forbidden');
+            const body = await readJson(req);
+            assertOnlyKeys(body, new Set(), 'comment resolution');
+            const resolved = await db.$transaction(async (tx) => {
+              const updated = await tx.reportSectionComment.updateMany({
+                where: { id: childId, sectionId: p09SectionId, isResolved: false },
+                data: { isResolved: true, resolvedById: context.user.id, resolvedAt: new Date() }
+              });
+              if (updated.count !== 1) throw new HttpError(409, 'Comment is missing or already resolved');
+              await tx.auditLog.create({
+                data: requestAudit(context, 'REPORT_SECTION_COMMENT_RESOLVED', 'ReportSectionComment', childId, {
+                  reportId: p09ReportId, sectionId: p09SectionId
+                })
+              });
+              return tx.reportSectionComment.findUniqueOrThrow({ where: { id: childId } });
             });
+            sendJson(res, 200, { comment: resolved });
+            return;
+          }
 
-            await tx.auditLog.create({
-              data: requestAudit(context, 'REPORT_MERGE_SNAPSHOT_CREATED', 'ReportMergeSnapshot', created.id, {
-                reportId, snapshotVersion: nextMergeVersion, sectionCount: approvedSectionsData.length
-              })
+          if (p09SectionId && sectionAction === 'approve' && req.method === 'POST') {
+            requireAnyRole(context, new Set(['admin', 'director', 'reviewer']), 'Section approval requires Reviewer, Director, or Admin role');
+            const section = p09Report.sections.find((entry) => entry.id === p09SectionId);
+            if (!section) throw new HttpError(404, 'Report section not found');
+            if (section.status === 'APPROVED') throw new HttpError(409, 'Section is already approved');
+            const body = await readJson(req);
+            assertOnlyKeys(body, new Set(['revisionId', 'comment', 'expectedVersion']), 'approval');
+            const expectedVersion = requiredPositiveInteger(body.expectedVersion, 'expectedVersion');
+            const revisionId = normalizedBoundedText(body.revisionId, 'revisionId', 200) as string;
+            const comment = normalizedBoundedText(body.comment, 'comment', 4000, false);
+            const target = section.revisions.find((revision) => revision.id === revisionId);
+            if (!target) throw new HttpError(400, 'Approval revision does not belong to the section');
+            if (target.id !== section.revisions[0]?.id) throw new HttpError(409, 'Only the latest revision can be approved');
+            if (target.authorId === context.user.id) throw new HttpError(403, 'Self-approval is strictly forbidden');
+            if (target.validationStatus !== 'VALID') throw new HttpError(409, 'Only a VALID revision can be approved');
+            if (section.comments.some((entry) => entry.commentType === 'REVISION_REQUEST' && !entry.isResolved)) {
+              throw new HttpError(409, 'Resolve all revision requests before approval');
+            }
+
+            const approval = await db.$transaction(async (tx) => {
+              const latestEvent = await tx.reportSectionApproval.findFirst({ where: { sectionId: p09SectionId }, orderBy: { eventNumber: 'desc' } });
+              const eventNumber = (latestEvent?.eventNumber ?? 0) + 1;
+              const created = await tx.reportSectionApproval.create({
+                data: {
+                  id: `APPR-${crypto.randomUUID()}`,
+                  sectionId: p09SectionId,
+                  approvedRevisionId: revisionId,
+                  approverId: context.user.id,
+                  eventNumber,
+                  status: 'APPROVED',
+                  comment
+                }
+              });
+              const locked = await tx.reportSection.updateMany({
+                where: { id: p09SectionId, reportId: p09ReportId, version: expectedVersion, status: { not: 'APPROVED' } },
+                data: { status: 'APPROVED', version: { increment: 1 }, updatedAt: new Date() }
+              });
+              if (locked.count !== 1) throw new HttpError(409, 'Concurrency conflict while approving section');
+              await tx.auditLog.create({
+                data: requestAudit(context, 'REPORT_SECTION_APPROVED', 'ReportSectionApproval', created.id, {
+                  reportId: p09ReportId, sectionId: p09SectionId, revisionId, eventNumber
+                })
+              });
+              return tx.reportSectionApproval.findUniqueOrThrow({
+                where: { id: created.id },
+                include: {
+                  approver: { select: { id: true, name: true, email: true } },
+                  approvedRevision: { select: { id: true, revisionNumber: true, sha256: true } }
+                }
+              });
             });
+            sendJson(res, 200, { approval, sectionStatus: 'APPROVED', sectionVersion: expectedVersion + 1 });
+            return;
+          }
 
-            return created;
-          });
+          if (p09SectionId && sectionAction === 'unlock' && req.method === 'POST') {
+            requireAnyRole(context, new Set(['admin', 'director', 'reviewer']), 'Section unlock requires Reviewer, Director, or Admin role');
+            const section = p09Report.sections.find((entry) => entry.id === p09SectionId);
+            if (!section) throw new HttpError(404, 'Report section not found');
+            if (section.status !== 'APPROVED') throw new HttpError(409, 'Only an APPROVED section can be unlocked');
+            const body = await readJson(req);
+            assertOnlyKeys(body, new Set(['comment', 'expectedVersion']), 'unlock');
+            const expectedVersion = requiredPositiveInteger(body.expectedVersion, 'expectedVersion');
+            const comment = normalizedBoundedText(body.comment, 'comment', 4000) as string;
+            const latestApproval = section.approvals[0];
+            if (!latestApproval || latestApproval.status !== 'APPROVED') throw new HttpError(409, 'Latest approval event is missing');
 
-          sendJson(res, 201, { snapshot });
-          return;
+            const unlock = await db.$transaction(async (tx) => {
+              const eventNumber = latestApproval.eventNumber + 1;
+              const created = await tx.reportSectionApproval.create({
+                data: {
+                  id: `UNLK-${crypto.randomUUID()}`,
+                  sectionId: p09SectionId,
+                  approvedRevisionId: latestApproval.approvedRevisionId,
+                  approverId: context.user.id,
+                  eventNumber,
+                  status: 'UNLOCKED',
+                  comment
+                }
+              });
+              const unlocked = await tx.reportSection.updateMany({
+                where: { id: p09SectionId, reportId: p09ReportId, version: expectedVersion, status: 'APPROVED' },
+                data: { status: 'DRAFT', version: { increment: 1 }, updatedAt: new Date() }
+              });
+              if (unlocked.count !== 1) throw new HttpError(409, 'Concurrency conflict while unlocking section');
+              await tx.auditLog.create({
+                data: requestAudit(context, 'REPORT_SECTION_UNLOCKED', 'ReportSectionApproval', created.id, {
+                  reportId: p09ReportId, sectionId: p09SectionId, eventNumber, reason: comment
+                })
+              });
+              return tx.reportSectionApproval.findUniqueOrThrow({
+                where: { id: created.id },
+                include: {
+                  approver: { select: { id: true, name: true, email: true } },
+                  approvedRevision: { select: { id: true, revisionNumber: true, sha256: true } }
+                }
+              });
+            });
+            sendJson(res, 200, { unlock, sectionStatus: 'DRAFT', sectionVersion: expectedVersion + 1 });
+            return;
+          }
+
+          if (reportAction === 'merge' && req.method === 'POST') {
+            requireAnyRole(context, new Set(['admin', 'pm', 'director']), 'Report merge forbidden');
+            const body = await readJson(req);
+            assertOnlyKeys(body, new Set(['expectedReportVersion']), 'merge');
+            const expectedReportVersion = requiredPositiveInteger(body.expectedReportVersion, 'expectedReportVersion');
+
+            const snapshot = await db.$transaction(async (tx) => {
+              const reportLock = await tx.report.updateMany({
+                where: { id: p09ReportId, reportInstanceId: { not: null }, deletedAt: null, version: expectedReportVersion },
+                data: { version: { increment: 1 }, updatedAt: new Date() }
+              });
+              if (reportLock.count !== 1) throw new HttpError(409, 'Concurrency conflict while merging report');
+              const sections = await tx.reportSection.findMany({
+                where: { reportId: p09ReportId, deletedAt: null },
+                orderBy: { sectionNumber: 'asc' },
+                include: {
+                  revisions: {
+                    orderBy: { revisionNumber: 'desc' },
+                    include: { evidenceLinks: { orderBy: [{ targetParagraphIndex: 'asc' }, { sourceType: 'asc' }, { sourceId: 'asc' }] } }
+                  },
+                  approvals: { orderBy: { eventNumber: 'desc' } },
+                  comments: { where: { commentType: 'REVISION_REQUEST', isResolved: false } }
+                }
+              });
+              if (sections.length === 0) throw new HttpError(409, 'Report has no sections');
+              const sectionSnapshots = sections.map((section) => {
+                const latestRevision = section.revisions[0];
+                const latestEvent = section.approvals[0];
+                if (section.status !== 'APPROVED' || !latestRevision || latestRevision.validationStatus !== 'VALID'
+                  || !latestEvent || latestEvent.status !== 'APPROVED' || latestEvent.approvedRevisionId !== latestRevision.id
+                  || section.comments.length > 0) {
+                  throw new HttpError(409, `Section ${section.sectionNumber} does not have a latest, valid, fully approved revision`);
+                }
+                const evidence = latestRevision.evidenceLinks.map((link) => ({
+                  sourceType: link.sourceType,
+                  sourceId: link.sourceId,
+                  sourceSha256: link.sourceSha256,
+                  sourceVersion: link.sourceVersion,
+                  targetParagraphIndex: link.targetParagraphIndex,
+                  quoteText: link.quoteText,
+                  anchorPosition: link.anchorPosition
+                }));
+                return {
+                  sectionId: section.id,
+                  sectionNumber: section.sectionNumber,
+                  title: section.title,
+                  revisionId: latestRevision.id,
+                  revisionNumber: latestRevision.revisionNumber,
+                  revisionSha256: latestRevision.sha256,
+                  content: latestRevision.content,
+                  evidence
+                };
+              });
+              const mergedBodyText = sectionSnapshots.map((section) => `## ${section.sectionNumber}. ${section.title}\n\n${section.content}`).join('\n\n---\n\n');
+              const evidenceSnapshot = sectionSnapshots.flatMap((section) => section.evidence.map((evidence) => ({ sectionId: section.sectionId, ...evidence })));
+              const latestSnapshot = await tx.reportMergeSnapshot.findFirst({ where: { reportId: p09ReportId }, orderBy: { snapshotVersion: 'desc' } });
+              const snapshotVersion = (latestSnapshot?.snapshotVersion ?? 0) + 1;
+              const snapshotMaterial = {
+                reportId: p09ReportId,
+                reportInstanceId: p09Report.reportInstanceId,
+                snapshotVersion,
+                sections: sectionSnapshots,
+                evidence: evidenceSnapshot,
+                mergedBodyText
+              };
+              const snapshotSha256 = crypto.createHash('sha256').update(canonicalJson(snapshotMaterial)).digest('hex');
+              const created = await tx.reportMergeSnapshot.create({
+                data: {
+                  id: `MRGSNAP-${crypto.randomUUID()}`,
+                  reportId: p09ReportId,
+                  snapshotVersion,
+                  mergedBodyText,
+                  sectionsSnapshotJson: canonicalJson(sectionSnapshots),
+                  evidenceSnapshotJson: canonicalJson(evidenceSnapshot),
+                  snapshotSha256,
+                  createdById: context.user.id
+                }
+              });
+              await tx.auditLog.create({
+                data: requestAudit(context, 'REPORT_MERGE_SNAPSHOT_CREATED', 'ReportMergeSnapshot', created.id, {
+                  reportId: p09ReportId,
+                  reportInstanceId: p09Report.reportInstanceId,
+                  snapshotVersion,
+                  snapshotSha256,
+                  sectionCount: sectionSnapshots.length
+                })
+              });
+              return tx.reportMergeSnapshot.findUniqueOrThrow({
+                where: { id: created.id },
+                include: { createdBy: { select: { id: true, name: true } } }
+              });
+            });
+            sendJson(res, 201, { snapshot, reportVersion: expectedReportVersion + 1 });
+            return;
+          }
+
+          throw new HttpError(405, 'Method not allowed for P09 studio route');
         }
       }
+
 
       // --- P05 Dashboard KPI Endpoint ---
       if (pathname === '/api/dashboard/kpi' && req.method === 'GET') {
@@ -3279,7 +3383,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       throw new HttpError(404, 'Endpoint not found');
     })().catch((error: unknown) => {
       if (error instanceof HttpError) {
-        sendJson(res, error.status, { error: error.message });
+        sendJson(res, error.status, { error: error.message, ...error.details });
         return;
       }
       console.error('API request failed', error);
