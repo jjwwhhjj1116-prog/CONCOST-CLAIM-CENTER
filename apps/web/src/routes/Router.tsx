@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Button, Card, ComponentCatalog, Dialog, Input, Select, StateView, StatusBadge } from '@claim-studio/ui';
 import { CaseManagement } from '../case-management/CaseManagement';
+import { ProposalView } from '../proposals/ProposalView';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -122,7 +123,25 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
 
   if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {
-    return <section className="route-view" aria-labelledby="route-title"><div className="route-heading"><h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2></div><CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} /></section>;
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <div className="route-heading">
+          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+        </div>
+        <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} />
+      </section>
+    );
+  }
+
+  if (['PROP-01', 'PROP-02'].includes(currentRoute.id)) {
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <div className="route-heading">
+          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+        </div>
+        <ProposalView routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
+      </section>
+    );
   }
 
   return (

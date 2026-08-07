@@ -9,6 +9,7 @@ import './p05-contract-test';
 import './p05-case-test';
 import './p06-contract-test';
 import './p06-materials-test';
+import './p07-proposal-test';
 
 const EXPECTED_EXACT_SHAS: Record<string, string> = {
   'TPL-REF-001': '793cf78dd4262af8ddfddc77b85e5052f379e76d9e30f437cb799b9c43cec40a',
@@ -112,6 +113,21 @@ test('P04 Manifest declares independent DB, E2E and security gates', () => {
 test('Phase Status Machine Integration', () => {
   const status = JSON.parse(fs.readFileSync(path.join(__dirname, '../docs/harness/phase-status.json'), 'utf8'));
   assert.strictEqual(status.project, 'claim-center-report-studio');
-  for (const phase of ['P00', 'P01', 'P02', 'P03', 'P04', 'P05']) assert.strictEqual(status.phases[phase].status, 'PASS');
-  assert.ok(['IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'].includes(status.phases.P06.status));
+  for (const phase of ['P00', 'P01', 'P02', 'P03', 'P04', 'P05', 'P06']) assert.strictEqual(status.phases[phase].status, 'PASS');
+  assert.ok(['IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'].includes(status.phases.P07.status));
+});
+
+test('P07 keeps real E2E/security gates and DB-enforced immutable proposal history', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.match(packageJson.scripts['test:e2e'], /p07-e2e\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p04-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p05-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p06-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p07-security-test\.ts/);
+  const migration = fs.readFileSync(path.join(__dirname, '../packages/database/prisma/migrations/20260807090000_p07_proposal_templates/migration.sql'), 'utf8');
+  for (const trigger of [
+    'P07_proposal_integrity_update', 'P07_proposal_version_update_guard', 'P07_proposal_version_delete_guard',
+    'P07_proposal_review_insert_guard', 'P07_proposal_review_update_guard', 'P07_output_document_delete_guard'
+  ]) assert.ok(migration.includes(trigger), `P07 DB guard missing: ${trigger}`);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
 });

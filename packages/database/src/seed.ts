@@ -294,20 +294,199 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         create: { id: 'SEC-SYN-001', reportId: 'REPO-SYN-001', title: 'Facts', content: 'Synthetic facts only.', status: 'draft', version: 1, createdAt: now, updatedAt: now }
       });
 
-      // 14. Initial Audit Log
+      // 14. P07 Proposal Templates & Proposals
+      const proposalPlaceholders = [
+        'CASE_NUMBER', 'CASE_TITLE', 'CLAIM_TYPE', 'ASSIGNED_USER', 'CLIENT_NAME', 'CREATED_DATE',
+        'BACKGROUND', 'OBJECTIVE', 'METHOD', 'EXPECTED_OUTCOME', 'EXCLUSIONS'
+      ];
+      const proposalTemplates = [
+        {
+          id: 'TPL-PROP-TYPE-01',
+          name: '현장조사 및 수량산출 클레임 제안서 템플릿',
+          claimType: 'TYPE-01',
+          description: 'TYPE-01 현장조사 및 수량산출 전문 클레임 기술제안서 표준 템플릿',
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})
+의뢰인: {{CLIENT_NAME}}
+1. 의뢰 배경
+{{BACKGROUND}}
+
+2. 수행 목적
+{{OBJECTIVE}}
+
+3. 수행 방법 및 수량산출 범위
+{{METHOD}}
+
+4. 예상 성과물 및 제출 기한
+{{EXPECTED_OUTCOME}}
+
+5. 제외 사항
+{{EXCLUSIONS}}
+
+담당자: {{ASSIGNED_USER}} / 작성일: {{CREATED_DATE}}`,
+          placeholdersJson: JSON.stringify(proposalPlaceholders),
+          version: 1
+        },
+        {
+          id: 'TPL-PROP-TYPE-02',
+          name: '분석 보고서 작성 클레임 제안서 템플릿',
+          claimType: 'TYPE-02',
+          description: 'TYPE-02 분석 보고서 작성 클레임 표준 템플릿',
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})\n의뢰인: {{CLIENT_NAME}}\n1. 분석 배경\n{{BACKGROUND}}\n2. 수행 목적\n{{OBJECTIVE}}\n3. 분석 방법론\n{{METHOD}}\n4. 성과물\n{{EXPECTED_OUTCOME}}\n5. 제외사항\n{{EXCLUSIONS}}`,
+          placeholdersJson: JSON.stringify(proposalPlaceholders),
+          version: 1
+        },
+        {
+          id: 'TPL-PROP-TYPE-03',
+          name: '일반 클레임 제안서 템플릿',
+          claimType: 'TYPE-03',
+          description: 'TYPE-03 일반 클레임 표준 템플릿',
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})\n의뢰인: {{CLIENT_NAME}}\n1. 의뢰 개요\n{{BACKGROUND}}\n2. 수행 목적\n{{OBJECTIVE}}\n3. 수행 전략\n{{METHOD}}\n4. 성과물\n{{EXPECTED_OUTCOME}}\n5. 유의사항\n{{EXCLUSIONS}}`,
+          placeholdersJson: JSON.stringify(proposalPlaceholders),
+          version: 1
+        },
+        {
+          id: 'TPL-PROP-TYPE-04',
+          name: '재건축·재개발 공사비 협상 제안서 템플릿',
+          claimType: 'TYPE-04',
+          description: 'TYPE-04 공사비 협상 클레임 표준 템플릿',
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})\n의뢰인: {{CLIENT_NAME}}\n1. 협상 배경\n{{BACKGROUND}}\n2. 수행 목적\n{{OBJECTIVE}}\n3. 검증 방법론\n{{METHOD}}\n4. 협상 목표\n{{EXPECTED_OUTCOME}}\n5. 제외조건\n{{EXCLUSIONS}}`,
+          placeholdersJson: JSON.stringify(proposalPlaceholders),
+          version: 1
+        },
+        {
+          id: 'TPL-PROP-TYPE-05',
+          name: '사감정보고서 제안서 템플릿',
+          claimType: 'TYPE-05',
+          description: 'TYPE-05 사감정보고서 표준 템플릿',
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})\n의뢰인: {{CLIENT_NAME}}\n1. 감정 개요\n{{BACKGROUND}}\n2. 수행 목적\n{{OBJECTIVE}}\n3. 감정 절차\n{{METHOD}}\n4. 예상 결과서\n{{EXPECTED_OUTCOME}}\n5. 한계사항\n{{EXCLUSIONS}}`,
+          placeholdersJson: JSON.stringify(proposalPlaceholders),
+          version: 1
+        },
+        {
+          id: 'TPL-PROP-TYPE-06',
+          name: '물가변동 클레임 제안서 템플릿',
+          claimType: 'TYPE-06',
+          description: 'TYPE-06 물가변동 조정 산출 클레임 템플릿',
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})\n의뢰인: {{CLIENT_NAME}}\n1. 산출 배경\n{{BACKGROUND}}\n2. 수행 목적\n{{OBJECTIVE}}\n3. 등율/품목 산출법\n{{METHOD}}\n4. 조정 성과물\n{{EXPECTED_OUTCOME}}\n5. 면책사항\n{{EXCLUSIONS}}`,
+          placeholdersJson: JSON.stringify(proposalPlaceholders),
+          version: 1
+        }
+      ];
+
+      for (const tpl of proposalTemplates) {
+        await tx.proposalTemplate.upsert({
+          where: { id: tpl.id },
+          update: { ...tpl, updatedAt: now },
+          create: { ...tpl, createdAt: now, updatedAt: now }
+        });
+      }
+
+      const prop1Id = 'PROP-SYN-001';
+      const prop2Id = 'PROP-SYN-002';
+
+      await tx.proposal.upsert({
+        where: { id: prop1Id },
+        update: {},
+        create: {
+          id: prop1Id, caseId: 'CASE-SYN-001', templateId: 'TPL-PROP-TYPE-01', templateVersionSnapshot: 1,
+          templateBodySnapshot: proposalTemplates[0].bodyTemplate, templatePlaceholdersSnapshotJson: proposalTemplates[0].placeholdersJson,
+          title: 'SYNTHETIC_PROPOSAL_01', status: 'DRAFT', version: 2,
+          createdById: 'USR-PM', updatedById: 'USR-PM', createdAt: now, updatedAt: now
+        }
+      });
+
+      const v1Body = '[제안서] SYNTHETIC_CASE_01\n1. 의뢰 배경: 수량산출 재검토\n2. 수행 방법: 현장 실측\n3. 성과물: 보고서\n4. 제외사항: 없음';
+      const v2Body = '[제안서 AI] SYNTHETIC_CASE_01\n1. 의뢰 배경: [AI 생성] 수량산출 정밀 분석\n2. 수행 방법: BIM 수량산출\n3. 성과물: 최종 제안서\n4. 제외사항: 없음';
+
+      await tx.proposalVersion.upsert({
+        where: { id: 'PROPVER-SYN-001' },
+        update: {},
+        create: {
+          id: 'PROPVER-SYN-001', proposalId: prop1Id, versionNumber: 1, bodyText: v1Body,
+          structuredInputsJson: JSON.stringify({ background: '수량산출 재검토', objective: '정확도 검증', method: '현장 실측', expectedOutcome: '보고서', exclusions: '없음' }),
+          renderedValuesJson: JSON.stringify({ CASE_TITLE: 'SYNTHETIC_CASE_01', CASE_NUMBER: 'CASE-2026-0001' }),
+          missingFieldsJson: JSON.stringify([]), generationMode: 'MANUAL', providerId: null, modelId: null,
+          promptConfigVersion: null, inputSha256: crypto.createHash('sha256').update(JSON.stringify({ background: '수량산출 재검토', objective: '정확도 검증', method: '현장 실측', expectedOutcome: '보고서', exclusions: '없음' })).digest('hex'), generatedAt: null,
+          sourceDocumentVersionIdsJson: JSON.stringify([]),
+          sha256: crypto.createHash('sha256').update(v1Body).digest('hex'), isApproved: false, createdById: 'USR-PM', createdAt: now
+        }
+      });
+
+      await tx.proposalVersion.upsert({
+        where: { id: 'PROPVER-SYN-002' },
+        update: {},
+        create: {
+          id: 'PROPVER-SYN-002', proposalId: prop1Id, versionNumber: 2, bodyText: v2Body,
+          structuredInputsJson: JSON.stringify({ background: '[AI 생성] 수량산출 정밀 분석', objective: '정확도 검증', method: 'BIM 수량산출', expectedOutcome: '최종 제안서', exclusions: '없음' }),
+          renderedValuesJson: JSON.stringify({ CASE_TITLE: 'SYNTHETIC_CASE_01', CASE_NUMBER: 'CASE-2026-0001' }),
+          missingFieldsJson: JSON.stringify([]), generationMode: 'AI', providerId: 'local-fake-ai', modelId: 'fake-claim-v1',
+          promptConfigVersion: 'v1.0', inputSha256: crypto.createHash('sha256').update(JSON.stringify({ background: '[AI 생성] 수량산출 정밀 분석', objective: '정확도 검증', method: 'BIM 수량산출', expectedOutcome: '최종 제안서', exclusions: '없음' })).digest('hex'), generatedAt: now,
+          sourceDocumentVersionIdsJson: JSON.stringify([]),
+          sha256: crypto.createHash('sha256').update(v2Body).digest('hex'), isApproved: false, createdById: 'USR-PM', createdAt: now
+        }
+      });
+
+      await tx.proposal.update({ where: { id: prop1Id }, data: { currentVersionId: 'PROPVER-SYN-002' } });
+
+      await tx.proposal.upsert({
+        where: { id: prop2Id },
+        update: {},
+        create: {
+          id: prop2Id, caseId: 'CASE-SYN-001', templateId: 'TPL-PROP-TYPE-01', templateVersionSnapshot: 1,
+          templateBodySnapshot: proposalTemplates[0].bodyTemplate, templatePlaceholdersSnapshotJson: proposalTemplates[0].placeholdersJson,
+          title: 'SYNTHETIC_PROPOSAL_APPROVED_02', status: 'DRAFT', version: 1,
+          createdById: 'USR-PM', updatedById: 'USR-DIRECTOR', createdAt: now, updatedAt: now
+        }
+      });
+
+      const v3Body = '[승인된 제안서] SYNTHETIC_CASE_01\n1. 의뢰 배경: 최종 승인문서\n2. 수행 방법: 현장검증\n3. 성과물: DOCX/PDF\n4. 제외사항: 없음';
+      await tx.proposalVersion.upsert({
+        where: { id: 'PROPVER-SYN-003' },
+        update: {},
+        create: {
+          id: 'PROPVER-SYN-003', proposalId: prop2Id, versionNumber: 1, bodyText: v3Body,
+          structuredInputsJson: JSON.stringify({ background: '최종 승인문서', objective: '승인', method: '현장검증', expectedOutcome: 'DOCX/PDF', exclusions: '없음' }),
+          renderedValuesJson: JSON.stringify({ CASE_TITLE: 'SYNTHETIC_CASE_01', CASE_NUMBER: 'CASE-2026-0001' }),
+          missingFieldsJson: JSON.stringify([]), generationMode: 'MANUAL', providerId: null, modelId: null,
+          promptConfigVersion: null, inputSha256: crypto.createHash('sha256').update(JSON.stringify({ background: '최종 승인문서', objective: '승인', method: '현장검증', expectedOutcome: 'DOCX/PDF', exclusions: '없음' })).digest('hex'), generatedAt: null,
+          sourceDocumentVersionIdsJson: JSON.stringify([]),
+          sha256: crypto.createHash('sha256').update(v3Body).digest('hex'), isApproved: false, createdById: 'USR-PM', createdAt: now
+        }
+      });
+
+      const approvedFixtureVersion = await tx.proposalVersion.findUniqueOrThrow({ where: { id: 'PROPVER-SYN-003' } });
+      if (!approvedFixtureVersion.isApproved) {
+        await tx.proposalVersion.update({ where: { id: 'PROPVER-SYN-003' }, data: { isApproved: true } });
+      }
+      const approvedFixtureProposal = await tx.proposal.findUniqueOrThrow({ where: { id: prop2Id } });
+      if (approvedFixtureProposal.status === 'DRAFT') {
+        await tx.proposal.update({ where: { id: prop2Id }, data: { status: 'IN_REVIEW', currentVersionId: 'PROPVER-SYN-003' } });
+        await tx.proposal.update({ where: { id: prop2Id }, data: { status: 'APPROVED', approvedVersionId: 'PROPVER-SYN-003' } });
+      }
+
+      await tx.proposalReview.upsert({
+        where: { id: 'PROPREV-SYN-001' },
+        update: {},
+        create: {
+          id: 'PROPREV-SYN-001', proposalId: prop2Id, versionId: 'PROPVER-SYN-003', reviewerId: 'USR-DIRECTOR',
+          action: 'APPROVE', comment: 'Synthetic proposal approved by Director', createdAt: now
+        }
+      });
+
+      // 15. Initial Audit Log
       await tx.auditLog.upsert({
         where: { id: 'AUD-SYN-001' },
         update: {},
         create: {
           id: 'AUD-SYN-001', organizationId: 'ORG-SYN-A', userId: 'USR-ADMIN', action: 'SEED_INITIALIZED',
-          targetEntity: 'System', targetId: 'P06', metadataJson: JSON.stringify({ source: 'synthetic-seed-p06' }), createdAt: now
+          targetEntity: 'System', targetId: 'P07', metadataJson: JSON.stringify({ source: 'synthetic-seed-p07' }), createdAt: now
         }
       });
     });
   } finally {
     await db.$disconnect();
   }
-  console.log('Database seeded with deterministic synthetic P06 fixtures.');
+  console.log('Database seeded with deterministic synthetic P07 fixtures.');
 }
 
 if (require.main === module) {

@@ -6,6 +6,9 @@ import {
   createPrismaClient, getDatabaseUrl, hashToken, verifyPassword,
   type Prisma, type PrismaClient, type User
 } from '@claim-studio/database';
+import {
+  generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer
+} from '@claim-studio/document-engine';
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -20,6 +23,13 @@ const ALLOWED_CLAIM_TYPES = new Set(['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04',
 const ALLOWED_SCHEDULE_TYPES = new Set(['COURT', 'CLIENT', 'INTERNAL']);
 const CASE_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
 const CASE_DELETE_ROLES = new Set(['ceo', 'director', 'admin']);
+const PROPOSAL_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
+const PROPOSAL_APPROVER_ROLES = new Set(['reviewer', 'director', 'ceo', 'admin']);
+const ALLOWED_PROPOSAL_PLACEHOLDERS = new Set([
+  'CASE_NUMBER', 'CASE_TITLE', 'CLAIM_TYPE', 'ASSIGNED_USER', 'CLIENT_NAME', 'CREATED_DATE',
+  'BACKGROUND', 'OBJECTIVE', 'METHOD', 'EXPECTED_OUTCOME', 'EXCLUSIONS'
+]);
+const ALLOWED_AI_PROVIDERS = new Map([['local-fake-ai', new Set(['fake-claim-v1'])]]);
 
 const ALLOWED_DOC_SOURCES = new Set(['RECEIVED', 'AUTHORED', 'SUBMITTED']);
 const ALLOWED_DOC_CATEGORIES = new Set(['PROPOSAL', 'EVIDENCE', 'CONTRACT', 'REPORT', 'MEETING', 'ETC']);
@@ -92,6 +102,62 @@ function sanitizeDisplayName(rawName: string): string {
   clean = path.basename(clean);
   clean = clean.replace(/[^a-zA-Z0-9가-힣._-]/g, '_');
   return clean || 'unnamed_file';
+}
+
+export function renderProposalTemplate(
+  templateText: string,
+  values: Record<string, string>
+): { rendered: string; missing: string[] } {
+  const missing: string[] = [];
+  let rendered = templateText;
+  const matches = templateText.match(/\{\{([A-Z0-9_]+)\}\}/g) ?? [];
+  for (const key of new Set(matches.map((match) => match.slice(2, -2)))) {
+    const value = values[key]?.trim();
+    if (ALLOWED_PROPOSAL_PLACEHOLDERS.has(key) && value) {
+      rendered = rendered.replaceAll(`{{${key}}}`, value);
+    } else {
+      missing.push(key);
+      rendered = rendered.replaceAll(`{{${key}}}`, `누락: ${key}`);
+    }
+  }
+  return { rendered, missing };
+}
+
+function proposalInputHash(value: Record<string, unknown>): string {
+  return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+function parseStringArray(value: string | null, label: string): string[] {
+  if (value === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) throw new Error('invalid');
+    return parsed;
+  } catch {
+    throw new HttpError(409, `${label} is corrupt`);
+  }
+}
+
+async function verifyProposalSources(
+  db: PrismaClient,
+  uploadDir: string,
+  caseId: string,
+  sourceIds: string[]
+): Promise<void> {
+  if (new Set(sourceIds).size !== sourceIds.length) throw new HttpError(400, 'Duplicate source document versions are forbidden');
+  if (sourceIds.length === 0) return;
+  const versions = await db.documentVersion.findMany({
+    where: { id: { in: sourceIds }, document: { caseId, deletedAt: null } },
+    include: { document: true }
+  });
+  if (versions.length !== sourceIds.length) throw new HttpError(403, 'Source document version does not belong to the same case or is unavailable');
+  for (const version of versions) {
+    const storedPath = safeStoragePath(uploadDir, version.storageKey);
+    if (!fs.existsSync(storedPath) || !fs.statSync(storedPath).isFile()) throw new HttpError(409, 'Source document storage object is missing');
+    const stored = fs.readFileSync(storedPath);
+    const storedHash = crypto.createHash('sha256').update(stored).digest('hex');
+    if (stored.length !== version.fileSize || storedHash !== version.sha256) throw new HttpError(409, 'Source document integrity verification failed');
+  }
 }
 
 function validateOriginalFilename(filename: string): string {
@@ -381,6 +447,17 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
       if (pathname === '/auth/session' && req.method === 'GET') {
         sendJson(res, 200, { ...context.user, roles: context.roles });
+        return;
+      }
+
+      if (pathname === '/api/proposal-templates' && req.method === 'GET') {
+        const claimType = url.searchParams.get('claimType')?.trim();
+        if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType filter');
+        const templates = await db.proposalTemplate.findMany({
+          where: claimType ? { claimType } : {},
+          orderBy: [{ claimType: 'asc' }, { version: 'desc' }]
+        });
+        sendJson(res, 200, { templates });
         return;
       }
 
@@ -773,6 +850,441 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
         sendJson(res, 200, { case: updatedCase });
         return;
+      }
+
+      // --- P07 Proposal Template & Writer Endpoints ---
+      const proposalMatch = pathname.match(/^\/api\/cases\/([^/]+)\/proposals(?:\/([^/]+)(?:\/(versions|reviews|render))?)?$/);
+      if (proposalMatch) {
+        const [, caseId, proposalId, action] = proposalMatch;
+        const caseRow = await db.caseItem.findUnique({
+          where: { id: caseId },
+          include: {
+            assignedUser: { select: { id: true, name: true } },
+            parties: { orderBy: { createdAt: 'asc' }, take: 1 }
+          }
+        });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        if (!proposalId && req.method === 'GET') {
+          const proposals = await db.proposal.findMany({
+            where: { caseId, deletedAt: null },
+            include: {
+              template: true,
+              versions: { orderBy: { versionNumber: 'desc' } },
+              reviews: {
+                orderBy: { createdAt: 'desc' },
+                include: { reviewer: { select: { id: true, name: true, email: true } } }
+              }
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          sendJson(res, 200, { proposals });
+          return;
+        }
+
+        if (!proposalId && req.method === 'POST') {
+          requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal creation forbidden');
+          const body = await readJson(req);
+          const templateId = typeof body.templateId === 'string' ? body.templateId.trim() : '';
+          const titleInput = typeof body.title === 'string' ? body.title.trim() : '';
+          if (!templateId) throw new HttpError(400, 'Proposal templateId is required');
+          const template = await db.proposalTemplate.findUnique({ where: { id: templateId } });
+          if (!template) throw new HttpError(404, 'Proposal template not found');
+          if (template.claimType !== caseRow.claimType) throw new HttpError(400, 'Proposal template claim type must match the case');
+          const declaredPlaceholders = parseStringArray(template.placeholdersJson, 'Template placeholders');
+          if (declaredPlaceholders.some((key) => !ALLOWED_PROPOSAL_PLACEHOLDERS.has(key))) {
+            throw new HttpError(409, 'Proposal template declares an unsupported placeholder');
+          }
+          const title = titleInput || `${caseRow.title} 제안서`;
+          if (title.length > 500) throw new HttpError(400, 'Proposal title must be 500 characters or fewer');
+
+          const structuredInputs = { background: '', objective: '', method: '', expectedOutcome: '', exclusions: '' };
+          const renderedValues: Record<string, string> = {
+            CASE_NUMBER: caseRow.caseNumber,
+            CASE_TITLE: caseRow.title,
+            CLAIM_TYPE: caseRow.claimType,
+            ASSIGNED_USER: caseRow.assignedUser?.name ?? context.user.name,
+            CLIENT_NAME: caseRow.parties[0]?.name ?? '',
+            CREATED_DATE: getKstDateString(new Date())
+          };
+          const { rendered, missing } = renderProposalTemplate(template.bodyTemplate, renderedValues);
+          const proposalIdNew = `PROP-${crypto.randomUUID()}`;
+          const proposalVersionId = `PROPVER-${crypto.randomUUID()}`;
+          const renderedHash = crypto.createHash('sha256').update(rendered).digest('hex');
+
+          const proposal = await db.$transaction(async (tx) => {
+            await tx.proposal.create({
+              data: {
+                id: proposalIdNew,
+                caseId,
+                templateId,
+                templateVersionSnapshot: template.version,
+                templateBodySnapshot: template.bodyTemplate,
+                templatePlaceholdersSnapshotJson: template.placeholdersJson,
+                title,
+                status: 'DRAFT',
+                version: 1,
+                createdById: context.user.id,
+                updatedById: context.user.id
+              }
+            });
+            await tx.proposalVersion.create({
+              data: {
+                id: proposalVersionId,
+                proposalId: proposalIdNew,
+                versionNumber: 1,
+                bodyText: rendered,
+                structuredInputsJson: JSON.stringify(structuredInputs),
+                renderedValuesJson: JSON.stringify(renderedValues),
+                missingFieldsJson: JSON.stringify(missing),
+                generationMode: 'MANUAL',
+                inputSha256: proposalInputHash({ structuredInputs, renderedValues, sourceDocumentVersionIds: [] }),
+                sourceDocumentVersionIdsJson: JSON.stringify([]),
+                sha256: renderedHash,
+                createdById: context.user.id
+              }
+            });
+            await tx.proposal.update({ where: { id: proposalIdNew }, data: { currentVersionId: proposalVersionId } });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PROPOSAL_CREATED', 'Proposal', proposalIdNew, {
+                caseId, templateId, templateVersion: template.version, proposalVersionId
+              })
+            });
+            return tx.proposal.findUniqueOrThrow({ where: { id: proposalIdNew }, include: { versions: true, template: true } });
+          });
+          sendJson(res, 201, { proposal });
+          return;
+        }
+
+        if (proposalId && !action && req.method === 'GET') {
+          const proposal = await db.proposal.findUnique({
+            where: { id: proposalId },
+            include: {
+              template: true,
+              versions: {
+                orderBy: { versionNumber: 'desc' },
+                include: { createdBy: { select: { id: true, name: true, email: true } } }
+              },
+              reviews: {
+                orderBy: { createdAt: 'desc' },
+                include: { reviewer: { select: { id: true, name: true, email: true } } }
+              }
+            }
+          });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          sendJson(res, 200, { proposal });
+          return;
+        }
+
+        if (proposalId && action === 'versions' && req.method === 'POST') {
+          requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal version creation forbidden');
+          const proposal = await db.proposal.findUnique({
+            where: { id: proposalId },
+            include: { versions: { orderBy: { versionNumber: 'desc' }, take: 1 } }
+          });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          if (!['DRAFT', 'REJECTED'].includes(proposal.status)) throw new HttpError(409, 'Proposal cannot be edited in its current status');
+
+          const body = await readJson(req);
+          if (['apiKey', 'token', 'secret', 'credential'].some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+            throw new HttpError(400, 'AI credentials are not accepted by the proposal API');
+          }
+          const structuredInputs = {
+            background: typeof body.background === 'string' ? body.background.trim() : '',
+            objective: typeof body.objective === 'string' ? body.objective.trim() : '',
+            method: typeof body.method === 'string' ? body.method.trim() : '',
+            expectedOutcome: typeof body.expectedOutcome === 'string' ? body.expectedOutcome.trim() : '',
+            exclusions: typeof body.exclusions === 'string' ? body.exclusions.trim() : ''
+          };
+          if (Object.values(structuredInputs).some((value) => !value)) throw new HttpError(400, 'All five proposal inputs are required');
+          if (Object.values(structuredInputs).some((value) => value.length > 50_000)) throw new HttpError(400, 'Proposal input exceeds the 50000 character limit');
+          const generationMode = body.generationMode;
+          if (generationMode !== 'MANUAL' && generationMode !== 'AI') throw new HttpError(400, 'generationMode must be MANUAL or AI');
+          const expectedVersion = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : -1;
+          if (expectedVersion < 1) throw new HttpError(400, 'A positive proposal version is required');
+          if (body.sourceDocumentVersionIds !== undefined && !Array.isArray(body.sourceDocumentVersionIds)) {
+            throw new HttpError(400, 'sourceDocumentVersionIds must be an array');
+          }
+          const sourceIds = (body.sourceDocumentVersionIds ?? []) as unknown[];
+          if (!sourceIds.every((id) => typeof id === 'string' && id.trim().length > 0)) throw new HttpError(400, 'Source document version IDs must be non-empty strings');
+          const sourceDocumentVersionIds = sourceIds.map((id) => (id as string).trim());
+
+          let providerId: string | null = null;
+          let modelId: string | null = null;
+          let promptConfigVersion: string | null = null;
+          let generatedAt: Date | null = null;
+          if (generationMode === 'AI') {
+            providerId = typeof body.providerId === 'string' ? body.providerId.trim() : '';
+            modelId = typeof body.modelId === 'string' ? body.modelId.trim() : '';
+            if (!ALLOWED_AI_PROVIDERS.get(providerId)?.has(modelId)) throw new HttpError(400, 'Unsupported deterministic AI provider or model');
+            promptConfigVersion = 'p07-local-v1';
+            generatedAt = new Date();
+          } else if (body.providerId || body.modelId) {
+            throw new HttpError(400, 'Manual proposal mode must not include provider or model identifiers');
+          }
+
+          await verifyProposalSources(db, uploadDir, caseId, sourceDocumentVersionIds);
+          const renderedValues: Record<string, string> = {
+            CASE_NUMBER: caseRow.caseNumber,
+            CASE_TITLE: caseRow.title,
+            CLAIM_TYPE: caseRow.claimType,
+            ASSIGNED_USER: caseRow.assignedUser?.name ?? context.user.name,
+            CLIENT_NAME: caseRow.parties[0]?.name ?? '',
+            CREATED_DATE: getKstDateString(new Date()),
+            BACKGROUND: generationMode === 'AI' ? `[AI_DRAFT] ${structuredInputs.background}` : structuredInputs.background,
+            OBJECTIVE: structuredInputs.objective,
+            METHOD: structuredInputs.method,
+            EXPECTED_OUTCOME: structuredInputs.expectedOutcome,
+            EXCLUSIONS: structuredInputs.exclusions
+          };
+          const { rendered, missing } = renderProposalTemplate(proposal.templateBodySnapshot, renderedValues);
+          const nextVersionNumber = (proposal.versions[0]?.versionNumber ?? 0) + 1;
+          const proposalVersionId = `PROPVER-${crypto.randomUUID()}`;
+          const inputSha256 = proposalInputHash({
+            structuredInputs, renderedValues, generationMode, providerId, modelId, promptConfigVersion, sourceDocumentVersionIds
+          });
+          const sha256 = crypto.createHash('sha256').update(rendered).digest('hex');
+
+          const createdVersion = await db.$transaction(async (tx) => {
+            const changed = await tx.proposal.updateMany({
+              where: { id: proposalId, version: expectedVersion, status: proposal.status, deletedAt: null },
+              data: { status: 'DRAFT', version: { increment: 1 }, updatedById: context.user.id }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+            const created = await tx.proposalVersion.create({
+              data: {
+                id: proposalVersionId,
+                proposalId,
+                versionNumber: nextVersionNumber,
+                bodyText: rendered,
+                structuredInputsJson: JSON.stringify(structuredInputs),
+                renderedValuesJson: JSON.stringify(renderedValues),
+                missingFieldsJson: JSON.stringify(missing),
+                generationMode,
+                providerId,
+                modelId,
+                promptConfigVersion,
+                inputSha256,
+                generatedAt,
+                sourceDocumentVersionIdsJson: JSON.stringify(sourceDocumentVersionIds),
+                sha256,
+                createdById: context.user.id
+              }
+            });
+            await tx.proposal.update({ where: { id: proposalId }, data: { currentVersionId: proposalVersionId } });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PROPOSAL_VERSION_CREATED', 'ProposalVersion', proposalVersionId, {
+                proposalId, versionNumber: nextVersionNumber, generationMode, providerId, modelId,
+                inputSha256, sha256, sourceDocumentVersionIds
+              })
+            });
+            return created;
+          });
+          sendJson(res, 201, { version: createdVersion, proposalVersion: expectedVersion + 1 });
+          return;
+        }
+
+        if (proposalId && action === 'reviews' && req.method === 'POST') {
+          const proposal = await db.proposal.findUnique({ where: { id: proposalId }, include: { versions: true } });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          const body = await readJson(req);
+          const reviewAction = typeof body.action === 'string' ? body.action.trim() : '';
+          const targetVersionId = typeof body.versionId === 'string' ? body.versionId.trim() : '';
+          const expectedVersion = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : -1;
+          const comment = typeof body.comment === 'string' ? body.comment.trim() : null;
+          if (expectedVersion < 1) throw new HttpError(400, 'A positive proposal version is required');
+          if (!targetVersionId || targetVersionId !== proposal.currentVersionId) throw new HttpError(409, 'Review action must target the current proposal version');
+          const targetVersion = proposal.versions.find((version) => version.id === targetVersionId);
+          if (!targetVersion) throw new HttpError(404, 'Proposal version not found');
+
+          if (reviewAction === 'REQUEST_REVIEW') {
+            requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal review request forbidden');
+            if (proposal.status !== 'DRAFT') throw new HttpError(409, 'Only a DRAFT proposal can request review');
+            if (targetVersion.generationMode === 'AI' || targetVersion.bodyText.includes('[AI_DRAFT]')) {
+              throw new HttpError(409, 'AI draft must be saved as a human-edited MANUAL version before review');
+            }
+            if (parseStringArray(targetVersion.missingFieldsJson, 'Missing fields').length > 0) throw new HttpError(409, 'Proposal has unresolved missing fields');
+            if (crypto.createHash('sha256').update(targetVersion.bodyText).digest('hex') !== targetVersion.sha256) throw new HttpError(409, 'Proposal version integrity verification failed');
+            await verifyProposalSources(db, uploadDir, caseId, parseStringArray(targetVersion.sourceDocumentVersionIdsJson, 'Source document IDs'));
+            await db.$transaction(async (tx) => {
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, version: expectedVersion, status: 'DRAFT', currentVersionId: targetVersionId },
+                data: { status: 'IN_REVIEW', version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              await tx.proposalReview.create({
+                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId, versionId: targetVersionId, reviewerId: context.user.id, action: 'REQUEST_REVIEW', comment }
+              });
+              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_REVIEW_REQUESTED', 'Proposal', proposalId, { versionId: targetVersionId }) });
+            });
+            sendJson(res, 200, { status: 'IN_REVIEW', version: expectedVersion + 1 });
+            return;
+          }
+
+          if (reviewAction === 'APPROVE') {
+            requireAnyRole(context, PROPOSAL_APPROVER_ROLES, 'Proposal approval forbidden');
+            if (targetVersion.createdById === context.user.id) throw new HttpError(403, 'Proposal version creator cannot self-approve');
+            if (proposal.status !== 'IN_REVIEW') throw new HttpError(409, 'Only an IN_REVIEW proposal can be approved');
+            if (targetVersion.isApproved) throw new HttpError(409, 'Proposal version is already approved');
+            if (targetVersion.generationMode !== 'MANUAL' || targetVersion.bodyText.includes('[AI_DRAFT]')) throw new HttpError(409, 'AI draft cannot be approved directly');
+            if (parseStringArray(targetVersion.missingFieldsJson, 'Missing fields').length > 0) throw new HttpError(409, 'Proposal has unresolved missing fields');
+            if (crypto.createHash('sha256').update(targetVersion.bodyText).digest('hex') !== targetVersion.sha256) throw new HttpError(409, 'Proposal version integrity verification failed');
+            await verifyProposalSources(db, uploadDir, caseId, parseStringArray(targetVersion.sourceDocumentVersionIdsJson, 'Source document IDs'));
+            await db.$transaction(async (tx) => {
+              await tx.proposalVersion.update({ where: { id: targetVersionId }, data: { isApproved: true } });
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, version: expectedVersion, status: 'IN_REVIEW', currentVersionId: targetVersionId },
+                data: { status: 'APPROVED', approvedVersionId: targetVersionId, version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              await tx.proposalReview.create({
+                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId, versionId: targetVersionId, reviewerId: context.user.id, action: 'APPROVE', comment }
+              });
+              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_APPROVED', 'Proposal', proposalId, { versionId: targetVersionId }) });
+            });
+            sendJson(res, 200, { status: 'APPROVED', version: expectedVersion + 1 });
+            return;
+          }
+
+          if (reviewAction === 'REJECT') {
+            requireAnyRole(context, PROPOSAL_APPROVER_ROLES, 'Proposal rejection forbidden');
+            if (proposal.status !== 'IN_REVIEW') throw new HttpError(409, 'Only an IN_REVIEW proposal can be rejected');
+            if (!comment) throw new HttpError(400, 'A rejection comment is required');
+            await db.$transaction(async (tx) => {
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, version: expectedVersion, status: 'IN_REVIEW', currentVersionId: targetVersionId },
+                data: { status: 'REJECTED', version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              await tx.proposalReview.create({
+                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId, versionId: targetVersionId, reviewerId: context.user.id, action: 'REJECT', comment }
+              });
+              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_REJECTED', 'Proposal', proposalId, { versionId: targetVersionId, comment }) });
+            });
+            sendJson(res, 200, { status: 'REJECTED', version: expectedVersion + 1 });
+            return;
+          }
+
+          throw new HttpError(400, 'Review action must be REQUEST_REVIEW, APPROVE, or REJECT');
+        }
+
+        if (proposalId && action === 'render' && req.method === 'POST') {
+          const proposal = await db.proposal.findUnique({
+            where: { id: proposalId },
+            include: {
+              versions: true,
+              reviews: {
+                where: { action: 'APPROVE' },
+                orderBy: { createdAt: 'desc' },
+                include: { reviewer: { select: { id: true, name: true } } }
+              }
+            }
+          });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          if (proposal.status !== 'APPROVED' || !proposal.approvedVersionId) throw new HttpError(403, 'Proposal must be APPROVED before rendering final document');
+          const body = await readJson(req);
+          const format = body.format;
+          if (format !== 'docx' && format !== 'pdf') throw new HttpError(400, 'Render format must be docx or pdf');
+          const targetVersionId = typeof body.versionId === 'string' ? body.versionId.trim() : proposal.approvedVersionId;
+          const expectedVersion = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : -1;
+          if (expectedVersion < 1) throw new HttpError(400, 'A positive proposal version is required');
+          if (targetVersionId !== proposal.approvedVersionId) throw new HttpError(403, 'Only the approved proposal version may be rendered');
+          const targetVersion = proposal.versions.find((version) => version.id === targetVersionId);
+          if (!targetVersion?.isApproved) throw new HttpError(409, 'Approved proposal version record is inconsistent');
+          if (parseStringArray(targetVersion.missingFieldsJson, 'Missing fields').length > 0) throw new HttpError(409, 'Proposal has unresolved missing fields');
+          if (crypto.createHash('sha256').update(targetVersion.bodyText).digest('hex') !== targetVersion.sha256) throw new HttpError(409, 'Proposal version integrity verification failed');
+          await verifyProposalSources(db, uploadDir, caseId, parseStringArray(targetVersion.sourceDocumentVersionIdsJson, 'Source document IDs'));
+          const approval = proposal.reviews.find((review) => review.versionId === targetVersionId);
+          if (!approval) throw new HttpError(409, 'Approved proposal is missing approval history');
+
+          const renderOptions = {
+            title: proposal.title,
+            caseNumber: caseRow.caseNumber,
+            claimType: caseRow.claimType,
+            proposalId,
+            versionId: targetVersionId,
+            versionNumber: targetVersion.versionNumber,
+            approvedBy: approval.reviewer.name,
+            approvedAt: approval.createdAt.toISOString(),
+            sha256: targetVersion.sha256,
+            bodyText: targetVersion.bodyText
+          };
+          const buffer = format === 'docx' ? generateDocxBuffer(renderOptions) : generatePdfBuffer(renderOptions);
+          const parsed = format === 'docx' ? validateDocxBuffer(buffer) : validatePdfBuffer(buffer);
+          if (!parsed.isValid || parsed.metadata?.ProposalId !== proposalId || parsed.metadata?.VersionId !== targetVersionId) {
+            throw new HttpError(500, 'Generated document failed parser or provenance validation');
+          }
+          const extension = `.${format}`;
+          const mimeType = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          validateFileSecurity(`proposal${extension}`, mimeType, buffer);
+          const displayName = `${caseRow.caseNumber}_PROPOSAL_${sanitizeDisplayName(proposal.title)}_${getKstDateString(new Date())}_v${String(targetVersion.versionNumber).padStart(2, '0')}${extension}`;
+          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
+          const diskPath = safeStoragePath(uploadDir, storageKey);
+          fs.writeFileSync(diskPath, buffer, { flag: 'wx' });
+
+          try {
+            await db.$transaction(async (tx) => {
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, status: 'APPROVED', approvedVersionId: targetVersionId, version: expectedVersion, deletedAt: null },
+                data: { version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              const documentId = `DOC-${crypto.randomUUID()}`;
+              const documentVersionId = `DOCVER-${crypto.randomUUID()}`;
+              await tx.document.create({
+                data: {
+                  id: documentId,
+                  caseId,
+                  title: `${proposal.title} [승인 출력물]`,
+                  category: 'PROPOSAL',
+                  source: 'AUTHORED',
+                  currentVersionId: null,
+                  finalVersionId: null,
+                  version: 1
+                }
+              });
+              await tx.documentVersion.create({
+                data: {
+                  id: documentVersionId,
+                  documentId,
+                  versionNumber: 1,
+                  originalName: `proposal${extension}`,
+                  displayName,
+                  storageKey,
+                  fileSize: buffer.length,
+                  mimeType,
+                  sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+                  isFinal: true,
+                  uploadedById: context.user.id
+                }
+              });
+              await tx.document.update({
+                where: { id: documentId },
+                data: { currentVersionId: documentVersionId, finalVersionId: documentVersionId, proposalVersionId: targetVersionId }
+              });
+              await tx.proposal.update({ where: { id: proposalId }, data: { outputDocumentId: documentId } });
+              await tx.auditLog.create({
+                data: requestAudit(context, 'PROPOSAL_RENDERED', 'Proposal', proposalId, {
+                  format, displayName, proposalVersionId: targetVersionId, outputDocumentId: documentId, documentVersionId
+                })
+              });
+            });
+          } catch (error) {
+            fs.rmSync(diskPath, { force: true });
+            throw error;
+          }
+
+          res.writeHead(200, {
+            'Content-Type': mimeType,
+            'Content-Length': buffer.length,
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(displayName)}`,
+            'Cache-Control': 'no-store'
+          });
+          res.end(buffer);
+          return;
+        }
       }
 
       // --- P06 Documents Endpoints ---

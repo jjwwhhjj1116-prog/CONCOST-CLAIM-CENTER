@@ -41,6 +41,9 @@ importers:
       '@claim-studio/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@claim-studio/document-engine':
+        specifier: workspace:*
+        version: link:../../packages/document-engine
 
   apps/web:
     dependencies:
@@ -85,6 +88,12 @@ importers:
       prisma:
         specifier: 6.19.3
         version: 6.19.3(typescript@5.9.3)
+
+  packages/document-engine:
+    devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   packages/ui:
     dependencies:

@@ -54,3 +54,18 @@ export async function apiDownload(pathname: string): Promise<{ blob: Blob; filen
   const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
   return { blob: await response.blob(), filename: encoded ? decodeURIComponent(encoded) : 'download.bin' };
 }
+
+export async function apiDownloadPost(pathname: string, body: unknown): Promise<{ blob: Blob; filename: string }> {
+  const init: RequestInit = {
+    method: 'POST',
+    body: JSON.stringify(body)
+  };
+  const response = await fetch(`${API_ORIGIN}${pathname}`, { credentials: 'include', headers: requestHeaders(init), method: 'POST', body: JSON.stringify(body) });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`);
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  return { blob: await response.blob(), filename: encoded ? decodeURIComponent(encoded) : 'download.bin' };
+}

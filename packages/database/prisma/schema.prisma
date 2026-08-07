@@ -18,24 +18,28 @@ model Organization {
 }
 
 model User {
-  id               String              @id
-  email            String              @unique
-  passwordHash     String
-  name             String
-  organizationId   String
-  isActive         Boolean             @default(true)
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
-  organization     Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  roles            UserRole[]
-  sessions         Session[]
-  assignments      CaseAssignment[]
-  assignedCases    CaseItem[]          @relation("AssignedCases")
-  statusHistories  StatusHistory[]
-  auditLogs        AuditLog[]
-  uploadedVersions DocumentVersion[]
-  createdMeetings  Meeting[]
-  actionItems      MeetingActionItem[]
+  id                      String            @id
+  email                   String            @unique
+  passwordHash            String
+  name                    String
+  organizationId          String
+  isActive                Boolean           @default(true)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  organization            Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  roles                   UserRole[]
+  sessions                Session[]
+  assignments             CaseAssignment[]
+  assignedCases           CaseItem[]        @relation("AssignedCases")
+  statusHistories         StatusHistory[]
+  auditLogs               AuditLog[]
+  uploadedVersions        DocumentVersion[]
+  createdMeetings         Meeting[]
+  actionItems             MeetingActionItem[]
+  createdProposals        Proposal[]        @relation("ProposalCreator")
+  updatedProposals        Proposal[]        @relation("ProposalUpdater")
+  createdProposalVersions ProposalVersion[] @relation("ProposalVersionCreator")
+  proposalReviews         ProposalReview[]
 }
 
 model Role {
@@ -88,6 +92,7 @@ model CaseItem {
   reports        Report[]
   documents      Document[]
   meetings       Meeting[]
+  proposals      Proposal[]
 
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
@@ -168,6 +173,7 @@ model Document {
   caseId           String
   scheduleId       String?
   reportSectionId  String?
+  proposalVersionId String?
   title            String
   category         String?
   source           String            // RECEIVED, AUTHORED, SUBMITTED
@@ -180,11 +186,13 @@ model Document {
   case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
   schedule         Schedule?         @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   reportSection    ReportSection?    @relation(fields: [reportSectionId], references: [id], onDelete: SetNull)
+  proposalVersion  ProposalVersion?  @relation(fields: [proposalVersionId], references: [id], onDelete: Restrict)
   versions         DocumentVersion[]
 
   @@index([caseId, deletedAt])
   @@index([scheduleId])
   @@index([reportSectionId])
+  @@index([proposalVersionId])
   @@index([source])
 }
 
@@ -210,24 +218,24 @@ model DocumentVersion {
 }
 
 model Meeting {
-  id          String              @id
-  caseId      String
-  title       String
-  meetingDate DateTime
-  location    String?
-  attendees   String?
-  rawText     String?
+  id            String              @id
+  caseId        String
+  title         String
+  meetingDate   DateTime
+  location      String?
+  attendees     String?
+  rawText       String?
   rawTextSha256 String?
-  summary     String?
-  decisions   String?
-  status      String              @default("DRAFT") // DRAFT, FINAL
-  version     Int                 @default(1)
-  createdById String
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
-  case        CaseItem            @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  createdBy   User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
-  actionItems MeetingActionItem[]
+  summary       String?
+  decisions     String?
+  status        String              @default("DRAFT") // DRAFT, FINAL
+  version       Int                 @default(1)
+  createdById   String
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  case          CaseItem            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdBy     User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  actionItems   MeetingActionItem[]
 
   @@index([caseId])
   @@index([meetingDate])
@@ -235,18 +243,18 @@ model Meeting {
 }
 
 model MeetingActionItem {
-  id          String    @id
-  meetingId   String
-  title       String
-  assigneeId  String?
-  scheduleId  String?
-  dueDate     DateTime?
-  status      String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  meeting     Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
-  assignee    User?     @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
-  schedule    Schedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  id         String    @id
+  meetingId  String
+  title      String
+  assigneeId String?
+  scheduleId String?
+  dueDate    DateTime?
+  status     String    @default("PENDING") // PENDING, IN_PROGRESS, COMPLETED
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  meeting    Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  assignee   User?     @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
+  schedule   Schedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
 
   @@index([meetingId])
   @@index([assigneeId])
@@ -268,19 +276,110 @@ model Report {
 }
 
 model ReportSection {
-  id        String    @id
+  id        String     @id
   reportId  String
   title     String
   content   String
   status    String
-  version   Int       @default(1)
+  version   Int        @default(1)
   deletedAt DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  report    Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  report    Report     @relation(fields: [reportId], references: [id], onDelete: Cascade)
   documents Document[]
 
   @@index([reportId, deletedAt])
+}
+
+model ProposalTemplate {
+  id               String     @id
+  name             String
+  claimType        String     // TYPE-01 to TYPE-06
+  description      String?
+  bodyTemplate     String
+  placeholdersJson String
+  version          Int        @default(1)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  proposals        Proposal[]
+
+  @@index([claimType])
+}
+
+model Proposal {
+  id               String            @id
+  caseId           String
+  templateId       String
+  templateVersionSnapshot Int
+  templateBodySnapshot String
+  templatePlaceholdersSnapshotJson String
+  title            String
+  status           String            @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED, REJECTED
+  currentVersionId String?
+  approvedVersionId String?
+  outputDocumentId String?
+  version          Int               @default(1)
+  createdById      String
+  updatedById      String
+  deletedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  template         ProposalTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy        User              @relation("ProposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy        User              @relation("ProposalUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+  versions         ProposalVersion[]
+  reviews          ProposalReview[]
+
+  @@index([caseId, deletedAt])
+  @@index([templateId])
+  @@index([updatedById])
+  @@index([status])
+}
+
+model ProposalVersion {
+  id                           String           @id
+  proposalId                   String
+  versionNumber                Int
+  bodyText                     String
+  structuredInputsJson         String
+  renderedValuesJson           String
+  missingFieldsJson            String
+  generationMode               String           // MANUAL, AI
+  providerId                   String?
+  modelId                      String?
+  promptConfigVersion          String?
+  inputSha256                   String
+  generatedAt                  DateTime?
+  sourceDocumentVersionIdsJson String?
+  sha256                       String
+  isApproved                   Boolean          @default(false)
+  createdById                  String
+  createdAt                    DateTime         @default(now())
+  proposal                     Proposal         @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  createdBy                    User             @relation("ProposalVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  reviews                      ProposalReview[]
+  outputDocuments              Document[]
+
+  @@unique([proposalId, versionNumber])
+  @@index([proposalId])
+}
+
+model ProposalReview {
+  id         String          @id
+  proposalId String
+  versionId  String
+  reviewerId String
+  action     String          // REQUEST_REVIEW, APPROVE, REJECT
+  comment    String?
+  createdAt  DateTime        @default(now())
+  proposal   Proposal        @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  version    ProposalVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  reviewer   User            @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([proposalId])
+  @@index([versionId])
+  @@index([reviewerId])
 }
 
 model AuditLog {

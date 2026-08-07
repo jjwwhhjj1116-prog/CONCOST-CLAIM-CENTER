@@ -54,7 +54,8 @@ test('P06 web performs browser-native upload/download and exposes version, metad
 
 test('P06 has phase-specific integration, browser E2E and security suites without replacing prior security regressions', () => {
   const packageJson = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
-  assert.strictEqual(packageJson.scripts['test:e2e'], 'tsx scripts/p06-e2e.ts');
+  assert.match(packageJson.scripts['test:e2e'], /p06-e2e\.ts/);
+  assert.match(packageJson.scripts['test:e2e'], /p07-e2e\.ts/);
   for (const file of ['p04-security-test.ts', 'p05-security-test.ts', 'p06-security-test.ts']) assert.ok(packageJson.scripts['test:security'].includes(file));
   const harness = read('scripts/harness-test.ts');
   assert.ok(harness.includes("import './p06-contract-test'"));

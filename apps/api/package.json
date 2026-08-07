@@ -9,6 +9,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@claim-studio/database": "workspace:*"
+    "@claim-studio/database": "workspace:*",
+    "@claim-studio/document-engine": "workspace:*"
   }
 }

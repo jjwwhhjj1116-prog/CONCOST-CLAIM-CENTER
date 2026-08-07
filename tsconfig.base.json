@@ -12,6 +12,8 @@
     "sourceMap": true,
     "baseUrl": ".",
     "paths": {
+      "@claim-studio/database": ["packages/database/src/index.ts"],
+      "@claim-studio/document-engine": ["packages/document-engine/src/index.ts"],
       "@claim-studio/ui": ["packages/ui/src/index.ts"]
     }
   }
