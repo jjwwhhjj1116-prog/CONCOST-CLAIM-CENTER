@@ -1,235 +1,279 @@
+import test from 'node:test';
+import assert from 'node:assert';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
-import { createPrismaClient, getDatabaseUrl } from '@claim-studio/database';
-import { createApiServer } from '../apps/api/src/server';
+import type { AddressInfo } from 'node:net';
+import { execFileSync } from 'node:child_process';
+import {
+  createPrismaClient, databaseUrlFor, resetDatabase, seedDatabase, type PrismaClient
+} from '@claim-studio/database';
+import { createApiServer, type ManagedApiServer } from '../apps/api/src/server';
 
-const ROOT_DIR = path.resolve(__dirname, '..');
-const REFERENCE_INVENTORY_FILE = path.join(ROOT_DIR, 'docs/templates/reference-inventory.json');
-const LOCAL_TEMPLATES_DIR = path.join(ROOT_DIR, 'docs/보고서 템플릿');
+interface InventoryFile {
+  fileId: string;
+  relativePath: string;
+  filename: string;
+  extension: string;
+  sizeBytes: number;
+  sha256: string;
+  scanStatus: string;
+}
+interface InventoryDocument { totalFiles: number; files: InventoryFile[] }
+interface Session { cookie: string; csrf: string }
+interface Result { status: number; body: Record<string, any>; headers: http.IncomingHttpHeaders }
 
-export async function runP08ContractTests(): Promise<void> {
-  console.log('[P08-CONTRACT] Running P08 Report Template Catalog Contract Tests...');
+const root = path.resolve(__dirname, '..');
+const inventoryPath = path.join(root, 'docs/templates/reference-inventory.json');
+const localReferenceRoot = path.join(root, 'docs/보고서 템플릿');
+const migrationPath = path.join(root, 'packages/database/prisma/migrations/20260807100000_p08_report_template_catalog/migration.sql');
+const schemaPath = path.join(root, 'packages/database/prisma/schema.prisma');
+const databasePath = path.join(root, 'packages/database/.data', `p08-contract-${process.pid}.db`);
+const databaseUrl = databaseUrlFor(databasePath);
+const allowedOrigin = 'http://localhost:3000';
 
-  // 1. Reference Inventory & Offline Local 32-File Check
-  if (!fs.existsSync(REFERENCE_INVENTORY_FILE)) {
-    throw new Error(`[P08-CONTRACT] reference-inventory.json missing at ${REFERENCE_INVENTORY_FILE}`);
+function readInventory(): InventoryDocument {
+  const parsed = JSON.parse(fs.readFileSync(inventoryPath, 'utf8')) as InventoryDocument;
+  assert.strictEqual(parsed.totalFiles, 32);
+  assert.strictEqual(parsed.files.length, 32);
+  assert.deepStrictEqual(parsed.files.map((item) => item.fileId), Array.from({ length: 32 }, (_, index) => `TPL-REF-${String(index + 1).padStart(3, '0')}`));
+  assert.strictEqual(new Set(parsed.files.map((item) => item.sha256)).size, 32);
+  for (const item of parsed.files) {
+    assert.match(item.fileId, /^TPL-REF-\d{3}$/);
+    assert.match(item.sha256, /^[0-9a-f]{64}$/);
+    assert.ok(item.sizeBytes > 0);
+    assert.strictEqual(item.filename.startsWith(`${item.fileId}_template_ref.`), true);
+    assert.strictEqual(item.relativePath.includes(item.filename), true);
+    assert.doesNotMatch(item.filename, /[가-힣]|CASE-|고객|사건/i);
   }
-  const inventoryRaw = fs.readFileSync(REFERENCE_INVENTORY_FILE, 'utf8');
-  const inventory = JSON.parse(inventoryRaw) as Array<{ id: string; fileId: string; sha256: string; fileSize: number }>;
-  if (inventory.length !== 32) {
-    throw new Error(`[P08-CONTRACT] reference-inventory.json must contain exactly 32 items, got ${inventory.length}`);
-  }
+  return parsed;
+}
 
-  // Git untracked check for reference template files
-  try {
-    const gitTracked = execSync('git ls-files "docs/보고서 템플릿"', { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
-    if (gitTracked.length > 0) {
-      throw new Error(`[P08-CONTRACT] Local reference files MUST NOT be tracked in Git! Tracked files: ${gitTracked}`);
-    }
-  } catch (err) {
-    if (err instanceof Error && err.message.includes('MUST NOT be tracked')) throw err;
-  }
+function walkFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(directory, entry.name);
+    return entry.isDirectory() ? walkFiles(fullPath) : entry.isFile() ? [fullPath] : [];
+  });
+}
 
-  // If local template directory exists (offline harness environment), verify 32/32 sizes & SHA-256
-  if (fs.existsSync(LOCAL_TEMPLATES_DIR)) {
-    console.log('[P08-CONTRACT] Verifying local reference files 32/32 size and SHA-256...');
-    let foundCount = 0;
-    const items = inventory;
-    for (const item of items) {
-      // Find matching file in local subdirectories
-      let matchedPath: string | null = null;
-      const walk = (dir: string) => {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walk(fullPath);
-          } else if (entry.isFile()) {
-            const buf = fs.readFileSync(fullPath);
-            const sha = crypto.createHash('sha256').update(buf).digest('hex');
-            if (sha === item.sha256) {
-              matchedPath = fullPath;
-              break;
-            }
-          }
-        }
-      };
-      walk(LOCAL_TEMPLATES_DIR);
-      if (matchedPath) {
-        foundCount++;
+function request(origin: string, pathname: string, method = 'GET', body?: unknown, session?: Session): Promise<Result> {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? '' : JSON.stringify(body);
+    const req = http.request(`${origin}${pathname}`, {
+      method,
+      headers: {
+        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)) } : {}),
+        ...(session ? { Cookie: session.cookie, Origin: allowedOrigin, 'X-CSRF-Token': session.csrf } : { Origin: allowedOrigin })
       }
-    }
-    console.log(`[P08-CONTRACT] Found and verified ${foundCount}/32 matching local reference files.`);
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks);
+        resolve({
+          status: res.statusCode ?? 500,
+          body: raw.length && String(res.headers['content-type']).includes('application/json') ? JSON.parse(raw.toString('utf8')) : {},
+          headers: res.headers
+        });
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function login(origin: string, email: string): Promise<Session> {
+  const response = await request(origin, '/auth/login', 'POST', { email, password: 'Password123!' });
+  assert.strictEqual(response.status, 200);
+  return {
+    cookie: (response.headers['set-cookie'] ?? []).map((value) => value.split(';')[0]).join('; '),
+    csrf: response.body.csrfToken
+  };
+}
+
+function draftPayload(name: string, primaryType = 'TYPE-01') {
+  return {
+    code: `P08-${name.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`,
+    name,
+    description: 'Synthetic P08 contract template',
+    companyForm: `${name} company form`,
+    primaryType,
+    secondaryTypes: primaryType === 'TYPE-01' ? ['TYPE-02'] : [],
+    tocStructure: ['검토 개요', '결론'],
+    requiredSections: ['검토 개요', '결론'],
+    requiredEvidenceRules: ['계약서 사본 확인'],
+    blockSchemas: {
+      '검토 개요': { blockCode: 'executive-summary', config: { compact: false } },
+      '결론': { blockCode: 'conclusion', config: { signoff: true } }
+    },
+    referenceFileIds: []
+  };
+}
+
+test('P08 sanitized reference inventory is exact, anonymous, and raw templates stay outside Git', () => {
+  const inventory = readInventory();
+  const tracked = execFileSync('git', ['ls-files', '--', 'docs/보고서 템플릿', 'docs/보고서 템플릿/**'], {
+    cwd: root,
+    encoding: 'utf8'
+  }).trim();
+  assert.strictEqual(tracked, '');
+
+  if (!fs.existsSync(localReferenceRoot)) {
+    console.log('[P08-CONTRACT] local source mode: INVENTORY_ONLY (raw reference folder absent in clean checkout)');
+    return;
   }
 
-  // 2. Database Model & Seed Contract Verification
-  const db = createPrismaClient(getDatabaseUrl());
+  const localFiles = walkFiles(localReferenceRoot);
+  assert.strictEqual(localFiles.length, 32, 'Local source mode requires exactly 32 raw reference files');
+  const actual = new Map(localFiles.map((filePath) => {
+    const bytes = fs.readFileSync(filePath);
+    return [crypto.createHash('sha256').update(bytes).digest('hex'), bytes.length] as const;
+  }));
+  assert.strictEqual(actual.size, 32);
+  for (const item of inventory.files) assert.strictEqual(actual.get(item.sha256), item.sizeBytes, `Local reference mismatch: ${item.fileId}`);
+  console.log('[P08-CONTRACT] local source mode: 32/32 SHA-256 and byte sizes verified');
+});
+
+test('P08 migration is additive and DB-enforces lifecycle, provenance, tenant, and snapshot guards', () => {
+  const migration = fs.readFileSync(migrationPath, 'utf8');
+  const schema = fs.readFileSync(schemaPath, 'utf8');
+  for (const model of [
+    'ReferenceInventory', 'ReportTemplate', 'ReportTemplateVersion', 'TemplateTypeMapping',
+    'TemplateSection', 'TemplateSectionBlock', 'TemplateReference', 'BlockDefinition', 'ReportInstance'
+  ]) assert.match(schema, new RegExp(`model ${model} \\\{`));
+  for (const guard of [
+    'P08_reference_identity_immutable', 'P08_template_version_content_immutable',
+    'P08_template_version_lifecycle_guard', 'P08_template_version_approval_guard',
+    'P08_template_version_activation_guard', 'P08_mapping_insert_guard',
+    'P08_section_update_guard', 'P08_section_block_update_guard',
+    'P08_reference_mapping_insert_guard', 'P08_report_instance_insert_guard',
+    'P08_report_instance_snapshot_immutable', 'P08_report_section_snapshot_immutable'
+  ]) assert.ok(migration.includes(guard), `Missing P08 DB guard: ${guard}`);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
+  assert.match(migration, /TYPE-05'\s+THEN RAISE\(ABORT, 'P08_TYPE05_TEMPLATE_MAPPING_FORBIDDEN'/);
+  assert.match(migration, /CREATE UNIQUE INDEX "TemplateTypeMapping_one_primary"/);
+});
+
+test('P08 seed preserves 32 exact references, eight instruction-defined standard blocks, and zero pre-approved templates', async () => {
+  await resetDatabase(databaseUrl);
+  await seedDatabase(databaseUrl);
+  const inventory = readInventory();
+  const db = createPrismaClient(databaseUrl);
   try {
-    // Check production seed ACTIVE template count is strictly 0
-    const activeTemplatesCount = await db.reportTemplateVersion.count({ where: { status: 'ACTIVE' } });
-    if (activeTemplatesCount !== 0) {
-      throw new Error(`[P08-CONTRACT] Production seed ACTIVE template count must be strictly 0, got ${activeTemplatesCount}`);
-    }
-
-    // Check TYPE-05 template & version count is strictly 0
-    const type05VersionCount = await db.templateTypeMapping.count({ where: { typeId: 'TYPE-05' } });
-    if (type05VersionCount !== 0) {
-      throw new Error(`[P08-CONTRACT] TYPE-05 template mappings must be strictly 0, got ${type05VersionCount}`);
-    }
-
-    // Check BlockDefinition count (8 standard blocks)
-    const blockCount = await db.blockDefinition.count();
-    if (blockCount < 8) {
-      throw new Error(`[P08-CONTRACT] BlockDefinition must contain at least 8 standard blocks, got ${blockCount}`);
-    }
-
-    // Check ReferenceInventory count (32 anonymous items, all REVIEW_REQUIRED)
-    const refCount = await db.referenceInventory.count();
-    if (refCount !== 32) {
-      throw new Error(`[P08-CONTRACT] ReferenceInventory must contain exactly 32 items, got ${refCount}`);
-    }
-
-    const unapprovedRefCount = await db.referenceInventory.count({ where: { approvalStatus: 'REVIEW_REQUIRED' } });
-    if (unapprovedRefCount !== 32) {
-      throw new Error(`[P08-CONTRACT] All 32 ReferenceInventory items must be REVIEW_REQUIRED, got ${unapprovedRefCount}`);
-    }
-
+    const references = await db.referenceInventory.findMany({ orderBy: { fileId: 'asc' } });
+    assert.strictEqual(references.length, 32);
+    assert.deepStrictEqual(references.map((row) => [row.fileId, row.sha256, row.fileSize]), inventory.files.map((item) => [item.fileId, item.sha256, item.sizeBytes]));
+    assert.strictEqual(references.every((row) => row.approvalStatus === 'REVIEW_REQUIRED'), true);
+    assert.strictEqual(await db.reportTemplate.count(), 0);
+    assert.strictEqual(await db.reportTemplateVersion.count({ where: { status: 'ACTIVE' } }), 0);
+    assert.strictEqual(await db.templateTypeMapping.count({ where: { typeId: 'TYPE-05' } }), 0);
+    assert.deepStrictEqual((await db.blockDefinition.findMany({ orderBy: { code: 'asc' } })).map((row) => row.code), [
+      'calculation-basis', 'conclusion', 'contract-status', 'executive-summary', 'fact-relation', 'legal-review', 'opinion', 'photo-analysis'
+    ]);
   } finally {
     await db.$disconnect();
   }
+});
 
-  // 3. API Contract & Snapshot Immutability Test
-  const testDbUrl = getDatabaseUrl();
-  const server = createApiServer({ databaseUrl: testDbUrl, allowedOrigins: ['http://localhost:3000'] });
+test('P08 API creates approved templates and immutable case snapshots without changing v1 after v2 activation', async (t) => {
+  await resetDatabase(databaseUrl);
+  await seedDatabase(databaseUrl);
+  const db: PrismaClient = createPrismaClient(databaseUrl);
+  const server: ManagedApiServer = createApiServer({ databaseUrl, allowedOrigins: [allowedOrigin], secureCookies: false });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  const port = typeof address === 'object' && address ? address.port : 3001;
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const admin = await login(origin, 'admin@example.invalid');
+  const director = await login(origin, 'director@example.invalid');
+  const pm = await login(origin, 'pm@example.invalid');
+  let templateId = '';
+  let v1Id = '';
+  let instanceId = '';
+  let caseVersion = (await db.caseItem.findUniqueOrThrow({ where: { id: 'CASE-SYN-001' } })).version;
 
   try {
-    // Login as Admin to test DRAFT template creation
-    const loginRes = await fetch(`${baseUrl}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
-      body: JSON.stringify({ email: 'admin@example.invalid', password: 'Password123!' })
+    await t.test('TYPE-05 remains an explicit empty state', async () => {
+      const response = await request(origin, '/api/report-templates?claimType=TYPE-05', 'GET', undefined, pm);
+      assert.strictEqual(response.status, 200);
+      assert.strictEqual(response.body.availability, 'TEMPLATE_NOT_FOUND');
+      assert.deepStrictEqual(response.body.templates, []);
     });
-    if (!loginRes.ok) throw new Error('[P08-CONTRACT] Admin login failed');
 
-    const cookies = loginRes.headers.getSetCookie();
-    const sessionToken = cookies.find((c) => c.startsWith('session_token='))?.split(';')[0].split('=')[1];
-    const csrfToken = cookies.find((c) => c.startsWith('csrf_token='))?.split(';')[0].split('=')[1];
+    await t.test('Admin draft, independent Director approval, and activation use optimistic versions', async () => {
+      const created = await request(origin, '/api/report-templates', 'POST', draftPayload('P08 v1'), admin);
+      assert.strictEqual(created.status, 201);
+      templateId = created.body.template.id;
+      v1Id = created.body.version.id;
+      assert.strictEqual(created.body.version.status, 'DRAFT');
+      assert.match(created.body.version.contentSha256, /^[0-9a-f]{64}$/);
 
-    const authHeaders = {
-      'Content-Type': 'application/json',
-      Origin: 'http://localhost:3000',
-      Cookie: `session_token=${sessionToken}; csrf_token=${csrfToken}`,
-      'X-CSRF-Token': csrfToken || ''
-    };
-
-    // Test GET /api/report-templates?claimType=TYPE-05
-    const type05Res = await fetch(`${baseUrl}/api/report-templates?claimType=TYPE-05`, { headers: authHeaders });
-    const type05Data = (await type05Res.json()) as { availability: string; templates: unknown[] };
-    if (type05Data.availability !== 'TEMPLATE_NOT_AVAILABLE' || type05Data.templates.length !== 0) {
-      throw new Error('[P08-CONTRACT] TYPE-05 query must return TEMPLATE_NOT_AVAILABLE with empty templates array');
-    }
-
-    // Create DRAFT template for TYPE-01
-    const createRes = await fetch(`${baseUrl}/api/report-templates`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        code: `RPT-CONTRACT-${Date.now()}`,
-        name: 'Contract Test Template',
-        companyForm: 'Company Form Contract v1',
-        primaryType: 'TYPE-01',
-        secondaryTypes: ['TYPE-02'],
-        tocStructure: ['개요', '계약', '사실관계', '의견'],
-        requiredSections: ['개요'],
-        requiredEvidenceRules: ['계약서'],
-        blockSchemas: { default: 'std' }
-      })
+      const staleApproval = await request(origin, `/api/report-templates/${templateId}/versions/${v1Id}/approve`, 'POST', { expectedRowVersion: 2 }, director);
+      assert.strictEqual(staleApproval.status, 409);
+      const approved = await request(origin, `/api/report-templates/${templateId}/versions/${v1Id}/approve`, 'POST', { expectedRowVersion: 1 }, director);
+      assert.strictEqual(approved.status, 200);
+      assert.strictEqual(approved.body.version.status, 'HUMAN_APPROVED');
+      assert.strictEqual(approved.body.version.rowVersion, 2);
+      const activated = await request(origin, `/api/report-templates/${templateId}/versions/${v1Id}/activate`, 'POST', { expectedRowVersion: 2 }, director);
+      assert.strictEqual(activated.status, 200);
+      assert.strictEqual(activated.body.version.status, 'ACTIVE');
+      assert.strictEqual(activated.body.version.rowVersion, 3);
     });
-    if (!createRes.ok) {
-      const err = await createRes.text();
-      throw new Error(`[P08-CONTRACT] Template creation failed: ${err}`);
-    }
 
-    const createdData = (await createRes.json()) as { template: { id: string }; version: { id: string } };
+    let v1Snapshot = '';
+    let v1Sections = '';
+    await t.test('ACTIVE version creates a same-tenant, same-type immutable report snapshot', async () => {
+      const created = await request(origin, '/api/cases/CASE-SYN-001/report-instances', 'POST', {
+        templateVersionId: v1Id,
+        expectedCaseVersion: caseVersion
+      }, pm);
+      assert.strictEqual(created.status, 201);
+      instanceId = created.body.instance.id;
+      caseVersion = created.body.caseVersion;
+      assert.strictEqual(created.body.sections.length, 2);
+      assert.strictEqual(created.body.sections.every((section: any) => section.isRequired), true);
+      const instance = await db.reportInstance.findUniqueOrThrow({ where: { id: instanceId } });
+      v1Snapshot = JSON.stringify(instance);
+      v1Sections = JSON.stringify(await db.reportSection.findMany({ where: { report: { reportInstanceId: instanceId } }, orderBy: { sectionNumber: 'asc' } }));
 
-    // Login as Director to approve & activate
-    const dirLogin = await fetch(`${baseUrl}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
-      body: JSON.stringify({ email: 'director@example.invalid', password: 'Password123!' })
+      const stale = await request(origin, '/api/cases/CASE-SYN-001/report-instances', 'POST', {
+        templateVersionId: v1Id,
+        expectedCaseVersion: caseVersion - 1
+      }, pm);
+      assert.strictEqual(stale.status, 409);
     });
-    const dirCookies = dirLogin.headers.getSetCookie();
-    const dirSession = dirCookies.find((c) => c.startsWith('session_token='))?.split(';')[0].split('=')[1];
-    const dirCsrf = dirCookies.find((c) => c.startsWith('csrf_token='))?.split(';')[0].split('=')[1];
 
-    const dirHeaders = {
-      'Content-Type': 'application/json',
-      Origin: 'http://localhost:3000',
-      Cookie: `session_token=${dirSession}; csrf_token=${dirCsrf}`,
-      'X-CSRF-Token': dirCsrf || ''
-    };
-
-    // Approve version
-    const approveRes = await fetch(`${baseUrl}/api/report-templates/${createdData.template.id}/versions/${createdData.version.id}/approve`, {
-      method: 'POST',
-      headers: dirHeaders
+    await t.test('new v2 is a new immutable snapshot and activating it archives v1 only', async () => {
+      const v2Payload = { ...draftPayload('P08 v2'), expectedTemplateVersion: 1 };
+      v2Payload.companyForm = 'P08 v2 changed company form';
+      const v2 = await request(origin, `/api/report-templates/${templateId}/versions`, 'POST', v2Payload, admin);
+      assert.strictEqual(v2.status, 201);
+      assert.strictEqual(v2.body.version.versionNumber, 2);
+      const v2Id = v2.body.version.id;
+      assert.notStrictEqual(v2.body.version.contentSha256, (await db.reportTemplateVersion.findUniqueOrThrow({ where: { id: v1Id } })).contentSha256);
+      assert.strictEqual((await request(origin, `/api/report-templates/${templateId}/versions/${v2Id}/approve`, 'POST', { expectedRowVersion: 1 }, director)).status, 200);
+      assert.strictEqual((await request(origin, `/api/report-templates/${templateId}/versions/${v2Id}/activate`, 'POST', { expectedRowVersion: 2 }, director)).status, 200);
+      assert.strictEqual((await db.reportTemplateVersion.findUniqueOrThrow({ where: { id: v1Id } })).status, 'ARCHIVED');
+      assert.strictEqual((await db.reportTemplateVersion.findUniqueOrThrow({ where: { id: v2Id } })).status, 'ACTIVE');
+      assert.strictEqual(JSON.stringify(await db.reportInstance.findUniqueOrThrow({ where: { id: instanceId } })), v1Snapshot);
+      assert.strictEqual(JSON.stringify(await db.reportSection.findMany({ where: { report: { reportInstanceId: instanceId } }, orderBy: { sectionNumber: 'asc' } })), v1Sections);
     });
-    if (!approveRes.ok) throw new Error('[P08-CONTRACT] Template approval failed');
 
-    // Activate version
-    const activateRes = await fetch(`${baseUrl}/api/report-templates/${createdData.template.id}/versions/${createdData.version.id}/activate`, {
-      method: 'POST',
-      headers: dirHeaders
+    await t.test('a template for another claim type cannot instantiate a TYPE-01 case', async () => {
+      const created = await request(origin, '/api/report-templates', 'POST', draftPayload('P08 type2', 'TYPE-02'), admin);
+      assert.strictEqual(created.status, 201);
+      assert.strictEqual((await request(origin, `/api/report-templates/${created.body.template.id}/versions/${created.body.version.id}/approve`, 'POST', { expectedRowVersion: 1 }, director)).status, 200);
+      assert.strictEqual((await request(origin, `/api/report-templates/${created.body.template.id}/versions/${created.body.version.id}/activate`, 'POST', { expectedRowVersion: 2 }, director)).status, 200);
+      const mismatch = await request(origin, '/api/cases/CASE-SYN-001/report-instances', 'POST', {
+        templateVersionId: created.body.version.id,
+        expectedCaseVersion: caseVersion
+      }, pm);
+      assert.strictEqual(mismatch.status, 409);
     });
-    if (!activateRes.ok) throw new Error('[P08-CONTRACT] Template activation failed');
-
-    // Login as PM to create ReportInstance
-    const pmLogin = await fetch(`${baseUrl}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
-      body: JSON.stringify({ email: 'pm@example.invalid', password: 'Password123!' })
-    });
-    const pmCookies = pmLogin.headers.getSetCookie();
-    const pmSession = pmCookies.find((c) => c.startsWith('session_token='))?.split(';')[0].split('=')[1];
-    const pmCsrf = pmCookies.find((c) => c.startsWith('csrf_token='))?.split(';')[0].split('=')[1];
-
-    const pmHeaders = {
-      'Content-Type': 'application/json',
-      Origin: 'http://localhost:3000',
-      Cookie: `session_token=${pmSession}; csrf_token=${pmCsrf}`,
-      'X-CSRF-Token': pmCsrf || ''
-    };
-
-    const instRes = await fetch(`${baseUrl}/api/cases/CASE-SYN-001/report-instances`, {
-      method: 'POST',
-      headers: pmHeaders,
-      body: JSON.stringify({ templateVersionId: createdData.version.id })
-    });
-    if (!instRes.ok) {
-      const err = await instRes.text();
-      throw new Error(`[P08-CONTRACT] ReportInstance creation failed: ${err}`);
-    }
-
-    const instData = (await instRes.json()) as { instance: { id: string; companyFormSnapshot: string } };
-    if (instData.instance.companyFormSnapshot !== 'Company Form Contract v1') {
-      throw new Error('[P08-CONTRACT] ReportInstance companyFormSnapshot mismatch');
-    }
-
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await server.waitForDatabaseClose();
+    await db.$disconnect();
+    for (const suffix of ['', '-journal', '-shm', '-wal']) fs.rmSync(`${databasePath}${suffix}`, { force: true });
   }
-
-  console.log('[P08-CONTRACT] All P08 contract tests passed successfully.');
-}
-
-if (require.main === module) {
-  runP08ContractTests().catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
-}
+});

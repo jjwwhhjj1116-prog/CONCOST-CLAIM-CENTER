@@ -1,4 +1,6 @@
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { createPrismaClient, getDatabaseUrl } from './db-engine';
 
 const SCRYPT_KEY_LENGTH = 32;
@@ -18,6 +20,25 @@ export function verifyPassword(password: string, stored: string): boolean {
 
 export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+interface SanitizedReferenceInventory {
+  totalFiles: number;
+  files: Array<{
+    fileId: string;
+    sizeBytes: number;
+    sha256: string;
+    scanStatus: string;
+  }>;
+}
+
+function loadSanitizedReferenceInventory(): SanitizedReferenceInventory {
+  const inventoryPath = path.resolve(__dirname, '../../../docs/templates/reference-inventory.json');
+  const parsed = JSON.parse(fs.readFileSync(inventoryPath, 'utf8')) as SanitizedReferenceInventory;
+  if (parsed.totalFiles !== 32 || parsed.files.length !== 32) {
+    throw new Error('P08 sanitized reference inventory must contain exactly 32 entries');
+  }
+  return parsed;
 }
 
 function seedPasswordHash(userId: string): string {
@@ -305,7 +326,24 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
           name: '현장조사 및 수량산출 클레임 제안서 템플릿',
           claimType: 'TYPE-01',
           description: 'TYPE-01 현장조사 및 수량산출 전문 클레임 기술제안서 표준 템플릿',
-          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})\n의뢰인: {{CLIENT_NAME}}\n1. 의뢰 배경\n{{BACKGROUND}}\n2. 수행 목적\n{{OBJECTIVE}}\n3. 수행 방법 및 수량산출 범위\n{{METHOD}}\n4. 예상 성과물 및 제출 기한\n{{EXPECTED_OUTCOME}}\n5. 제외 사항\n{{EXCLUSIONS}}\n담당자: {{ASSIGNED_USER}} / 작성일: {{CREATED_DATE}}`,
+          bodyTemplate: `[제안서] {{CASE_TITLE}} (사건번호: {{CASE_NUMBER}} / 유형: {{CLAIM_TYPE}})
+의뢰인: {{CLIENT_NAME}}
+1. 의뢰 배경
+{{BACKGROUND}}
+
+2. 수행 목적
+{{OBJECTIVE}}
+
+3. 수행 방법 및 수량산출 범위
+{{METHOD}}
+
+4. 예상 성과물 및 제출 기한
+{{EXPECTED_OUTCOME}}
+
+5. 제외 사항
+{{EXCLUSIONS}}
+
+담당자: {{ASSIGNED_USER}} / 작성일: {{CREATED_DATE}}`,
           placeholdersJson: JSON.stringify(proposalPlaceholders),
           version: 1
         },
@@ -456,82 +494,67 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         }
       });
 
-      // 15. P08 Block Definitions
-      const blockDefs = [
-        { code: 'OVERVIEW', name: '검토 개요', description: '사건 개요 및 검토 목적', schemaJson: JSON.stringify({ type: 'object', properties: { summary: { type: 'string' } } }) },
-        { code: 'CONTRACT', name: '계약 현황', description: '공사/용역 계약 정보 및 조건', schemaJson: JSON.stringify({ type: 'object', properties: { contractAmount: { type: 'number' } } }) },
-        { code: 'FACTS', name: '사실관계', description: '일지 및 경과 사실 정리', schemaJson: JSON.stringify({ type: 'object', properties: { timeline: { type: 'array' } } }) },
-        { code: 'PHOTO_ANALYSIS', name: '사진 분석', description: '현장 사진 및 도면 대조 분석', schemaJson: JSON.stringify({ type: 'object', properties: { photos: { type: 'array' } } }) },
-        { code: 'COST_CALC', name: '산출근거', description: '클레임 금액 및 내역 산출 내역', schemaJson: JSON.stringify({ type: 'object', properties: { items: { type: 'array' } } }) },
-        { code: 'LEGAL_REVIEW', name: '법률 검토', description: '관련 법령 및 판례 검토', schemaJson: JSON.stringify({ type: 'object', properties: { precedents: { type: 'array' } } }) },
-        { code: 'OPINION', name: '의견', description: '전문가 종합 의견', schemaJson: JSON.stringify({ type: 'object', properties: { opinionText: { type: 'string' } } }) },
-        { code: 'CONCLUSION', name: '결론', description: '최종 결론 및 제언', schemaJson: JSON.stringify({ type: 'object', properties: { conclusionText: { type: 'string' } } }) }
-      ];
-
-      for (const bd of blockDefs) {
-        await tx.blockDefinition.upsert({
-          where: { code: bd.code },
-          update: { name: bd.name, description: bd.description, schemaJson: bd.schemaJson, updatedAt: now },
-          create: { id: `BLK-${bd.code}`, code: bd.code, name: bd.name, description: bd.description, schemaJson: bd.schemaJson, createdAt: now, updatedAt: now }
-        });
+      // 15. P08 reference provenance and reusable block definitions.
+      // Production seed intentionally creates zero report templates and zero ACTIVE versions.
+      const referenceInventory = loadSanitizedReferenceInventory();
+      for (const reference of referenceInventory.files) {
+        if (!/^TPL-REF-\d{3}$/.test(reference.fileId) || !/^[0-9a-f]{64}$/.test(reference.sha256) || reference.sizeBytes <= 0) {
+          throw new Error(`Invalid sanitized reference inventory entry: ${reference.fileId}`);
+        }
+        const existing = await tx.referenceInventory.findUnique({ where: { fileId: reference.fileId } });
+        if (!existing) {
+          await tx.referenceInventory.create({
+            data: {
+              id: reference.fileId,
+              fileId: reference.fileId,
+              sha256: reference.sha256,
+              fileSize: reference.sizeBytes,
+              scanStatus: reference.scanStatus === 'UNSCANNED' ? 'UNSCANNED' : 'SCANNED',
+              approvalStatus: 'REVIEW_REQUIRED',
+              version: 1,
+              createdAt: now,
+              updatedAt: now
+            }
+          });
+        }
       }
 
-      // 16. P08 Reference Inventory (32 익명 레코드, 사전 승인은 0건이고 모두 REVIEW_REQUIRED)
-      const EXPECTED_EXACT_SHAS: Record<string, string> = {
-        'TPL-REF-001': '793cf78dd4262af8ddfddc77b85e5052f379e76d9e30f437cb799b9c43cec40a',
-        'TPL-REF-002': '07e6483b00146f2aae5440e426e67e0c3a109dfd03b5e4ceb45dd3c1da222863',
-        'TPL-REF-003': '33d47c460c30f5df150d0c213e16b02bad32af118932d7509e92521ef3d3656c',
-        'TPL-REF-004': '2841c45be4cb33c376196415a942dd67bbc5a4a63ed4167548c50c18ead02818',
-        'TPL-REF-005': '79bdd80d6ea68e2bdbe1d5eb79b082c12fbcd7dfc41d8a17f8e0af6cb15bc8b9',
-        'TPL-REF-006': '799f600cc28b85a2d9b3de0b4e4e30160f4ca016891346bbdc955d7ba09a48cb',
-        'TPL-REF-007': '803a7dac76f5dfb641d6ed09545bd8c3e1bc705e70fc3d6c313d9bdcc9a5862a',
-        'TPL-REF-008': 'b5fc68e971e16c0dc10afdad52ade68466d79f49c5c6632c8bd6746b9b3f733c',
-        'TPL-REF-009': '54916152527b6669d0b984e1452913369029b749e168396bbf89193174358e73',
-        'TPL-REF-010': '48e695fc178c9c5ab7e1922accc11085fad8ffa90a83801dc31988a1212392b5',
-        'TPL-REF-011': '704d15f89b301236454ff745a320abfd07a9f81dfe59f01ac80c1200a5a3ab08',
-        'TPL-REF-012': 'b2fa6c4b8d73139b362ec7bf8bf3a0830079d546046e186e5fecf4271cce0589',
-        'TPL-REF-013': 'cf615ffc0de836aa17238ce06f432efd2054554d24e3adeb3a95d028429073e7',
-        'TPL-REF-014': '3cfe73cd7abfd509ecb59c2d01f4d4dd6016d295d504bc7ba83fe268ab2f8912',
-        'TPL-REF-015': '295323489bfccd6b6a87287c2670756cf5f3f6114ce20a6b6863fa28ed709611',
-        'TPL-REF-016': 'aae869dd91d5466d7c9553c124efd1cc26da2bfb8543b247c2ad3d5b53a8a54e',
-        'TPL-REF-017': '46654b6954f7db138db189e90a256ebaab9721f8089f20536236e0690fa6f538',
-        'TPL-REF-018': 'af54833985f8e95683c8fb4c7e5daf07d8c5bef9a5c33187c12c26028cb240e5',
-        'TPL-REF-019': '5b250214112613ba64344bc07fd42c35a8b02658a48c1a0161e85f329e64d175',
-        'TPL-REF-020': '4f11c2e0a80a2a48ebc1c9c4d7fd5a7903a1ee7eeec33741969e81fd13dd835b',
-        'TPL-REF-021': 'c2b08275275061270eeebd87ad2834cdb93686d8f5079805fee1c156d555c22b',
-        'TPL-REF-022': 'b92bd57ca313180477328c38f1997090662f45851aa1fea8a2080d3410d8840b',
-        'TPL-REF-023': 'b46af144ac4530f510b2bb4545bc5060713aa59e58143d56137c50d6843737fa',
-        'TPL-REF-024': '2392e4723cdae1e26e111bffd27f463389de6ef9b0203b5894a7de27a3345534',
-        'TPL-REF-025': '281822dcaab11013dbf8a4d05ede709cad9763504cb411319fb6b0db71830dc5',
-        'TPL-REF-026': '036c826bab836a83962c1878bc7c8b5ee18d0120f3bf146ec535fbe7923d68be',
-        'TPL-REF-027': '62bc005ed3a99120cfb631dfac47ce694f68d52a3ad73ee528a2eda6a87abb3b',
-        'TPL-REF-028': 'a8c1e0294ead3b86e5e7dc0eff30054d92a501b93dc518ccc559fd4365fcb4b1',
-        'TPL-REF-029': 'a0c647b7892a4078b24cc670f33329007a45877f8e8df3cb43b2516dbe54a644',
-        'TPL-REF-030': '88babe364a7cacfbb1b5e25356f80c0bc6583cfc7a0c215346a5732117665c39',
-        'TPL-REF-031': '602861a42ba7ed0e96842eb40c811073942086fb9213ed8c938bef7a5d7a3bf2',
-        'TPL-REF-032': '017b8fb3aac57469b51ee8cc43cca7c58a56e58e49f31c6a38f9beaa42a9f707'
-      };
-
-      for (let i = 1; i <= 32; i++) {
-        const fileId = `TPL-REF-${String(i).padStart(3, '0')}`;
-        const sha256 = EXPECTED_EXACT_SHAS[fileId];
-        await tx.referenceInventory.upsert({
-          where: { fileId },
-          update: { sha256, scanStatus: 'UNSCANNED', approvalStatus: 'REVIEW_REQUIRED', updatedAt: now },
-          create: { id: fileId, fileId, sha256, fileSize: 1024 * i, scanStatus: 'UNSCANNED', approvalStatus: 'REVIEW_REQUIRED', createdAt: now, updatedAt: now }
-        });
+      const blockDefinitions = [
+        ['BLK-EXECUTIVE-SUMMARY', 'executive-summary', '검토 개요', { type: 'object', required: ['summary'], properties: { summary: { type: 'string' } } }],
+        ['BLK-CONTRACT-STATUS', 'contract-status', '계약 현황', { type: 'object', required: ['contracts'], properties: { contracts: { type: 'array' } } }],
+        ['BLK-FACT-RELATION', 'fact-relation', '사실관계', { type: 'object', required: ['facts'], properties: { facts: { type: 'array' } } }],
+        ['BLK-PHOTO-ANALYSIS', 'photo-analysis', '사진 분석', { type: 'object', required: ['photos'], properties: { photos: { type: 'array' } } }],
+        ['BLK-CALCULATION-BASIS', 'calculation-basis', '산출근거', { type: 'object', required: ['basis'], properties: { basis: { type: 'array' } } }],
+        ['BLK-LEGAL-REVIEW', 'legal-review', '법률 검토', { type: 'object', required: ['opinion'], properties: { opinion: { type: 'string' } } }],
+        ['BLK-OPINION', 'opinion', '의견', { type: 'object', required: ['opinion'], properties: { opinion: { type: 'string' } } }],
+        ['BLK-CONCLUSION', 'conclusion', '결론', { type: 'object', required: ['conclusion'], properties: { conclusion: { type: 'string' } } }]
+      ] as const;
+      for (const [id, code, name, schema] of blockDefinitions) {
+        const existing = await tx.blockDefinition.findUnique({ where: { id } });
+        if (!existing) {
+          await tx.blockDefinition.create({
+            data: {
+              id,
+              code,
+              name,
+              description: `P08 synthetic ${code} block contract`,
+              schemaJson: JSON.stringify(schema),
+              version: 1,
+              status: 'ACTIVE',
+              createdAt: now,
+              updatedAt: now
+            }
+          });
+        }
       }
 
-      // NOTE: Production seed의 ACTIVE 템플릿 수는 지침에 따라 정확히 0개!
-      // TYPE-05 템플릿/버전/매핑 역시 0개!
-
-      // Initial Audit Log for P08
+      // 16. Initial Audit Log
       await tx.auditLog.upsert({
-        where: { id: 'AUD-SYN-P08' },
+        where: { id: 'AUD-SYN-001' },
         update: {},
         create: {
-          id: 'AUD-SYN-P08', organizationId: 'ORG-SYN-A', userId: 'USR-ADMIN', action: 'SEED_INITIALIZED_P08',
-          targetEntity: 'System', targetId: 'P08', metadataJson: JSON.stringify({ source: 'synthetic-seed-p08', activeTemplateCount: 0 }), createdAt: now
+          id: 'AUD-SYN-001', organizationId: 'ORG-SYN-A', userId: 'USR-ADMIN', action: 'SEED_INITIALIZED',
+          targetEntity: 'System', targetId: 'P08', metadataJson: JSON.stringify({ source: 'synthetic-seed-p08' }), createdAt: now
         }
       });
     });

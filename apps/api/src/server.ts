@@ -7,7 +7,7 @@ import {
   type Prisma, type PrismaClient, type User
 } from '@claim-studio/database';
 import {
-  generateDocxBuffer, generatePdfBuffer
+  generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer
 } from '@claim-studio/document-engine';
 
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -25,9 +25,9 @@ const CASE_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
 const CASE_DELETE_ROLES = new Set(['ceo', 'director', 'admin']);
 const PROPOSAL_EDITOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
 const PROPOSAL_APPROVER_ROLES = new Set(['reviewer', 'director', 'ceo', 'admin']);
-const TEMPLATE_APPROVER_ROLES = new Set(['ceo', 'director']);
-const TEMPLATE_ADMIN_ROLES = new Set(['admin']);
-
+const REPORT_TEMPLATE_ADMIN_ROLES = new Set(['admin']);
+const REPORT_TEMPLATE_APPROVER_ROLES = new Set(['ceo', 'director']);
+const REPORT_INSTANCE_CREATOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
 const ALLOWED_PROPOSAL_PLACEHOLDERS = new Set([
   'CASE_NUMBER', 'CASE_TITLE', 'CLAIM_TYPE', 'ASSIGNED_USER', 'CLIENT_NAME', 'CREATED_DATE',
   'BACKGROUND', 'OBJECTIVE', 'METHOD', 'EXPECTED_OUTCOME', 'EXCLUSIONS'
@@ -153,45 +153,93 @@ async function verifyProposalSources(
     where: { id: { in: sourceIds }, document: { caseId, deletedAt: null } },
     include: { document: true }
   });
-  if (versions.length !== sourceIds.length) throw new HttpError(403, 'Source document version must belong to the target case');
+  if (versions.length !== sourceIds.length) throw new HttpError(403, 'Source document version does not belong to the same case or is unavailable');
   for (const version of versions) {
-    const diskPath = path.join(uploadDir, version.storageKey);
-    if (!fs.existsSync(diskPath)) throw new HttpError(409, 'Source document file is missing on disk');
-    const digest = crypto.createHash('sha256').update(fs.readFileSync(diskPath)).digest('hex');
-    if (digest !== version.sha256) throw new HttpError(409, 'Source document file has been tampered with');
+    const storedPath = safeStoragePath(uploadDir, version.storageKey);
+    if (!fs.existsSync(storedPath) || !fs.statSync(storedPath).isFile()) throw new HttpError(409, 'Source document storage object is missing');
+    const stored = fs.readFileSync(storedPath);
+    const storedHash = crypto.createHash('sha256').update(stored).digest('hex');
+    if (stored.length !== version.fileSize || storedHash !== version.sha256) throw new HttpError(409, 'Source document integrity verification failed');
   }
 }
 
-export function validateFileSecurity(filename: string, mimeType: string, buffer: Buffer): { extension: string } {
-  if (buffer.length > UPLOAD_MAX_BYTES) throw new HttpError(400, 'File size exceeds maximum 10MB limit');
-  if (!filename || filename.includes('\0') || filename.includes('\\') || filename.includes('/')) throw new HttpError(400, 'Invalid filename or path semantics');
-  if (filename.split('.').length > 2) throw new HttpError(400, 'Double file extensions are strictly forbidden');
+function validateOriginalFilename(filename: string): string {
+  if (!filename || filename.includes('\0') || filename.includes('/') || filename.includes('\\') || filename.includes('..') || path.basename(filename) !== filename) {
+    throw new HttpError(400, 'Unsafe file name');
+  }
+  const clean = sanitizeDisplayName(filename);
+  const segments = clean.toLowerCase().split('.');
+  if (segments.length < 2 || segments.slice(1, -1).some((segment) => FORBIDDEN_FILE_EXTENSIONS.has(`.${segment}`))) {
+    throw new HttpError(400, 'Double extension or executable disguise is forbidden');
+  }
+  return clean;
+}
 
-  const ext = path.extname(filename).toLowerCase();
-  if (FORBIDDEN_FILE_EXTENSIONS.has(ext)) throw new HttpError(400, `Forbidden executable file extension: ${ext}`);
+function decodeStrictBase64(value: string): Buffer {
+  const compact = value.replace(/\s/g, '');
+  if (!compact || compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) throw new HttpError(400, 'Invalid base64 file content');
+  const decoded = Buffer.from(compact, 'base64');
+  if (decoded.toString('base64') !== compact) throw new HttpError(400, 'Invalid base64 file content');
+  return decoded;
+}
 
+export function validateFileSecurity(filename: string, mimeType: string, buffer: Buffer): { extension: string; cleanFilename: string; mimeType: string } {
+  const cleanFilename = validateOriginalFilename(filename);
+  if (buffer.length === 0) throw new HttpError(400, 'Empty files are not allowed');
+  if (buffer.length > UPLOAD_MAX_BYTES) {
+    throw new HttpError(400, 'File size exceeds maximum 10MB limit');
+  }
+
+  const ext = path.extname(cleanFilename).toLowerCase();
+  if (FORBIDDEN_FILE_EXTENSIONS.has(ext)) {
+    throw new HttpError(400, `Forbidden executable file extension: ${ext}`);
+  }
+  const normalizedMime = mimeType.split(';', 1)[0].trim().toLowerCase();
   const allowedMimes = FILE_POLICIES[ext];
-  if (!allowedMimes || !allowedMimes.includes(mimeType.toLowerCase())) {
-    throw new HttpError(400, `MIME type ${mimeType} does not match allowed policy for ${ext}`);
+  if (!allowedMimes) {
+    throw new HttpError(400, `Unsupported file extension: ${ext}`);
+  }
+  if (!allowedMimes.includes(normalizedMime)) throw new HttpError(400, 'MIME type does not match the file extension');
+
+  // Magic Byte Check
+  if (ext === '.pdf') {
+    if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+      throw new HttpError(400, 'Invalid PDF magic bytes');
+    }
+  } else if (ext === '.png') {
+    const pngMagic = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    if (buffer.length < 8 || !buffer.subarray(0, 8).equals(pngMagic)) {
+      throw new HttpError(400, 'Invalid PNG magic bytes');
+    }
+  } else if (ext === '.jpg' || ext === '.jpeg') {
+    const jpgMagic = Buffer.from([0xff, 0xd8, 0xff]);
+    if (buffer.length < 3 || !buffer.subarray(0, 3).equals(jpgMagic)) {
+      throw new HttpError(400, 'Invalid JPEG magic bytes');
+    }
+  } else if (['.docx', '.xlsx', '.pptx'].includes(ext)) {
+    const zipMagic = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+    if (buffer.length < 4 || !buffer.subarray(0, 4).equals(zipMagic)) {
+      throw new HttpError(400, 'Invalid Office OpenXML magic bytes');
+    }
+    const marker = ext === '.docx' ? 'word/' : ext === '.xlsx' ? 'xl/' : 'ppt/';
+    const archiveHeader = buffer.subarray(0, Math.min(buffer.length, 1_000_000)).toString('latin1');
+    if (!archiveHeader.includes('[Content_Types].xml') || !archiveHeader.includes(marker)) throw new HttpError(400, 'Office archive content does not match its extension');
+  } else if (ext === '.hwp') {
+    const oleMagic = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    if (buffer.length < oleMagic.length || !buffer.subarray(0, oleMagic.length).equals(oleMagic)) throw new HttpError(400, 'Invalid HWP magic bytes');
+  } else if (ext === '.txt') {
+    if (buffer.includes(0) || buffer.toString('utf8').includes('\uFFFD')) throw new HttpError(400, 'Text upload must be valid UTF-8 without NUL bytes');
   }
 
-  if (ext === '.pdf' && (buffer.length < 5 || buffer.subarray(0, 5).toString('utf8') !== '%PDF-')) {
-    throw new HttpError(400, 'File content does not match PDF magic header');
-  }
-  if (ext === '.png' && (buffer.length < 8 || buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a')) {
-    throw new HttpError(400, 'File content does not match PNG magic header');
-  }
-  if ((ext === '.jpg' || ext === '.jpeg') && (buffer.length < 3 || buffer[0] !== 0xff || buffer[1] !== 0xd8 || buffer[2] !== 0xff)) {
-    throw new HttpError(400, 'File content does not match JPEG magic header');
-  }
-  if (['.docx', '.xlsx', '.pptx'].includes(ext) && (buffer.length < 4 || buffer.subarray(0, 4).readUInt32LE(0) !== 0x04034b50)) {
-    throw new HttpError(400, 'File content does not match Zip magic header');
-  }
-  if (ext === '.hwp' && (buffer.length < 8 || buffer.subarray(0, 8).toString('hex') !== 'd0cf11e0a1b11ae1')) {
-    throw new HttpError(400, 'File content does not match HWP OLE magic header');
-  }
+  return { extension: ext, cleanFilename, mimeType: normalizedMime };
+}
 
-  return { extension: ext };
+function safeStoragePath(uploadDir: string, storageKey: string): string {
+  if (!/^storage-[0-9a-f-]+\.[a-z0-9]+$/i.test(storageKey)) throw new HttpError(409, 'Stored file key is invalid');
+  const resolvedRoot = path.resolve(uploadDir);
+  const resolved = path.resolve(resolvedRoot, storageKey);
+  if (!resolved.startsWith(`${resolvedRoot}${path.sep}`)) throw new HttpError(409, 'Stored file path escaped the upload root');
+  return resolved;
 }
 
 function parseCookies(req: http.IncomingMessage): Record<string, string> {
@@ -277,6 +325,257 @@ function requireAnyRole(context: SessionContext, roles: Set<string>, message: st
   if (!context.roles.some((role) => roles.has(role))) throw new HttpError(403, message);
 }
 
+interface ReportTemplateDraftInput {
+  code: string;
+  name: string;
+  description: string | null;
+  companyForm: string;
+  primaryType: string;
+  secondaryTypes: string[];
+  tocStructure: string[];
+  requiredSections: string[];
+  requiredEvidenceRules: string[];
+  blockSchemas: Record<string, { blockCode: string; config?: Record<string, unknown> }>;
+  referenceFileIds: string[];
+}
+
+const FORBIDDEN_TEMPLATE_INPUT_KEYS = new Set([
+  'sourcePath', 'relativePath', 'filename', 'originalFilename', 'contentBase64',
+  'fileContent', 'apiKey', 'accessToken', 'refreshToken', 'secret', 'password'
+]);
+
+function assertNoForbiddenTemplateInput(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const child of value) assertNoForbiddenTemplateInput(child);
+    return;
+  }
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (FORBIDDEN_TEMPLATE_INPUT_KEYS.has(key)) throw new HttpError(400, `Forbidden template input field: ${key}`);
+    assertNoForbiddenTemplateInput(child);
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new HttpError(400, 'Template input contains a non-JSON value');
+  return encoded;
+}
+
+function strictStringArray(value: unknown, label: string, options: { min?: number; max?: number } = {}): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.trim().length > 0)) {
+    throw new HttpError(400, `${label} must be an array of non-empty strings`);
+  }
+  const normalized = value.map((item) => item.trim());
+  if (new Set(normalized).size !== normalized.length) throw new HttpError(400, `${label} must not contain duplicates`);
+  if (normalized.length < (options.min ?? 0) || normalized.length > (options.max ?? 100)) {
+    throw new HttpError(400, `${label} has an invalid number of entries`);
+  }
+  if (normalized.some((item) => item.length > 200)) throw new HttpError(400, `${label} entries must be 200 characters or fewer`);
+  return normalized;
+}
+
+function parseReportTemplateDraft(body: Record<string, unknown>, requireCode: boolean): ReportTemplateDraftInput {
+  assertNoForbiddenTemplateInput(body);
+  const allowed = new Set([
+    'code', 'name', 'description', 'companyForm', 'primaryType', 'secondaryTypes',
+    'tocStructure', 'requiredSections', 'requiredEvidenceRules', 'blockSchemas',
+    'referenceFileIds', 'expectedTemplateVersion'
+  ]);
+  const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) throw new HttpError(400, `Unknown template input field: ${unknown[0]}`);
+
+  const code = typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const description = typeof body.description === 'string' && body.description.trim() ? body.description.trim() : null;
+  const companyForm = typeof body.companyForm === 'string' ? body.companyForm.trim() : '';
+  const primaryType = typeof body.primaryType === 'string' ? body.primaryType.trim() : '';
+  if ((requireCode && !/^[A-Z0-9][A-Z0-9_-]{0,79}$/.test(code)) || !name || name.length > 200 || !companyForm || companyForm.length > 5000) {
+    throw new HttpError(400, 'Template code, name, and companyForm are invalid');
+  }
+  if (!ALLOWED_CLAIM_TYPES.has(primaryType) || primaryType === 'TYPE-05') {
+    throw new HttpError(400, 'primaryType must be one of TYPE-01..TYPE-04 or TYPE-06; TYPE-05 is TEMPLATE_NOT_FOUND');
+  }
+
+  const secondaryTypes = strictStringArray(body.secondaryTypes ?? [], 'secondaryTypes', { max: 5 });
+  if (secondaryTypes.some((type) => !ALLOWED_CLAIM_TYPES.has(type) || type === 'TYPE-05')) {
+    throw new HttpError(400, 'secondaryTypes contains an invalid or TYPE-05 value');
+  }
+  if (secondaryTypes.includes(primaryType)) throw new HttpError(400, 'primaryType cannot also be a secondaryType');
+
+  const tocStructure = strictStringArray(body.tocStructure, 'tocStructure', { min: 1, max: 50 });
+  const requiredSections = strictStringArray(body.requiredSections, 'requiredSections', { min: 1, max: 50 });
+  if (requiredSections.some((title) => !tocStructure.includes(title))) {
+    throw new HttpError(400, 'Every required section must exist in tocStructure');
+  }
+  const requiredEvidenceRules = strictStringArray(body.requiredEvidenceRules, 'requiredEvidenceRules', { min: 1, max: 50 });
+  const referenceFileIds = strictStringArray(body.referenceFileIds ?? [], 'referenceFileIds', { max: 32 });
+  if (referenceFileIds.some((fileId) => !/^TPL-REF-\d{3}$/.test(fileId))) {
+    throw new HttpError(400, 'referenceFileIds must use anonymous TPL-REF-NNN identifiers');
+  }
+
+  if (!body.blockSchemas || typeof body.blockSchemas !== 'object' || Array.isArray(body.blockSchemas)) {
+    throw new HttpError(400, 'blockSchemas must be an object keyed by section title');
+  }
+  const rawBlockSchemas = body.blockSchemas as Record<string, unknown>;
+  if (Object.keys(rawBlockSchemas).length !== tocStructure.length || tocStructure.some((title) => !(title in rawBlockSchemas))) {
+    throw new HttpError(400, 'blockSchemas must contain exactly one entry for every table-of-contents section');
+  }
+  const blockSchemas: ReportTemplateDraftInput['blockSchemas'] = {};
+  for (const title of tocStructure) {
+    const item = rawBlockSchemas[title];
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(400, `Invalid block schema for section: ${title}`);
+    const record = item as Record<string, unknown>;
+    const blockCode = typeof record.blockCode === 'string' ? record.blockCode.trim() : '';
+    const config = record.config;
+    if (!blockCode || (config !== undefined && (!config || typeof config !== 'object' || Array.isArray(config)))) {
+      throw new HttpError(400, `Invalid blockCode/config for section: ${title}`);
+    }
+    blockSchemas[title] = { blockCode, ...(config ? { config: config as Record<string, unknown> } : {}) };
+  }
+
+  return {
+    code,
+    name,
+    description,
+    companyForm,
+    primaryType,
+    secondaryTypes,
+    tocStructure,
+    requiredSections,
+    requiredEvidenceRules,
+    blockSchemas,
+    referenceFileIds
+  };
+}
+
+async function createReportTemplateVersion(
+  tx: Prisma.TransactionClient,
+  input: ReportTemplateDraftInput,
+  templateId: string,
+  versionNumber: number,
+  createdById: string
+) {
+  const references = input.referenceFileIds.length === 0 ? [] : await tx.referenceInventory.findMany({
+    where: { fileId: { in: input.referenceFileIds }, approvalStatus: 'HUMAN_APPROVED' },
+    orderBy: { fileId: 'asc' }
+  });
+  if (references.length !== input.referenceFileIds.length) {
+    throw new HttpError(409, 'All reference file IDs must exist and be HUMAN_APPROVED');
+  }
+
+  const blockCodes = [...new Set(Object.values(input.blockSchemas).map((item) => item.blockCode))];
+  const blocks = await tx.blockDefinition.findMany({
+    where: { code: { in: blockCodes }, status: 'ACTIVE' },
+    orderBy: { version: 'desc' }
+  });
+  const blockByCode = new Map<string, (typeof blocks)[number]>();
+  for (const block of blocks) if (!blockByCode.has(block.code)) blockByCode.set(block.code, block);
+  if (blockByCode.size !== blockCodes.length) throw new HttpError(409, 'Every section must reference an ACTIVE block definition');
+
+  const referenceProvenance = references.map((reference) => ({
+    fileId: reference.fileId,
+    sha256: reference.sha256,
+    fileSize: reference.fileSize
+  }));
+  const normalizedSnapshot = {
+    templateId,
+    versionNumber,
+    name: input.name,
+    companyForm: input.companyForm,
+    primaryType: input.primaryType,
+    secondaryTypes: input.secondaryTypes,
+    tocStructure: input.tocStructure,
+    requiredSections: input.requiredSections,
+    requiredEvidenceRules: input.requiredEvidenceRules,
+    blockSchemas: input.blockSchemas,
+    references: referenceProvenance
+  };
+  const contentSha256 = crypto.createHash('sha256').update(canonicalJson(normalizedSnapshot)).digest('hex');
+  const versionId = `RPT-TPL-VER-${crypto.randomUUID()}`;
+  const version = await tx.reportTemplateVersion.create({
+    data: {
+      id: versionId,
+      templateId,
+      versionNumber,
+      rowVersion: 1,
+      name: input.name,
+      companyForm: input.companyForm,
+      tocStructureJson: JSON.stringify(input.tocStructure),
+      requiredSectionsJson: JSON.stringify(input.requiredSections),
+      requiredEvidenceRulesJson: JSON.stringify(input.requiredEvidenceRules),
+      blockSchemasJson: canonicalJson(input.blockSchemas),
+      contentSha256,
+      status: 'DRAFT',
+      createdById
+    }
+  });
+
+  await tx.templateTypeMapping.create({
+    data: { id: `TTM-${crypto.randomUUID()}`, templateVersionId: versionId, typeId: input.primaryType, kind: 'PRIMARY' }
+  });
+  for (const typeId of input.secondaryTypes) {
+    await tx.templateTypeMapping.create({
+      data: { id: `TTM-${crypto.randomUUID()}`, templateVersionId: versionId, typeId, kind: 'SECONDARY' }
+    });
+  }
+
+  for (let index = 0; index < input.tocStructure.length; index++) {
+    const title = input.tocStructure[index];
+    const blockRequest = input.blockSchemas[title];
+    const block = blockByCode.get(blockRequest.blockCode);
+    if (!block) throw new HttpError(409, `Block definition unavailable: ${blockRequest.blockCode}`);
+    const sectionId = `TPL-SEC-${crypto.randomUUID()}`;
+    const blockSnapshot = {
+      code: block.code,
+      version: block.version,
+      schema: JSON.parse(block.schemaJson) as unknown,
+      config: blockRequest.config ?? {}
+    };
+    await tx.templateSection.create({
+      data: {
+        id: sectionId,
+        templateVersionId: versionId,
+        sectionNumber: index + 1,
+        title,
+        isRequired: input.requiredSections.includes(title),
+        description: null,
+        blockSchemaSnapshotJson: canonicalJson(blockSnapshot)
+      }
+    });
+    await tx.templateSectionBlock.create({
+      data: {
+        id: `TPL-SEC-BLK-${crypto.randomUUID()}`,
+        templateSectionId: sectionId,
+        blockDefinitionId: block.id,
+        position: 1,
+        blockCodeSnapshot: block.code,
+        blockVersionSnapshot: block.version,
+        blockSchemaSnapshotJson: block.schemaJson
+      }
+    });
+  }
+
+  for (const reference of references) {
+    await tx.templateReference.create({
+      data: {
+        id: `TPL-REF-MAP-${crypto.randomUUID()}`,
+        templateVersionId: versionId,
+        referenceId: reference.id,
+        fileIdSnapshot: reference.fileId,
+        sha256Snapshot: reference.sha256,
+        fileSizeSnapshot: reference.fileSize
+      }
+    });
+  }
+  return version;
+}
+
 export function getKstDateString(date: Date): string {
   const kstOffsetMs = 9 * 60 * 60 * 1000;
   const kstDate = new Date(date.getTime() + kstOffsetMs);
@@ -306,7 +605,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   const db = createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
   const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
-  const uploadDir = options.uploadDir ?? DEFAULT_UPLOAD_DIR;
+  const uploadDir = path.resolve(options.uploadDir ?? DEFAULT_UPLOAD_DIR);
   ensureUploadDir(uploadDir);
 
   const server = http.createServer((req, res) => {
@@ -319,6 +618,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
       }
       if (req.method === 'OPTIONS') {
         sendJson(res, 204, {});
@@ -404,439 +704,539 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
-      // --- P08 Block Definitions & Reference Inventory Endpoints ---
+      if (pathname === '/api/proposal-templates' && req.method === 'GET') {
+        const claimType = url.searchParams.get('claimType')?.trim();
+        if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType filter');
+        const templates = await db.proposalTemplate.findMany({
+          where: claimType ? { claimType } : {},
+          orderBy: [{ claimType: 'asc' }, { version: 'desc' }]
+        });
+        sendJson(res, 200, { templates });
+        return;
+      }
+
+      // --- P08 Report Template Catalog & Immutable Report Snapshot Endpoints ---
+      const canManageReportTemplates = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
+
       if (pathname === '/api/block-definitions' && req.method === 'GET') {
-        const blocks = await db.blockDefinition.findMany({ orderBy: { code: 'asc' } });
+        const blocks = await db.blockDefinition.findMany({
+          where: { status: 'ACTIVE' },
+          select: { id: true, code: true, name: true, description: true, schemaJson: true, version: true, status: true },
+          orderBy: [{ code: 'asc' }, { version: 'desc' }]
+        });
         sendJson(res, 200, { blocks });
         return;
       }
 
       if (pathname === '/api/reference-inventories' && req.method === 'GET') {
-        const inventory = await db.referenceInventory.findMany({ orderBy: { fileId: 'asc' } });
+        const inventory = await db.referenceInventory.findMany({
+          select: { fileId: true, sha256: true, fileSize: true, scanStatus: true, approvalStatus: true, version: true },
+          orderBy: { fileId: 'asc' }
+        });
         sendJson(res, 200, { inventory });
         return;
       }
 
-      // --- P08 Report Templates Endpoints ---
-      if (pathname === '/api/report-templates' && req.method === 'GET') {
-        const claimType = url.searchParams.get('claimType')?.trim();
-        if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) {
-          throw new HttpError(400, 'Invalid claimType filter');
+      const referenceReviewMatch = pathname.match(/^\/api\/reference-inventories\/(TPL-REF-\d{3})\/review$/);
+      if (referenceReviewMatch && req.method === 'POST') {
+        requireAnyRole(context, REPORT_TEMPLATE_APPROVER_ROLES, 'Reference approval requires CEO or Director role');
+        const body = await readJson(req);
+        const expectedVersion = Number(body.expectedVersion);
+        const decision = typeof body.decision === 'string' ? body.decision : '';
+        const unknown = Object.keys(body).filter((key) => !['expectedVersion', 'decision'].includes(key));
+        if (unknown.length > 0) throw new HttpError(400, `Unknown reference review field: ${unknown[0]}`);
+        if (!Number.isInteger(expectedVersion) || expectedVersion < 1 || decision !== 'HUMAN_APPROVE') {
+          throw new HttpError(400, 'expectedVersion and HUMAN_APPROVE decision are required');
         }
+        const fileId = referenceReviewMatch[1];
+        const approved = await db.$transaction(async (tx) => {
+          const reference = await tx.referenceInventory.findUnique({ where: { fileId } });
+          if (!reference) throw new HttpError(404, 'Reference inventory item not found');
+          if (reference.version !== expectedVersion || reference.approvalStatus === 'HUMAN_APPROVED') {
+            throw new HttpError(409, 'Stale or already approved reference');
+          }
+          if (reference.scanStatus !== 'SCANNED') throw new HttpError(409, 'UNSCANNED references cannot be approved');
+          const changed = await tx.referenceInventory.updateMany({
+            where: { fileId, version: expectedVersion, approvalStatus: { in: ['UNCLASSIFIED', 'REVIEW_REQUIRED'] }, scanStatus: 'SCANNED' },
+            data: { approvalStatus: 'HUMAN_APPROVED', version: { increment: 1 } }
+          });
+          if (changed.count !== 1) throw new HttpError(409, 'Stale reference approval request');
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REFERENCE_INVENTORY_APPROVED', 'ReferenceInventory', reference.id, {
+              fileId,
+              sha256: reference.sha256,
+              fileSize: reference.fileSize,
+              fromVersion: expectedVersion,
+              toVersion: expectedVersion + 1
+            })
+          });
+          return tx.referenceInventory.findUniqueOrThrow({ where: { fileId } });
+        });
+        sendJson(res, 200, { reference: approved });
+        return;
+      }
 
-        // TYPE-05 availability는 TEMPLATE_NOT_AVAILABLE로 빈 목록 반환!
+      if (pathname === '/api/report-templates' && req.method === 'GET') {
+        const claimType = url.searchParams.get('claimType')?.trim() ?? '';
+        if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType filter');
         if (claimType === 'TYPE-05') {
-          sendJson(res, 200, { templates: [], availability: 'TEMPLATE_NOT_AVAILABLE', claimType: 'TYPE-05' });
+          sendJson(res, 200, {
+            claimType,
+            availability: 'TEMPLATE_NOT_FOUND',
+            templates: [],
+            activeCounts: { 'TYPE-01': 0, 'TYPE-02': 0, 'TYPE-03': 0, 'TYPE-04': 0, 'TYPE-05': 0, 'TYPE-06': 0 }
+          });
           return;
         }
 
+        const versionVisibility: Prisma.ReportTemplateVersionWhereInput = canManageReportTemplates ? {} : { status: 'ACTIVE' };
         const templates = await db.reportTemplate.findMany({
-          where: claimType
-            ? { versions: { some: { typeMappings: { some: { typeId: claimType } } } } }
-            : {},
+          where: {
+            organizationId: context.user.organizationId,
+            status: 'ACTIVE',
+            ...(claimType ? {
+              versions: { some: { ...versionVisibility, typeMappings: { some: { typeId: claimType } } } }
+            } : canManageReportTemplates ? {} : { versions: { some: { status: 'ACTIVE' } } })
+          },
           include: {
             versions: {
+              where: versionVisibility,
               orderBy: { versionNumber: 'desc' },
               include: {
-                typeMappings: true,
-                createdBy: { select: { id: true, name: true, email: true } },
-                approvedBy: { select: { id: true, name: true, email: true } }
+                typeMappings: { orderBy: [{ kind: 'asc' }, { typeId: 'asc' }] },
+                sections: { orderBy: { sectionNumber: 'asc' } },
+                references: {
+                  orderBy: { fileIdSnapshot: 'asc' },
+                  select: { fileIdSnapshot: true, sha256Snapshot: true, fileSizeSnapshot: true }
+                },
+                createdBy: { select: { id: true, name: true } },
+                approvedBy: { select: { id: true, name: true } }
               }
             }
           },
-          orderBy: { createdAt: 'desc' }
+          orderBy: [{ code: 'asc' }]
         });
 
-        // 6개 클레임 유형 각각에 대해 ACTIVE 템플릿 버전 존재 여부 계산
         const activeCounts: Record<string, number> = {};
-        for (const type of ['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']) {
-          if (type === 'TYPE-05') {
-            activeCounts[type] = 0;
-          } else {
-            activeCounts[type] = await db.templateTypeMapping.count({
-              where: { typeId: type, kind: 'PRIMARY', templateVersion: { status: 'ACTIVE' } }
-            });
-          }
+        for (const typeId of ['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']) {
+          activeCounts[typeId] = typeId === 'TYPE-05' ? 0 : await db.templateTypeMapping.count({
+            where: {
+              typeId,
+              kind: 'PRIMARY',
+              templateVersion: {
+                status: 'ACTIVE',
+                template: { organizationId: context.user.organizationId, status: 'ACTIVE' }
+              }
+            }
+          });
         }
-
-        const availability = claimType ? (activeCounts[claimType] > 0 ? 'AVAILABLE' : 'TEMPLATE_NOT_AVAILABLE') : 'MIXED';
-
-        sendJson(res, 200, { templates, activeCounts, availability });
+        sendJson(res, 200, {
+          templates,
+          activeCounts,
+          availability: claimType ? (activeCounts[claimType] > 0 ? 'AVAILABLE' : 'TEMPLATE_NOT_FOUND') : 'MIXED'
+        });
         return;
       }
 
       if (pathname === '/api/report-templates' && req.method === 'POST') {
-        requireAnyRole(context, TEMPLATE_ADMIN_ROLES, 'Template creation requires Admin role');
+        requireAnyRole(context, REPORT_TEMPLATE_ADMIN_ROLES, 'Report template creation requires Admin role');
         const body = await readJson(req);
-        const name = typeof body.name === 'string' ? body.name.trim() : '';
-        const code = typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
-        const description = typeof body.description === 'string' ? body.description.trim() : null;
-        const companyForm = typeof body.companyForm === 'string' ? body.companyForm.trim() : '';
-        const primaryType = typeof body.primaryType === 'string' ? body.primaryType.trim() : '';
-        const secondaryTypes = Array.isArray(body.secondaryTypes)
-          ? body.secondaryTypes.filter((t): t is string => typeof t === 'string')
-          : [];
-        const tocStructure = Array.isArray(body.tocStructure) ? body.tocStructure : [];
-        const requiredSections = Array.isArray(body.requiredSections) ? body.requiredSections : [];
-        const requiredEvidenceRules = Array.isArray(body.requiredEvidenceRules) ? body.requiredEvidenceRules : [];
-        const blockSchemas = typeof body.blockSchemas === 'object' && body.blockSchemas !== null ? body.blockSchemas : {};
-        const referenceFileIds = Array.isArray(body.referenceFileIds)
-          ? body.referenceFileIds.filter((f): f is string => typeof f === 'string')
-          : [];
-
-        if (!name || !code || !companyForm || !primaryType) {
-          throw new HttpError(400, 'Name, code, companyForm, and primaryType are required');
-        }
-
-        if (primaryType === 'TYPE-05') {
-          throw new HttpError(400, 'TYPE-05 does not allow report template creation (TEMPLATE_NOT_FOUND state)');
-        }
-
-        if (!ALLOWED_CLAIM_TYPES.has(primaryType)) {
-          throw new HttpError(400, `Invalid primaryType ${primaryType}. Must be TYPE-01 to TYPE-06.`);
-        }
-
-        if (secondaryTypes.includes(primaryType)) {
-          throw new HttpError(400, 'primaryType cannot be included in secondaryTypes');
-        }
-
-        for (const secType of secondaryTypes) {
-          if (!ALLOWED_CLAIM_TYPES.has(secType) || secType === 'TYPE-05') {
-            throw new HttpError(400, `Invalid secondaryType ${secType}`);
-          }
-        }
-
+        const input = parseReportTemplateDraft(body, true);
         const templateId = `RPT-TPL-${crypto.randomUUID()}`;
-        const versionId = `RPT-TPL-VER-${crypto.randomUUID()}`;
-
         const created = await db.$transaction(async (tx) => {
           const template = await tx.reportTemplate.create({
-            data: { id: templateId, code, name, description, status: 'ACTIVE', version: 1 }
-          });
-
-          const versionRow = await tx.reportTemplateVersion.create({
             data: {
-              id: versionId,
-              templateId,
-              versionNumber: 1,
-              name: `${name} v1`,
-              companyForm,
-              tocStructureJson: JSON.stringify(tocStructure),
-              requiredSectionsJson: JSON.stringify(requiredSections),
-              requiredEvidenceRulesJson: JSON.stringify(requiredEvidenceRules),
-              blockSchemasJson: JSON.stringify(blockSchemas),
-              referenceFileIdsJson: JSON.stringify(referenceFileIds),
-              status: 'DRAFT',
+              id: templateId,
+              organizationId: context.user.organizationId,
+              code: input.code,
+              name: input.name,
+              description: input.description,
+              status: 'ACTIVE',
+              version: 1,
               createdById: context.user.id
             }
           });
-
-          // Primary mapping
-          await tx.templateTypeMapping.create({
-            data: { id: `TTM-${crypto.randomUUID()}`, templateVersionId: versionId, typeId: primaryType, kind: 'PRIMARY' }
-          });
-
-          // Secondary mappings
-          for (const secType of secondaryTypes) {
-            await tx.templateTypeMapping.create({
-              data: { id: `TTM-${crypto.randomUUID()}`, templateVersionId: versionId, typeId: secType, kind: 'SECONDARY' }
-            });
-          }
-
+          const version = await createReportTemplateVersion(tx, input, templateId, 1, context.user.id);
           await tx.auditLog.create({
-            data: requestAudit(context, 'REPORT_TEMPLATE_CREATED', 'ReportTemplate', templateId, { code, primaryType, versionId })
+            data: requestAudit(context, 'REPORT_TEMPLATE_DRAFT_CREATED', 'ReportTemplateVersion', version.id, {
+              templateId,
+              templateCode: input.code,
+              primaryType: input.primaryType,
+              secondaryTypes: input.secondaryTypes,
+              contentSha256: version.contentSha256
+            })
           });
-
-          return { template, version: versionRow };
+          return { template, version };
         });
-
         sendJson(res, 201, created);
         return;
       }
 
-      // GET /api/report-templates/:id
-      const tplDetailMatch = pathname.match(/^\/api\/report-templates\/([^/]+)$/);
-      if (tplDetailMatch && req.method === 'GET') {
-        const tplId = tplDetailMatch[1];
-        const template = await db.reportTemplate.findUnique({
-          where: { id: tplId },
-          include: {
-            versions: {
-              orderBy: { versionNumber: 'desc' },
-              include: {
-                typeMappings: true,
-                sections: { orderBy: { sectionNumber: 'asc' } },
-                createdBy: { select: { id: true, name: true, email: true } },
-                approvedBy: { select: { id: true, name: true, email: true } }
-              }
-            }
-          }
+      const templateVersionCreateMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions$/);
+      if (templateVersionCreateMatch && req.method === 'POST') {
+        requireAnyRole(context, REPORT_TEMPLATE_ADMIN_ROLES, 'Report template version creation requires Admin role');
+        const templateId = templateVersionCreateMatch[1];
+        const body = await readJson(req);
+        const expectedTemplateVersion = Number(body.expectedTemplateVersion);
+        if (!Number.isInteger(expectedTemplateVersion) || expectedTemplateVersion < 1) {
+          throw new HttpError(400, 'expectedTemplateVersion is required for optimistic locking');
+        }
+        const input = parseReportTemplateDraft(body, false);
+        const created = await db.$transaction(async (tx) => {
+          const template = await tx.reportTemplate.findFirst({
+            where: { id: templateId, organizationId: context.user.organizationId, status: 'ACTIVE' },
+            include: { versions: { orderBy: { versionNumber: 'desc' }, take: 1 } }
+          });
+          if (!template) throw new HttpError(404, 'Report template not found');
+          if (template.version !== expectedTemplateVersion) throw new HttpError(409, 'Stale report template version');
+          const bumped = await tx.reportTemplate.updateMany({
+            where: { id: templateId, organizationId: context.user.organizationId, version: expectedTemplateVersion },
+            data: { version: { increment: 1 } }
+          });
+          if (bumped.count !== 1) throw new HttpError(409, 'Stale report template version');
+          const versionNumber = (template.versions[0]?.versionNumber ?? 0) + 1;
+          const version = await createReportTemplateVersion(tx, input, templateId, versionNumber, context.user.id);
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_TEMPLATE_VERSION_CREATED', 'ReportTemplateVersion', version.id, {
+              templateId,
+              versionNumber,
+              primaryType: input.primaryType,
+              contentSha256: version.contentSha256
+            })
+          });
+          return { version, templateVersion: expectedTemplateVersion + 1 };
         });
-        if (!template) throw new HttpError(404, 'Report template not found');
-        sendJson(res, 200, { template });
+        sendJson(res, 201, created);
         return;
       }
 
-      // POST /api/report-templates/:id/versions/:versionId/approve (CEO/Director 전용 사람 승인)
-      const approveMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions\/([^/]+)\/approve$/);
-      if (approveMatch && req.method === 'POST') {
-        requireAnyRole(context, TEMPLATE_APPROVER_ROLES, 'Template approval requires CEO or Director role');
-        const [, tplId, versionId] = approveMatch;
-
-        const versionRow = await db.reportTemplateVersion.findUnique({ where: { id: versionId } });
-        if (!versionRow || versionRow.templateId !== tplId) throw new HttpError(404, 'Template version not found');
-
-        // Creator self-approval prohibition
-        if (versionRow.createdById === context.user.id) {
-          throw new HttpError(403, 'Creator self-approval of template version is forbidden');
-        }
-
-        if (versionRow.status !== 'DRAFT') {
-          throw new HttpError(400, `Cannot approve version with status ${versionRow.status}`);
-        }
-
-        const approved = await db.$transaction(async (tx) => {
-          const updated = await tx.reportTemplateVersion.update({
-            where: { id: versionId },
-            data: { status: 'HUMAN_APPROVED', approvedById: context.user.id, approvedAt: new Date() }
-          });
-
-          await tx.auditLog.create({
-            data: requestAudit(context, 'TEMPLATE_VERSION_APPROVED', 'ReportTemplateVersion', versionId, { templateId: tplId })
-          });
-
-          return updated;
+      const templatePreviewMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions\/([^/]+)\/preview$/);
+      if (templatePreviewMatch && req.method === 'GET') {
+        const [, templateId, versionId] = templatePreviewMatch;
+        const version = await db.reportTemplateVersion.findFirst({
+          where: {
+            id: versionId,
+            templateId,
+            template: { organizationId: context.user.organizationId },
+            ...(canManageReportTemplates ? {} : { status: 'ACTIVE' })
+          },
+          include: {
+            typeMappings: { orderBy: [{ kind: 'asc' }, { typeId: 'asc' }] },
+            sections: {
+              orderBy: { sectionNumber: 'asc' },
+              include: { blocks: { orderBy: { position: 'asc' } } }
+            },
+            references: {
+              orderBy: { fileIdSnapshot: 'asc' },
+              select: { fileIdSnapshot: true, sha256Snapshot: true, fileSizeSnapshot: true }
+            },
+            approvedBy: { select: { id: true, name: true } }
+          }
         });
+        if (!version) throw new HttpError(404, 'Report template version not found');
+        sendJson(res, 200, { version });
+        return;
+      }
 
+      const templateApprovalMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions\/([^/]+)\/approve$/);
+      if (templateApprovalMatch && req.method === 'POST') {
+        requireAnyRole(context, REPORT_TEMPLATE_APPROVER_ROLES, 'Template approval requires CEO or Director role');
+        const [, templateId, versionId] = templateApprovalMatch;
+        const body = await readJson(req);
+        const expectedRowVersion = Number(body.expectedRowVersion);
+        if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) throw new HttpError(400, 'expectedRowVersion is required');
+        const approved = await db.$transaction(async (tx) => {
+          const version = await tx.reportTemplateVersion.findFirst({
+            where: { id: versionId, templateId, template: { organizationId: context.user.organizationId } }
+          });
+          if (!version) throw new HttpError(404, 'Report template version not found');
+          if (version.createdById === context.user.id) throw new HttpError(403, 'Creator self-approval is forbidden');
+          if (version.status !== 'DRAFT' || version.rowVersion !== expectedRowVersion) throw new HttpError(409, 'Stale or non-draft template version');
+          const changed = await tx.reportTemplateVersion.updateMany({
+            where: { id: versionId, status: 'DRAFT', rowVersion: expectedRowVersion },
+            data: {
+              status: 'HUMAN_APPROVED',
+              approvedById: context.user.id,
+              approvedAt: new Date(),
+              rowVersion: { increment: 1 }
+            }
+          });
+          if (changed.count !== 1) throw new HttpError(409, 'Stale template approval request');
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_TEMPLATE_VERSION_APPROVED', 'ReportTemplateVersion', versionId, {
+              templateId,
+              fromRowVersion: expectedRowVersion,
+              toRowVersion: expectedRowVersion + 1
+            })
+          });
+          return tx.reportTemplateVersion.findUniqueOrThrow({ where: { id: versionId } });
+        });
         sendJson(res, 200, { version: approved });
         return;
       }
 
-      // POST /api/report-templates/:id/versions/:versionId/activate (CEO/Director 전용 활성화)
-      const activateMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions\/([^/]+)\/activate$/);
-      if (activateMatch && req.method === 'POST') {
-        requireAnyRole(context, TEMPLATE_APPROVER_ROLES, 'Template activation requires CEO or Director role');
-        const [, tplId, versionId] = activateMatch;
-
-        const versionRow = await db.reportTemplateVersion.findUnique({
-          where: { id: versionId },
-          include: { typeMappings: true }
-        });
-        if (!versionRow || versionRow.templateId !== tplId) throw new HttpError(404, 'Template version not found');
-
-        if (versionRow.status !== 'HUMAN_APPROVED') {
-          throw new HttpError(400, `Version must be HUMAN_APPROVED before activation. Current status: ${versionRow.status}`);
-        }
-
-        const primaryMapping = versionRow.typeMappings.find((m) => m.kind === 'PRIMARY');
-        if (!primaryMapping) throw new HttpError(400, 'Template version has no PRIMARY type mapping');
-
+      const templateActivationMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions\/([^/]+)\/activate$/);
+      if (templateActivationMatch && req.method === 'POST') {
+        requireAnyRole(context, REPORT_TEMPLATE_APPROVER_ROLES, 'Template activation requires CEO or Director role');
+        const [, templateId, versionId] = templateActivationMatch;
+        const body = await readJson(req);
+        const expectedRowVersion = Number(body.expectedRowVersion);
+        if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) throw new HttpError(400, 'expectedRowVersion is required');
         const activated = await db.$transaction(async (tx) => {
-          // Archive existing ACTIVE versions for this primary type
+          const version = await tx.reportTemplateVersion.findFirst({
+            where: { id: versionId, templateId, template: { organizationId: context.user.organizationId } },
+            include: { typeMappings: true }
+          });
+          if (!version) throw new HttpError(404, 'Report template version not found');
+          if (version.status !== 'HUMAN_APPROVED' || version.rowVersion !== expectedRowVersion) {
+            throw new HttpError(409, 'Stale or non-approved template version');
+          }
+          const primary = version.typeMappings.find((mapping) => mapping.kind === 'PRIMARY');
+          if (!primary) throw new HttpError(409, 'Exactly one PRIMARY type mapping is required');
+
           const existingActive = await tx.reportTemplateVersion.findMany({
             where: {
+              id: { not: versionId },
               status: 'ACTIVE',
-              typeMappings: { some: { typeId: primaryMapping.typeId, kind: 'PRIMARY' } }
+              template: { organizationId: context.user.organizationId },
+              typeMappings: { some: { typeId: primary.typeId, kind: 'PRIMARY' } }
             }
           });
-
-          for (const oldVer of existingActive) {
-            await tx.reportTemplateVersion.update({
-              where: { id: oldVer.id },
-              data: { status: 'ARCHIVED' }
+          const archivedAt = new Date();
+          for (const oldVersion of existingActive) {
+            const archived = await tx.reportTemplateVersion.updateMany({
+              where: { id: oldVersion.id, status: 'ACTIVE', rowVersion: oldVersion.rowVersion },
+              data: { status: 'ARCHIVED', archivedAt, rowVersion: { increment: 1 } }
             });
+            if (archived.count !== 1) throw new HttpError(409, 'Concurrent active template update detected');
           }
-
-          const updated = await tx.reportTemplateVersion.update({
-            where: { id: versionId },
-            data: { status: 'ACTIVE' }
+          const changed = await tx.reportTemplateVersion.updateMany({
+            where: { id: versionId, status: 'HUMAN_APPROVED', rowVersion: expectedRowVersion },
+            data: { status: 'ACTIVE', activatedAt: new Date(), rowVersion: { increment: 1 } }
           });
-
+          if (changed.count !== 1) throw new HttpError(409, 'Stale template activation request');
           await tx.auditLog.create({
-            data: requestAudit(context, 'TEMPLATE_VERSION_ACTIVATED', 'ReportTemplateVersion', versionId, {
-              templateId: tplId, primaryType: primaryMapping.typeId
+            data: requestAudit(context, 'REPORT_TEMPLATE_VERSION_ACTIVATED', 'ReportTemplateVersion', versionId, {
+              templateId,
+              primaryType: primary.typeId,
+              archivedVersionIds: existingActive.map((item) => item.id)
             })
           });
-
-          return updated;
+          return tx.reportTemplateVersion.findUniqueOrThrow({ where: { id: versionId } });
         });
-
         sendJson(res, 200, { version: activated });
         return;
       }
 
-      // --- P08 Report Instances Endpoints ---
-      // POST /api/cases/:id/report-instances (사건별 ACTIVE 템플릿 기반 snapshot 생성)
-      const instanceMatch = pathname.match(/^\/api\/cases\/([^/]+)\/report-instances(?:\/([^/]+))?$/);
-      if (instanceMatch) {
-        const [, caseId, instanceId] = instanceMatch;
+      const templateArchiveMatch = pathname.match(/^\/api\/report-templates\/([^/]+)\/versions\/([^/]+)\/archive$/);
+      if (templateArchiveMatch && req.method === 'POST') {
+        requireAnyRole(context, REPORT_TEMPLATE_APPROVER_ROLES, 'Template archive requires CEO or Director role');
+        const [, templateId, versionId] = templateArchiveMatch;
+        const body = await readJson(req);
+        const expectedRowVersion = Number(body.expectedRowVersion);
+        if (!Number.isInteger(expectedRowVersion) || expectedRowVersion < 1) throw new HttpError(400, 'expectedRowVersion is required');
+        const archived = await db.$transaction(async (tx) => {
+          const version = await tx.reportTemplateVersion.findFirst({
+            where: { id: versionId, templateId, template: { organizationId: context.user.organizationId } }
+          });
+          if (!version) throw new HttpError(404, 'Report template version not found');
+          if (version.status !== 'ACTIVE' || version.rowVersion !== expectedRowVersion) throw new HttpError(409, 'Stale or non-active template version');
+          const changed = await tx.reportTemplateVersion.updateMany({
+            where: { id: versionId, status: 'ACTIVE', rowVersion: expectedRowVersion },
+            data: { status: 'ARCHIVED', archivedAt: new Date(), rowVersion: { increment: 1 } }
+          });
+          if (changed.count !== 1) throw new HttpError(409, 'Stale template archive request');
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_TEMPLATE_VERSION_ARCHIVED', 'ReportTemplateVersion', versionId, { templateId })
+          });
+          return tx.reportTemplateVersion.findUniqueOrThrow({ where: { id: versionId } });
+        });
+        sendJson(res, 200, { version: archived });
+        return;
+      }
+
+      const reportTemplateDetailMatch = pathname.match(/^\/api\/report-templates\/([^/]+)$/);
+      if (reportTemplateDetailMatch && req.method === 'GET') {
+        const template = await db.reportTemplate.findFirst({
+          where: { id: reportTemplateDetailMatch[1], organizationId: context.user.organizationId },
+          include: {
+            versions: {
+              where: canManageReportTemplates ? {} : { status: 'ACTIVE' },
+              orderBy: { versionNumber: 'desc' },
+              include: {
+                typeMappings: true,
+                sections: { orderBy: { sectionNumber: 'asc' } },
+                references: {
+                  select: { fileIdSnapshot: true, sha256Snapshot: true, fileSizeSnapshot: true },
+                  orderBy: { fileIdSnapshot: 'asc' }
+                },
+                createdBy: { select: { id: true, name: true } },
+                approvedBy: { select: { id: true, name: true } }
+              }
+            }
+          }
+        });
+        if (!template || (!canManageReportTemplates && template.versions.length === 0)) throw new HttpError(404, 'Report template not found');
+        sendJson(res, 200, { template });
+        return;
+      }
+
+      const caseReportInstancesMatch = pathname.match(/^\/api\/cases\/([^/]+)\/report-instances$/);
+      if (caseReportInstancesMatch) {
+        const caseId = caseReportInstancesMatch[1];
         const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
         if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
         if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
-        if (!instanceId && req.method === 'GET') {
+        if (req.method === 'GET') {
           const instances = await db.reportInstance.findMany({
-            where: { caseId },
-            include: { templateVersion: true, createdBy: { select: { id: true, name: true, email: true } }, reports: true },
+            where: { caseId, organizationId: context.user.organizationId },
+            include: { report: { include: { sections: { orderBy: { sectionNumber: 'asc' } } } } },
             orderBy: { createdAt: 'desc' }
           });
           sendJson(res, 200, { instances });
           return;
         }
 
-        if (!instanceId && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'ReportInstance creation forbidden for Staff/Reviewer');
+        if (req.method === 'POST') {
+          requireAnyRole(context, REPORT_INSTANCE_CREATOR_ROLES, 'Report instance creation forbidden');
           const body = await readJson(req);
+          assertNoForbiddenTemplateInput(body);
           const templateVersionId = typeof body.templateVersionId === 'string' ? body.templateVersionId.trim() : '';
-
-          if (!templateVersionId) throw new HttpError(400, 'templateVersionId is required');
-
-          if (caseRow.claimType === 'TYPE-05') {
-            throw new HttpError(400, 'TYPE-05 cases have no available report templates (TEMPLATE_NOT_FOUND state)');
+          const expectedCaseVersion = Number(body.expectedCaseVersion);
+          const unknown = Object.keys(body).filter((key) => !['templateVersionId', 'expectedCaseVersion'].includes(key));
+          if (unknown.length > 0) throw new HttpError(400, `Unknown report instance input field: ${unknown[0]}`);
+          if (!templateVersionId || !Number.isInteger(expectedCaseVersion) || expectedCaseVersion < 1) {
+            throw new HttpError(400, 'templateVersionId and expectedCaseVersion are required');
           }
+          if (caseRow.claimType === 'TYPE-05') throw new HttpError(409, 'TYPE-05 report template is TEMPLATE_NOT_FOUND');
 
-          const versionRow = await db.reportTemplateVersion.findUnique({
-            where: { id: templateVersionId },
-            include: { typeMappings: true, sections: { orderBy: { sectionNumber: 'asc' } } }
-          });
-
-          if (!versionRow) throw new HttpError(404, 'Report template version not found');
-
-          if (versionRow.status !== 'ACTIVE') {
-            throw new HttpError(400, `Cannot create ReportInstance with non-ACTIVE template version (status: ${versionRow.status})`);
-          }
-
-          const newInstanceId = `RPT-INST-${crypto.randomUUID()}`;
-          const newReportId = `REPO-${crypto.randomUUID()}`;
-          const instTitle = `${caseRow.title} 전문보고서`;
-
-          const createdInstance = await db.$transaction(async (tx) => {
-            const instance = await tx.reportInstance.create({
-              data: {
-                id: newInstanceId,
-                caseId,
-                templateVersionId,
-                templateVersionNumberSnapshot: versionRow.versionNumber,
-                companyFormSnapshot: versionRow.companyForm,
-                tocStructureSnapshotJson: versionRow.tocStructureJson,
-                requiredSectionsSnapshotJson: versionRow.requiredSectionsJson,
-                requiredEvidenceRulesSnapshotJson: versionRow.requiredEvidenceRulesJson,
-                blockSchemasSnapshotJson: versionRow.blockSchemasJson,
-                title: instTitle,
-                status: 'DRAFT',
-                version: 1,
-                createdById: context.user.id
+          const created = await db.$transaction(async (tx) => {
+            const lockedCase = await tx.caseItem.findFirst({
+              where: { id: caseId, organizationId: context.user.organizationId, deletedAt: null }
+            });
+            if (!lockedCase) throw new HttpError(404, 'Case not found');
+            if (lockedCase.version !== expectedCaseVersion) throw new HttpError(409, 'Stale case version');
+            const templateVersion = await tx.reportTemplateVersion.findFirst({
+              where: {
+                id: templateVersionId,
+                status: 'ACTIVE',
+                template: { organizationId: context.user.organizationId, status: 'ACTIVE' },
+                typeMappings: { some: { kind: 'PRIMARY', typeId: lockedCase.claimType } }
+              },
+              include: {
+                template: true,
+                typeMappings: true,
+                sections: { orderBy: { sectionNumber: 'asc' } },
+                references: {
+                  orderBy: { fileIdSnapshot: 'asc' },
+                  select: { fileIdSnapshot: true, sha256Snapshot: true, fileSizeSnapshot: true }
+                }
               }
             });
+            if (!templateVersion) throw new HttpError(409, 'ACTIVE report template must match the case claim type and organization');
+            const primaryMappings = templateVersion.typeMappings.filter((mapping) => mapping.kind === 'PRIMARY');
+            if (primaryMappings.length !== 1 || primaryMappings[0].typeId !== lockedCase.claimType) {
+              throw new HttpError(409, 'Exactly one matching PRIMARY type mapping is required');
+            }
+            if (templateVersion.sections.length === 0) throw new HttpError(409, 'Report template has no sections');
 
-            await tx.report.create({
+            const snapshot = {
+              templateCode: templateVersion.template.code,
+              templateName: templateVersion.name,
+              templateVersionNumber: templateVersion.versionNumber,
+              companyForm: templateVersion.companyForm,
+              tocStructure: JSON.parse(templateVersion.tocStructureJson) as unknown,
+              requiredSections: JSON.parse(templateVersion.requiredSectionsJson) as unknown,
+              requiredEvidenceRules: JSON.parse(templateVersion.requiredEvidenceRulesJson) as unknown,
+              blockSchemas: JSON.parse(templateVersion.blockSchemasJson) as unknown,
+              referenceProvenance: templateVersion.references
+            };
+            const snapshotJson = canonicalJson(snapshot);
+            const snapshotSha256 = crypto.createHash('sha256').update(snapshotJson).digest('hex');
+            const instanceId = `RPT-INST-${crypto.randomUUID()}`;
+            const reportId = `REPO-${crypto.randomUUID()}`;
+            const instance = await tx.reportInstance.create({
               data: {
-                id: newReportId,
+                id: instanceId,
+                organizationId: context.user.organizationId,
                 caseId,
-                reportInstanceId: newInstanceId,
-                title: instTitle,
+                templateVersionId,
+                createdById: context.user.id,
+                version: 1,
+                templateCodeSnapshot: templateVersion.template.code,
+                templateNameSnapshot: templateVersion.name,
+                templateVersionNumberSnapshot: templateVersion.versionNumber,
+                companyFormSnapshot: templateVersion.companyForm,
+                tocStructureSnapshotJson: templateVersion.tocStructureJson,
+                requiredSectionsSnapshotJson: templateVersion.requiredSectionsJson,
+                requiredEvidenceRulesSnapshotJson: templateVersion.requiredEvidenceRulesJson,
+                blockSchemasSnapshotJson: templateVersion.blockSchemasJson,
+                referenceProvenanceSnapshotJson: JSON.stringify(templateVersion.references),
+                snapshotSha256
+              }
+            });
+            const report = await tx.report.create({
+              data: {
+                id: reportId,
+                caseId,
+                reportInstanceId: instanceId,
+                title: `${lockedCase.title} 보고서`,
                 version: 1
               }
             });
-
-            // Parse TOC structure for sections
-            const tocItems: Array<{ title: string; isRequired?: boolean }> = parseStringArray(versionRow.tocStructureJson, 'tocStructureJson')
-              .map((title) => ({ title, isRequired: true }));
-
-            let secNum = 1;
-            for (const item of tocItems) {
-              await tx.reportSection.create({
+            const sections = [];
+            for (const section of templateVersion.sections) {
+              sections.push(await tx.reportSection.create({
                 data: {
-                  id: `SEC-${crypto.randomUUID()}`,
-                  reportId: newReportId,
-                  sectionNumber: secNum++,
-                  title: item.title,
-                  content: `[${item.title} 기본 작성 영역]`,
+                  id: `RPT-SEC-${crypto.randomUUID()}`,
+                  reportId,
+                  templateSectionIdSnapshot: section.id,
+                  sectionNumber: section.sectionNumber,
+                  title: section.title,
+                  content: '',
                   status: 'draft',
-                  isRequired: Boolean(item.isRequired),
+                  isRequired: section.isRequired,
+                  blockSchemaSnapshotJson: section.blockSchemaSnapshotJson,
                   version: 1
                 }
-              });
+              }));
             }
-
+            const bumped = await tx.caseItem.updateMany({
+              where: { id: caseId, organizationId: context.user.organizationId, version: expectedCaseVersion },
+              data: { version: { increment: 1 } }
+            });
+            if (bumped.count !== 1) throw new HttpError(409, 'Stale case version');
             await tx.auditLog.create({
-              data: requestAudit(context, 'REPORT_INSTANCE_CREATED', 'ReportInstance', newInstanceId, {
-                caseId, templateVersionId, reportId: newReportId
+              data: requestAudit(context, 'REPORT_INSTANCE_CREATED', 'ReportInstance', instanceId, {
+                caseId,
+                reportId,
+                templateVersionId,
+                snapshotSha256,
+                sectionCount: sections.length
               })
             });
-
-            return instance;
+            return { instance, report, sections, caseVersion: expectedCaseVersion + 1 };
           });
-
-          sendJson(res, 201, { instance: createdInstance, reportId: newReportId });
+          sendJson(res, 201, created);
           return;
         }
       }
 
-      // --- P07 Proposal Templates Endpoint ---
-      if (pathname === '/api/proposal-templates' && req.method === 'GET') {
-        const claimType = url.searchParams.get('claimType')?.trim();
-        if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) {
-          throw new HttpError(400, 'Invalid claimType filter');
-        }
-        const templates = await db.proposalTemplate.findMany({
-          where: claimType ? { claimType } : {},
-          orderBy: { claimType: 'asc' }
-        });
-        sendJson(res, 200, { templates });
-        return;
-      }
-
-      // --- P04 Reports & Sections Endpoint ---
-      const reportMatch = pathname.match(/^\/api\/reports\/([^/]+)(?:\/(merge|sections\/([^/]+)\/(body|approve)))?$/);
-      if (reportMatch) {
-        const [, reportId, reportAction, sectionId, sectionAction] = reportMatch;
-        const report = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
-        if (!report || report.deletedAt || report.case.deletedAt) throw new HttpError(404, 'Report not found');
-        if (report.case.organizationId !== context.user.organizationId) throw new HttpError(403, 'Report access forbidden');
-        if (!(await canAccessCase(db, context, report.caseId))) throw new HttpError(403, 'Case assignment required');
-
-        if (sectionAction === 'body' && req.method === 'PATCH') {
-          if (context.roles.includes('reviewer')) throw new HttpError(403, 'Reviewer cannot edit report body');
-          const body = await readJson(req);
-          const content = typeof body.content === 'string' ? body.content.trim() : '';
-          const version = typeof body.version === 'number' ? body.version : -1;
-          await db.$transaction(async (tx) => {
-            const result = await tx.reportSection.updateMany({
-              where: { id: sectionId, reportId, version, deletedAt: null },
-              data: { content, version: { increment: 1 } }
-            });
-            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
-            await tx.auditLog.create({ data: requestAudit(context, 'REPORT_SECTION_UPDATED', 'ReportSection', sectionId, { reportId, version }) });
-          });
-          sendJson(res, 200, { message: 'Section body updated' });
-          return;
-        }
-
-        if (sectionAction === 'approve' && req.method === 'POST') {
-          if (!context.roles.some((role) => ['reviewer', 'pm', 'director', 'ceo', 'admin'].includes(role))) throw new HttpError(403, 'Approval forbidden');
-          await db.$transaction(async (tx) => {
-            const result = await tx.reportSection.updateMany({ where: { id: sectionId, reportId, deletedAt: null }, data: { status: 'approved' } });
-            if (result.count !== 1) throw new HttpError(404, 'Section not found');
-            await tx.auditLog.create({ data: requestAudit(context, 'SECTION_APPROVED', 'ReportSection', sectionId, { reportId }) });
-          });
-          sendJson(res, 200, { status: 'approved' });
-          return;
-        }
-
-        if (reportAction === 'merge' && req.method === 'POST') {
-          if (!context.roles.some((role) => ['ceo', 'director', 'pm', 'admin'].includes(role))) {
-            await db.auditLog.create({ data: requestAudit(context, 'REPORT_MERGE_BLOCKED', 'Report', reportId, {}) });
-            throw new HttpError(403, 'Final merge forbidden');
+      const reportInstanceDetailMatch = pathname.match(/^\/api\/report-instances\/([^/]+)$/);
+      if (reportInstanceDetailMatch && req.method === 'GET') {
+        const instance = await db.reportInstance.findFirst({
+          where: { id: reportInstanceDetailMatch[1], organizationId: context.user.organizationId },
+          include: {
+            templateVersion: { select: { id: true, status: true, contentSha256: true } },
+            report: { include: { sections: { orderBy: { sectionNumber: 'asc' } } } }
           }
-          await db.$transaction(async (tx) => {
-            await tx.report.update({ where: { id: reportId }, data: { version: { increment: 1 } } });
-            await tx.auditLog.create({ data: requestAudit(context, 'REPORT_MERGED', 'Report', reportId, {}) });
-          });
-          sendJson(res, 200, { message: 'Report merged' });
-          return;
-        }
+        });
+        if (!instance) throw new HttpError(404, 'Report instance not found');
+        if (!(await canAccessCase(db, context, instance.caseId))) throw new HttpError(403, 'Case assignment required');
+        sendJson(res, 200, { instance });
+        return;
       }
 
       // --- P05 Dashboard KPI Endpoint ---
@@ -863,21 +1263,33 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
         });
 
-        const schedules = await db.schedule.findMany({ where: { case: caseWhere } });
+        const schedules = await db.schedule.findMany({
+          where: { case: caseWhere }
+        });
+
         let todayTasksCount = 0;
         let delayedCount = 0;
 
         for (const s of schedules) {
           const dDayInfo = calculateDDay(s.date, now);
-          if (dDayInfo.isToday) todayTasksCount++;
-          else if (dDayInfo.isOverdue) delayedCount++;
+          if (dDayInfo.isToday) {
+            todayTasksCount++;
+          } else if (dDayInfo.isOverdue) {
+            delayedCount++;
+          }
         }
 
-        sendJson(res, 200, { totalCases, inProgressCount, reviewingDocsCount, todayTasksCount, delayedCount });
+        sendJson(res, 200, {
+          totalCases,
+          inProgressCount,
+          reviewingDocsCount,
+          todayTasksCount,
+          delayedCount
+        });
         return;
       }
 
-      // --- P05 Cases List & Creation ---
+      // --- P05 Cases List & Creation Endpoint ---
       if (pathname === '/api/cases' && req.method === 'GET') {
         const q = url.searchParams.get('q')?.trim() ?? '';
         const claimType = url.searchParams.get('claimType')?.trim();
@@ -959,963 +1371,51 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const createdCase = await db.$transaction(async (tx) => {
           const item = await tx.caseItem.create({
             data: {
-              id: caseId, organizationId: context.user.organizationId, caseNumber, title, description, claimType, status: 'INQUIRY', assignedUserId, version: 1
+              id: caseId,
+              organizationId: context.user.organizationId,
+              caseNumber,
+              title,
+              description,
+              claimType,
+              status: 'INQUIRY',
+              assignedUserId,
+              version: 1
             }
           });
-          await tx.caseCategory.create({ data: { id: `CAT-${crypto.randomUUID()}`, caseId, major, middle, minor } });
-          await tx.statusHistory.create({ data: { id: `STHIST-${crypto.randomUUID()}`, caseId, fromStatus: null, toStatus: 'INQUIRY', changedById: context.user.id, reason: '신규 사건 등록' } });
-          await tx.caseAssignment.create({ data: { caseId, userId: context.user.id } });
+
+          await tx.caseCategory.create({
+            data: { id: `CAT-${crypto.randomUUID()}`, caseId, major, middle, minor }
+          });
+
+          await tx.statusHistory.create({
+            data: {
+              id: `STHIST-${crypto.randomUUID()}`,
+              caseId,
+              fromStatus: null,
+              toStatus: 'INQUIRY',
+              changedById: context.user.id,
+              reason: '신규 사건 등록'
+            }
+          });
+
+          await tx.caseAssignment.create({
+            data: { caseId, userId: context.user.id }
+          });
           if (assignedUserId && assignedUserId !== context.user.id) {
-            await tx.caseAssignment.create({ data: { caseId, userId: assignedUserId } });
+            await tx.caseAssignment.create({
+              data: { caseId, userId: assignedUserId }
+            });
           }
-          await tx.auditLog.create({ data: requestAudit(context, 'CASE_CREATED', 'CaseItem', caseId, { title, claimType, caseNumber }) });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'CASE_CREATED', 'CaseItem', caseId, { title, claimType, caseNumber })
+          });
+
           return { ...item, category: { major, middle, minor } };
         });
 
         sendJson(res, 201, { case: createdCase });
         return;
-      }
-
-      // --- P07 Proposal Endpoints ---
-      const proposalMatch = pathname.match(/^\/api\/cases\/([^/]+)\/proposals(?:\/([^/]+)(?:\/(versions|reviews|render))?)?$/);
-      if (proposalMatch) {
-        const [, caseId, propId, action] = proposalMatch;
-        const caseRow = await db.caseItem.findUnique({
-          where: { id: caseId },
-          include: { assignedUser: true }
-        });
-        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
-        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
-        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
-
-        // GET /api/cases/:id/proposals
-        if (!propId && req.method === 'GET') {
-          const proposals = await db.proposal.findMany({
-            where: { caseId, deletedAt: null },
-            include: {
-              template: true,
-              versions: { orderBy: { versionNumber: 'desc' } },
-              reviews: { orderBy: { createdAt: 'desc' }, include: { reviewer: { select: { id: true, name: true, email: true } } } }
-            },
-            orderBy: { createdAt: 'desc' }
-          });
-          sendJson(res, 200, { proposals });
-          return;
-        }
-
-        // POST /api/cases/:id/proposals (Create proposal)
-        if (!propId && req.method === 'POST') {
-          requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal creation forbidden for Staff or Reviewer');
-          const body = await readJson(req);
-          const templateId = typeof body.templateId === 'string' ? body.templateId.trim() : '';
-          const title = typeof body.title === 'string' ? body.title.trim() : '';
-
-          if (!templateId) throw new HttpError(400, 'Proposal templateId is required');
-          const template = await db.proposalTemplate.findUnique({ where: { id: templateId } });
-          if (!template) {
-            console.error('Proposal template not found in DB:', templateId);
-            throw new HttpError(404, 'Proposal template not found');
-          }
-          if (template.claimType !== caseRow.claimType) {
-            throw new HttpError(400, `Template claimType (${template.claimType}) does not match case claimType (${caseRow.claimType})`);
-          }
-
-          const propTitle = title || `${caseRow.title} 제안서`;
-          const newPropId = `PROP-${crypto.randomUUID()}`;
-          const newVerId = `PROPVER-${crypto.randomUUID()}`;
-
-          const caseValues: Record<string, string> = {
-            CASE_NUMBER: caseRow.caseNumber,
-            CASE_TITLE: caseRow.title,
-            CLAIM_TYPE: caseRow.claimType,
-            ASSIGNED_USER: caseRow.assignedUser?.name || context.user.name,
-            CLIENT_NAME: '원청/의뢰인',
-            CREATED_DATE: getKstDateString(new Date())
-          };
-
-          const { rendered, missing } = renderProposalTemplate(template.bodyTemplate, caseValues);
-          const sha256 = crypto.createHash('sha256').update(rendered).digest('hex');
-          const inputSha = proposalInputHash({ background: '', objective: '', method: '', expectedOutcome: '', exclusions: '' });
-
-          const proposal = await db.$transaction(async (tx) => {
-            await tx.proposal.create({
-              data: {
-                id: newPropId,
-                caseId,
-                templateId,
-                templateVersionSnapshot: template.version,
-                templateBodySnapshot: template.bodyTemplate,
-                templatePlaceholdersSnapshotJson: template.placeholdersJson,
-                title: propTitle,
-                status: 'DRAFT',
-                currentVersionId: null,
-                version: 1,
-                createdById: context.user.id,
-                updatedById: context.user.id
-              }
-            });
-
-            await tx.proposalVersion.create({
-              data: {
-                id: newVerId,
-                proposalId: newPropId,
-                versionNumber: 1,
-                bodyText: rendered,
-                structuredInputsJson: JSON.stringify({ background: '', objective: '', method: '', expectedOutcome: '', exclusions: '' }),
-                renderedValuesJson: JSON.stringify(caseValues),
-                missingFieldsJson: JSON.stringify(missing),
-                generationMode: 'MANUAL',
-                inputSha256: inputSha,
-                sha256,
-                isApproved: false,
-                createdById: context.user.id
-              }
-            });
-
-            await tx.proposal.update({
-              where: { id: newPropId },
-              data: { currentVersionId: newVerId }
-            });
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'PROPOSAL_CREATED', 'Proposal', newPropId, { templateId, title: propTitle, versionNumber: 1 })
-            });
-
-            return tx.proposal.findUniqueOrThrow({
-              where: { id: newPropId },
-              include: { template: true, versions: { orderBy: { versionNumber: 'desc' } }, reviews: true }
-            });
-          });
-
-          sendJson(res, 201, { proposal, versionId: newVerId });
-          return;
-        }
-
-        // GET /api/cases/:id/proposals/:propId
-        if (propId && !action && req.method === 'GET') {
-          const proposal = await db.proposal.findUnique({
-            where: { id: propId },
-            include: {
-              template: true,
-              versions: {
-                orderBy: { versionNumber: 'desc' },
-                include: { createdBy: { select: { id: true, name: true, email: true } } }
-              },
-              reviews: {
-                orderBy: { createdAt: 'desc' },
-                include: { reviewer: { select: { id: true, name: true, email: true } } }
-              }
-            }
-          });
-          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
-          sendJson(res, 200, { proposal });
-          return;
-        }
-
-        // POST /api/cases/:id/proposals/:propId/versions
-        if (propId && action === 'versions' && req.method === 'POST') {
-          requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal version creation forbidden for Staff or Reviewer');
-          const proposal = await db.proposal.findUnique({
-            where: { id: propId },
-            include: { template: true, versions: { orderBy: { versionNumber: 'desc' } } }
-          });
-          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
-
-          const body = await readJson(req);
-          const background = typeof body.background === 'string' ? body.background.trim() : '';
-          const objective = typeof body.objective === 'string' ? body.objective.trim() : '';
-          const method = typeof body.method === 'string' ? body.method.trim() : '';
-          const expectedOutcome = typeof body.expectedOutcome === 'string' ? body.expectedOutcome.trim() : '';
-          const exclusions = typeof body.exclusions === 'string' ? body.exclusions.trim() : '';
-          const generationMode = body.generationMode === 'AI' ? 'AI' : 'MANUAL';
-          const reqVersion = typeof body.version === 'number' ? body.version : -1;
-          const providerId = typeof body.providerId === 'string' ? body.providerId.trim() : null;
-          const modelId = typeof body.modelId === 'string' ? body.modelId.trim() : null;
-
-          const sourceDocumentVersionIds = Array.isArray(body.sourceDocumentVersionIds)
-            ? body.sourceDocumentVersionIds.filter((id): id is string => typeof id === 'string')
-            : [];
-
-          if (body.apiKey !== undefined || body.sourcePath !== undefined || body.filename !== undefined || body.contentBase64 !== undefined) {
-            throw new HttpError(400, 'Forbidden parameters in proposal version body');
-          }
-
-          if (!background || !objective || !method || !expectedOutcome) {
-            throw new HttpError(400, 'Background, objective, method, and expectedOutcome are required inputs');
-          }
-
-          if (generationMode === 'AI') {
-            if (!providerId || !modelId) throw new HttpError(400, 'AI generation requires providerId and modelId');
-            const allowedModels = ALLOWED_AI_PROVIDERS.get(providerId);
-            if (!allowedModels || !allowedModels.has(modelId)) {
-              throw new HttpError(400, `Unsupported AI provider/model: ${providerId}/${modelId}`);
-            }
-          }
-
-          await verifyProposalSources(db, uploadDir, caseId, sourceDocumentVersionIds);
-
-          const caseValues: Record<string, string> = {
-            CASE_NUMBER: caseRow.caseNumber,
-            CASE_TITLE: caseRow.title,
-            CLAIM_TYPE: caseRow.claimType,
-            ASSIGNED_USER: caseRow.assignedUser?.name || context.user.name,
-            CLIENT_NAME: '원청/의뢰인',
-            CREATED_DATE: getKstDateString(new Date()),
-            BACKGROUND: generationMode === 'AI' ? `[AI_DRAFT] ${background}` : background,
-            OBJECTIVE: objective,
-            METHOD: method,
-            EXPECTED_OUTCOME: expectedOutcome,
-            EXCLUSIONS: exclusions || '없음'
-          };
-
-          const { rendered, missing } = renderProposalTemplate(proposal.templateBodySnapshot, caseValues);
-          const nextVerNum = (proposal.versions[0]?.versionNumber ?? 0) + 1;
-          const newVerId = `PROPVER-${crypto.randomUUID()}`;
-          const sha256 = crypto.createHash('sha256').update(rendered).digest('hex');
-          const inputSha = proposalInputHash({ background, objective, method, expectedOutcome, exclusions, sourceDocumentVersionIds });
-
-          const newVersion = await db.$transaction(async (tx) => {
-            if (reqVersion > 0 && proposal.version !== reqVersion) {
-              throw new HttpError(409, 'Concurrency conflict (stale version)');
-            }
-
-            const created = await tx.proposalVersion.create({
-              data: {
-                id: newVerId,
-                proposalId: propId,
-                versionNumber: nextVerNum,
-                bodyText: rendered,
-                structuredInputsJson: JSON.stringify({ background, objective, method, expectedOutcome, exclusions }),
-                renderedValuesJson: JSON.stringify(caseValues),
-                missingFieldsJson: JSON.stringify(missing),
-                generationMode,
-                providerId: generationMode === 'AI' ? providerId : null,
-                modelId: generationMode === 'AI' ? modelId : null,
-                promptConfigVersion: generationMode === 'AI' ? 'v1.0' : null,
-                inputSha256: inputSha,
-                generatedAt: generationMode === 'AI' ? new Date() : null,
-                sourceDocumentVersionIdsJson: JSON.stringify(sourceDocumentVersionIds),
-                sha256,
-                isApproved: false,
-                createdById: context.user.id
-              }
-            });
-
-            await tx.proposal.update({
-              where: { id: propId },
-              data: { currentVersionId: newVerId, version: { increment: 1 }, updatedById: context.user.id }
-            });
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'PROPOSAL_VERSION_CREATED', 'ProposalVersion', newVerId, {
-                proposalId: propId, versionNumber: nextVerNum, generationMode, sha256
-              })
-            });
-
-            return created;
-          });
-
-          sendJson(res, 201, { version: newVersion });
-          return;
-        }
-
-        // POST /api/cases/:id/proposals/:propId/reviews
-        if (propId && action === 'reviews' && req.method === 'POST') {
-          const proposal = await db.proposal.findUnique({
-            where: { id: propId },
-            include: { versions: true }
-          });
-          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
-
-          const body = await readJson(req);
-          const versionId = typeof body.versionId === 'string' ? body.versionId : (proposal.currentVersionId ?? '');
-          const reviewAction = typeof body.action === 'string' ? body.action.trim() : '';
-          const comment = typeof body.comment === 'string' ? body.comment.trim() : null;
-
-          const targetVer = proposal.versions.find((v) => v.id === versionId);
-          if (!targetVer) throw new HttpError(404, 'Target proposal version not found');
-
-          if (reviewAction === 'REQUEST_REVIEW') {
-            if (proposal.status !== 'DRAFT' && proposal.status !== 'REJECTED') {
-              throw new HttpError(400, `Cannot request review from status ${proposal.status}`);
-            }
-            if (targetVer.generationMode === 'AI') {
-              throw new HttpError(409, 'AI generated proposal version cannot be submitted directly for review. A manual human version must be created first.');
-            }
-            const sourceDocVerIds: string[] = JSON.parse(targetVer.sourceDocumentVersionIdsJson || '[]');
-            await verifyProposalSources(db, uploadDir, caseId, sourceDocVerIds);
-            await db.$transaction(async (tx) => {
-              await tx.proposal.update({ where: { id: propId }, data: { status: 'IN_REVIEW', updatedById: context.user.id } });
-              await tx.proposalReview.create({
-                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId: propId, versionId, reviewerId: context.user.id, action: 'REQUEST_REVIEW', comment }
-              });
-              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_REVIEW_REQUESTED', 'Proposal', propId, { versionId }) });
-            });
-            sendJson(res, 200, { message: 'Review requested', status: 'IN_REVIEW' });
-            return;
-          }
-
-          if (reviewAction === 'APPROVE') {
-            if (targetVer.createdById === context.user.id) {
-              throw new HttpError(403, 'Creator cannot self-approve proposal');
-            }
-            requireAnyRole(context, PROPOSAL_APPROVER_ROLES, 'Proposal approval forbidden for PM or Staff');
-
-            if (proposal.status !== 'IN_REVIEW') {
-              throw new HttpError(400, `Cannot approve proposal from status ${proposal.status}. Proposal must be IN_REVIEW.`);
-            }
-
-            await db.$transaction(async (tx) => {
-              await tx.proposalVersion.update({
-                where: { id: versionId },
-                data: { isApproved: true }
-              });
-              await tx.proposal.update({
-                where: { id: propId },
-                data: { status: 'APPROVED', approvedVersionId: versionId, updatedById: context.user.id }
-              });
-              await tx.proposalReview.create({
-                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId: propId, versionId, reviewerId: context.user.id, action: 'APPROVE', comment }
-              });
-              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_APPROVED', 'Proposal', propId, { versionId }) });
-            });
-            sendJson(res, 200, { message: 'Proposal approved', status: 'APPROVED' });
-            return;
-          }
-
-          if (reviewAction === 'REJECT') {
-            requireAnyRole(context, PROPOSAL_APPROVER_ROLES, 'Proposal rejection forbidden for PM or Staff');
-
-            if (proposal.status !== 'IN_REVIEW') {
-              throw new HttpError(400, `Cannot reject proposal from status ${proposal.status}`);
-            }
-
-            await db.$transaction(async (tx) => {
-              await tx.proposal.update({ where: { id: propId }, data: { status: 'REJECTED', updatedById: context.user.id } });
-              await tx.proposalReview.create({
-                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId: propId, versionId, reviewerId: context.user.id, action: 'REJECT', comment }
-              });
-              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_REJECTED', 'Proposal', propId, { versionId }) });
-            });
-            sendJson(res, 200, { message: 'Proposal rejected', status: 'REJECTED' });
-            return;
-          }
-
-          throw new HttpError(400, 'Invalid review action. Must be REQUEST_REVIEW, APPROVE, or REJECT');
-        }
-
-        // POST /api/cases/:id/proposals/:propId/render
-        if (propId && action === 'render' && req.method === 'POST') {
-          const proposal = await db.proposal.findUnique({
-            where: { id: propId },
-            include: { versions: true, template: true }
-          });
-          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
-
-          if (proposal.status !== 'APPROVED') {
-            throw new HttpError(403, 'Proposal must be APPROVED before rendering final document');
-          }
-
-          const body = await readJson(req);
-          const format = body.format === 'pdf' ? 'pdf' : 'docx';
-          const versionId = typeof body.versionId === 'string' ? body.versionId : (proposal.approvedVersionId ?? proposal.currentVersionId ?? '');
-
-          const targetVer = proposal.versions.find((v) => v.id === versionId);
-          if (!targetVer) throw new HttpError(404, 'Target approved proposal version not found');
-
-          const dateStr = getKstDateString(new Date());
-          const ext = format === 'pdf' ? '.pdf' : '.docx';
-          const mimeType = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-          const displayName = `${caseRow.caseNumber}_PROPOSAL_${sanitizeDisplayName(proposal.title)}_${dateStr}_v${String(targetVer.versionNumber).padStart(2, '0')}${ext}`;
-
-          let buffer: Buffer;
-          if (format === 'pdf') {
-            buffer = generatePdfBuffer({
-              title: proposal.title,
-              caseNumber: caseRow.caseNumber,
-              claimType: caseRow.claimType,
-              proposalId: propId,
-              versionId: targetVer.id,
-              versionNumber: targetVer.versionNumber,
-              approvedBy: context.user.name,
-              approvedAt: new Date().toISOString(),
-              sha256: targetVer.sha256,
-              bodyText: targetVer.bodyText
-            });
-          } else {
-            buffer = generateDocxBuffer({
-              title: proposal.title,
-              caseNumber: caseRow.caseNumber,
-              claimType: caseRow.claimType,
-              proposalId: propId,
-              versionId: targetVer.id,
-              versionNumber: targetVer.versionNumber,
-              approvedBy: context.user.name,
-              approvedAt: new Date().toISOString(),
-              sha256: targetVer.sha256,
-              bodyText: targetVer.bodyText
-            });
-          }
-
-          const storageKey = `storage-${crypto.randomUUID()}${ext}`;
-          const diskPath = path.join(uploadDir, storageKey);
-
-          fs.writeFileSync(diskPath, buffer);
-
-          try {
-            await db.$transaction(async (tx) => {
-              const docId = `DOC-${crypto.randomUUID()}`;
-              const docVerId = `DOCVER-${crypto.randomUUID()}`;
-
-              await tx.document.create({
-                data: {
-                  id: docId,
-                  caseId,
-                  proposalVersionId: targetVer.id,
-                  title: `${proposal.title} [최종 출력물]`,
-                  category: 'PROPOSAL',
-                  source: 'AUTHORED',
-                  currentVersionId: docVerId,
-                  finalVersionId: docVerId
-                }
-              });
-
-              await tx.documentVersion.create({
-                data: {
-                  id: docVerId,
-                  documentId: docId,
-                  versionNumber: 1,
-                  originalName: `${proposal.title}${ext}`,
-                  displayName,
-                  storageKey,
-                  fileSize: buffer.length,
-                  mimeType,
-                  sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-                  isFinal: true,
-                  uploadedById: context.user.id
-                }
-              });
-
-              await tx.proposal.update({
-                where: { id: propId },
-                data: { outputDocumentId: docId, updatedById: context.user.id }
-              });
-
-              await tx.auditLog.create({
-                data: requestAudit(context, 'PROPOSAL_RENDERED', 'Proposal', propId, {
-                  format, displayName, storageKey, outputDocumentId: docId
-                })
-              });
-            });
-
-            res.writeHead(200, {
-              'Content-Type': mimeType,
-              'Content-Length': buffer.length,
-              'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(displayName)}`,
-              'Cache-Control': 'no-store'
-            });
-            res.end(buffer);
-            return;
-          } catch (err) {
-            fs.rmSync(diskPath, { force: true });
-            throw err;
-          }
-        }
-      }
-
-      // --- P06 Documents Endpoints ---
-      const docMatch = pathname.match(/^\/api\/cases\/([^/]+)\/documents(?:\/([^/]+)(?:\/(versions(?:\/([^/]+)\/download)?|finalize))?)?$/);
-      if (docMatch) {
-        const [, caseId, docId, action, versionId] = docMatch;
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
-        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
-        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
-
-        // GET /api/cases/:id/documents
-        if (!docId && req.method === 'GET') {
-          const documents = await db.document.findMany({
-            where: { caseId, deletedAt: null },
-            include: {
-              versions: {
-                orderBy: { versionNumber: 'desc' },
-                include: { uploadedBy: { select: { id: true, name: true, email: true } } }
-              }
-            },
-            orderBy: { createdAt: 'desc' }
-          });
-          sendJson(res, 200, { documents });
-          return;
-        }
-
-        // POST /api/cases/:id/documents
-        if (!docId && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document upload forbidden for Staff or Reviewer');
-          const body = await readJson(req);
-          const title = typeof body.title === 'string' ? body.title.trim() : '';
-          const source = typeof body.source === 'string' ? body.source.trim() : '';
-          const category = typeof body.category === 'string' ? body.category.trim() : 'GENERAL';
-          const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
-          const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
-          const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim() : 'application/octet-stream';
-          const scheduleId = typeof body.scheduleId === 'string' ? body.scheduleId : null;
-          const reportSectionId = typeof body.reportSectionId === 'string' ? body.reportSectionId : null;
-
-          if (!title) throw new HttpError(400, 'Document title is required');
-          if (!ALLOWED_DOC_SOURCES.has(source)) throw new HttpError(400, 'Invalid document source. Must be RECEIVED, AUTHORED, or SUBMITTED');
-          if (!ALLOWED_DOC_CATEGORIES.has(category)) throw new HttpError(400, 'Invalid document category');
-          if (!filename || !fileBase64) throw new HttpError(400, 'File filename and content (fileBase64) are required');
-
-          if (scheduleId) {
-            const sched = await db.schedule.findUnique({ where: { id: scheduleId } });
-            if (!sched || sched.caseId !== caseId) throw new HttpError(400, 'Schedule does not belong to case');
-          }
-          if (reportSectionId) {
-            const sec = await db.reportSection.findUnique({ where: { id: reportSectionId }, include: { report: true } });
-            if (!sec || sec.report.caseId !== caseId) throw new HttpError(400, 'Report section does not belong to case');
-          }
-
-          let buffer: Buffer;
-          try {
-            buffer = Buffer.from(fileBase64, 'base64');
-            if (buffer.length === 0 && fileBase64.length > 0) throw new Error('invalid base64');
-          } catch {
-            throw new HttpError(400, 'Malformed Base64 file content');
-          }
-
-          const { extension } = validateFileSecurity(filename, mimeType, buffer);
-          const cleanTitle = sanitizeDisplayName(title);
-          const cleanFilename = sanitizeDisplayName(filename);
-
-          const existingDocs = await db.document.findMany({
-            where: { caseId, deletedAt: null },
-            include: { versions: true }
-          });
-          const isDuplicateFilename = existingDocs.some((d) => {
-            if (d.title.toLowerCase() === title.toLowerCase()) return true;
-            return d.versions.some((v) => v.displayName.toLowerCase().includes(cleanFilename.toLowerCase()));
-          });
-          if (isDuplicateFilename) {
-            throw new HttpError(409, 'A file with the exact same name already exists in this case');
-          }
-
-          const newDocId = `DOC-${crypto.randomUUID()}`;
-          const newVersionId = `DOCVER-${crypto.randomUUID()}`;
-          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
-          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-          const dateStr = getKstDateString(new Date());
-          const displayName = `${caseRow.caseNumber}_${category}_${cleanTitle}_${cleanFilename}_${dateStr}_v01${extension}`;
-          const diskPath = path.join(uploadDir, storageKey);
-
-          fs.writeFileSync(diskPath, buffer);
-
-          try {
-            const document = await db.$transaction(async (tx) => {
-              const docItem = await tx.document.create({
-                data: {
-                  id: newDocId, caseId, scheduleId, reportSectionId, title, category, source, currentVersionId: null, finalVersionId: null
-                }
-              });
-
-              await tx.documentVersion.create({
-                data: {
-                  id: newVersionId, documentId: newDocId, versionNumber: 1, originalName: filename,
-                  displayName, storageKey, fileSize: buffer.length,
-                  mimeType, sha256, isFinal: false, uploadedById: context.user.id
-                }
-              });
-
-              await tx.document.update({
-                where: { id: newDocId },
-                data: { currentVersionId: newVersionId }
-              });
-
-              await tx.auditLog.create({
-                data: requestAudit(context, 'DOCUMENT_CREATED', 'Document', newDocId, { title, source, category, versionNumber: 1, storageKey })
-              });
-
-              return docItem;
-            });
-
-            sendJson(res, 201, { document, versionId: newVersionId });
-            return;
-          } catch (err) {
-            fs.rmSync(diskPath, { force: true });
-            throw err;
-          }
-        }
-
-        // POST /api/cases/:id/documents/:docId/versions
-        if (docId && action === 'versions' && !versionId && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document version upload forbidden for Staff or Reviewer');
-          const doc = await db.document.findUnique({
-            where: { id: docId },
-            include: { versions: { orderBy: { versionNumber: 'desc' } } }
-          });
-          if (!doc || doc.caseId !== caseId || doc.deletedAt) throw new HttpError(404, 'Document not found');
-
-          const body = await readJson(req);
-          const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
-          const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
-          const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim() : 'application/octet-stream';
-          const reqVersion = typeof body.version === 'number' ? body.version : -1;
-
-          if (reqVersion > 0 && doc.version !== reqVersion) {
-            throw new HttpError(409, 'Concurrency conflict (stale document version)');
-          }
-
-          let buffer: Buffer;
-          try {
-            buffer = Buffer.from(fileBase64, 'base64');
-          } catch {
-            throw new HttpError(400, 'Malformed Base64 file content');
-          }
-
-          const { extension } = validateFileSecurity(filename, mimeType, buffer);
-          const cleanTitle = sanitizeDisplayName(doc.title);
-          const cleanFilename = sanitizeDisplayName(filename);
-          const nextVerNum = (doc.versions[0]?.versionNumber ?? 0) + 1;
-
-          const newVersionId = `DOCVER-${crypto.randomUUID()}`;
-          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
-          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-          const dateStr = getKstDateString(new Date());
-          const displayName = `${caseRow.caseNumber}_${doc.category || 'DOC'}_${cleanTitle}_${cleanFilename}_${dateStr}_v${String(nextVerNum).padStart(2, '0')}${extension}`;
-          const diskPath = path.join(uploadDir, storageKey);
-
-          fs.writeFileSync(diskPath, buffer);
-
-          try {
-            const versionRow = await db.$transaction(async (tx) => {
-              const createdVer = await tx.documentVersion.create({
-                data: {
-                  id: newVersionId, documentId: docId, versionNumber: nextVerNum, originalName: filename,
-                  displayName, storageKey, fileSize: buffer.length,
-                  mimeType, sha256, isFinal: false, uploadedById: context.user.id
-                }
-              });
-
-              await tx.document.update({
-                where: { id: docId },
-                data: { currentVersionId: newVersionId, version: { increment: 1 }, updatedAt: new Date() }
-              });
-
-              await tx.auditLog.create({
-                data: requestAudit(context, 'DOCUMENT_VERSION_CREATED', 'DocumentVersion', newVersionId, { documentId: docId, versionNumber: nextVerNum, storageKey })
-              });
-
-              return createdVer;
-            });
-
-            sendJson(res, 201, { version: versionRow });
-            return;
-          } catch (err) {
-            fs.rmSync(diskPath, { force: true });
-            throw err;
-          }
-        }
-
-        // GET /api/cases/:id/documents/:docId/versions/:versionId/download
-        if (docId && action === 'versions' && versionId && req.url?.endsWith('/download') && req.method === 'GET') {
-          const versionRow = await db.documentVersion.findUnique({
-            where: { id: versionId },
-            include: { document: true }
-          });
-          if (!versionRow || versionRow.documentId !== docId || versionRow.document.caseId !== caseId || versionRow.document.deletedAt) {
-            throw new HttpError(404, 'Document file not found');
-          }
-
-          const diskPath = path.join(uploadDir, versionRow.storageKey);
-          if (!fs.existsSync(diskPath)) {
-            throw new HttpError(404, 'File on disk not found');
-          }
-
-          const currentDiskBuffer = fs.readFileSync(diskPath);
-          const currentDiskSha = crypto.createHash('sha256').update(currentDiskBuffer).digest('hex');
-          if (currentDiskSha !== versionRow.sha256) {
-            throw new HttpError(409, 'File integrity validation failed. Storage file has been tampered with.');
-          }
-
-          await db.auditLog.create({
-            data: requestAudit(context, 'DOCUMENT_DOWNLOADED', 'DocumentVersion', versionId, { displayName: versionRow.displayName })
-          });
-
-          res.writeHead(200, {
-            'Content-Type': versionRow.mimeType || 'application/octet-stream',
-            'Content-Length': currentDiskBuffer.length,
-            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(versionRow.displayName)}`,
-            'Cache-Control': 'no-store'
-          });
-          res.end(currentDiskBuffer);
-          return;
-        }
-
-        // POST /api/cases/:id/documents/:docId/finalize
-        if (docId && action === 'finalize' && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document finalize forbidden');
-          const doc = await db.document.findUnique({ where: { id: docId } });
-          if (!doc || doc.caseId !== caseId || doc.deletedAt) throw new HttpError(404, 'Document not found');
-          const currentVerId = doc.currentVersionId;
-          if (!currentVerId) throw new HttpError(400, 'Document has no current version');
-
-          await db.$transaction(async (tx) => {
-            await tx.documentVersion.update({
-              where: { id: currentVerId },
-              data: { isFinal: true }
-            });
-            await tx.document.update({
-              where: { id: docId },
-              data: { finalVersionId: currentVerId }
-            });
-            await tx.auditLog.create({
-              data: requestAudit(context, 'DOCUMENT_FINALIZED', 'Document', docId, { finalVersionId: currentVerId })
-            });
-          });
-
-          sendJson(res, 200, { message: 'Document finalized' });
-          return;
-        }
-
-        // DELETE /api/cases/:id/documents/:docId
-        if (docId && !action && req.method === 'DELETE') {
-          requireAnyRole(context, CASE_DELETE_ROLES, 'Document delete forbidden');
-          const doc = await db.document.findUnique({ where: { id: docId } });
-          if (!doc || doc.caseId !== caseId || doc.deletedAt) throw new HttpError(404, 'Document not found');
-
-          await db.$transaction(async (tx) => {
-            await tx.document.update({
-              where: { id: docId },
-              data: { deletedAt: new Date() }
-            });
-            await tx.auditLog.create({
-              data: requestAudit(context, 'DOCUMENT_DELETED', 'Document', docId, { caseId })
-            });
-          });
-
-          sendJson(res, 200, { message: 'Document deleted' });
-          return;
-        }
-      }
-
-      // --- P06 Meetings Endpoints ---
-      const meetingMatch = pathname.match(/^\/api\/cases\/([^/]+)\/meetings(?:\/([^/]+)(?:\/(finalize|action-items))?)?$/);
-      if (meetingMatch) {
-        const [, caseId, meetingId, action] = meetingMatch;
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
-        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
-        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
-
-        // GET /api/cases/:id/meetings
-        if (!meetingId && req.method === 'GET') {
-          const meetings = await db.meeting.findMany({
-            where: { caseId },
-            include: { createdBy: { select: { id: true, name: true, email: true } }, actionItems: true },
-            orderBy: { meetingDate: 'desc' }
-          });
-          sendJson(res, 200, { meetings });
-          return;
-        }
-
-        // POST /api/cases/:id/meetings
-        if (!meetingId && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting creation forbidden');
-          const body = await readJson(req);
-          const title = typeof body.title === 'string' ? body.title.trim() : '';
-          const meetingDateStr = typeof body.meetingDate === 'string' ? body.meetingDate : '';
-          const location = typeof body.location === 'string' ? body.location.trim() : undefined;
-          const attendees = typeof body.attendees === 'string' ? body.attendees.trim() : undefined;
-          const rawText = typeof body.rawText === 'string' ? body.rawText : undefined;
-          const summary = typeof body.summary === 'string' ? body.summary.trim() : undefined;
-          const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : undefined;
-          const actionItemsInput = Array.isArray(body.actionItems) ? body.actionItems : [];
-
-          if (!title) throw new HttpError(400, 'Meeting title is required');
-          const meetingDate = new Date(meetingDateStr);
-          if (isNaN(meetingDate.getTime())) throw new HttpError(400, 'Invalid meeting date');
-
-          const newMeetingId = `MEET-${crypto.randomUUID()}`;
-          const rawTextSha256 = rawText ? crypto.createHash('sha256').update(rawText).digest('hex') : undefined;
-
-          const meeting = await db.$transaction(async (tx) => {
-            await tx.meeting.create({
-              data: {
-                id: newMeetingId,
-                caseId,
-                title,
-                meetingDate,
-                location: location ?? undefined,
-                attendees: attendees ?? undefined,
-                rawText: rawText ?? undefined,
-                rawTextSha256: rawTextSha256 ?? undefined,
-                summary: summary ?? undefined,
-                decisions: decisions ?? undefined,
-                status: 'DRAFT',
-                version: 1,
-                createdById: context.user.id
-              }
-            });
-
-            for (const item of actionItemsInput) {
-              if (item && typeof item === 'object' && typeof item.title === 'string' && item.title.trim()) {
-                const assigneeId = typeof item.assigneeId === 'string' ? item.assigneeId : undefined;
-                if (assigneeId) {
-                  const assignee = await tx.user.findUnique({ where: { id: assigneeId } });
-                  if (!assignee || assignee.organizationId !== context.user.organizationId) {
-                    throw new HttpError(403, 'Assignee must belong to the same organization');
-                  }
-                }
-                const scheduleId = typeof item.scheduleId === 'string' ? item.scheduleId : undefined;
-                if (scheduleId) {
-                  const sched = await tx.schedule.findUnique({ where: { id: scheduleId } });
-                  if (!sched || sched.caseId !== caseId) {
-                    throw new HttpError(403, 'Schedule must belong to the same case');
-                  }
-                }
-                await tx.meetingActionItem.create({
-                  data: {
-                    id: `ACT-${crypto.randomUUID()}`,
-                    meetingId: newMeetingId,
-                    title: item.title.trim(),
-                    assigneeId,
-                    scheduleId,
-                    dueDate: typeof item.dueDate === 'string' && !isNaN(new Date(item.dueDate).getTime()) ? new Date(item.dueDate) : undefined,
-                    status: 'PENDING'
-                  }
-                });
-              }
-            }
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'MEETING_CREATED', 'Meeting', newMeetingId, { title, meetingDate: meetingDate.toISOString() })
-            });
-
-            return tx.meeting.findUniqueOrThrow({ where: { id: newMeetingId }, include: { actionItems: true } });
-          });
-
-          sendJson(res, 201, { meeting });
-          return;
-        }
-
-        // PATCH /api/cases/:id/meetings/:meetingId
-        if (meetingId && !action && req.method === 'PATCH') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting edit forbidden');
-          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
-          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
-          if (meetingRow.status === 'FINAL') throw new HttpError(400, 'FINAL meeting records are frozen and cannot be updated');
-
-          const body = await readJson(req);
-          const reqVersion = typeof body.version === 'number' ? body.version : -1;
-          if (reqVersion > 0 && meetingRow.version !== reqVersion) {
-            throw new HttpError(409, 'Concurrency conflict (stale meeting version)');
-          }
-
-          if (body.rawText !== undefined && body.rawText !== meetingRow.rawText) {
-            throw new HttpError(400, 'Raw meeting transcript is immutable and cannot be updated');
-          }
-
-          const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : meetingRow.title;
-          const summary = typeof body.summary === 'string' ? body.summary.trim() : meetingRow.summary;
-          const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : meetingRow.decisions;
-
-          const updated = await db.$transaction(async (tx) => {
-            const result = await tx.meeting.updateMany({
-              where: { id: meetingId, version: meetingRow.version, status: 'DRAFT' },
-              data: { title, summary, decisions, version: { increment: 1 } }
-            });
-            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict or meeting finalized');
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'MEETING_UPDATED', 'Meeting', meetingId, { title, summary })
-            });
-
-            return tx.meeting.findUniqueOrThrow({ where: { id: meetingId }, include: { actionItems: true } });
-          });
-
-          sendJson(res, 200, { meeting: updated });
-          return;
-        }
-
-        // POST /api/cases/:id/meetings/:meetingId/finalize
-        if (meetingId && action === 'finalize' && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting finalize forbidden');
-          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
-          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
-
-          const body = await readJson(req);
-          const reqVersion = typeof body.version === 'number' ? body.version : -1;
-          if (reqVersion > 0 && meetingRow.version !== reqVersion) {
-            throw new HttpError(409, 'Concurrency conflict (stale meeting version)');
-          }
-
-          const finalized = await db.$transaction(async (tx) => {
-            const result = await tx.meeting.updateMany({
-              where: { id: meetingId, version: meetingRow.version },
-              data: { status: 'FINAL', version: { increment: 1 } }
-            });
-            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'MEETING_FINALIZED', 'Meeting', meetingId, {})
-            });
-
-            return tx.meeting.findUniqueOrThrow({ where: { id: meetingId }, include: { actionItems: true } });
-          });
-
-          sendJson(res, 200, { meeting: finalized });
-          return;
-        }
-
-        // POST /api/cases/:id/meetings/:meetingId/action-items
-        if (meetingId && action === 'action-items' && req.method === 'POST') {
-          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting action items forbidden');
-          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
-          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
-          if (meetingRow.status === 'FINAL') throw new HttpError(400, 'Cannot add action items to a FINAL meeting record');
-
-          const body = await readJson(req);
-          const title = typeof body.title === 'string' ? body.title.trim() : '';
-          if (!title) throw new HttpError(400, 'Action item title is required');
-
-          const assigneeId = typeof body.assigneeId === 'string' ? body.assigneeId : undefined;
-          if (assigneeId) {
-            const assignee = await db.user.findUnique({ where: { id: assigneeId } });
-            if (!assignee || assignee.organizationId !== context.user.organizationId) {
-              throw new HttpError(403, 'Cross-organization assignee is forbidden');
-            }
-          }
-
-          const scheduleId = typeof body.scheduleId === 'string' ? body.scheduleId : undefined;
-          if (scheduleId) {
-            const sched = await db.schedule.findUnique({ where: { id: scheduleId } });
-            if (!sched || sched.caseId !== caseId) {
-              throw new HttpError(403, 'Cross-case schedule is forbidden');
-            }
-          }
-
-          const actionItem = await db.$transaction(async (tx) => {
-            const created = await tx.meetingActionItem.create({
-              data: {
-                id: `ACT-${crypto.randomUUID()}`,
-                meetingId,
-                title,
-                assigneeId,
-                scheduleId,
-                dueDate: typeof body.dueDate === 'string' && !isNaN(new Date(body.dueDate).getTime()) ? new Date(body.dueDate) : undefined,
-                status: 'PENDING'
-              }
-            });
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'ACTION_ITEM_ADDED', 'MeetingActionItem', created.id, { meetingId, title })
-            });
-
-            return created;
-          });
-
-          sendJson(res, 201, { actionItem });
-          return;
-        }
       }
 
       // --- P05 Parties Endpoint ---
@@ -1932,7 +1432,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const body = await readJson(req);
           const name = typeof body.name === 'string' ? body.name.trim() : '';
           const role = typeof body.role === 'string' ? body.role.trim() : 'OTHER';
-          const contact = typeof body.contact === 'string' ? body.contact.trim() : undefined;
+          const contact = typeof body.contact === 'string' ? body.contact.trim() : null;
 
           if (!name) throw new HttpError(400, 'Party name is required');
 
@@ -2008,8 +1508,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           const title = typeof body.title === 'string' ? body.title.trim() : '';
           const type = typeof body.type === 'string' ? body.type.trim() : '';
           const dateStr = typeof body.date === 'string' ? body.date : '';
-          const location = typeof body.location === 'string' ? body.location.trim() : undefined;
-          const description = typeof body.description === 'string' ? body.description.trim() : undefined;
+          const location = typeof body.location === 'string' ? body.location.trim() : null;
+          const description = typeof body.description === 'string' ? body.description.trim() : null;
 
           if (!title) throw new HttpError(400, 'Schedule title is required');
           if (!ALLOWED_SCHEDULE_TYPES.has(type)) throw new HttpError(400, 'Invalid schedule type. Must be COURT, CLIENT, or INTERNAL');
@@ -2089,7 +1589,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
         const body = await readJson(req);
         const toStatus = typeof body.toStatus === 'string' ? body.toStatus.trim() : '';
-        const reason = typeof body.reason === 'string' ? body.reason.trim() : undefined;
+        const reason = typeof body.reason === 'string' ? body.reason.trim() : null;
         const version = typeof body.version === 'number' ? body.version : -1;
 
         const allowedNext = VALID_STATUS_TRANSITIONS[caseRow.status] ?? [];
@@ -2130,7 +1630,1003 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
-      // --- P05 Case Detail Endpoint & P04 PATCH Case Endpoint ---
+      // --- P07 Proposal Template & Writer Endpoints ---
+      const proposalMatch = pathname.match(/^\/api\/cases\/([^/]+)\/proposals(?:\/([^/]+)(?:\/(versions|reviews|render))?)?$/);
+      if (proposalMatch) {
+        const [, caseId, proposalId, action] = proposalMatch;
+        const caseRow = await db.caseItem.findUnique({
+          where: { id: caseId },
+          include: {
+            assignedUser: { select: { id: true, name: true } },
+            parties: { orderBy: { createdAt: 'asc' }, take: 1 }
+          }
+        });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        if (!proposalId && req.method === 'GET') {
+          const proposals = await db.proposal.findMany({
+            where: { caseId, deletedAt: null },
+            include: {
+              template: true,
+              versions: { orderBy: { versionNumber: 'desc' } },
+              reviews: {
+                orderBy: { createdAt: 'desc' },
+                include: { reviewer: { select: { id: true, name: true, email: true } } }
+              }
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          sendJson(res, 200, { proposals });
+          return;
+        }
+
+        if (!proposalId && req.method === 'POST') {
+          requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal creation forbidden');
+          const body = await readJson(req);
+          const templateId = typeof body.templateId === 'string' ? body.templateId.trim() : '';
+          const titleInput = typeof body.title === 'string' ? body.title.trim() : '';
+          if (!templateId) throw new HttpError(400, 'Proposal templateId is required');
+          const template = await db.proposalTemplate.findUnique({ where: { id: templateId } });
+          if (!template) throw new HttpError(404, 'Proposal template not found');
+          if (template.claimType !== caseRow.claimType) throw new HttpError(400, 'Proposal template claim type must match the case');
+          const declaredPlaceholders = parseStringArray(template.placeholdersJson, 'Template placeholders');
+          if (declaredPlaceholders.some((key) => !ALLOWED_PROPOSAL_PLACEHOLDERS.has(key))) {
+            throw new HttpError(409, 'Proposal template declares an unsupported placeholder');
+          }
+          const title = titleInput || `${caseRow.title} 제안서`;
+          if (title.length > 500) throw new HttpError(400, 'Proposal title must be 500 characters or fewer');
+
+          const structuredInputs = { background: '', objective: '', method: '', expectedOutcome: '', exclusions: '' };
+          const renderedValues: Record<string, string> = {
+            CASE_NUMBER: caseRow.caseNumber,
+            CASE_TITLE: caseRow.title,
+            CLAIM_TYPE: caseRow.claimType,
+            ASSIGNED_USER: caseRow.assignedUser?.name ?? context.user.name,
+            CLIENT_NAME: caseRow.parties[0]?.name ?? '',
+            CREATED_DATE: getKstDateString(new Date())
+          };
+          const { rendered, missing } = renderProposalTemplate(template.bodyTemplate, renderedValues);
+          const proposalIdNew = `PROP-${crypto.randomUUID()}`;
+          const proposalVersionId = `PROPVER-${crypto.randomUUID()}`;
+          const renderedHash = crypto.createHash('sha256').update(rendered).digest('hex');
+
+          const proposal = await db.$transaction(async (tx) => {
+            await tx.proposal.create({
+              data: {
+                id: proposalIdNew,
+                caseId,
+                templateId,
+                templateVersionSnapshot: template.version,
+                templateBodySnapshot: template.bodyTemplate,
+                templatePlaceholdersSnapshotJson: template.placeholdersJson,
+                title,
+                status: 'DRAFT',
+                version: 1,
+                createdById: context.user.id,
+                updatedById: context.user.id
+              }
+            });
+            await tx.proposalVersion.create({
+              data: {
+                id: proposalVersionId,
+                proposalId: proposalIdNew,
+                versionNumber: 1,
+                bodyText: rendered,
+                structuredInputsJson: JSON.stringify(structuredInputs),
+                renderedValuesJson: JSON.stringify(renderedValues),
+                missingFieldsJson: JSON.stringify(missing),
+                generationMode: 'MANUAL',
+                inputSha256: proposalInputHash({ structuredInputs, renderedValues, sourceDocumentVersionIds: [] }),
+                sourceDocumentVersionIdsJson: JSON.stringify([]),
+                sha256: renderedHash,
+                createdById: context.user.id
+              }
+            });
+            await tx.proposal.update({ where: { id: proposalIdNew }, data: { currentVersionId: proposalVersionId } });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PROPOSAL_CREATED', 'Proposal', proposalIdNew, {
+                caseId, templateId, templateVersion: template.version, proposalVersionId
+              })
+            });
+            return tx.proposal.findUniqueOrThrow({ where: { id: proposalIdNew }, include: { versions: true, template: true } });
+          });
+          sendJson(res, 201, { proposal });
+          return;
+        }
+
+        if (proposalId && !action && req.method === 'GET') {
+          const proposal = await db.proposal.findUnique({
+            where: { id: proposalId },
+            include: {
+              template: true,
+              versions: {
+                orderBy: { versionNumber: 'desc' },
+                include: { createdBy: { select: { id: true, name: true, email: true } } }
+              },
+              reviews: {
+                orderBy: { createdAt: 'desc' },
+                include: { reviewer: { select: { id: true, name: true, email: true } } }
+              }
+            }
+          });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          sendJson(res, 200, { proposal });
+          return;
+        }
+
+        if (proposalId && action === 'versions' && req.method === 'POST') {
+          requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal version creation forbidden');
+          const proposal = await db.proposal.findUnique({
+            where: { id: proposalId },
+            include: { versions: { orderBy: { versionNumber: 'desc' }, take: 1 } }
+          });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          if (!['DRAFT', 'REJECTED'].includes(proposal.status)) throw new HttpError(409, 'Proposal cannot be edited in its current status');
+
+          const body = await readJson(req);
+          if (['apiKey', 'token', 'secret', 'credential'].some((field) => Object.prototype.hasOwnProperty.call(body, field))) {
+            throw new HttpError(400, 'AI credentials are not accepted by the proposal API');
+          }
+          const structuredInputs = {
+            background: typeof body.background === 'string' ? body.background.trim() : '',
+            objective: typeof body.objective === 'string' ? body.objective.trim() : '',
+            method: typeof body.method === 'string' ? body.method.trim() : '',
+            expectedOutcome: typeof body.expectedOutcome === 'string' ? body.expectedOutcome.trim() : '',
+            exclusions: typeof body.exclusions === 'string' ? body.exclusions.trim() : ''
+          };
+          if (Object.values(structuredInputs).some((value) => !value)) throw new HttpError(400, 'All five proposal inputs are required');
+          if (Object.values(structuredInputs).some((value) => value.length > 50_000)) throw new HttpError(400, 'Proposal input exceeds the 50000 character limit');
+          const generationMode = body.generationMode;
+          if (generationMode !== 'MANUAL' && generationMode !== 'AI') throw new HttpError(400, 'generationMode must be MANUAL or AI');
+          const expectedVersion = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : -1;
+          if (expectedVersion < 1) throw new HttpError(400, 'A positive proposal version is required');
+          if (body.sourceDocumentVersionIds !== undefined && !Array.isArray(body.sourceDocumentVersionIds)) {
+            throw new HttpError(400, 'sourceDocumentVersionIds must be an array');
+          }
+          const sourceIds = (body.sourceDocumentVersionIds ?? []) as unknown[];
+          if (!sourceIds.every((id) => typeof id === 'string' && id.trim().length > 0)) throw new HttpError(400, 'Source document version IDs must be non-empty strings');
+          const sourceDocumentVersionIds = sourceIds.map((id) => (id as string).trim());
+
+          let providerId: string | null = null;
+          let modelId: string | null = null;
+          let promptConfigVersion: string | null = null;
+          let generatedAt: Date | null = null;
+          if (generationMode === 'AI') {
+            providerId = typeof body.providerId === 'string' ? body.providerId.trim() : '';
+            modelId = typeof body.modelId === 'string' ? body.modelId.trim() : '';
+            if (!ALLOWED_AI_PROVIDERS.get(providerId)?.has(modelId)) throw new HttpError(400, 'Unsupported deterministic AI provider or model');
+            promptConfigVersion = 'p07-local-v1';
+            generatedAt = new Date();
+          } else if (body.providerId || body.modelId) {
+            throw new HttpError(400, 'Manual proposal mode must not include provider or model identifiers');
+          }
+
+          await verifyProposalSources(db, uploadDir, caseId, sourceDocumentVersionIds);
+          const renderedValues: Record<string, string> = {
+            CASE_NUMBER: caseRow.caseNumber,
+            CASE_TITLE: caseRow.title,
+            CLAIM_TYPE: caseRow.claimType,
+            ASSIGNED_USER: caseRow.assignedUser?.name ?? context.user.name,
+            CLIENT_NAME: caseRow.parties[0]?.name ?? '',
+            CREATED_DATE: getKstDateString(new Date()),
+            BACKGROUND: generationMode === 'AI' ? `[AI_DRAFT] ${structuredInputs.background}` : structuredInputs.background,
+            OBJECTIVE: structuredInputs.objective,
+            METHOD: structuredInputs.method,
+            EXPECTED_OUTCOME: structuredInputs.expectedOutcome,
+            EXCLUSIONS: structuredInputs.exclusions
+          };
+          const { rendered, missing } = renderProposalTemplate(proposal.templateBodySnapshot, renderedValues);
+          const nextVersionNumber = (proposal.versions[0]?.versionNumber ?? 0) + 1;
+          const proposalVersionId = `PROPVER-${crypto.randomUUID()}`;
+          const inputSha256 = proposalInputHash({
+            structuredInputs, renderedValues, generationMode, providerId, modelId, promptConfigVersion, sourceDocumentVersionIds
+          });
+          const sha256 = crypto.createHash('sha256').update(rendered).digest('hex');
+
+          const createdVersion = await db.$transaction(async (tx) => {
+            const changed = await tx.proposal.updateMany({
+              where: { id: proposalId, version: expectedVersion, status: proposal.status, deletedAt: null },
+              data: { status: 'DRAFT', version: { increment: 1 }, updatedById: context.user.id }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+            const created = await tx.proposalVersion.create({
+              data: {
+                id: proposalVersionId,
+                proposalId,
+                versionNumber: nextVersionNumber,
+                bodyText: rendered,
+                structuredInputsJson: JSON.stringify(structuredInputs),
+                renderedValuesJson: JSON.stringify(renderedValues),
+                missingFieldsJson: JSON.stringify(missing),
+                generationMode,
+                providerId,
+                modelId,
+                promptConfigVersion,
+                inputSha256,
+                generatedAt,
+                sourceDocumentVersionIdsJson: JSON.stringify(sourceDocumentVersionIds),
+                sha256,
+                createdById: context.user.id
+              }
+            });
+            await tx.proposal.update({ where: { id: proposalId }, data: { currentVersionId: proposalVersionId } });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'PROPOSAL_VERSION_CREATED', 'ProposalVersion', proposalVersionId, {
+                proposalId, versionNumber: nextVersionNumber, generationMode, providerId, modelId,
+                inputSha256, sha256, sourceDocumentVersionIds
+              })
+            });
+            return created;
+          });
+          sendJson(res, 201, { version: createdVersion, proposalVersion: expectedVersion + 1 });
+          return;
+        }
+
+        if (proposalId && action === 'reviews' && req.method === 'POST') {
+          const proposal = await db.proposal.findUnique({ where: { id: proposalId }, include: { versions: true } });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          const body = await readJson(req);
+          const reviewAction = typeof body.action === 'string' ? body.action.trim() : '';
+          const targetVersionId = typeof body.versionId === 'string' ? body.versionId.trim() : '';
+          const expectedVersion = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : -1;
+          const comment = typeof body.comment === 'string' ? body.comment.trim() : null;
+          if (expectedVersion < 1) throw new HttpError(400, 'A positive proposal version is required');
+          if (!targetVersionId || targetVersionId !== proposal.currentVersionId) throw new HttpError(409, 'Review action must target the current proposal version');
+          const targetVersion = proposal.versions.find((version) => version.id === targetVersionId);
+          if (!targetVersion) throw new HttpError(404, 'Proposal version not found');
+
+          if (reviewAction === 'REQUEST_REVIEW') {
+            requireAnyRole(context, PROPOSAL_EDITOR_ROLES, 'Proposal review request forbidden');
+            if (proposal.status !== 'DRAFT') throw new HttpError(409, 'Only a DRAFT proposal can request review');
+            if (targetVersion.generationMode === 'AI' || targetVersion.bodyText.includes('[AI_DRAFT]')) {
+              throw new HttpError(409, 'AI draft must be saved as a human-edited MANUAL version before review');
+            }
+            if (parseStringArray(targetVersion.missingFieldsJson, 'Missing fields').length > 0) throw new HttpError(409, 'Proposal has unresolved missing fields');
+            if (crypto.createHash('sha256').update(targetVersion.bodyText).digest('hex') !== targetVersion.sha256) throw new HttpError(409, 'Proposal version integrity verification failed');
+            await verifyProposalSources(db, uploadDir, caseId, parseStringArray(targetVersion.sourceDocumentVersionIdsJson, 'Source document IDs'));
+            await db.$transaction(async (tx) => {
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, version: expectedVersion, status: 'DRAFT', currentVersionId: targetVersionId },
+                data: { status: 'IN_REVIEW', version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              await tx.proposalReview.create({
+                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId, versionId: targetVersionId, reviewerId: context.user.id, action: 'REQUEST_REVIEW', comment }
+              });
+              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_REVIEW_REQUESTED', 'Proposal', proposalId, { versionId: targetVersionId }) });
+            });
+            sendJson(res, 200, { status: 'IN_REVIEW', version: expectedVersion + 1 });
+            return;
+          }
+
+          if (reviewAction === 'APPROVE') {
+            requireAnyRole(context, PROPOSAL_APPROVER_ROLES, 'Proposal approval forbidden');
+            if (targetVersion.createdById === context.user.id) throw new HttpError(403, 'Proposal version creator cannot self-approve');
+            if (proposal.status !== 'IN_REVIEW') throw new HttpError(409, 'Only an IN_REVIEW proposal can be approved');
+            if (targetVersion.isApproved) throw new HttpError(409, 'Proposal version is already approved');
+            if (targetVersion.generationMode !== 'MANUAL' || targetVersion.bodyText.includes('[AI_DRAFT]')) throw new HttpError(409, 'AI draft cannot be approved directly');
+            if (parseStringArray(targetVersion.missingFieldsJson, 'Missing fields').length > 0) throw new HttpError(409, 'Proposal has unresolved missing fields');
+            if (crypto.createHash('sha256').update(targetVersion.bodyText).digest('hex') !== targetVersion.sha256) throw new HttpError(409, 'Proposal version integrity verification failed');
+            await verifyProposalSources(db, uploadDir, caseId, parseStringArray(targetVersion.sourceDocumentVersionIdsJson, 'Source document IDs'));
+            await db.$transaction(async (tx) => {
+              await tx.proposalVersion.update({ where: { id: targetVersionId }, data: { isApproved: true } });
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, version: expectedVersion, status: 'IN_REVIEW', currentVersionId: targetVersionId },
+                data: { status: 'APPROVED', approvedVersionId: targetVersionId, version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              await tx.proposalReview.create({
+                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId, versionId: targetVersionId, reviewerId: context.user.id, action: 'APPROVE', comment }
+              });
+              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_APPROVED', 'Proposal', proposalId, { versionId: targetVersionId }) });
+            });
+            sendJson(res, 200, { status: 'APPROVED', version: expectedVersion + 1 });
+            return;
+          }
+
+          if (reviewAction === 'REJECT') {
+            requireAnyRole(context, PROPOSAL_APPROVER_ROLES, 'Proposal rejection forbidden');
+            if (proposal.status !== 'IN_REVIEW') throw new HttpError(409, 'Only an IN_REVIEW proposal can be rejected');
+            if (!comment) throw new HttpError(400, 'A rejection comment is required');
+            await db.$transaction(async (tx) => {
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, version: expectedVersion, status: 'IN_REVIEW', currentVersionId: targetVersionId },
+                data: { status: 'REJECTED', version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              await tx.proposalReview.create({
+                data: { id: `PROPREV-${crypto.randomUUID()}`, proposalId, versionId: targetVersionId, reviewerId: context.user.id, action: 'REJECT', comment }
+              });
+              await tx.auditLog.create({ data: requestAudit(context, 'PROPOSAL_REJECTED', 'Proposal', proposalId, { versionId: targetVersionId, comment }) });
+            });
+            sendJson(res, 200, { status: 'REJECTED', version: expectedVersion + 1 });
+            return;
+          }
+
+          throw new HttpError(400, 'Review action must be REQUEST_REVIEW, APPROVE, or REJECT');
+        }
+
+        if (proposalId && action === 'render' && req.method === 'POST') {
+          const proposal = await db.proposal.findUnique({
+            where: { id: proposalId },
+            include: {
+              versions: true,
+              reviews: {
+                where: { action: 'APPROVE' },
+                orderBy: { createdAt: 'desc' },
+                include: { reviewer: { select: { id: true, name: true } } }
+              }
+            }
+          });
+          if (!proposal || proposal.caseId !== caseId || proposal.deletedAt) throw new HttpError(404, 'Proposal not found');
+          if (proposal.status !== 'APPROVED' || !proposal.approvedVersionId) throw new HttpError(403, 'Proposal must be APPROVED before rendering final document');
+          const body = await readJson(req);
+          const format = body.format;
+          if (format !== 'docx' && format !== 'pdf') throw new HttpError(400, 'Render format must be docx or pdf');
+          const targetVersionId = typeof body.versionId === 'string' ? body.versionId.trim() : proposal.approvedVersionId;
+          const expectedVersion = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : -1;
+          if (expectedVersion < 1) throw new HttpError(400, 'A positive proposal version is required');
+          if (targetVersionId !== proposal.approvedVersionId) throw new HttpError(403, 'Only the approved proposal version may be rendered');
+          const targetVersion = proposal.versions.find((version) => version.id === targetVersionId);
+          if (!targetVersion?.isApproved) throw new HttpError(409, 'Approved proposal version record is inconsistent');
+          if (parseStringArray(targetVersion.missingFieldsJson, 'Missing fields').length > 0) throw new HttpError(409, 'Proposal has unresolved missing fields');
+          if (crypto.createHash('sha256').update(targetVersion.bodyText).digest('hex') !== targetVersion.sha256) throw new HttpError(409, 'Proposal version integrity verification failed');
+          await verifyProposalSources(db, uploadDir, caseId, parseStringArray(targetVersion.sourceDocumentVersionIdsJson, 'Source document IDs'));
+          const approval = proposal.reviews.find((review) => review.versionId === targetVersionId);
+          if (!approval) throw new HttpError(409, 'Approved proposal is missing approval history');
+
+          const renderOptions = {
+            title: proposal.title,
+            caseNumber: caseRow.caseNumber,
+            claimType: caseRow.claimType,
+            proposalId,
+            versionId: targetVersionId,
+            versionNumber: targetVersion.versionNumber,
+            approvedBy: approval.reviewer.name,
+            approvedAt: approval.createdAt.toISOString(),
+            sha256: targetVersion.sha256,
+            bodyText: targetVersion.bodyText
+          };
+          const buffer = format === 'docx' ? generateDocxBuffer(renderOptions) : generatePdfBuffer(renderOptions);
+          const parsed = format === 'docx' ? validateDocxBuffer(buffer) : validatePdfBuffer(buffer);
+          if (!parsed.isValid || parsed.metadata?.ProposalId !== proposalId || parsed.metadata?.VersionId !== targetVersionId) {
+            throw new HttpError(500, 'Generated document failed parser or provenance validation');
+          }
+          const extension = `.${format}`;
+          const mimeType = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          validateFileSecurity(`proposal${extension}`, mimeType, buffer);
+          const displayName = `${caseRow.caseNumber}_PROPOSAL_${sanitizeDisplayName(proposal.title)}_${getKstDateString(new Date())}_v${String(targetVersion.versionNumber).padStart(2, '0')}${extension}`;
+          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
+          const diskPath = safeStoragePath(uploadDir, storageKey);
+          fs.writeFileSync(diskPath, buffer, { flag: 'wx' });
+
+          try {
+            await db.$transaction(async (tx) => {
+              const changed = await tx.proposal.updateMany({
+                where: { id: proposalId, status: 'APPROVED', approvedVersionId: targetVersionId, version: expectedVersion, deletedAt: null },
+                data: { version: { increment: 1 }, updatedById: context.user.id }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Proposal concurrency conflict');
+              const documentId = `DOC-${crypto.randomUUID()}`;
+              const documentVersionId = `DOCVER-${crypto.randomUUID()}`;
+              await tx.document.create({
+                data: {
+                  id: documentId,
+                  caseId,
+                  title: `${proposal.title} [승인 출력물]`,
+                  category: 'PROPOSAL',
+                  source: 'AUTHORED',
+                  currentVersionId: null,
+                  finalVersionId: null,
+                  version: 1
+                }
+              });
+              await tx.documentVersion.create({
+                data: {
+                  id: documentVersionId,
+                  documentId,
+                  versionNumber: 1,
+                  originalName: `proposal${extension}`,
+                  displayName,
+                  storageKey,
+                  fileSize: buffer.length,
+                  mimeType,
+                  sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+                  isFinal: true,
+                  uploadedById: context.user.id
+                }
+              });
+              await tx.document.update({
+                where: { id: documentId },
+                data: { currentVersionId: documentVersionId, finalVersionId: documentVersionId, proposalVersionId: targetVersionId }
+              });
+              await tx.proposal.update({ where: { id: proposalId }, data: { outputDocumentId: documentId } });
+              await tx.auditLog.create({
+                data: requestAudit(context, 'PROPOSAL_RENDERED', 'Proposal', proposalId, {
+                  format, displayName, proposalVersionId: targetVersionId, outputDocumentId: documentId, documentVersionId
+                })
+              });
+            });
+          } catch (error) {
+            fs.rmSync(diskPath, { force: true });
+            throw error;
+          }
+
+          res.writeHead(200, {
+            'Content-Type': mimeType,
+            'Content-Length': buffer.length,
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(displayName)}`,
+            'Cache-Control': 'no-store'
+          });
+          res.end(buffer);
+          return;
+        }
+      }
+
+      // --- P06 Documents Endpoints ---
+      const docMatch = pathname.match(/^\/api\/cases\/([^/]+)\/documents(?:\/([^/]+)(?:\/(versions|finalize)(?:\/([^/]+)\/download)?)?)?$/);
+      if (docMatch) {
+        const [, caseId, docId, action, versionId] = docMatch;
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        // GET /api/cases/:id/documents
+        if (!docId && req.method === 'GET') {
+          const documents = await db.document.findMany({
+            where: { caseId, deletedAt: null },
+            include: {
+              versions: {
+                orderBy: { versionNumber: 'desc' },
+                include: { uploadedBy: { select: { id: true, name: true, email: true } } }
+              }
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          sendJson(res, 200, { documents });
+          return;
+        }
+
+        // POST /api/cases/:id/documents (Upload new document)
+        if (!docId && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document upload forbidden for Staff or Reviewer');
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const source = typeof body.source === 'string' ? body.source.trim() : '';
+          const category = typeof body.category === 'string' ? body.category.trim() : 'ETC';
+          const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
+          const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+          const requestedMime = typeof body.mimeType === 'string' ? body.mimeType : '';
+          const scheduleId = typeof body.scheduleId === 'string' && body.scheduleId ? body.scheduleId : null;
+          const reportSectionId = typeof body.reportSectionId === 'string' && body.reportSectionId ? body.reportSectionId : null;
+
+          if (!title || title.length > 200) throw new HttpError(400, 'Document title is required and must be at most 200 characters');
+          if (!ALLOWED_DOC_SOURCES.has(source)) throw new HttpError(400, 'Invalid document source. Must be RECEIVED, AUTHORED, or SUBMITTED');
+          if (!ALLOWED_DOC_CATEGORIES.has(category)) throw new HttpError(400, 'Invalid document category');
+          if (!filename || !fileBase64 || !requestedMime) throw new HttpError(400, 'File filename, MIME type and content are required');
+          if (scheduleId) {
+            const linkedSchedule = await db.schedule.findUnique({ where: { id: scheduleId } });
+            if (!linkedSchedule || linkedSchedule.caseId !== caseId) throw new HttpError(400, 'Linked schedule must belong to the same case');
+          }
+          if (reportSectionId) {
+            const section = await db.reportSection.findUnique({ where: { id: reportSectionId }, include: { report: true } });
+            if (!section || section.report.caseId !== caseId) throw new HttpError(400, 'Linked report section must belong to the same case');
+          }
+
+          const buffer = decodeStrictBase64(fileBase64);
+          const { extension, cleanFilename, mimeType } = validateFileSecurity(filename, requestedMime, buffer);
+          const cleanTitle = sanitizeDisplayName(title);
+
+          // Check for duplicate filename or duplicate title in same case
+          const existingDocs = await db.document.findMany({
+            where: { caseId, deletedAt: null },
+            include: { versions: true }
+          });
+          const isDuplicateFilename = existingDocs.some((d) => {
+            if (d.title.toLowerCase() === title.toLowerCase()) return true;
+            return d.versions.some((v) => v.originalName.toLowerCase() === cleanFilename.toLowerCase());
+          });
+          if (isDuplicateFilename) {
+            throw new HttpError(409, 'A file with the exact same name already exists in this case');
+          }
+
+          const newDocId = `DOC-${crypto.randomUUID()}`;
+          const newVersionId = `DOCVER-${crypto.randomUUID()}`;
+          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
+          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+          const dateStr = getKstDateString(new Date());
+          const displayName = `${caseRow.caseNumber}_${category}_${cleanTitle}_${dateStr}_v01${extension}`;
+          const diskPath = safeStoragePath(uploadDir, storageKey);
+
+          fs.writeFileSync(diskPath, buffer);
+
+          try {
+            const document = await db.$transaction(async (tx) => {
+              await tx.document.create({
+                data: {
+                  id: newDocId,
+                  caseId,
+                  scheduleId,
+                  reportSectionId,
+                  title,
+                  category,
+                  source,
+                  currentVersionId: null,
+                  finalVersionId: null,
+                  version: 1
+                }
+              });
+
+              await tx.documentVersion.create({
+                data: {
+                  id: newVersionId,
+                  documentId: newDocId,
+                  versionNumber: 1,
+                  originalName: cleanFilename,
+                  displayName,
+                  storageKey,
+                  fileSize: buffer.length,
+                  mimeType,
+                  sha256,
+                  isFinal: false,
+                  uploadedById: context.user.id
+                }
+              });
+
+              const docItem = await tx.document.update({ where: { id: newDocId }, data: { currentVersionId: newVersionId } });
+
+              await tx.auditLog.create({
+                data: requestAudit(context, 'DOCUMENT_CREATED', 'Document', newDocId, {
+                  title, source, category, versionNumber: 1, sha256, scheduleId, reportSectionId
+                })
+              });
+
+              return docItem;
+            });
+
+            sendJson(res, 201, { document, versionId: newVersionId });
+            return;
+          } catch (err) {
+            fs.rmSync(diskPath, { force: true });
+            throw err;
+          }
+        }
+
+        // POST /api/cases/:id/documents/:docId/versions
+        if (docId && action === 'versions' && !versionId && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document version upload forbidden for Staff or Reviewer');
+          const docRow = await db.document.findUnique({
+            where: { id: docId },
+            include: { versions: { orderBy: { versionNumber: 'desc' } } }
+          });
+          if (!docRow || docRow.caseId !== caseId || docRow.deletedAt) throw new HttpError(404, 'Document not found');
+
+          const body = await readJson(req);
+          const filename = typeof body.filename === 'string' ? body.filename.trim() : '';
+          const fileBase64 = typeof body.fileBase64 === 'string' ? body.fileBase64 : '';
+          const requestedMime = typeof body.mimeType === 'string' ? body.mimeType : '';
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
+
+          if (!filename || !fileBase64 || !requestedMime) throw new HttpError(400, 'File filename, MIME type and content are required');
+
+          const buffer = decodeStrictBase64(fileBase64);
+          const { extension, cleanFilename, mimeType } = validateFileSecurity(filename, requestedMime, buffer);
+          const cleanTitle = sanitizeDisplayName(docRow.title);
+
+          const nextVersionNum = (docRow.versions[0]?.versionNumber ?? 0) + 1;
+          const paddedVer = String(nextVersionNum).padStart(2, '0');
+          const dateStr = getKstDateString(new Date());
+          const displayName = `${caseRow.caseNumber}_${docRow.category ?? 'GEN'}_${cleanTitle}_${dateStr}_v${paddedVer}${extension}`;
+          const newVersionId = `DOCVER-${crypto.randomUUID()}`;
+          const storageKey = `storage-${crypto.randomUUID()}${extension}`;
+          const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+          const diskPath = safeStoragePath(uploadDir, storageKey);
+
+          fs.writeFileSync(diskPath, buffer);
+
+          try {
+            const version = await db.$transaction(async (tx) => {
+              const createdVersion = await tx.documentVersion.create({
+                data: {
+                  id: newVersionId,
+                  documentId: docId,
+                  versionNumber: nextVersionNum,
+                  originalName: cleanFilename,
+                  displayName,
+                  storageKey,
+                  fileSize: buffer.length,
+                  mimeType,
+                  sha256,
+                  isFinal: false,
+                  uploadedById: context.user.id
+                }
+              });
+
+              const changed = await tx.document.updateMany({
+                where: { id: docId, version: expectedVersion, deletedAt: null },
+                data: { currentVersionId: newVersionId, version: { increment: 1 }, updatedAt: new Date() }
+              });
+              if (changed.count !== 1) throw new HttpError(409, 'Document version conflict');
+
+              await tx.auditLog.create({
+                data: requestAudit(context, 'DOCUMENT_VERSION_CREATED', 'DocumentVersion', newVersionId, {
+                  docId, versionNumber: nextVersionNum, sha256
+                })
+              });
+
+              return createdVersion;
+            });
+
+            sendJson(res, 201, { version });
+            return;
+          } catch (err) {
+            fs.rmSync(diskPath, { force: true });
+            throw err;
+          }
+        }
+
+        // POST /api/cases/:id/documents/:docId/finalize
+        if (docId && action === 'finalize' && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Document finalization forbidden for Staff or Reviewer');
+          const docRow = await db.document.findUnique({ where: { id: docId } });
+          if (!docRow || docRow.caseId !== caseId || docRow.deletedAt) throw new HttpError(404, 'Document not found');
+
+          const body = await readJson(req);
+          const targetVersionId = typeof body.versionId === 'string' ? body.versionId : '';
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
+          const targetVer = await db.documentVersion.findUnique({ where: { id: targetVersionId } });
+          if (!targetVer || targetVer.documentId !== docId) throw new HttpError(404, 'Document version not found');
+
+          await db.$transaction(async (tx) => {
+            const changed = await tx.document.updateMany({
+              where: { id: docId, version: expectedVersion, deletedAt: null },
+              data: { version: { increment: 1 } }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Document finalization conflict');
+            await tx.documentVersion.updateMany({
+              where: { documentId: docId },
+              data: { isFinal: false }
+            });
+            await tx.documentVersion.update({
+              where: { id: targetVersionId },
+              data: { isFinal: true }
+            });
+            await tx.document.update({
+              where: { id: docId },
+              data: { finalVersionId: targetVersionId }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'DOCUMENT_FINALIZED', 'Document', docId, { versionId: targetVersionId, versionNumber: targetVer.versionNumber })
+            });
+          });
+
+          sendJson(res, 200, { message: 'Document version finalized', versionId: targetVersionId });
+          return;
+        }
+
+        // GET /api/cases/:id/documents/:docId/versions/:versionId/download
+        if (docId && action === 'versions' && versionId && req.url?.endsWith('/download') && req.method === 'GET') {
+          const versionRow = await db.documentVersion.findUnique({
+            where: { id: versionId },
+            include: { document: true }
+          });
+          if (!versionRow || versionRow.documentId !== docId || versionRow.document.caseId !== caseId || versionRow.document.deletedAt) {
+            throw new HttpError(404, 'Document file not found');
+          }
+
+          const diskPath = safeStoragePath(uploadDir, versionRow.storageKey);
+          if (!fs.existsSync(diskPath)) {
+            throw new HttpError(404, 'File on disk not found');
+          }
+
+          const stat = fs.statSync(diskPath);
+          const storedBytes = fs.readFileSync(diskPath);
+          const storedSha = crypto.createHash('sha256').update(storedBytes).digest('hex');
+          if (stat.size !== versionRow.fileSize || storedSha !== versionRow.sha256) throw new HttpError(409, 'Stored file integrity check failed');
+          await db.auditLog.create({
+            data: requestAudit(context, 'DOCUMENT_DOWNLOADED', 'DocumentVersion', versionId, { displayName: versionRow.displayName })
+          });
+          res.writeHead(200, {
+            'Content-Type': versionRow.mimeType || 'application/octet-stream',
+            'Content-Length': stat.size,
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(versionRow.displayName)}`,
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "sandbox"
+          });
+          fs.createReadStream(diskPath).pipe(res);
+          return;
+        }
+
+        // DELETE /api/cases/:id/documents/:docId
+        if (docId && !action && req.method === 'DELETE') {
+          requireAnyRole(context, CASE_DELETE_ROLES, 'Document deletion forbidden for PM or Staff');
+          const docRow = await db.document.findUnique({
+            where: { id: docId },
+            include: { versions: true }
+          });
+          if (!docRow || docRow.caseId !== caseId || docRow.deletedAt) throw new HttpError(404, 'Document not found');
+
+          const hasFinalVersion = docRow.versions.some((v) => v.isFinal);
+          if (hasFinalVersion) {
+            throw new HttpError(400, 'Finalized documents cannot be deleted');
+          }
+
+          const body = await readJson(req);
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
+          await db.$transaction(async (tx) => {
+            const changed = await tx.document.updateMany({
+              where: { id: docId, version: expectedVersion, deletedAt: null },
+              data: { deletedAt: new Date(), version: { increment: 1 } }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Document deletion conflict');
+            await tx.auditLog.create({
+              data: requestAudit(context, 'DOCUMENT_SOFT_DELETED', 'Document', docId, {})
+            });
+          });
+
+          sendJson(res, 200, { message: 'Document soft deleted' });
+          return;
+        }
+      }
+
+      // --- P06 Meetings Endpoints ---
+      const meetingMatch = pathname.match(/^\/api\/cases\/([^/]+)\/meetings(?:\/([^/]+)(?:\/(finalize|action-items))?)?$/);
+      if (meetingMatch) {
+        const [, caseId, meetingId, action] = meetingMatch;
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        // GET /api/cases/:id/meetings
+        if (!meetingId && req.method === 'GET') {
+          const meetings = await db.meeting.findMany({
+            where: { caseId },
+            include: {
+              createdBy: { select: { id: true, name: true, email: true } },
+              actionItems: {
+                include: {
+                  assignee: { select: { id: true, name: true, email: true } },
+                  schedule: true
+                }
+              }
+            },
+            orderBy: { meetingDate: 'desc' }
+          });
+          sendJson(res, 200, { meetings });
+          return;
+        }
+
+        // POST /api/cases/:id/meetings
+        if (!meetingId && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting creation forbidden');
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const dateStr = typeof body.meetingDate === 'string' ? body.meetingDate : '';
+          const location = typeof body.location === 'string' ? body.location.trim() : null;
+          const attendees = typeof body.attendees === 'string' ? body.attendees.trim() : null;
+          const rawText = typeof body.rawText === 'string' ? body.rawText.trim() : null;
+          const rawTextSha256 = rawText ? crypto.createHash('sha256').update(rawText).digest('hex') : null;
+          const summary = typeof body.summary === 'string' ? body.summary.trim() : null;
+          const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : null;
+          const actionItemsInput = Array.isArray(body.actionItems) ? body.actionItems : [];
+
+          if (!title) throw new HttpError(400, 'Meeting title is required');
+          const meetingDate = new Date(dateStr);
+          if (isNaN(meetingDate.getTime())) throw new HttpError(400, 'Invalid meeting date');
+
+          const newMeetingId = `MEET-${crypto.randomUUID()}`;
+
+          const createdMeeting = await db.$transaction(async (tx) => {
+            await tx.meeting.create({
+              data: {
+                id: newMeetingId,
+                caseId,
+                title,
+                meetingDate,
+                location,
+                attendees,
+                rawText,
+                rawTextSha256,
+                summary,
+                decisions,
+                status: 'DRAFT',
+                version: 1,
+                createdById: context.user.id
+              }
+            });
+
+            for (const ai of actionItemsInput) {
+              if (typeof ai === 'object' && ai && typeof ai.title === 'string' && ai.title.trim()) {
+                const assigneeId = typeof ai.assigneeId === 'string' ? ai.assigneeId : null;
+                const scheduleId = typeof ai.scheduleId === 'string' ? ai.scheduleId : null;
+                if (assigneeId) {
+                  const assigneeUser = await tx.user.findUnique({ where: { id: assigneeId } });
+                  if (!assigneeUser || assigneeUser.organizationId !== context.user.organizationId) {
+                    throw new HttpError(403, 'Action item assignee must belong to the same organization');
+                  }
+                }
+                if (scheduleId) {
+                  const linkedSchedule = await tx.schedule.findUnique({ where: { id: scheduleId } });
+                  if (!linkedSchedule || linkedSchedule.caseId !== caseId) throw new HttpError(403, 'Action item schedule must belong to the same case');
+                }
+                const dueDate = ai.dueDate ? new Date(String(ai.dueDate)) : null;
+                if (dueDate && isNaN(dueDate.getTime())) throw new HttpError(400, 'Invalid action item due date');
+                await tx.meetingActionItem.create({
+                  data: {
+                    id: `ACT-${crypto.randomUUID()}`,
+                    meetingId: newMeetingId,
+                    title: ai.title.trim(),
+                    assigneeId,
+                    scheduleId,
+                    dueDate,
+                    status: 'PENDING'
+                  }
+                });
+              }
+            }
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'MEETING_CREATED', 'Meeting', newMeetingId, { title, meetingDate: meetingDate.toISOString() })
+            });
+
+            return tx.meeting.findUniqueOrThrow({
+              where: { id: newMeetingId },
+              include: { actionItems: true }
+            });
+          });
+
+          sendJson(res, 201, { meeting: createdMeeting });
+          return;
+        }
+
+        // GET /api/cases/:id/meetings/:meetingId
+        if (meetingId && !action && req.method === 'GET') {
+          const meeting = await db.meeting.findUnique({
+            where: { id: meetingId },
+            include: {
+              createdBy: { select: { id: true, name: true, email: true } },
+              actionItems: {
+                include: {
+                  assignee: { select: { id: true, name: true, email: true } },
+                  schedule: true
+                }
+              }
+            }
+          });
+          if (!meeting || meeting.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          sendJson(res, 200, { meeting });
+          return;
+        }
+
+        // PATCH /api/cases/:id/meetings/:meetingId
+        if (meetingId && !action && req.method === 'PATCH') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting modification forbidden');
+          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
+          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          if (meetingRow.status === 'FINAL') {
+            throw new HttpError(400, 'Finalized meeting cannot be updated');
+          }
+
+          const body = await readJson(req);
+          const version = typeof body.version === 'number' ? body.version : -1;
+          const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : meetingRow.title;
+          const location = typeof body.location === 'string' ? body.location.trim() : meetingRow.location;
+          const attendees = typeof body.attendees === 'string' ? body.attendees.trim() : meetingRow.attendees;
+          const rawText = typeof body.rawText === 'string' ? body.rawText.trim() : meetingRow.rawText;
+          const summary = typeof body.summary === 'string' ? body.summary.trim() : meetingRow.summary;
+          const decisions = typeof body.decisions === 'string' ? body.decisions.trim() : meetingRow.decisions;
+          if (meetingRow.rawText !== null && rawText !== meetingRow.rawText) throw new HttpError(400, 'Original meeting transcript cannot be changed');
+          const rawTextSha256 = rawText ? crypto.createHash('sha256').update(rawText).digest('hex') : null;
+
+          const updated = await db.$transaction(async (tx) => {
+            const result = await tx.meeting.updateMany({
+              where: { id: meetingId, status: 'DRAFT', version },
+              data: { title, location, attendees, rawText, rawTextSha256, summary, decisions, version: { increment: 1 } }
+            });
+            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict or meeting already finalized');
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'MEETING_UPDATED', 'Meeting', meetingId, { title, version: version + 1 })
+            });
+
+            return tx.meeting.findUniqueOrThrow({ where: { id: meetingId } });
+          });
+
+          sendJson(res, 200, { meeting: updated });
+          return;
+        }
+
+        // POST /api/cases/:id/meetings/:meetingId/finalize
+        if (meetingId && action === 'finalize' && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Meeting finalization forbidden');
+          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
+          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          if (meetingRow.status === 'FINAL') {
+            sendJson(res, 200, { meeting: meetingRow });
+            return;
+          }
+          const body = await readJson(req);
+          const expectedVersion = typeof body.version === 'number' ? body.version : -1;
+
+          const finalized = await db.$transaction(async (tx) => {
+            const changed = await tx.meeting.updateMany({
+              where: { id: meetingId, status: 'DRAFT', version: expectedVersion },
+              data: { status: 'FINAL', version: { increment: 1 } }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Meeting finalization conflict');
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'MEETING_FINALIZED', 'Meeting', meetingId, { title: meetingRow.title })
+            });
+
+            return tx.meeting.findUniqueOrThrow({ where: { id: meetingId } });
+          });
+
+          sendJson(res, 200, { meeting: finalized });
+          return;
+        }
+
+        // POST /api/cases/:id/meetings/:meetingId/action-items
+        if (meetingId && action === 'action-items' && req.method === 'POST') {
+          requireAnyRole(context, CASE_EDITOR_ROLES, 'Action item creation forbidden');
+          const meetingRow = await db.meeting.findUnique({ where: { id: meetingId } });
+          if (!meetingRow || meetingRow.caseId !== caseId) throw new HttpError(404, 'Meeting not found');
+          if (meetingRow.status === 'FINAL') throw new HttpError(400, 'Finalized meeting action items cannot be changed');
+
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : '';
+          const assigneeId = typeof body.assigneeId === 'string' ? body.assigneeId : null;
+          const scheduleId = typeof body.scheduleId === 'string' ? body.scheduleId : null;
+          const dueDateStr = typeof body.dueDate === 'string' ? body.dueDate : null;
+
+          if (!title) throw new HttpError(400, 'Action item title is required');
+          const dueDate = dueDateStr ? new Date(dueDateStr) : null;
+          if (dueDate && isNaN(dueDate.getTime())) throw new HttpError(400, 'Invalid action item due date');
+
+          const actionItem = await db.$transaction(async (tx) => {
+            if (assigneeId) {
+              const assigneeUser = await tx.user.findUnique({ where: { id: assigneeId } });
+              if (!assigneeUser || assigneeUser.organizationId !== context.user.organizationId) {
+                throw new HttpError(403, 'Action item assignee must belong to the same organization');
+              }
+            }
+            if (scheduleId) {
+              const schedRow = await tx.schedule.findUnique({ where: { id: scheduleId } });
+              if (!schedRow || schedRow.caseId !== caseId) {
+                throw new HttpError(403, 'Schedule must belong to the same case');
+              }
+            }
+
+            const created = await tx.meetingActionItem.create({
+              data: {
+                id: `ACT-${crypto.randomUUID()}`,
+                meetingId,
+                title,
+                assigneeId,
+                scheduleId,
+                dueDate,
+                status: 'PENDING'
+              }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'ACTION_ITEM_CREATED', 'MeetingActionItem', created.id, { meetingId, title })
+            });
+
+            return created;
+          });
+
+          sendJson(res, 201, { actionItem });
+          return;
+        }
+      }
+
+      // --- P05 Case Detail Endpoint ---
       const caseMatch = pathname.match(/^\/api\/cases\/([^/]+)$/);
       if (caseMatch) {
         const caseId = decodeURIComponent(caseMatch[1]);
@@ -2145,7 +2641,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
         });
         if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
-        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (caseRow.organizationId !== context.user.organizationId) {
+          await db.auditLog.create({ data: requestAudit(context, 'IDOR_ATTEMPT_BLOCKED', 'CaseItem', caseId, { boundary: 'organization' }) });
+          throw new HttpError(403, 'Case access forbidden');
+        }
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
         if (req.method === 'GET') {
@@ -2164,39 +2663,107 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           sendJson(res, 200, { case: { ...caseRow, schedules: schedulesWithDDay, activityTimeline } });
           return;
         }
-
         if (req.method === 'PATCH') {
           requireAnyRole(context, CASE_EDITOR_ROLES, 'Case modification forbidden');
           const body = await readJson(req);
-          const version = typeof body.version === 'number' ? body.version : -1;
           const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : caseRow.title;
           const description = typeof body.description === 'string' ? body.description.trim() : caseRow.description;
+          const version = typeof body.version === 'number' ? body.version : -1;
+          const category = body.category && typeof body.category === 'object' && !Array.isArray(body.category)
+            ? body.category as Record<string, unknown>
+            : null;
 
-          const updatedCase = await db.$transaction(async (tx) => {
+          await db.$transaction(async (tx) => {
             const result = await tx.caseItem.updateMany({
-              where: { id: caseId, version, deletedAt: null },
+              where: { id: caseId, organizationId: context.user.organizationId, deletedAt: null, version },
               data: { title, description, version: { increment: 1 } }
             });
             if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
-
-            await tx.auditLog.create({
-              data: requestAudit(context, 'CASE_UPDATED', 'CaseItem', caseId, { title, version })
-            });
-
-            return tx.caseItem.findUniqueOrThrow({ where: { id: caseId } });
+            if (category) {
+              const major = typeof category.major === 'string' ? category.major.trim() : '';
+              const middle = typeof category.middle === 'string' ? category.middle.trim() : '';
+              const minor = typeof category.minor === 'string' ? category.minor.trim() : '';
+              if (!major || !middle || !minor) throw new HttpError(400, 'Major, middle, and minor category values are required');
+              await tx.caseCategory.upsert({
+                where: { caseId },
+                update: { major, middle, minor },
+                create: { id: `CAT-${crypto.randomUUID()}`, caseId, major, middle, minor }
+              });
+            }
+            await tx.auditLog.create({ data: requestAudit(context, 'CASE_UPDATED', 'CaseItem', caseId, { fromVersion: version, toVersion: version + 1 }) });
           });
+          sendJson(res, 200, { version: version + 1 });
+          return;
+        }
+        if (req.method === 'DELETE') {
+          requireAnyRole(context, CASE_DELETE_ROLES, 'Case deletion forbidden');
+          const body = await readJson(req);
+          const version = typeof body.version === 'number' ? body.version : -1;
+          await db.$transaction(async (tx) => {
+            const result = await tx.caseItem.updateMany({
+              where: { id: caseId, deletedAt: null, version },
+              data: { deletedAt: new Date(), version: { increment: 1 } }
+            });
+            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
+            await tx.auditLog.create({ data: requestAudit(context, 'CASE_SOFT_DELETED', 'CaseItem', caseId, {}) });
+          });
+          sendJson(res, 200, { message: 'Case soft deleted' });
+          return;
+        }
+      }
 
-          sendJson(res, 200, { case: updatedCase });
+      const reportMatch = pathname.match(/^\/api\/reports\/([^/]+)(?:\/sections\/([^/]+)\/(body|approve)|\/(merge))$/);
+      if (reportMatch) {
+        const [, reportId, sectionId, sectionAction, reportAction] = reportMatch;
+        const report = await db.report.findUnique({
+          where: { id: reportId },
+          include: { case: { include: { assignments: true } } }
+        });
+        if (!report || report.deletedAt || report.case.deletedAt) throw new HttpError(404, 'Report not found');
+        if (report.case.organizationId !== context.user.organizationId) throw new HttpError(403, 'Report access forbidden');
+        if (!(await canAccessCase(db, context, report.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        if (sectionAction === 'body' && req.method === 'PATCH') {
+          if (context.roles.includes('reviewer')) {
+            await db.auditLog.create({ data: requestAudit(context, 'REVIEWER_DIRECT_EDIT_BLOCKED', 'ReportSection', sectionId, {}) });
+            throw new HttpError(403, 'Reviewer cannot edit report body');
+          }
+          const body = await readJson(req);
+          const content = typeof body.content === 'string' ? body.content : '';
+          const version = typeof body.version === 'number' ? body.version : -1;
+          await db.$transaction(async (tx) => {
+            const result = await tx.reportSection.updateMany({
+              where: { id: sectionId, reportId, deletedAt: null, version },
+              data: { content, version: { increment: 1 } }
+            });
+            if (result.count !== 1) throw new HttpError(409, 'Concurrency conflict');
+            await tx.auditLog.create({ data: requestAudit(context, 'REPORT_SECTION_UPDATED', 'ReportSection', sectionId, { reportId, version }) });
+          });
+          sendJson(res, 200, { version: version + 1 });
           return;
         }
 
-        if (req.method === 'DELETE') {
-          requireAnyRole(context, CASE_DELETE_ROLES, 'Case deletion forbidden');
+        if (sectionAction === 'approve' && req.method === 'POST') {
+          if (!context.roles.some((role) => ['reviewer', 'pm', 'admin'].includes(role))) throw new HttpError(403, 'Approval forbidden');
           await db.$transaction(async (tx) => {
-            await tx.caseItem.update({ where: { id: caseId }, data: { deletedAt: new Date() } });
-            await tx.auditLog.create({ data: requestAudit(context, 'CASE_DELETED', 'CaseItem', caseId, {}) });
+            const result = await tx.reportSection.updateMany({ where: { id: sectionId, reportId, deletedAt: null }, data: { status: 'approved' } });
+            if (result.count !== 1) throw new HttpError(404, 'Section not found');
+            await tx.auditLog.create({ data: requestAudit(context, 'SECTION_APPROVED', 'ReportSection', sectionId, { reportId }) });
           });
-          sendJson(res, 200, { message: 'Case deleted' });
+          sendJson(res, 200, { status: 'approved' });
+          return;
+        }
+
+        if (reportAction === 'merge' && req.method === 'POST') {
+          if (!context.roles.some((role) => ['ceo', 'director', 'pm', 'admin'].includes(role))) {
+            await db.auditLog.create({ data: requestAudit(context, 'REPORT_MERGE_BLOCKED', 'Report', reportId, {}) });
+            throw new HttpError(403, 'Final merge forbidden');
+          }
+          await db.$transaction(async (tx) => {
+            await tx.report.update({ where: { id: reportId }, data: { version: { increment: 1 } } });
+            await tx.auditLog.create({ data: requestAudit(context, 'REPORT_MERGED', 'Report', reportId, {}) });
+          });
+          sendJson(res, 200, { message: 'Report merged' });
           return;
         }
       }

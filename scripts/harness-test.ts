@@ -118,20 +118,37 @@ test('Phase Status Machine Integration', () => {
   assert.ok(['IN_PROGRESS', 'READY_FOR_REVIEW', 'PASS'].includes(status.phases.P07.status));
 });
 
-test('P08 keeps real E2E/security gates and DB-enforced immutable report template history', () => {
+test('P07 keeps real E2E/security gates and DB-enforced immutable proposal history', () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
-  assert.match(packageJson.scripts['test:e2e'], /p08-e2e\.ts/);
-  assert.match(packageJson.scripts['test:security'], /p08-security-test\.ts/);
-
-  const migration = fs.readFileSync(path.join(__dirname, '../packages/database/prisma/migrations/20260807100000_p08_report_template_catalog/migration.sql'), 'utf8');
+  assert.match(packageJson.scripts['test:e2e'], /p07-e2e\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p04-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p05-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p06-security-test\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p07-security-test\.ts/);
+  const migration = fs.readFileSync(path.join(__dirname, '../packages/database/prisma/migrations/20260807090000_p07_proposal_templates/migration.sql'), 'utf8');
   for (const trigger of [
-    'P08_report_template_version_no_update',
-    'P08_report_template_version_no_delete',
-    'P08_report_template_version_no_self_approval',
-    'P08_template_type_mapping_single_primary',
-    'P08_report_instance_no_snapshot_update'
-  ]) {
-    assert.ok(migration.includes(trigger), `P08 DB guard missing: ${trigger}`);
+    'P07_proposal_integrity_update', 'P07_proposal_version_update_guard', 'P07_proposal_version_delete_guard',
+    'P07_proposal_review_insert_guard', 'P07_proposal_review_update_guard', 'P07_output_document_delete_guard'
+  ]) assert.ok(migration.includes(trigger), `P07 DB guard missing: ${trigger}`);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
+});
+
+test('P08 keeps prior regressions and adds real catalog E2E/security plus immutable snapshot guards', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.match(packageJson.scripts['test:e2e'], /p06-e2e\.ts.*p07-e2e\.ts.*p08-e2e\.ts/);
+  for (const phase of ['p04', 'p05', 'p06', 'p07', 'p08']) {
+    assert.match(packageJson.scripts['test:security'], new RegExp(`${phase}-security-test\\.ts`));
   }
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../packages/database/prisma/migrations/20260807100000_p08_report_template_catalog/migration.sql'),
+    'utf8'
+  );
+  for (const guard of [
+    'P08_template_version_content_immutable',
+    'P08_template_version_approval_guard',
+    'P08_report_instance_insert_guard',
+    'P08_report_instance_snapshot_immutable',
+    'P08_report_section_snapshot_immutable'
+  ]) assert.ok(migration.includes(guard), `P08 DB guard missing: ${guard}`);
   assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
 });

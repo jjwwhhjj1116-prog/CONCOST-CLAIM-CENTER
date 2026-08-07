@@ -15,34 +15,37 @@ model Organization {
   users     User[]
   cases     CaseItem[]
   auditLogs AuditLog[]
+  reportTemplates ReportTemplate[]
+  reportInstances ReportInstance[]
 }
 
 model User {
-  id                               String                  @id
-  email                            String                  @unique
-  passwordHash                     String
-  name                             String
-  organizationId                   String
-  isActive                         Boolean                 @default(true)
-  createdAt                        DateTime                @default(now())
-  updatedAt                        DateTime                @updatedAt
-  organization                     Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  roles                            UserRole[]
-  sessions                         Session[]
-  assignments                      CaseAssignment[]
-  assignedCases                    CaseItem[]              @relation("AssignedCases")
-  statusHistories                  StatusHistory[]
-  auditLogs                        AuditLog[]
-  uploadedVersions                 DocumentVersion[]
-  createdMeetings                  Meeting[]
-  actionItems                      MeetingActionItem[]
-  createdProposals                 Proposal[]              @relation("ProposalCreator")
-  updatedProposals                 Proposal[]              @relation("ProposalUpdater")
-  createdProposalVersions          ProposalVersion[]       @relation("ProposalVersionCreator")
-  proposalReviews                  ProposalReview[]
-  createdReportTemplateVersions   ReportTemplateVersion[] @relation("TemplateVersionCreator")
-  approvedReportTemplateVersions  ReportTemplateVersion[] @relation("TemplateVersionApprover")
-  createdReportInstances          ReportInstance[]        @relation("ReportInstanceCreator")
+  id                      String            @id
+  email                   String            @unique
+  passwordHash            String
+  name                    String
+  organizationId          String
+  isActive                Boolean           @default(true)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  organization            Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  roles                   UserRole[]
+  sessions                Session[]
+  assignments             CaseAssignment[]
+  assignedCases           CaseItem[]        @relation("AssignedCases")
+  statusHistories         StatusHistory[]
+  auditLogs               AuditLog[]
+  uploadedVersions        DocumentVersion[]
+  createdMeetings         Meeting[]
+  actionItems             MeetingActionItem[]
+  createdProposals        Proposal[]        @relation("ProposalCreator")
+  updatedProposals        Proposal[]        @relation("ProposalUpdater")
+  createdProposalVersions ProposalVersion[] @relation("ProposalVersionCreator")
+  proposalReviews         ProposalReview[]
+  createdReportTemplates  ReportTemplate[]        @relation("ReportTemplateCreator")
+  createdReportTemplateVersions ReportTemplateVersion[] @relation("ReportTemplateVersionCreator")
+  approvedReportTemplateVersions ReportTemplateVersion[] @relation("ReportTemplateVersionApprover")
+  createdReportInstances  ReportInstance[]         @relation("ReportInstanceCreator")
 }
 
 model Role {
@@ -73,29 +76,29 @@ model Session {
 }
 
 model CaseItem {
-  id              String           @id
-  organizationId  String
-  caseNumber      String           @unique
-  title           String
-  description     String?
-  claimType       String
-  status          String           @default("INQUIRY")
-  assignedUserId  String?
-  version         Int              @default(1)
-  deletedAt       DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  assignedUser    User?            @relation("AssignedCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  assignments     CaseAssignment[]
-  category        CaseCategory?
-  parties         Party[]
-  schedules       Schedule[]
+  id             String           @id
+  organizationId String
+  caseNumber     String           @unique
+  title          String
+  description    String?
+  claimType      String
+  status         String           @default("INQUIRY")
+  assignedUserId String?
+  version        Int              @default(1)
+  deletedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignedUser   User?            @relation("AssignedCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignments    CaseAssignment[]
+  category       CaseCategory?
+  parties        Party[]
+  schedules      Schedule[]
   statusHistories StatusHistory[]
-  reports         Report[]
-  documents       Document[]
-  meetings        Meeting[]
-  proposals       Proposal[]
+  reports        Report[]
+  documents      Document[]
+  meetings       Meeting[]
+  proposals      Proposal[]
   reportInstances ReportInstance[]
 
   @@index([organizationId, deletedAt])
@@ -173,25 +176,25 @@ model StatusHistory {
 }
 
 model Document {
-  id                String           @id
-  caseId            String
-  scheduleId        String?
-  reportSectionId   String?
+  id               String            @id
+  caseId           String
+  scheduleId       String?
+  reportSectionId  String?
   proposalVersionId String?
-  title             String
-  category          String?
-  source            String // RECEIVED, AUTHORED, SUBMITTED
-  currentVersionId  String?
-  finalVersionId    String?
-  version           Int              @default(1)
-  deletedAt         DateTime?
-  createdAt         DateTime         @default(now())
-  updatedAt         DateTime         @updatedAt
-  case              CaseItem         @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  schedule          Schedule?        @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
-  reportSection     ReportSection?   @relation(fields: [reportSectionId], references: [id], onDelete: SetNull)
-  proposalVersion   ProposalVersion? @relation(fields: [proposalVersionId], references: [id], onDelete: Restrict)
-  versions          DocumentVersion[]
+  title            String
+  category         String?
+  source           String            // RECEIVED, AUTHORED, SUBMITTED
+  currentVersionId String?
+  finalVersionId   String?
+  version          Int               @default(1)
+  deletedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  schedule         Schedule?         @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  reportSection    ReportSection?    @relation(fields: [reportSectionId], references: [id], onDelete: SetNull)
+  proposalVersion  ProposalVersion?  @relation(fields: [proposalVersionId], references: [id], onDelete: Restrict)
+  versions         DocumentVersion[]
 
   @@index([caseId, deletedAt])
   @@index([scheduleId])
@@ -266,36 +269,37 @@ model MeetingActionItem {
 }
 
 model Report {
-  id               String          @id
-  caseId           String
-  reportInstanceId String?
-  title            String
-  version          Int             @default(1)
-  deletedAt        DateTime?
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
-  case             CaseItem        @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  reportInstance   ReportInstance? @relation(fields: [reportInstanceId], references: [id], onDelete: SetNull)
-  sections         ReportSection[]
+  id        String          @id
+  caseId    String
+  reportInstanceId String?  @unique
+  title     String
+  version   Int             @default(1)
+  deletedAt DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  case      CaseItem        @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  reportInstance ReportInstance? @relation(fields: [reportInstanceId], references: [id], onDelete: Restrict)
+  sections  ReportSection[]
 
   @@index([caseId, deletedAt])
-  @@index([reportInstanceId])
 }
 
 model ReportSection {
-  id             String     @id
-  reportId       String
-  sectionNumber  Int        @default(1)
-  title          String
-  content        String
-  status         String
-  isRequired     Boolean    @default(false)
-  version        Int        @default(1)
-  deletedAt      DateTime?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-  report         Report     @relation(fields: [reportId], references: [id], onDelete: Cascade)
-  documents      Document[]
+  id        String     @id
+  reportId  String
+  templateSectionIdSnapshot String?
+  sectionNumber Int      @default(1)
+  title     String
+  content   String
+  status    String
+  isRequired Boolean     @default(false)
+  blockSchemaSnapshotJson String @default("{}")
+  version   Int        @default(1)
+  deletedAt DateTime?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  report    Report     @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  documents Document[]
 
   @@index([reportId, deletedAt])
 }
@@ -316,29 +320,29 @@ model ProposalTemplate {
 }
 
 model Proposal {
-  id                               String            @id
-  caseId                           String
-  templateId                       String
-  templateVersionSnapshot          Int
-  templateBodySnapshot             String
+  id               String            @id
+  caseId           String
+  templateId       String
+  templateVersionSnapshot Int
+  templateBodySnapshot String
   templatePlaceholdersSnapshotJson String
-  title                            String
-  status                           String            @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED, REJECTED
-  currentVersionId                 String?
-  approvedVersionId                String?
-  outputDocumentId                 String?
-  version                          Int               @default(1)
-  createdById                      String
-  updatedById                      String
-  deletedAt                        DateTime?
-  createdAt                        DateTime          @default(now())
-  updatedAt                        DateTime          @updatedAt
-  case                             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  template                         ProposalTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  createdBy                        User              @relation("ProposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy                        User              @relation("ProposalUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
-  versions                         ProposalVersion[]
-  reviews                          ProposalReview[]
+  title            String
+  status           String            @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED, REJECTED
+  currentVersionId String?
+  approvedVersionId String?
+  outputDocumentId String?
+  version          Int               @default(1)
+  createdById      String
+  updatedById      String
+  deletedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  template         ProposalTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy        User              @relation("ProposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy        User              @relation("ProposalUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+  versions         ProposalVersion[]
+  reviews          ProposalReview[]
 
   @@index([caseId, deletedAt])
   @@index([templateId])
@@ -358,7 +362,7 @@ model ProposalVersion {
   providerId                   String?
   modelId                      String?
   promptConfigVersion          String?
-  inputSha256                  String
+  inputSha256                   String
   generatedAt                  DateTime?
   sourceDocumentVersionIdsJson String?
   sha256                       String
@@ -391,128 +395,174 @@ model ProposalReview {
   @@index([reviewerId])
 }
 
-// --- P08 Report Template & Catalog Domain Models ---
-
 model ReferenceInventory {
-  id             String   @id // e.g. TPL-REF-001
-  fileId         String   @unique // 익명 fileId (TPL-REF-001)
+  id             String   @id
+  fileId         String   @unique
   sha256         String
   fileSize       Int
-  scanStatus     String   @default("UNSCANNED") // UNSCANNED, SCANNED
-  approvalStatus String   @default("REVIEW_REQUIRED") // UNCLASSIFIED, REVIEW_REQUIRED, HUMAN_APPROVED
+  scanStatus     String   @default("UNSCANNED")
+  approvalStatus String   @default("REVIEW_REQUIRED")
+  version        Int      @default(1)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  templateReferences TemplateReference[]
 
-  @@index([fileId])
   @@index([approvalStatus])
 }
 
 model ReportTemplate {
-  id          String                  @id // e.g. RPT-TPL-001
-  code        String                  @unique
-  name        String
-  description String?
-  status      String                  @default("ACTIVE")
-  version     Int                     @default(1)
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
-  versions    ReportTemplateVersion[]
+  id             String   @id
+  organizationId String
+  code           String
+  name           String
+  description    String?
+  status         String   @default("ACTIVE")
+  version        Int      @default(1)
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy      User     @relation("ReportTemplateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  versions       ReportTemplateVersion[]
 
-  @@index([code])
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
 }
 
 model ReportTemplateVersion {
-  id                         String               @id // e.g. RPT-TPL-VER-001
+  id                         String   @id
   templateId                 String
   versionNumber              Int
+  rowVersion                 Int      @default(1)
   name                       String
-  companyForm                String               // 회사 표준 양식 설명/이름
-  tocStructureJson           String               // 목차 구조 JSON
-  requiredSectionsJson       String               // 필수 장 목록 JSON
-  requiredEvidenceRulesJson String               // 필수 증빙 자료 규칙 JSON
-  blockSchemasJson           String               // 블록 스키마 JSON
-  referenceFileIdsJson       String               // 익명 fileId 배열 JSON
-  status                     String               @default("DRAFT") // DRAFT, HUMAN_APPROVED, ACTIVE, ARCHIVED
+  companyForm                String
+  tocStructureJson           String
+  requiredSectionsJson       String
+  requiredEvidenceRulesJson  String
+  blockSchemasJson           String
+  contentSha256              String
+  status                     String   @default("DRAFT")
   createdById                String
   approvedById               String?
   approvedAt                 DateTime?
-  createdAt                  DateTime             @default(now())
-  updatedAt                  DateTime             @updatedAt
-  template                   ReportTemplate       @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  createdBy                  User                 @relation("TemplateVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy                 User?                @relation("TemplateVersionApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  activatedAt                DateTime?
+  archivedAt                 DateTime?
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+  template                   ReportTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy                  User     @relation("ReportTemplateVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy                 User?    @relation("ReportTemplateVersionApprover", fields: [approvedById], references: [id], onDelete: Restrict)
   typeMappings               TemplateTypeMapping[]
   sections                   TemplateSection[]
+  references                 TemplateReference[]
   reportInstances            ReportInstance[]
 
   @@unique([templateId, versionNumber])
-  @@index([templateId])
-  @@index([status])
+  @@index([templateId, status])
 }
 
 model TemplateTypeMapping {
-  id                String                @id
+  id                String   @id
   templateVersionId String
-  typeId            String                // TYPE-01 to TYPE-06
-  kind              String                // PRIMARY, SECONDARY
-  createdAt         DateTime              @default(now())
-  templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  typeId            String
+  kind              String
+  createdAt         DateTime @default(now())
+  templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
 
   @@unique([templateVersionId, typeId])
-  @@index([templateVersionId])
   @@index([typeId, kind])
 }
 
 model TemplateSection {
-  id                String                @id
+  id                String   @id
   templateVersionId String
   sectionNumber     Int
   title             String
-  isRequired        Boolean               @default(false)
+  isRequired        Boolean  @default(false)
   description       String?
-  defaultBlocksJson String?
-  createdAt         DateTime              @default(now())
-  updatedAt         DateTime              @updatedAt
-  templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Cascade)
+  blockSchemaSnapshotJson String
+  createdAt         DateTime @default(now())
+  templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  blocks            TemplateSectionBlock[]
 
   @@unique([templateVersionId, sectionNumber])
   @@index([templateVersionId])
 }
 
+model TemplateSectionBlock {
+  id                     String   @id
+  templateSectionId      String
+  blockDefinitionId      String
+  position               Int
+  blockCodeSnapshot      String
+  blockVersionSnapshot   Int
+  blockSchemaSnapshotJson String
+  createdAt              DateTime @default(now())
+  templateSection        TemplateSection @relation(fields: [templateSectionId], references: [id], onDelete: Restrict)
+  blockDefinition        BlockDefinition @relation(fields: [blockDefinitionId], references: [id], onDelete: Restrict)
+
+  @@unique([templateSectionId, position])
+  @@index([blockDefinitionId])
+}
+
+model TemplateReference {
+  id                String   @id
+  templateVersionId String
+  referenceId       String
+  fileIdSnapshot    String
+  sha256Snapshot    String
+  fileSizeSnapshot  Int
+  createdAt         DateTime @default(now())
+  templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  reference         ReferenceInventory @relation(fields: [referenceId], references: [id], onDelete: Restrict)
+
+  @@unique([templateVersionId, referenceId])
+  @@index([templateVersionId])
+}
+
 model BlockDefinition {
   id          String   @id
-  code        String   @unique // OVERVIEW, CONTRACT, FACTS, PHOTO_ANALYSIS, COST_CALC, LEGAL_REVIEW, OPINION, CONCLUSION
+  code        String
   name        String
   description String?
   schemaJson  String
+  version     Int      @default(1)
+  status      String   @default("ACTIVE")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  sectionMappings TemplateSectionBlock[]
+
+  @@unique([code, version])
+  @@index([code, status])
 }
 
 model ReportInstance {
-  id                              String                @id
-  caseId                          String
-  templateVersionId               String
-  templateVersionNumberSnapshot   Int
-  companyFormSnapshot             String
-  tocStructureSnapshotJson        String
-  requiredSectionsSnapshotJson    String
-  requiredEvidenceRulesSnapshotJson String
-  blockSchemasSnapshotJson        String
-  title                           String
-  status                          String                @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED
-  version                         Int                   @default(1)
-  createdById                     String
-  createdAt                       DateTime              @default(now())
-  updatedAt                       DateTime              @updatedAt
-  case                            CaseItem              @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  templateVersion                 ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  createdBy                       User                  @relation("ReportInstanceCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  reports                         Report[]
+  id                                  String   @id
+  organizationId                      String
+  caseId                              String
+  templateVersionId                   String
+  createdById                         String
+  version                             Int      @default(1)
+  templateCodeSnapshot                String
+  templateNameSnapshot                String
+  templateVersionNumberSnapshot       Int
+  companyFormSnapshot                 String
+  tocStructureSnapshotJson            String
+  requiredSectionsSnapshotJson        String
+  requiredEvidenceRulesSnapshotJson   String
+  blockSchemasSnapshotJson            String
+  referenceProvenanceSnapshotJson      String
+  snapshotSha256                      String
+  createdAt                           DateTime @default(now())
+  updatedAt                           DateTime @updatedAt
+  organization                        Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                                CaseItem @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  templateVersion                     ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  createdBy                           User @relation("ReportInstanceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  report                              Report?
 
-  @@index([caseId])
+  @@index([organizationId, caseId])
   @@index([templateVersionId])
-  @@index([createdById])
 }
 
 model AuditLog {
