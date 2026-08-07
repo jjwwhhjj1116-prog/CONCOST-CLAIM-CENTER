@@ -150,9 +150,86 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const [quoteText, setQuoteText] = useState('');
   const [anchorPosition, setAnchorPosition] = useState('');
 
+  // P10 AI Gateway States
+  const [aiPolicy, setAiPolicy] = useState<{ externalAiAllowed: boolean; maxTokensPerRequest: number; maxCostMicrosPerRequest: number } | null>(null);
+  const [aiModels, setAiModels] = useState<{ providerId: string; providerKind: string; name: string; modelCode: string }[]>([]);
+  const [selectedAiModel, setSelectedAiModel] = useState<string>('fake-claim-v1');
+  const [aiStatus, setAiStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [aiRequestId, setAiRequestId] = useState<string | null>(null);
+  const [aiResultMsg, setAiResultMsg] = useState<string | null>(null);
+
   const canEdit = roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
   const canApprove = roles.some((role) => ['admin', 'director', 'reviewer'].includes(role));
   const canMerge = roles.some((role) => ['admin', 'director', 'pm'].includes(role));
+
+  const fetchAiData = useCallback(async (caseId: string) => {
+    try {
+      const polRes = await apiRequest<{ policy: { externalAiAllowed: boolean; maxTokensPerRequest: number; maxCostMicrosPerRequest: number } }>(`/api/ai/cases/${caseId}/policy`);
+      setAiPolicy(polRes.policy);
+      const modRes = await apiRequest<{ models: { providerId: string; providerKind: string; name: string; modelCode: string }[] }>('/api/ai/models');
+      setAiModels(modRes.models);
+      if (modRes.models.length > 0) {
+        setSelectedAiModel(modRes.models[0].modelCode);
+      }
+    } catch {
+      // Ignore AI metadata load failures
+    }
+  }, []);
+
+  const toggleExternalAiPolicy = async (allowed: boolean) => {
+    if (!report?.case.id) return;
+    try {
+      const res = await apiRequest<{ policy: { externalAiAllowed: boolean; maxTokensPerRequest: number; maxCostMicrosPerRequest: number } }>(`/api/ai/cases/${report.case.id}/policy`, {
+        method: 'POST',
+        body: JSON.stringify({ externalAiAllowed: allowed })
+      });
+      setAiPolicy(res.policy);
+    } catch (err) {
+      setAiResultMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const testAiGeneration = async () => {
+    if (!report?.case.id || aiModels.length === 0) return;
+    const model = aiModels.find((m) => m.modelCode === selectedAiModel) || aiModels[0];
+    setAiStatus('loading');
+    setAiResultMsg(null);
+    setAiRequestId(null);
+    try {
+      const res = await apiRequest<{ result: { requestId: string; status: string; actualCostMicros: number; totalTokens: number; resultText?: string; redactedErrorMessage?: string } }>('/api/ai/requests', {
+        method: 'POST',
+        body: JSON.stringify({
+          caseId: report.case.id,
+          providerConfigId: model.providerId,
+          modelCode: model.modelCode,
+          prompt: 'P10 Report Studio AI Gateway Integration Test Prompt',
+          idempotencyKey: `IDEMP-STUDIO-${Date.now()}`
+        })
+      });
+      setAiRequestId(res.result.requestId);
+      if (res.result.status === 'COMPLETED') {
+        setAiStatus('success');
+        setAiResultMsg(`[AI 응답 OK] 토큰: ${res.result.totalTokens}, 비용: $${(res.result.actualCostMicros / 1000000).toFixed(4)} USD — ${res.result.resultText}`);
+      } else {
+        setAiStatus('error');
+        setAiResultMsg(`[AI 요청 ${res.result.status}] ${res.result.redactedErrorMessage || '오류 발생'}`);
+      }
+    } catch (err) {
+      setAiStatus('error');
+      setAiResultMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const cancelAiRequest = async () => {
+    if (!aiRequestId) return;
+    try {
+      await apiRequest(`/api/ai/requests/${aiRequestId}/cancel`, { method: 'POST' });
+      setAiStatus('error');
+      setAiResultMsg('AI Gateway 생성 요청이 취소되었습니다.');
+    } catch (err) {
+      setAiResultMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const loadStudio = useCallback(async () => {
     if (!reportId) {
@@ -174,6 +251,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
           : { content: latestContent(section), baseVersion: section.version, dirty: false, state: 'idle' as const }];
       })));
       setError(null);
+      void fetchAiData(response.report.caseId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '보고서 스튜디오를 불러오지 못했습니다.');
     } finally {
@@ -523,6 +601,66 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
             <p className="p09-muted">모든 장의 최신 VALID 개정이 승인된 경우에만 생성합니다. DOCX/PDF는 P12에서 출력합니다.</p>
             {canMerge ? <Button onClick={() => void mergeReport()}>승인본 병합 스냅샷 생성</Button> : <p className="p09-muted">현재 역할은 병합할 수 없습니다.</p>}
             <ul className="p09-snapshots">{report.mergeSnapshots.map((snapshot) => <li key={snapshot.id}>v{snapshot.snapshotVersion} · {snapshot.snapshotSha256.slice(0, 12)} · {snapshot.createdBy.name}</li>)}</ul>
+          </section>
+          <section className="p10-ai-gateway-section">
+            <h4>P10 AI Gateway 연동</h4>
+            {aiPolicy ? (
+              <div style={{ fontSize: '0.8125rem', color: '#334155' }}>
+                <div>사건 외부 전송 보안: <strong style={{ color: aiPolicy.externalAiAllowed ? '#166534' : '#991b1b' }}>{aiPolicy.externalAiAllowed ? '외부 전송 허용 (TRUE)' : '외부 전송 차단 (FALSE)'}</strong></div>
+                {roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r)) && (
+                  <button
+                    type="button"
+                    onClick={() => void toggleExternalAiPolicy(!aiPolicy.externalAiAllowed)}
+                    style={{ marginTop: '4px', fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
+                  >
+                    {aiPolicy.externalAiAllowed ? '외부 전송 차단' : '외부 전송 허용'}
+                  </button>
+                )}
+              </div>
+            ) : <p className="p09-muted">사건 AI 정책 로딩 중...</p>}
+
+            {aiModels.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <label style={{ fontSize: '0.75rem' }}>사용 가능 AI 모델</label>
+                <select
+                  value={selectedAiModel}
+                  onChange={(e) => setSelectedAiModel(e.target.value)}
+                  style={{ width: '100%', fontSize: '0.8125rem', padding: '4px' }}
+                >
+                  {aiModels.map((m) => (
+                    <option key={`${m.providerId}-${m.modelCode}`} value={m.modelCode}>
+                      {m.name} ({m.modelCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div style={{ marginTop: '8px' }}>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={aiStatus === 'loading' || !aiPolicy?.externalAiAllowed}
+                onClick={() => void testAiGeneration()}
+              >
+                {aiStatus === 'loading' ? 'AI Gateway 호출 중...' : 'AI Gateway 테스트 호출'}
+              </Button>
+              {aiRequestId && aiStatus === 'loading' && (
+                <button
+                  type="button"
+                  onClick={() => void cancelAiRequest()}
+                  style={{ marginLeft: '6px', fontSize: '0.75rem', color: '#991b1b', background: '#fee2e2', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  취소 (Cancel)
+                </button>
+              )}
+            </div>
+
+            {aiResultMsg && (
+              <div style={{ marginTop: '8px', padding: '8px', background: aiStatus === 'error' ? '#fef2f2' : '#f0fdf4', border: `1px solid ${aiStatus === 'error' ? '#fecaca' : '#bbf7d0'}`, borderRadius: '4px', fontSize: '0.75rem', color: aiStatus === 'error' ? '#991b1b' : '#166534' }}>
+                {aiResultMsg}
+              </div>
+            )}
           </section>
         </aside>
       </div>

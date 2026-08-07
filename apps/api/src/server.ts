@@ -9,6 +9,10 @@ import {
 import {
   generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer
 } from '@claim-studio/document-engine';
+import { assertSafeBaseUrl, SsrfError } from './ai/ssrf-guard';
+import { resolveSecretReference } from './ai/secret-resolver';
+import { executeFakeAdapterCall } from './ai/fake-adapter';
+import { processAiGenerationRequest, AiGatewayError } from './ai/gateway-engine';
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -3377,6 +3381,255 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           await tx.auditLog.create({ data: requestAudit(context, 'ADMIN_ROLE_CHANGED', 'UserRole', targetUserId, { roleId }) });
         });
         sendJson(res, 200, { message: 'Role assigned' });
+        return;
+      }
+
+      // ==========================================
+      // P10 AI Gateway Routes
+      // ==========================================
+      if (pathname === '/api/ai/providers' && req.method === 'GET') {
+        if (!context.roles.includes('admin')) throw new HttpError(403, 'Admin role required');
+        const configs = await db.aiProviderConfig.findMany({
+          where: { organizationId: context.user.organizationId },
+          orderBy: { createdAt: 'desc' }
+        });
+        const safeConfigs = configs.map((c) => ({
+          ...c,
+          secretRef: c.secretRef, // secretRef string reference only (e.g. ENV_LOCAL_FAKE_KEY)
+          hasSecretConfigured: Boolean(resolveSecretReference(c.secretRef))
+        }));
+        sendJson(res, 200, { providers: safeConfigs });
+        return;
+      }
+
+      if (pathname === '/api/ai/providers' && req.method === 'POST') {
+        if (!context.roles.includes('admin')) throw new HttpError(403, 'Admin role required');
+        const body = await readJson(req);
+        const providerKind = String(body.providerKind || 'LOCAL_FAKE');
+        const name = String(body.name || 'AI Provider');
+        const baseUrl = String(body.baseUrl || 'https://localhost/fake-ai');
+        const secretRef = String(body.secretRef || 'ENV_LOCAL_FAKE_KEY');
+        const allowedModels = Array.isArray(body.allowedModels) ? body.allowedModels.map(String) : ['fake-claim-v1'];
+        const timeoutMs = typeof body.timeoutMs === 'number' ? body.timeoutMs : 30000;
+        const maxRetries = typeof body.maxRetries === 'number' ? body.maxRetries : 3;
+        const dailyBudgetMicros = typeof body.dailyBudgetMicros === 'number' ? body.dailyBudgetMicros : 100000000;
+
+        const isLocalFake = providerKind === 'LOCAL_FAKE';
+        try {
+          assertSafeBaseUrl(baseUrl, isLocalFake);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : 'Invalid provider base URL');
+        }
+
+        if (secretRef.startsWith('sk-') || secretRef.startsWith('key-') || secretRef.startsWith('Bearer ')) {
+          throw new HttpError(400, 'Raw API key or secret cannot be stored in secretRef');
+        }
+
+        const id = typeof body.id === 'string' && body.id ? body.id : `CFG-${crypto.randomUUID()}`;
+        const config = await db.aiProviderConfig.upsert({
+          where: { id },
+          update: {
+            providerKind, name, baseUrl, secretRef,
+            allowedModelsJson: JSON.stringify(allowedModels),
+            timeoutMs, maxRetries, dailyBudgetMicros, version: { increment: 1 }
+          },
+          create: {
+            id, organizationId: context.user.organizationId, providerKind, name, baseUrl, secretRef,
+            status: 'ACTIVE', allowedModelsJson: JSON.stringify(allowedModels),
+            timeoutMs, maxRetries, dailyBudgetMicros, version: 1
+          }
+        });
+
+        await db.auditLog.create({
+          data: requestAudit(context, 'AI_PROVIDER_CONFIGURED', 'AiProviderConfig', config.id, { providerKind, name })
+        });
+
+        sendJson(res, 200, { provider: config });
+        return;
+      }
+
+      const aiTestMatch = pathname.match(/^\/api\/ai\/providers\/([^/]+)\/test$/);
+      if (aiTestMatch && req.method === 'POST') {
+        if (!context.roles.includes('admin')) throw new HttpError(403, 'Admin role required');
+        const providerId = aiTestMatch[1];
+        const config = await db.aiProviderConfig.findUnique({ where: { id: providerId } });
+        if (!config || config.organizationId !== context.user.organizationId) throw new HttpError(404, 'Provider configuration not found');
+
+        const secretKey = resolveSecretReference(config.secretRef);
+        const testResult = await executeFakeAdapterCall(secretKey, {
+          modelCode: 'fake-claim-v1',
+          prompt: 'P10_PING_TEST'
+        });
+
+        await db.auditLog.create({
+          data: requestAudit(context, 'AI_PROVIDER_TESTED', 'AiProviderConfig', providerId, { status: testResult.status })
+        });
+
+        sendJson(res, 200, {
+          ok: testResult.status === 'SUCCESS',
+          status: testResult.status,
+          statusCode: testResult.statusCode,
+          message: testResult.errorMessage || 'Connection test successful'
+        });
+        return;
+      }
+
+      if (pathname === '/api/ai/models' && req.method === 'GET') {
+        const activeConfigs = await db.aiProviderConfig.findMany({
+          where: { organizationId: context.user.organizationId, status: 'ACTIVE' }
+        });
+        const models: { providerId: string; providerKind: string; name: string; modelCode: string }[] = [];
+        for (const config of activeConfigs) {
+          const allowed: string[] = JSON.parse(config.allowedModelsJson || '[]');
+          for (const modelCode of allowed) {
+            models.push({ providerId: config.id, providerKind: config.providerKind, name: config.name, modelCode });
+          }
+        }
+        sendJson(res, 200, { models });
+        return;
+      }
+
+      const casePolicyMatch = pathname.match(/^\/api\/ai\/cases\/([^/]+)\/policy$/);
+      if (casePolicyMatch) {
+        const caseId = casePolicyMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        if (req.method === 'GET') {
+          const policy = await db.aiCasePolicy.findUnique({ where: { caseId } });
+          sendJson(res, 200, {
+            policy: policy || {
+              caseId,
+              externalAiAllowed: false,
+              maxTokensPerRequest: 4096,
+              maxCostMicrosPerRequest: 1000000,
+              allowedProviderIdsJson: '[]'
+            }
+          });
+          return;
+        }
+
+        if (req.method === 'POST' || req.method === 'PATCH') {
+          if (!context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r))) {
+            throw new HttpError(403, 'Policy modification forbidden');
+          }
+          const body = await readJson(req);
+          const externalAiAllowed = Boolean(body.externalAiAllowed);
+          const maxTokensPerRequest = typeof body.maxTokensPerRequest === 'number' ? body.maxTokensPerRequest : 4096;
+          const maxCostMicrosPerRequest = typeof body.maxCostMicrosPerRequest === 'number' ? body.maxCostMicrosPerRequest : 1000000;
+
+          const policy = await db.aiCasePolicy.upsert({
+            where: { caseId },
+            update: { externalAiAllowed, maxTokensPerRequest, maxCostMicrosPerRequest },
+            create: { id: `POL-${crypto.randomUUID()}`, caseId, externalAiAllowed, maxTokensPerRequest, maxCostMicrosPerRequest }
+          });
+
+          await db.auditLog.create({
+            data: requestAudit(context, 'AI_CASE_POLICY_UPDATED', 'AiCasePolicy', policy.id, { caseId, externalAiAllowed })
+          });
+
+          sendJson(res, 200, { policy });
+          return;
+        }
+      }
+
+      if (pathname === '/api/ai/requests' && req.method === 'POST') {
+        const body = await readJson(req);
+        const caseId = String(body.caseId || '');
+        const providerConfigId = String(body.providerConfigId || '');
+        const modelCode = String(body.modelCode || '');
+        const prompt = String(body.prompt || '');
+        const idempotencyKey = String(body.idempotencyKey || `IDEMP-${crypto.randomUUID()}`);
+        const maxTokens = typeof body.maxTokens === 'number' ? body.maxTokens : undefined;
+
+        if (!caseId || !providerConfigId || !modelCode || !prompt) {
+          throw new HttpError(400, 'Missing required fields (caseId, providerConfigId, modelCode, prompt)');
+        }
+
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (caseRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Case access forbidden');
+        if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+
+        try {
+          const gatewayResult = await processAiGenerationRequest(db, {
+            organizationId: context.user.organizationId,
+            caseId,
+            userId: context.user.id,
+            providerConfigId,
+            modelCode,
+            prompt,
+            idempotencyKey,
+            maxTokens
+          });
+
+          await db.auditLog.create({
+            data: requestAudit(context, 'AI_GENERATION_REQUESTED', 'AiGenerationRequest', gatewayResult.requestId, {
+              status: gatewayResult.status, costMicros: gatewayResult.actualCostMicros
+            })
+          });
+
+          sendJson(res, 200, { result: gatewayResult });
+          return;
+        } catch (err) {
+          if (err instanceof AiGatewayError) {
+            throw new HttpError(err.status, err.message);
+          }
+          if (err instanceof SsrfError) {
+            throw new HttpError(400, err.message);
+          }
+          throw err;
+        }
+      }
+
+      const aiCancelMatch = pathname.match(/^\/api\/ai\/requests\/([^/]+)\/cancel$/);
+      if (aiCancelMatch && req.method === 'POST') {
+        const requestId = aiCancelMatch[1];
+        const reqRow = await db.aiGenerationRequest.findUnique({ where: { id: requestId } });
+        if (!reqRow) throw new HttpError(404, 'Generation request not found');
+        if (reqRow.organizationId !== context.user.organizationId) throw new HttpError(403, 'Request access forbidden');
+        if (reqRow.userId !== context.user.id && !context.roles.includes('admin')) {
+          throw new HttpError(403, 'Cannot cancel another user\'s request');
+        }
+
+        if (['COMPLETED', 'FAILED', 'CANCELED'].includes(reqRow.status)) {
+          throw new HttpError(409, 'Request is already in terminal state');
+        }
+
+        await db.$transaction(async (tx) => {
+          await tx.aiGenerationRequest.update({
+            where: { id: requestId },
+            data: { status: 'CANCELED', redactedErrorMessage: 'Canceled by user request' }
+          });
+          await tx.auditLog.create({
+            data: requestAudit(context, 'AI_GENERATION_CANCELED', 'AiGenerationRequest', requestId, {})
+          });
+        });
+
+        sendJson(res, 200, { message: 'Request canceled' });
+        return;
+      }
+
+      if (pathname === '/api/ai/usage' && req.method === 'GET') {
+        const ledgers = await db.aiUsageLedger.findMany({
+          where: { organizationId: context.user.organizationId },
+          orderBy: { createdAt: 'desc' },
+          take: 100
+        });
+
+        const totalCostMicros = ledgers.reduce((acc, l) => acc + l.costMicros, 0);
+        const totalTokens = ledgers.reduce((acc, l) => acc + l.totalTokens, 0);
+
+        sendJson(res, 200, {
+          ledgers,
+          summary: {
+            totalCostMicros,
+            totalCostUsd: (totalCostMicros / 1000000).toFixed(4),
+            totalTokens
+          }
+        });
         return;
       }
 

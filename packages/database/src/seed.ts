@@ -548,21 +548,116 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         }
       }
 
-      // 16. Initial Audit Log. P09 reports must originate from a P08 ReportInstance,
-      // so production seed deliberately does not create a standalone studio report.
+      // 17. P10 AI Gateway Provider Configs, Case Policies & Usage Ledgers
+      await tx.aiProviderConfig.upsert({
+        where: { id: 'CFG-LOCAL-FAKE-01' },
+        update: {
+          organizationId: 'ORG-SYN-A',
+          providerKind: 'LOCAL_FAKE',
+          name: 'Local Synthetic Fake AI Engine',
+          baseUrl: 'https://localhost/fake-ai',
+          secretRef: 'ENV_LOCAL_FAKE_KEY',
+          status: 'ACTIVE',
+          allowedModelsJson: JSON.stringify(['fake-claim-v1', 'fake-analysis-v2']),
+          timeoutMs: 30000,
+          maxRetries: 3,
+          dailyBudgetMicros: 100000000,
+          version: 1,
+          updatedAt: now
+        },
+        create: {
+          id: 'CFG-LOCAL-FAKE-01',
+          organizationId: 'ORG-SYN-A',
+          providerKind: 'LOCAL_FAKE',
+          name: 'Local Synthetic Fake AI Engine',
+          baseUrl: 'https://localhost/fake-ai',
+          secretRef: 'ENV_LOCAL_FAKE_KEY',
+          status: 'ACTIVE',
+          allowedModelsJson: JSON.stringify(['fake-claim-v1', 'fake-analysis-v2']),
+          timeoutMs: 30000,
+          maxRetries: 3,
+          dailyBudgetMicros: 100000000,
+          version: 1,
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+
+      await tx.aiCasePolicy.upsert({
+        where: { caseId: 'CASE-SYN-001' },
+        update: {
+          externalAiAllowed: true,
+          maxTokensPerRequest: 4096,
+          maxCostMicrosPerRequest: 1000000,
+          allowedProviderIdsJson: JSON.stringify(['CFG-LOCAL-FAKE-01']),
+          updatedAt: now
+        },
+        create: {
+          id: 'POL-CASE-SYN-001',
+          caseId: 'CASE-SYN-001',
+          externalAiAllowed: true,
+          maxTokensPerRequest: 4096,
+          maxCostMicrosPerRequest: 1000000,
+          allowedProviderIdsJson: JSON.stringify(['CFG-LOCAL-FAKE-01']),
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+
+      await tx.aiCasePolicy.upsert({
+        where: { caseId: 'CASE-SYN-003' },
+        update: {
+          externalAiAllowed: false,
+          maxTokensPerRequest: 2048,
+          maxCostMicrosPerRequest: 500000,
+          allowedProviderIdsJson: JSON.stringify([]),
+          updatedAt: now
+        },
+        create: {
+          id: 'POL-CASE-SYN-003',
+          caseId: 'CASE-SYN-003',
+          externalAiAllowed: false,
+          maxTokensPerRequest: 2048,
+          maxCostMicrosPerRequest: 500000,
+          allowedProviderIdsJson: JSON.stringify([]),
+          createdAt: now,
+          updatedAt: now
+        }
+      });
+
+      await tx.aiUsageLedger.upsert({
+        where: { id: 'LDG-SYN-001' },
+        update: {},
+        create: {
+          id: 'LDG-SYN-001',
+          organizationId: 'ORG-SYN-A',
+          caseId: 'CASE-SYN-001',
+          userId: 'USR-PM',
+          providerConfigId: 'CFG-LOCAL-FAKE-01',
+          modelCode: 'fake-claim-v1',
+          requestId: null,
+          transactionType: 'RECONCILIATION',
+          promptTokens: 120,
+          completionTokens: 250,
+          totalTokens: 370,
+          costMicros: 3700, // $0.0037 USD
+          createdAt: now
+        }
+      });
+
       await tx.auditLog.upsert({
         where: { id: 'AUD-SYN-001' },
         update: {},
         create: {
           id: 'AUD-SYN-001', organizationId: 'ORG-SYN-A', userId: 'USR-ADMIN', action: 'SEED_INITIALIZED',
-          targetEntity: 'System', targetId: 'P08', metadataJson: JSON.stringify({ source: 'synthetic-seed-p08' }), createdAt: now
+          targetEntity: 'System', targetId: 'P10', metadataJson: JSON.stringify({ source: 'synthetic-seed-p10' }), createdAt: now
         }
       });
     });
   } finally {
     await db.$disconnect();
   }
-  console.log('Database seeded with deterministic synthetic P08 fixtures.');
+  console.log('Database seeded with deterministic synthetic P10 fixtures.');
 }
 
 if (require.main === module) {

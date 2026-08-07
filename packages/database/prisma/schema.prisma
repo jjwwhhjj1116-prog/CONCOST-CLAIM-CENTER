@@ -17,6 +17,9 @@ model Organization {
   auditLogs AuditLog[]
   reportTemplates ReportTemplate[]
   reportInstances ReportInstance[]
+  aiProviderConfigs AiProviderConfig[]
+  aiUsageLedgers AiUsageLedger[]
+  aiGenerationRequests AiGenerationRequest[]
 }
 
 model User {
@@ -51,6 +54,8 @@ model User {
   resolvedSectionComments ReportSectionComment[] @relation("SectionCommentResolver")
   approvedReportSections ReportSectionApproval[] @relation("SectionApprovalApprover")
   createdReportMergeSnapshots ReportMergeSnapshot[] @relation("ReportMergeSnapshotCreator")
+  aiUsageLedgers AiUsageLedger[]
+  aiGenerationRequests AiGenerationRequest[]
 }
 
 model Role {
@@ -105,6 +110,9 @@ model CaseItem {
   meetings       Meeting[]
   proposals      Proposal[]
   reportInstances ReportInstance[]
+  aiPolicy       AiCasePolicy?
+  aiUsageLedgers AiUsageLedger[]
+  aiGenerationRequests AiGenerationRequest[]
 
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
@@ -695,4 +703,108 @@ model ReportMergeSnapshot {
   @@unique([reportId, snapshotVersion])
   @@index([reportId])
   @@index([createdById])
+}
+
+model AiProviderConfig {
+  id                 String                @id
+  organizationId     String
+  providerKind       String                // LOCAL_FAKE, OPENAI, ANTHROPIC, GEMINI
+  name               String
+  baseUrl            String
+  secretRef          String                // API 키 환경변수/Secret Manager 참해보 레퍼런스 (원문 키 아님)
+  status             String                @default("ACTIVE") // ACTIVE, DISABLED
+  allowedModelsJson  String                @default("[]")
+  timeoutMs          Int                   @default(30000)
+  maxRetries         Int                   @default(3)
+  dailyBudgetMicros  Int                   @default(100000000) // Micro-USD (e.g. 100 USD = 100,000,000 micros)
+  version            Int                   @default(1)
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  requests           AiGenerationRequest[]
+  ledgers            AiUsageLedger[]
+
+  @@index([organizationId, status])
+}
+
+model AiCasePolicy {
+  id                      String   @id
+  caseId                  String   @unique
+  externalAiAllowed       Boolean  @default(false)
+  maxTokensPerRequest     Int      @default(4096)
+  maxCostMicrosPerRequest Int      @default(1000000) // 1 USD
+  allowedProviderIdsJson  String   @default("[]")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  case                    CaseItem @relation(fields: [caseId], references: [id], onDelete: Cascade)
+}
+
+model AiUsageLedger {
+  id                String               @id
+  organizationId    String
+  caseId            String
+  userId            String
+  providerConfigId  String
+  modelCode         String
+  requestId         String?
+  transactionType   String               // RESERVATION, RECONCILIATION, ADJUSTMENT
+  promptTokens      Int                  @default(0)
+  completionTokens  Int                  @default(0)
+  totalTokens       Int                  @default(0)
+  costMicros        Int                  @default(0) // Micro-USD 정수
+  createdAt         DateTime             @default(now())
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case              CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  providerConfig    AiProviderConfig     @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
+  request           AiGenerationRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([caseId])
+  @@index([userId])
+  @@index([requestId])
+}
+
+model AiGenerationRequest {
+  id                   String                @id
+  organizationId       String
+  caseId               String
+  userId               String
+  providerConfigId     String
+  modelCode            String
+  status               String                @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, CANCELED
+  promptSha256         String
+  idempotencyKey       String
+  reservedCostMicros   Int                   @default(0)
+  actualCostMicros     Int                   @default(0)
+  totalTokens          Int                   @default(0)
+  responseMetadataJson String                @default("{}")
+  redactedErrorMessage String?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                 CaseItem              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  providerConfig       AiProviderConfig      @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
+  attempts             AiGenerationAttempt[]
+  ledgers              AiUsageLedger[]
+
+  @@unique([organizationId, caseId, userId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([caseId])
+  @@index([userId])
+}
+
+model AiGenerationAttempt {
+  id                   String              @id
+  requestId            String
+  attemptNumber        Int
+  status               String              // PROCESSING, SUCCESS, TRANSIENT_FAILURE, HARD_FAILURE, CANCELED, TIMEOUT
+  statusCode           Int?
+  redactedErrorMessage String?
+  durationMs           Int                 @default(0)
+  createdAt            DateTime            @default(now())
+  request              AiGenerationRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+
+  @@index([requestId, attemptNumber])
 }
