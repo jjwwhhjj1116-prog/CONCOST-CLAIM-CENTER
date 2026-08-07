@@ -18,6 +18,22 @@ export interface FakeAdapterResponse {
   retryAfterSeconds?: number;
 }
 
+async function waitForAbortableDelay(milliseconds: number, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) return false;
+  return await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(false);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 /**
  * Deterministic local fake AI provider adapter.
  * Used for testing and CI without external network access or real API keys.
@@ -40,7 +56,7 @@ export async function executeFakeAdapterCall(
   }
 
   // 1. Bad Key Check
-  if (!apiKey || apiKey === 'INVALID_KEY' || options.prompt.includes('TRIGGER_BAD_KEY')) {
+  if (apiKey === 'INVALID_KEY' || options.prompt.includes('TRIGGER_BAD_KEY')) {
     return {
       status: 'BAD_KEY',
       statusCode: 401,
@@ -50,6 +66,16 @@ export async function executeFakeAdapterCall(
       costMicros: 0,
       errorMessage: 'Invalid or revoked API key'
     };
+  }
+
+  if (options.prompt.includes('TRIGGER_SLOW_SUCCESS')) {
+    const completed = await waitForAbortableDelay(750, options.abortSignal);
+    if (!completed) {
+      return {
+        status: 'USER_CANCEL', statusCode: 499, promptTokens: 0, completionTokens: 0, totalTokens: 0, costMicros: 0,
+        errorMessage: 'User canceled the in-flight provider request'
+      };
+    }
   }
 
   // 2. Timeout simulation
@@ -121,8 +147,9 @@ export async function executeFakeAdapterCall(
   }
 
   // 7. Success case
-  const promptTokens = Math.max(10, Math.ceil(options.prompt.length / 4));
-  const completionTokens = 150;
+  const maxTokens = Math.max(1, options.maxTokens ?? 4096);
+  const promptTokens = Math.min(maxTokens, Math.max(10, Math.ceil(options.prompt.length / 4)));
+  const completionTokens = Math.max(0, Math.min(150, maxTokens - promptTokens));
   const totalTokens = promptTokens + completionTokens;
   // Standard pricing: 10 micros per token ($0.00001 USD per token)
   const costMicros = totalTokens * 10;

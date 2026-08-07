@@ -9,10 +9,10 @@ import {
 import {
   generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer
 } from '@claim-studio/document-engine';
-import { assertSafeBaseUrl, SsrfError } from './ai/ssrf-guard';
-import { resolveSecretReference } from './ai/secret-resolver';
+import { assertSafeBaseUrl, assertSafeResolvedBaseUrl, SsrfError, type AiProviderKind } from './ai/ssrf-guard';
+import { assertSecretReference, resolveSecretReference, secretReferenceHint } from './ai/secret-resolver';
 import { executeFakeAdapterCall } from './ai/fake-adapter';
-import { processAiGenerationRequest, AiGatewayError } from './ai/gateway-engine';
+import { processAiGenerationRequest, AiGatewayError, type AiAuditEvent } from './ai/gateway-engine';
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -80,6 +80,14 @@ class HttpError extends Error {
   constructor(public readonly status: number, message: string, public readonly details: Record<string, unknown> = {}) {
     super(message);
   }
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number, label: string): number {
+  const candidate = value === undefined ? fallback : value;
+  if (typeof candidate !== 'number' || !Number.isSafeInteger(candidate) || candidate < minimum || candidate > maximum) {
+    throw new HttpError(400, `${label} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return candidate;
 }
 
 interface SessionContext {
@@ -692,6 +700,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
   const uploadDir = path.resolve(options.uploadDir ?? DEFAULT_UPLOAD_DIR);
   ensureUploadDir(uploadDir);
+  const inFlightAiRequests = new Map<string, AbortController>();
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -3393,10 +3402,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           where: { organizationId: context.user.organizationId },
           orderBy: { createdAt: 'desc' }
         });
-        const safeConfigs = configs.map((c) => ({
-          ...c,
-          secretRef: c.secretRef, // secretRef string reference only (e.g. ENV_LOCAL_FAKE_KEY)
-          hasSecretConfigured: Boolean(resolveSecretReference(c.secretRef))
+        const safeConfigs = configs.map(({ secretRef, ...config }) => ({
+          ...config,
+          secretRefHint: secretReferenceHint(secretRef),
+          hasSecretConfigured: config.providerKind === 'LOCAL_FAKE' || Boolean(resolveSecretReference(secretRef))
         }));
         sendJson(res, 200, { providers: safeConfigs });
         return;
@@ -3405,46 +3414,48 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       if (pathname === '/api/ai/providers' && req.method === 'POST') {
         if (!context.roles.includes('admin')) throw new HttpError(403, 'Admin role required');
         const body = await readJson(req);
-        const providerKind = String(body.providerKind || 'LOCAL_FAKE');
-        const name = String(body.name || 'AI Provider');
-        const baseUrl = String(body.baseUrl || 'https://localhost/fake-ai');
-        const secretRef = String(body.secretRef || 'ENV_LOCAL_FAKE_KEY');
-        const allowedModels = Array.isArray(body.allowedModels) ? body.allowedModels.map(String) : ['fake-claim-v1'];
-        const timeoutMs = typeof body.timeoutMs === 'number' ? body.timeoutMs : 30000;
-        const maxRetries = typeof body.maxRetries === 'number' ? body.maxRetries : 3;
-        const dailyBudgetMicros = typeof body.dailyBudgetMicros === 'number' ? body.dailyBudgetMicros : 100000000;
-
+        const providerKind = String(body.providerKind || 'LOCAL_FAKE') as AiProviderKind;
+        if (!['LOCAL_FAKE', 'OPENAI', 'ANTHROPIC', 'GEMINI'].includes(providerKind)) throw new HttpError(400, 'Unsupported providerKind');
+        const name = String(body.name || 'AI Provider').trim();
+        if (!name || name.length > 120) throw new HttpError(400, 'Provider name is required and must not exceed 120 characters');
         const isLocalFake = providerKind === 'LOCAL_FAKE';
-        try {
-          assertSafeBaseUrl(baseUrl, isLocalFake);
-        } catch (err) {
-          throw new HttpError(400, err instanceof Error ? err.message : 'Invalid provider base URL');
+        const baseUrl = String(body.baseUrl || (isLocalFake ? 'https://local-fake.invalid/v1' : ''));
+        const secretRef = String(body.secretRef || (isLocalFake ? 'LOCAL_FAKE' : ''));
+        const allowedModels = Array.isArray(body.allowedModels) ? [...new Set(body.allowedModels.map(String).map((item) => item.trim()).filter(Boolean))] : [];
+        if (allowedModels.length === 0 || allowedModels.length > 50 || allowedModels.some((model) => model.length > 100)) {
+          throw new HttpError(400, 'allowedModels must contain 1 to 50 bounded model identifiers');
         }
+        const timeoutMs = boundedInteger(body.timeoutMs, 30000, 1000, 120000, 'timeoutMs');
+        const maxRetries = boundedInteger(body.maxRetries, 3, 0, 3, 'maxRetries');
+        const dailyBudgetMicros = boundedInteger(body.dailyBudgetMicros, 100000000, 1, 2_000_000_000, 'dailyBudgetMicros');
 
-        if (secretRef.startsWith('sk-') || secretRef.startsWith('key-') || secretRef.startsWith('Bearer ')) {
-          throw new HttpError(400, 'Raw API key or secret cannot be stored in secretRef');
+        try {
+          assertSafeBaseUrl(baseUrl, isLocalFake, providerKind);
+          assertSecretReference(secretRef, isLocalFake);
+        } catch (err) {
+          throw new HttpError(400, err instanceof Error ? err.message : 'Invalid provider configuration');
         }
 
         const id = typeof body.id === 'string' && body.id ? body.id : `CFG-${crypto.randomUUID()}`;
-        const config = await db.aiProviderConfig.upsert({
-          where: { id },
-          update: {
-            providerKind, name, baseUrl, secretRef,
-            allowedModelsJson: JSON.stringify(allowedModels),
-            timeoutMs, maxRetries, dailyBudgetMicros, version: { increment: 1 }
-          },
-          create: {
-            id, organizationId: context.user.organizationId, providerKind, name, baseUrl, secretRef,
-            status: 'ACTIVE', allowedModelsJson: JSON.stringify(allowedModels),
-            timeoutMs, maxRetries, dailyBudgetMicros, version: 1
-          }
+        const current = await db.aiProviderConfig.findUnique({ where: { id } });
+        if (current && current.organizationId !== context.user.organizationId) throw new HttpError(403, 'Cross-organization provider update forbidden');
+        const config = await db.$transaction(async (tx) => {
+          const stored = await tx.aiProviderConfig.upsert({
+            where: { id },
+            update: {
+              providerKind, name, baseUrl, secretRef,
+              allowedModelsJson: JSON.stringify(allowedModels), timeoutMs, maxRetries, dailyBudgetMicros, version: { increment: 1 }
+            },
+            create: {
+              id, organizationId: context.user.organizationId, providerKind, name, baseUrl, secretRef,
+              status: 'ACTIVE', allowedModelsJson: JSON.stringify(allowedModels), timeoutMs, maxRetries, dailyBudgetMicros, version: 1
+            }
+          });
+          await tx.auditLog.create({ data: requestAudit(context, 'AI_PROVIDER_CONFIGURED', 'AiProviderConfig', stored.id, { providerKind, name }) });
+          return stored;
         });
-
-        await db.auditLog.create({
-          data: requestAudit(context, 'AI_PROVIDER_CONFIGURED', 'AiProviderConfig', config.id, { providerKind, name })
-        });
-
-        sendJson(res, 200, { provider: config });
+        const { secretRef: storedSecretRef, ...safeConfig } = config;
+        sendJson(res, 200, { provider: { ...safeConfig, secretRefHint: secretReferenceHint(storedSecretRef), hasSecretConfigured: isLocalFake || Boolean(resolveSecretReference(storedSecretRef)) } });
         return;
       }
 
@@ -3455,11 +3466,15 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const config = await db.aiProviderConfig.findUnique({ where: { id: providerId } });
         if (!config || config.organizationId !== context.user.organizationId) throw new HttpError(404, 'Provider configuration not found');
 
-        const secretKey = resolveSecretReference(config.secretRef);
-        const testResult = await executeFakeAdapterCall(secretKey, {
-          modelCode: 'fake-claim-v1',
-          prompt: 'P10_PING_TEST'
-        });
+        let testResult;
+        if (config.providerKind === 'LOCAL_FAKE') {
+          testResult = await executeFakeAdapterCall('LOCAL_FAKE', { modelCode: 'fake-claim-v1', prompt: 'P10_PING_TEST' });
+        } else {
+          await assertSafeResolvedBaseUrl(config.baseUrl, config.providerKind as AiProviderKind);
+          assertSecretReference(config.secretRef);
+          if (!resolveSecretReference(config.secretRef)) throw new HttpError(400, 'Configured provider secret reference is unavailable');
+          throw new HttpError(501, 'Live provider connection tests require a separately authorized adapter deployment');
+        }
 
         await db.auditLog.create({
           data: requestAudit(context, 'AI_PROVIDER_TESTED', 'AiProviderConfig', providerId, { status: testResult.status })
@@ -3475,8 +3490,25 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       }
 
       if (pathname === '/api/ai/models' && req.method === 'GET') {
+        const requestedCaseId = url.searchParams.get('caseId');
+        let policyProviderIds: string[] | null = null;
+        if (requestedCaseId) {
+          const caseRow = await db.caseItem.findUnique({ where: { id: requestedCaseId } });
+          if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+          if (caseRow.organizationId !== context.user.organizationId || !(await canAccessCase(db, context, requestedCaseId))) throw new HttpError(403, 'Case access forbidden');
+          const policy = await db.aiCasePolicy.findUnique({ where: { caseId: requestedCaseId } });
+          if (!policy?.externalAiAllowed) {
+            sendJson(res, 200, { models: [] });
+            return;
+          }
+          policyProviderIds = JSON.parse(policy.allowedProviderIdsJson) as string[];
+        }
         const activeConfigs = await db.aiProviderConfig.findMany({
-          where: { organizationId: context.user.organizationId, status: 'ACTIVE' }
+          where: {
+            organizationId: context.user.organizationId,
+            status: 'ACTIVE',
+            ...(policyProviderIds ? { id: { in: policyProviderIds } } : {})
+          }
         });
         const models: { providerId: string; providerKind: string; name: string; modelCode: string }[] = [];
         for (const config of activeConfigs) {
@@ -3517,19 +3549,24 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
           const body = await readJson(req);
           const externalAiAllowed = Boolean(body.externalAiAllowed);
-          const maxTokensPerRequest = typeof body.maxTokensPerRequest === 'number' ? body.maxTokensPerRequest : 4096;
-          const maxCostMicrosPerRequest = typeof body.maxCostMicrosPerRequest === 'number' ? body.maxCostMicrosPerRequest : 1000000;
+          const currentPolicy = await db.aiCasePolicy.findUnique({ where: { caseId } });
+          const maxTokensPerRequest = boundedInteger(body.maxTokensPerRequest, currentPolicy?.maxTokensPerRequest ?? 4096, 1, 100_000, 'maxTokensPerRequest');
+          const maxCostMicrosPerRequest = boundedInteger(body.maxCostMicrosPerRequest, currentPolicy?.maxCostMicrosPerRequest ?? 1_000_000, 1, 2_000_000_000, 'maxCostMicrosPerRequest');
+          const allowedProviderIds = Array.isArray(body.allowedProviderIds)
+            ? [...new Set(body.allowedProviderIds.map(String))]
+            : currentPolicy ? JSON.parse(currentPolicy.allowedProviderIdsJson) as string[] : [];
+          const ownedProviderCount = await db.aiProviderConfig.count({ where: { organizationId: context.user.organizationId, id: { in: allowedProviderIds } } });
+          if (ownedProviderCount !== allowedProviderIds.length) throw new HttpError(400, 'Policy provider allowlist contains an unknown provider');
 
-          const policy = await db.aiCasePolicy.upsert({
-            where: { caseId },
-            update: { externalAiAllowed, maxTokensPerRequest, maxCostMicrosPerRequest },
-            create: { id: `POL-${crypto.randomUUID()}`, caseId, externalAiAllowed, maxTokensPerRequest, maxCostMicrosPerRequest }
+          const policy = await db.$transaction(async (tx) => {
+            const stored = await tx.aiCasePolicy.upsert({
+              where: { caseId },
+              update: { externalAiAllowed, maxTokensPerRequest, maxCostMicrosPerRequest, allowedProviderIdsJson: JSON.stringify(allowedProviderIds) },
+              create: { id: `POL-${crypto.randomUUID()}`, caseId, externalAiAllowed, maxTokensPerRequest, maxCostMicrosPerRequest, allowedProviderIdsJson: JSON.stringify(allowedProviderIds) }
+            });
+            await tx.auditLog.create({ data: requestAudit(context, 'AI_CASE_POLICY_UPDATED', 'AiCasePolicy', stored.id, { caseId, externalAiAllowed, allowedProviderIds }) });
+            return stored;
           });
-
-          await db.auditLog.create({
-            data: requestAudit(context, 'AI_CASE_POLICY_UPDATED', 'AiCasePolicy', policy.id, { caseId, externalAiAllowed })
-          });
-
           sendJson(res, 200, { policy });
           return;
         }
@@ -3541,12 +3578,14 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const providerConfigId = String(body.providerConfigId || '');
         const modelCode = String(body.modelCode || '');
         const prompt = String(body.prompt || '');
-        const idempotencyKey = String(body.idempotencyKey || `IDEMP-${crypto.randomUUID()}`);
+        const idempotencyKey = String(body.idempotencyKey || '');
         const maxTokens = typeof body.maxTokens === 'number' ? body.maxTokens : undefined;
+        const waitForCompletion = body.waitForCompletion !== false;
 
-        if (!caseId || !providerConfigId || !modelCode || !prompt) {
-          throw new HttpError(400, 'Missing required fields (caseId, providerConfigId, modelCode, prompt)');
+        if (!caseId || !providerConfigId || !modelCode || !prompt || !idempotencyKey) {
+          throw new HttpError(400, 'Missing required fields (caseId, providerConfigId, modelCode, prompt, idempotencyKey)');
         }
+        if (idempotencyKey.length > 128 || prompt.length > 200_000) throw new HttpError(400, 'Request field length exceeds the P10 limit');
 
         const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
         if (!caseRow || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
@@ -3554,7 +3593,12 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!(await canAccessCase(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
         try {
-          const gatewayResult = await processAiGenerationRequest(db, {
+          const controller = new AbortController();
+          let resolveKnown!: (value: { requestId: string; status: string }) => void;
+          let rejectKnown!: (error: unknown) => void;
+          const knownRequest = new Promise<{ requestId: string; status: string }>((resolve, reject) => { resolveKnown = resolve; rejectKnown = reject; });
+          void knownRequest.catch(() => undefined);
+          const execution = processAiGenerationRequest(db, {
             organizationId: context.user.organizationId,
             caseId,
             userId: context.user.id,
@@ -3562,16 +3606,36 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             modelCode,
             prompt,
             idempotencyKey,
-            maxTokens
+            maxTokens,
+            auditLogFactory: (event: AiAuditEvent, targetId, metadata) => requestAudit(
+              context,
+              {
+                STARTED: 'AI_GENERATION_STARTED', COMPLETED: 'AI_GENERATION_COMPLETED', FAILED: 'AI_GENERATION_FAILED',
+                CANCELED: 'AI_GENERATION_CANCELED', POLICY_BLOCKED: 'AI_GENERATION_POLICY_BLOCKED', BUDGET_BLOCKED: 'AI_GENERATION_BUDGET_BLOCKED'
+              }[event],
+              event === 'STARTED' || event === 'COMPLETED' || event === 'FAILED' || event === 'CANCELED' ? 'AiGenerationRequest' : 'CaseItem',
+              targetId,
+              { caseId, providerConfigId, modelCode, ...metadata }
+            )
+          }, {
+            abortSignal: controller.signal,
+            onRequestKnown: (requestId, status) => resolveKnown({ requestId, status })
           });
+          void execution.catch(rejectKnown);
 
-          await db.auditLog.create({
-            data: requestAudit(context, 'AI_GENERATION_REQUESTED', 'AiGenerationRequest', gatewayResult.requestId, {
-              status: gatewayResult.status, costMicros: gatewayResult.actualCostMicros
-            })
-          });
+          if (waitForCompletion) {
+            sendJson(res, 200, { result: await execution });
+            return;
+          }
 
-          sendJson(res, 200, { result: gatewayResult });
+          const known = await knownRequest;
+          if (known.status !== 'PROCESSING') {
+            sendJson(res, 200, { result: await execution });
+            return;
+          }
+          inFlightAiRequests.set(known.requestId, controller);
+          void execution.catch((error: unknown) => console.error('Background AI request failed', error)).finally(() => inFlightAiRequests.delete(known.requestId));
+          sendJson(res, 202, { result: { requestId: known.requestId, status: 'PROCESSING' } });
           return;
         } catch (err) {
           if (err instanceof AiGatewayError) {
@@ -3582,6 +3646,23 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
           throw err;
         }
+      }
+
+      const aiRequestMatch = pathname.match(/^\/api\/ai\/requests\/([^/]+)$/);
+      if (aiRequestMatch && req.method === 'GET') {
+        const requestRow = await db.aiGenerationRequest.findUnique({ where: { id: aiRequestMatch[1] }, include: { attempts: true } });
+        if (!requestRow || requestRow.organizationId !== context.user.organizationId) throw new HttpError(404, 'Generation request not found');
+        if (requestRow.userId !== context.user.id && !context.roles.includes('admin')) throw new HttpError(403, 'Request access forbidden');
+        let resultText: string | undefined;
+        try { resultText = (JSON.parse(requestRow.responseMetadataJson) as { resultText?: string }).resultText; } catch { resultText = undefined; }
+        sendJson(res, 200, {
+          result: {
+            requestId: requestRow.id, status: requestRow.status, reservedCostMicros: requestRow.reservedCostMicros,
+            actualCostMicros: requestRow.actualCostMicros, totalTokens: requestRow.totalTokens, resultText,
+            redactedErrorMessage: requestRow.redactedErrorMessage, attemptsCount: requestRow.attempts.length
+          }
+        });
+        return;
       }
 
       const aiCancelMatch = pathname.match(/^\/api\/ai\/requests\/([^/]+)\/cancel$/);
@@ -3599,22 +3680,32 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         await db.$transaction(async (tx) => {
-          await tx.aiGenerationRequest.update({
-            where: { id: requestId },
-            data: { status: 'CANCELED', redactedErrorMessage: 'Canceled by user request' }
+          const changed = await tx.aiGenerationRequest.updateMany({
+            where: { id: requestId, status: { in: ['PENDING', 'PROCESSING'] } },
+            data: { status: 'CANCELED', actualCostMicros: 0, totalTokens: 0, redactedErrorMessage: 'Canceled by user request' }
+          });
+          if (changed.count === 0) throw new HttpError(409, 'Request is already in terminal state');
+          await tx.aiUsageLedger.create({
+            data: {
+              id: `LDG-${crypto.randomUUID()}`, organizationId: reqRow.organizationId, caseId: reqRow.caseId,
+              userId: reqRow.userId, providerConfigId: reqRow.providerConfigId, modelCode: reqRow.modelCode,
+              requestId, transactionType: 'RECONCILIATION', costMicros: -reqRow.reservedCostMicros
+            }
           });
           await tx.auditLog.create({
             data: requestAudit(context, 'AI_GENERATION_CANCELED', 'AiGenerationRequest', requestId, {})
           });
         });
-
-        sendJson(res, 200, { message: 'Request canceled' });
+        inFlightAiRequests.get(requestId)?.abort();
+        inFlightAiRequests.delete(requestId);
+        sendJson(res, 200, { message: 'Request canceled', result: { requestId, status: 'CANCELED' } });
         return;
       }
 
       if (pathname === '/api/ai/usage' && req.method === 'GET') {
+        const canViewOrganizationUsage = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
         const ledgers = await db.aiUsageLedger.findMany({
-          where: { organizationId: context.user.organizationId },
+          where: { organizationId: context.user.organizationId, ...(!canViewOrganizationUsage ? { userId: context.user.id } : {}) },
           orderBy: { createdAt: 'desc' },
           take: 100
         });
@@ -3645,7 +3736,11 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   }) as ManagedApiServer;
 
   let databaseClose = Promise.resolve();
-  server.on('close', () => { databaseClose = db.$disconnect(); });
+  server.on('close', () => {
+    for (const controller of inFlightAiRequests.values()) controller.abort();
+    inFlightAiRequests.clear();
+    databaseClose = db.$disconnect();
+  });
   server.waitForDatabaseClose = () => databaseClose;
   return server;
 }

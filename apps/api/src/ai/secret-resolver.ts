@@ -1,31 +1,27 @@
-/**
- * Resolves API keys from environment variables or secure vault references.
- * Raw key strings are NEVER stored in DB, written to logs, audit entries, or API responses.
- */
-export function resolveSecretReference(secretRef: string): string | null {
-  if (!secretRef) return null;
+const SECRET_REFERENCE = /^ENV_[A-Z][A-Z0-9_]{1,126}$/;
 
-  // Local fake environment key default fallback
-  if (secretRef === 'ENV_LOCAL_FAKE_KEY') {
-    return process.env.LOCAL_FAKE_AI_KEY || 'fake-synthetic-local-key-secret-value-12345';
-  }
-
-  if (secretRef.startsWith('ENV_')) {
-    const envKey = secretRef.replace(/^ENV_/, '');
-    return process.env[envKey] || null;
-  }
-
-  return null;
+export function assertSecretReference(secretRef: string, isLocalFake = false): void {
+  if (isLocalFake && secretRef === 'LOCAL_FAKE') return;
+  if (!SECRET_REFERENCE.test(secretRef)) throw new Error('Secret reference must be an ENV_* identifier; raw secrets are forbidden');
 }
 
-/**
- * Sanitizes and redacts raw secret strings from error messages or logs.
- */
+/** Resolve only explicit environment references. No fallback secret is embedded in source code. */
+export function resolveSecretReference(secretRef: string): string | null {
+  assertSecretReference(secretRef);
+  return process.env[secretRef.slice(4)] || null;
+}
+
+export function secretReferenceHint(secretRef: string): string {
+  if (secretRef === 'LOCAL_FAKE') return 'LOCAL_FAKE';
+  if (!SECRET_REFERENCE.test(secretRef)) return '[INVALID_REFERENCE]';
+  return `${secretRef.slice(0, 8)}…${secretRef.slice(-4)}`;
+}
+
+/** Sanitize common credential formats without echoing the matched secret. */
 export function redactSecretText(text: string): string {
   if (!text) return '';
   return text
-    .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
-    .replace(/(key-[a-zA-Z0-9]{20,})/g, '[REDACTED_API_KEY]')
-    .replace(/(Bearer\s+[a-zA-Z0-9.\-_]+)/gi, 'Bearer [REDACTED_TOKEN]')
-    .replace(/(gsa_[a-zA-Z0-9]{20,})/g, '[REDACTED_SERVICE_ACCOUNT]');
+    .replace(/\b(?:sk|key|gsa|ghp|github_pat)-?[a-zA-Z0-9_\-]{12,}\b/g, '[REDACTED_SECRET]')
+    .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [REDACTED_TOKEN]')
+    .replace(/((?:api[_-]?key|token|secret|password)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]');
 }

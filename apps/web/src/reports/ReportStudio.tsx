@@ -166,10 +166,10 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
     try {
       const polRes = await apiRequest<{ policy: { externalAiAllowed: boolean; maxTokensPerRequest: number; maxCostMicrosPerRequest: number } }>(`/api/ai/cases/${caseId}/policy`);
       setAiPolicy(polRes.policy);
-      const modRes = await apiRequest<{ models: { providerId: string; providerKind: string; name: string; modelCode: string }[] }>('/api/ai/models');
+      const modRes = await apiRequest<{ models: { providerId: string; providerKind: string; name: string; modelCode: string }[] }>(`/api/ai/models?caseId=${encodeURIComponent(caseId)}`);
       setAiModels(modRes.models);
       if (modRes.models.length > 0) {
-        setSelectedAiModel(modRes.models[0].modelCode);
+        setSelectedAiModel(`${modRes.models[0].providerId}::${modRes.models[0].modelCode}`);
       }
     } catch {
       // Ignore AI metadata load failures
@@ -191,28 +191,44 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
 
   const testAiGeneration = async () => {
     if (!report?.case.id || aiModels.length === 0) return;
-    const model = aiModels.find((m) => m.modelCode === selectedAiModel) || aiModels[0];
+    const model = aiModels.find((m) => `${m.providerId}::${m.modelCode}` === selectedAiModel) || aiModels[0];
     setAiStatus('loading');
     setAiResultMsg(null);
     setAiRequestId(null);
     try {
-      const res = await apiRequest<{ result: { requestId: string; status: string; actualCostMicros: number; totalTokens: number; resultText?: string; redactedErrorMessage?: string } }>('/api/ai/requests', {
+      const res = await apiRequest<{ result: { requestId: string; status: string; actualCostMicros?: number; totalTokens?: number; resultText?: string; redactedErrorMessage?: string } }>('/api/ai/requests', {
         method: 'POST',
         body: JSON.stringify({
           caseId: report.case.id,
           providerConfigId: model.providerId,
           modelCode: model.modelCode,
-          prompt: 'P10 Report Studio AI Gateway Integration Test Prompt',
-          idempotencyKey: `IDEMP-STUDIO-${Date.now()}`
+          prompt: model.providerKind === 'LOCAL_FAKE' ? 'P10 Report Studio transport diagnostic TRIGGER_SLOW_SUCCESS' : 'P10 Report Studio transport diagnostic',
+          idempotencyKey: `IDEMP-STUDIO-${Date.now()}`,
+          waitForCompletion: false
         })
       });
       setAiRequestId(res.result.requestId);
-      if (res.result.status === 'COMPLETED') {
+      if (res.result.status === 'PROCESSING') {
+        for (let poll = 0; poll < 80; poll += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 100));
+          const current = await apiRequest<{ result: { requestId: string; status: string; actualCostMicros: number; totalTokens: number; resultText?: string; redactedErrorMessage?: string } }>(`/api/ai/requests/${encodeURIComponent(res.result.requestId)}`);
+          if (current.result.status === 'PROCESSING') continue;
+          if (current.result.status === 'COMPLETED') {
+            setAiStatus('success');
+            setAiResultMsg(`[Gateway 진단 성공] 토큰: ${current.result.totalTokens}, 비용: $${(current.result.actualCostMicros / 1000000).toFixed(4)} USD — ${current.result.resultText}`);
+          } else {
+            setAiStatus('error');
+            setAiResultMsg(`[Gateway 요청 ${current.result.status}] ${current.result.redactedErrorMessage || '오류 발생'}`);
+          }
+          return;
+        }
+        throw new Error('AI Gateway 상태 확인 시간이 초과되었습니다.');
+      } else if (res.result.status === 'COMPLETED') {
         setAiStatus('success');
-        setAiResultMsg(`[AI 응답 OK] 토큰: ${res.result.totalTokens}, 비용: $${(res.result.actualCostMicros / 1000000).toFixed(4)} USD — ${res.result.resultText}`);
+        setAiResultMsg(`[Gateway 진단 성공] 토큰: ${res.result.totalTokens ?? 0}, 비용: $${((res.result.actualCostMicros ?? 0) / 1000000).toFixed(4)} USD — ${res.result.resultText}`);
       } else {
         setAiStatus('error');
-        setAiResultMsg(`[AI 요청 ${res.result.status}] ${res.result.redactedErrorMessage || '오류 발생'}`);
+        setAiResultMsg(`[Gateway 요청 ${res.result.status}] ${res.result.redactedErrorMessage || '오류 발생'}`);
       }
     } catch (err) {
       setAiStatus('error');
@@ -225,7 +241,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
     try {
       await apiRequest(`/api/ai/requests/${aiRequestId}/cancel`, { method: 'POST' });
       setAiStatus('error');
-      setAiResultMsg('AI Gateway 생성 요청이 취소되었습니다.');
+      setAiResultMsg('AI Gateway 실행 중 요청이 취소되었습니다.');
     } catch (err) {
       setAiResultMsg(err instanceof Error ? err.message : String(err));
     }
@@ -572,7 +588,6 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
               최신 개정: {activeRevision?.validationStatus ?? '미저장'}
             </div>
             {validationErrors.map((item) => <p key={`${item.code}-${item.paragraphIndex}`} className="p09-validation-item">문단 {item.paragraphIndex + 1}: {item.message}</p>)}
-            <div className="p09-ai-placeholder" aria-disabled="true"><strong>AI 보조 검토</strong><p>P10 AI Gateway 전까지 비활성 상태입니다. 외부 공급자 전송은 발생하지 않습니다.</p><button disabled>AI 검토 실행(비활성)</button></div>
           </section>
           <section>
             <h4>댓글·수정 요청</h4>
@@ -621,14 +636,15 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
 
             {aiModels.length > 0 && (
               <div style={{ marginTop: '8px' }}>
-                <label style={{ fontSize: '0.75rem' }}>사용 가능 AI 모델</label>
+                <label htmlFor="p10-ai-model" style={{ fontSize: '0.75rem' }}>사용 가능 AI 모델</label>
                 <select
+                  id="p10-ai-model"
                   value={selectedAiModel}
                   onChange={(e) => setSelectedAiModel(e.target.value)}
                   style={{ width: '100%', fontSize: '0.8125rem', padding: '4px' }}
                 >
                   {aiModels.map((m) => (
-                    <option key={`${m.providerId}-${m.modelCode}`} value={m.modelCode}>
+                    <option key={`${m.providerId}-${m.modelCode}`} value={`${m.providerId}::${m.modelCode}`}>
                       {m.name} ({m.modelCode})
                     </option>
                   ))}
@@ -643,7 +659,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                 disabled={aiStatus === 'loading' || !aiPolicy?.externalAiAllowed}
                 onClick={() => void testAiGeneration()}
               >
-                {aiStatus === 'loading' ? 'AI Gateway 호출 중...' : 'AI Gateway 테스트 호출'}
+                {aiStatus === 'loading' ? 'AI Gateway 진단 실행 중...' : 'AI Gateway 연결 진단 시작'}
               </Button>
               {aiRequestId && aiStatus === 'loading' && (
                 <button
@@ -651,7 +667,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                   onClick={() => void cancelAiRequest()}
                   style={{ marginLeft: '6px', fontSize: '0.75rem', color: '#991b1b', background: '#fee2e2', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer' }}
                 >
-                  취소 (Cancel)
+                  실행 중 요청 취소
                 </button>
               )}
             </div>

@@ -152,3 +152,27 @@ test('P08 keeps prior regressions and adds real catalog E2E/security plus immuta
   ]) assert.ok(migration.includes(guard), `P08 DB guard missing: ${guard}`);
   assert.doesNotMatch(migration, /DROP\s+TABLE|ALTER\s+TABLE\s+[^;]+\s+RENAME/i);
 });
+
+test('P10 keeps real Chromium E2E and DB-enforced gateway security invariants', () => {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  assert.match(packageJson.scripts['test:e2e'], /p09-e2e\.ts.*p10-e2e\.ts/);
+  assert.match(packageJson.scripts['test:security'], /p09-security-test\.ts.*p10-security-test\.ts/);
+  const e2e = fs.readFileSync(path.join(__dirname, './p10-e2e.ts'), 'utf8');
+  assert.match(e2e, /chromium\.launch/);
+  assert.match(e2e, /page\.goto/);
+  assert.match(e2e, /실행 중 요청 취소/);
+  const migration = fs.readFileSync(
+    path.join(__dirname, '../packages/database/prisma/migrations/20260807140000_p10_ai_gateway/migration.sql'),
+    'utf8'
+  );
+  for (const guard of [
+    'P10_ai_generation_request_valid_transition',
+    'P10_ai_generation_request_identity_immutable_update',
+    'P10_ai_generation_request_integrity_insert',
+    'P10_ai_usage_ledger_integrity_insert',
+    'P10_ai_usage_ledger_immutable_update',
+    'P10_ai_generation_attempt_immutable_update'
+  ]) assert.ok(migration.includes(guard), `P10 DB guard missing: ${guard}`);
+  const resolver = fs.readFileSync(path.join(__dirname, '../apps/api/src/ai/secret-resolver.ts'), 'utf8');
+  assert.doesNotMatch(resolver, /fake-synthetic-local-key|sk-[a-z0-9]/i);
+});

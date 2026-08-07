@@ -8,15 +8,15 @@ import { login, requestJson, P09_TEST_ORIGIN } from './p09-test-support';
 
 const root = path.resolve(__dirname, '..');
 
-async function startIsolated(name: string): Promise<{
-  db: PrismaClient;
-  api: ManagedApiServer;
-  origin: string;
-  databasePath: string;
-  uploadDir: string;
-}> {
-  const databasePath = path.join(root, 'packages/database/.data', `${name}-${process.pid}-${Date.now()}.db`);
-  const uploadDir = path.join(root, 'packages/database/.data', `${name}-uploads-${process.pid}-${Date.now()}`);
+async function suppressExpectedServerError<T>(task: () => Promise<T>): Promise<T> {
+  const original = console.error;
+  console.error = () => undefined;
+  try { return await task(); } finally { console.error = original; }
+}
+
+async function fixture(): Promise<{ db: PrismaClient; api: ManagedApiServer; origin: string; databasePath: string; uploadDir: string }> {
+  const databasePath = path.join(root, 'packages/database/.data', `p10-security-${process.pid}-${Date.now()}.db`);
+  const uploadDir = `${databasePath}-uploads`;
   const databaseUrl = `file:${databasePath}`;
   await resetDatabase(databaseUrl);
   await seedDatabase(databaseUrl);
@@ -26,73 +26,95 @@ async function startIsolated(name: string): Promise<{
   return { db, api, origin: `http://127.0.0.1:${(api.address() as AddressInfo).port}`, databasePath, uploadDir };
 }
 
-async function closeIsolated(context: Awaited<ReturnType<typeof startIsolated>>): Promise<void> {
-  await new Promise<void>((resolve) => context.api.close(() => resolve()));
-  await context.api.waitForDatabaseClose();
-  await context.db.$disconnect();
-  fs.rmSync(context.uploadDir, { recursive: true, force: true });
-  for (const suffix of ['', '-journal', '-shm', '-wal']) fs.rmSync(`${context.databasePath}${suffix}`, { force: true });
-}
-
-async function runP10SecurityTests() {
-  console.log('[P10 Security Test] Initializing database and API server...');
-  const ctx = await startIsolated('p10-security-test');
-
+async function main(): Promise<void> {
+  console.log('P10 security: RBAC/IDOR, zero-secret, default deny, tenant integrity, audit rollback');
+  const ctx = await fixture();
   try {
-    const adminSession = await login(ctx.origin, 'admin@example.invalid');
-    const staffSession = await login(ctx.origin, 'staff@example.invalid');
+    const admin = await login(ctx.origin, 'admin@example.invalid');
+    const pm = await login(ctx.origin, 'pm@example.invalid');
+    const staff = await login(ctx.origin, 'staff@example.invalid');
+    assert.equal((await requestJson(ctx.origin, '/api/ai/providers', 'GET', undefined, staff)).status, 403);
+    const adminProviders = await requestJson(ctx.origin, '/api/ai/providers', 'GET', undefined, admin);
+    const providerText = JSON.stringify(adminProviders.body);
+    assert.equal(/"secretRef"\s*:/.test(providerText), false);
+    assert.equal(/(?:sk-|Bearer\s|fake-synthetic-local-key)/i.test(providerText), false);
 
-    // 1. Admin API Authorization Boundary (/api/ai/providers)
-    console.log('[P10 Security Test] 1. Admin RBAC Guard Verification...');
-    const staffAccessRes = await requestJson(ctx.origin, '/api/ai/providers', 'GET', undefined, staffSession);
-    assert.equal(staffAccessRes.status, 403);
+    const rawSecret = ['sk', 'proj', 'THIS_IS_A_RAW_SECRET_123456789'].join('-');
+    const rawResponse = await requestJson(ctx.origin, '/api/ai/providers', 'POST', {
+      providerKind: 'OPENAI', name: 'Bad', baseUrl: 'https://api.openai.com/v1', secretRef: rawSecret,
+      allowedModels: ['gpt-test'], dailyBudgetMicros: 1000
+    }, admin);
+    assert.equal(rawResponse.status, 400);
+    assert.equal(JSON.stringify(rawResponse.body).includes(rawSecret), false);
+    await assert.rejects(ctx.db.aiProviderConfig.create({
+      data: {
+        id: 'CFG-RAW', organizationId: 'ORG-SYN-A', providerKind: 'OPENAI', name: 'Raw', baseUrl: 'https://api.openai.com/v1',
+        secretRef: rawSecret, allowedModelsJson: '[]', updatedAt: new Date()
+      }
+    }));
 
-    const adminAccessRes = await requestJson(ctx.origin, '/api/ai/providers', 'GET', undefined, adminSession);
-    assert.equal(adminAccessRes.status, 200);
+    const blocked = await requestJson(ctx.origin, '/api/ai/requests', 'POST', {
+      caseId: 'CASE-SYN-003', providerConfigId: 'CFG-LOCAL-FAKE-01', modelCode: 'fake-claim-v1', prompt: 'forbidden', idempotencyKey: 'P10-BLOCKED'
+    }, admin);
+    assert.equal(blocked.status, 403);
+    await ctx.db.aiCasePolicy.delete({ where: { caseId: 'CASE-SYN-001' } });
+    const defaultDenied = await requestJson(ctx.origin, '/api/ai/requests', 'POST', {
+      caseId: 'CASE-SYN-001', providerConfigId: 'CFG-LOCAL-FAKE-01', modelCode: 'fake-claim-v1', prompt: 'no policy', idempotencyKey: 'P10-NO-POLICY'
+    }, pm);
+    assert.equal(defaultDenied.status, 403);
+    await ctx.db.aiCasePolicy.create({
+      data: { id: 'POL-RESTORED', caseId: 'CASE-SYN-001', externalAiAllowed: true, maxTokensPerRequest: 4096, maxCostMicrosPerRequest: 1_000_000, allowedProviderIdsJson: '["CFG-LOCAL-FAKE-01"]' }
+    });
 
-    // 2. Raw Secret Key Leakage Check in API Response & DB
-    console.log('[P10 Security Test] 2. Raw Secret Zero-Leakage Verification...');
-    const provBody = JSON.stringify(adminAccessRes.body);
-    assert.equal(provBody.includes('sk-'), false);
-    assert.equal(provBody.includes('key-'), false);
-    assert.equal(provBody.includes('Bearer '), false);
+    await ctx.db.aiProviderConfig.create({
+      data: {
+        id: 'CFG-ORG-B', organizationId: 'ORG-SYN-B', providerKind: 'LOCAL_FAKE', name: 'Other tenant',
+        baseUrl: 'https://local-fake.invalid/v1', secretRef: 'LOCAL_FAKE', allowedModelsJson: '["fake-claim-v1"]', updatedAt: new Date()
+      }
+    });
+    const crossTenantUpdate = await requestJson(ctx.origin, '/api/ai/providers', 'POST', {
+      id: 'CFG-ORG-B', providerKind: 'LOCAL_FAKE', name: 'Hijacked', baseUrl: 'https://local-fake.invalid/v1', secretRef: 'LOCAL_FAKE', allowedModels: ['fake-claim-v1']
+    }, admin);
+    assert.equal(crossTenantUpdate.status, 403);
+    assert.equal((await ctx.db.aiProviderConfig.findUniqueOrThrow({ where: { id: 'CFG-ORG-B' } })).name, 'Other tenant');
 
-    // Verify DB secretRef does not store raw secrets
-    const dbConfigs = await ctx.db.aiProviderConfig.findMany();
-    for (const cfg of dbConfigs) {
-      assert.equal(cfg.secretRef.startsWith('sk-'), false);
-      assert.equal(cfg.secretRef.startsWith('key-'), false);
-    }
+    const created = await requestJson(ctx.origin, '/api/ai/requests', 'POST', {
+      caseId: 'CASE-SYN-001', providerConfigId: 'CFG-LOCAL-FAKE-01', modelCode: 'fake-claim-v1', prompt: 'actor scoped', idempotencyKey: 'P10-ACTOR-SCOPE'
+    }, pm);
+    const requestId = created.body.result.requestId as string;
+    assert.equal((await requestJson(ctx.origin, `/api/ai/requests/${requestId}`, 'GET', undefined, staff)).status, 403);
+    assert.equal((await requestJson(ctx.origin, `/api/ai/requests/${requestId}/cancel`, 'POST', undefined, staff)).status, 403);
 
-    // DB Trigger Block Raw Secret Insertion
-    await assert.rejects(async () => {
-      await ctx.db.$executeRawUnsafe(
-        `INSERT INTO AiProviderConfig (id, organizationId, providerKind, name, baseUrl, secretRef, status, allowedModelsJson, timeoutMs, maxRetries, dailyBudgetMicros, version, createdAt, updatedAt) ` +
-        `VALUES ('CFG-BAD-${Date.now()}', 'ORG-SYN-A', 'OPENAI', 'Bad Config', 'https://api.openai.com/v1', 'sk-proj-raw-secret-key-that-must-be-blocked', 'ACTIVE', '[]', 30000, 3, 100000000, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
-      );
-    }, /P10: Raw secret or API key string cannot be stored/);
+    await ctx.db.$executeRawUnsafe(`CREATE TRIGGER P10_TEST_FAIL_PROVIDER_AUDIT BEFORE INSERT ON AuditLog WHEN NEW.action = 'AI_PROVIDER_CONFIGURED' BEGIN SELECT RAISE(FAIL, 'forced audit failure'); END`);
+    const auditProviderId = `CFG-AUDIT-${Date.now()}`;
+    const failedProvider = await suppressExpectedServerError(() => requestJson(ctx.origin, '/api/ai/providers', 'POST', {
+      id: auditProviderId, providerKind: 'LOCAL_FAKE', name: 'Must rollback', baseUrl: 'https://local-fake.invalid/v1',
+      secretRef: 'LOCAL_FAKE', allowedModels: ['fake-claim-v1'], dailyBudgetMicros: 10000
+    }, admin));
+    assert.equal(failedProvider.status, 500);
+    assert.equal(await ctx.db.aiProviderConfig.count({ where: { id: auditProviderId } }), 0);
+    await ctx.db.$executeRawUnsafe('DROP TRIGGER P10_TEST_FAIL_PROVIDER_AUDIT');
 
-    // 3. externalAiAllowed=false Case Security Enforcement
-    console.log('[P10 Security Test] 3. External AI Forbidden Policy Enforcement...');
-    // CASE-SYN-003 has externalAiAllowed=false
-    const reqBlockedRes = await requestJson(ctx.origin, '/api/ai/requests', 'POST', {
-      caseId: 'CASE-SYN-003',
-      providerConfigId: 'CFG-LOCAL-FAKE-01',
-      modelCode: 'fake-claim-v1',
-      prompt: 'Attempting external transmission on forbidden case',
-      idempotencyKey: `IDEMP-BLOCKED-${Date.now()}`
-    }, adminSession);
-    assert.equal(reqBlockedRes.status, 403);
+    await ctx.db.$executeRawUnsafe(`CREATE TRIGGER P10_TEST_FAIL_REQUEST_AUDIT BEFORE INSERT ON AuditLog WHEN NEW.action = 'AI_GENERATION_STARTED' BEGIN SELECT RAISE(FAIL, 'forced request audit failure'); END`);
+    const failedIdempotency = `P10-AUDIT-REQUEST-${Date.now()}`;
+    const failedRequest = await suppressExpectedServerError(() => requestJson(ctx.origin, '/api/ai/requests', 'POST', {
+      caseId: 'CASE-SYN-001', providerConfigId: 'CFG-LOCAL-FAKE-01', modelCode: 'fake-claim-v1', prompt: 'must rollback', idempotencyKey: failedIdempotency
+    }, pm));
+    assert.equal(failedRequest.status, 500);
+    assert.equal(await ctx.db.aiGenerationRequest.count({ where: { idempotencyKey: failedIdempotency } }), 0);
+    assert.equal(await ctx.db.aiUsageLedger.count({ where: { request: { idempotencyKey: failedIdempotency } } }), 0);
 
-    console.log('[P10 Security Test] PASS 100%!');
+    await assert.rejects(ctx.db.$executeRawUnsafe(
+      `INSERT INTO AiGenerationRequest (id, organizationId, caseId, userId, providerConfigId, modelCode, status, promptSha256, requestFingerprintSha256, idempotencyKey, reservedCostMicros, actualCostMicros, totalTokens, responseMetadataJson, createdAt, updatedAt) VALUES ('CROSS-TENANT', 'ORG-SYN-B', 'CASE-SYN-001', 'USR-PM', 'CFG-ORG-B', 'fake-claim-v1', 'PROCESSING', 'x', 'y', 'z', 1, 0, 0, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    ));
+    console.log('P10 security: PASSED');
   } finally {
-    await closeIsolated(ctx);
+    await new Promise<void>((resolve) => ctx.api.close(() => resolve()));
+    await ctx.api.waitForDatabaseClose();
+    await ctx.db.$disconnect();
+    fs.rmSync(ctx.uploadDir, { recursive: true, force: true });
+    for (const suffix of ['', '-journal', '-shm', '-wal']) fs.rmSync(`${ctx.databasePath}${suffix}`, { force: true });
   }
 }
 
-if (require.main === module) {
-  runP10SecurityTests().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
-}
+if (require.main === module) void main().catch((error) => { console.error(error); process.exitCode = 1; });

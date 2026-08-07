@@ -62,6 +62,7 @@ CREATE TABLE "AiGenerationRequest" (
     "modelCode" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'PENDING',
     "promptSha256" TEXT NOT NULL,
+    "requestFingerprintSha256" TEXT NOT NULL,
     "idempotencyKey" TEXT NOT NULL,
     "reservedCostMicros" INTEGER NOT NULL DEFAULT 0,
     "actualCostMicros" INTEGER NOT NULL DEFAULT 0,
@@ -97,13 +98,14 @@ CREATE INDEX "AiUsageLedger_organizationId_createdAt_idx" ON "AiUsageLedger"("or
 CREATE INDEX "AiUsageLedger_caseId_idx" ON "AiUsageLedger"("caseId");
 CREATE INDEX "AiUsageLedger_userId_idx" ON "AiUsageLedger"("userId");
 CREATE INDEX "AiUsageLedger_requestId_idx" ON "AiUsageLedger"("requestId");
+CREATE UNIQUE INDEX "AiUsageLedger_requestId_transactionType_key" ON "AiUsageLedger"("requestId", "transactionType");
 
 CREATE UNIQUE INDEX "AiGenerationRequest_organizationId_caseId_userId_idempotencyKey_key" ON "AiGenerationRequest"("organizationId", "caseId", "userId", "idempotencyKey");
 CREATE INDEX "AiGenerationRequest_organizationId_status_idx" ON "AiGenerationRequest"("organizationId", "status");
 CREATE INDEX "AiGenerationRequest_caseId_idx" ON "AiGenerationRequest"("caseId");
 CREATE INDEX "AiGenerationRequest_userId_idx" ON "AiGenerationRequest"("userId");
 
-CREATE INDEX "AiGenerationAttempt_requestId_attemptNumber_idx" ON "AiGenerationAttempt"("requestId", "attemptNumber");
+CREATE UNIQUE INDEX "AiGenerationAttempt_requestId_attemptNumber_key" ON "AiGenerationAttempt"("requestId", "attemptNumber");
 
 -- Triggers for Guarding P10 Invariants
 
@@ -111,7 +113,14 @@ CREATE INDEX "AiGenerationAttempt_requestId_attemptNumber_idx" ON "AiGenerationA
 CREATE TRIGGER "P10_ai_provider_config_no_raw_secret_insert"
 BEFORE INSERT ON "AiProviderConfig"
 FOR EACH ROW
-WHEN (NEW.secretRef LIKE 'sk-%' OR NEW.secretRef LIKE 'key-%' OR NEW.secretRef LIKE 'Bearer %' OR NEW.secretRef LIKE 'gsa_%')
+WHEN (
+  NEW.secretRef LIKE 'sk-%' OR NEW.secretRef LIKE 'key-%' OR NEW.secretRef LIKE 'Bearer %' OR NEW.secretRef LIKE 'gsa_%'
+  OR (NEW.providerKind = 'LOCAL_FAKE' AND NEW.secretRef != 'LOCAL_FAKE')
+  OR (NEW.providerKind != 'LOCAL_FAKE' AND (substr(NEW.secretRef, 1, 4) != 'ENV_' OR length(NEW.secretRef) < 6 OR NEW.secretRef GLOB '*[^A-Z0-9_]*'))
+  OR NEW.providerKind NOT IN ('LOCAL_FAKE', 'OPENAI', 'ANTHROPIC', 'GEMINI')
+  OR NEW.timeoutMs < 1000 OR NEW.timeoutMs > 120000 OR NEW.maxRetries < 0 OR NEW.maxRetries > 3 OR NEW.dailyBudgetMicros < 1
+  OR length(NEW.secretRef) > 128
+)
 BEGIN
     SELECT RAISE(FAIL, 'P10: Raw secret or API key string cannot be stored in secretRef');
 END;
@@ -119,18 +128,84 @@ END;
 CREATE TRIGGER "P10_ai_provider_config_no_raw_secret_update"
 BEFORE UPDATE ON "AiProviderConfig"
 FOR EACH ROW
-WHEN (NEW.secretRef LIKE 'sk-%' OR NEW.secretRef LIKE 'key-%' OR NEW.secretRef LIKE 'Bearer %' OR NEW.secretRef LIKE 'gsa_%')
+WHEN (
+  NEW.secretRef LIKE 'sk-%' OR NEW.secretRef LIKE 'key-%' OR NEW.secretRef LIKE 'Bearer %' OR NEW.secretRef LIKE 'gsa_%'
+  OR (NEW.providerKind = 'LOCAL_FAKE' AND NEW.secretRef != 'LOCAL_FAKE')
+  OR (NEW.providerKind != 'LOCAL_FAKE' AND (substr(NEW.secretRef, 1, 4) != 'ENV_' OR length(NEW.secretRef) < 6 OR NEW.secretRef GLOB '*[^A-Z0-9_]*'))
+  OR NEW.providerKind NOT IN ('LOCAL_FAKE', 'OPENAI', 'ANTHROPIC', 'GEMINI')
+  OR NEW.organizationId != OLD.organizationId
+  OR NEW.timeoutMs < 1000 OR NEW.timeoutMs > 120000 OR NEW.maxRetries < 0 OR NEW.maxRetries > 3 OR NEW.dailyBudgetMicros < 1
+  OR length(NEW.secretRef) > 128
+)
 BEGIN
     SELECT RAISE(FAIL, 'P10: Raw secret or API key string cannot be stored in secretRef');
 END;
 
 -- 2. Terminal State Guard for AiGenerationRequest
-CREATE TRIGGER "P10_ai_generation_request_terminal_state_update"
+CREATE TRIGGER "P10_ai_generation_request_valid_transition"
 BEFORE UPDATE ON "AiGenerationRequest"
 FOR EACH ROW
-WHEN (OLD.status IN ('COMPLETED', 'FAILED', 'CANCELED') AND NEW.status != OLD.status)
+WHEN (
+  OLD.status IN ('COMPLETED', 'FAILED', 'CANCELED')
+  OR (OLD.status = 'PENDING' AND NEW.status NOT IN ('PROCESSING', 'CANCELED'))
+  OR (OLD.status = 'PROCESSING' AND NEW.status NOT IN ('COMPLETED', 'FAILED', 'CANCELED'))
+)
 BEGIN
-    SELECT RAISE(FAIL, 'P10: Terminal state generation requests cannot transition to another status');
+    SELECT RAISE(FAIL, 'P10: Invalid or terminal AI generation request transition');
+END;
+
+CREATE TRIGGER "P10_ai_generation_request_immutable_delete"
+BEFORE DELETE ON "AiGenerationRequest"
+FOR EACH ROW
+BEGIN
+    SELECT RAISE(FAIL, 'P10: AiGenerationRequest records cannot be deleted');
+END;
+
+CREATE TRIGGER "P10_ai_generation_request_integrity_insert"
+BEFORE INSERT ON "AiGenerationRequest"
+FOR EACH ROW
+WHEN (
+  NEW.status NOT IN ('PENDING', 'PROCESSING')
+  OR NEW.reservedCostMicros < 0 OR NEW.actualCostMicros < 0 OR NEW.totalTokens < 0
+  OR NOT EXISTS (SELECT 1 FROM "CaseItem" c WHERE c.id = NEW.caseId AND c.organizationId = NEW.organizationId)
+  OR NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id = NEW.userId AND u.organizationId = NEW.organizationId)
+  OR NOT EXISTS (SELECT 1 FROM "AiProviderConfig" p WHERE p.id = NEW.providerConfigId AND p.organizationId = NEW.organizationId)
+)
+BEGIN
+    SELECT RAISE(FAIL, 'P10: AiGenerationRequest tenant, actor, provider, or amount integrity violation');
+END;
+
+CREATE TRIGGER "P10_ai_generation_request_identity_immutable_update"
+BEFORE UPDATE ON "AiGenerationRequest"
+FOR EACH ROW
+WHEN (
+  NEW.organizationId != OLD.organizationId OR NEW.caseId != OLD.caseId OR NEW.userId != OLD.userId
+  OR NEW.providerConfigId != OLD.providerConfigId OR NEW.modelCode != OLD.modelCode
+  OR NEW.promptSha256 != OLD.promptSha256 OR NEW.requestFingerprintSha256 != OLD.requestFingerprintSha256
+  OR NEW.idempotencyKey != OLD.idempotencyKey OR NEW.reservedCostMicros != OLD.reservedCostMicros
+  OR NEW.actualCostMicros < 0 OR NEW.totalTokens < 0
+)
+BEGIN
+    SELECT RAISE(FAIL, 'P10: AiGenerationRequest identity and reservation fields are immutable');
+END;
+
+CREATE TRIGGER "P10_ai_usage_ledger_integrity_insert"
+BEFORE INSERT ON "AiUsageLedger"
+FOR EACH ROW
+WHEN (
+  NEW.transactionType NOT IN ('RESERVATION', 'RECONCILIATION', 'ADJUSTMENT')
+  OR NEW.promptTokens < 0 OR NEW.completionTokens < 0 OR NEW.totalTokens < 0
+  OR NOT EXISTS (SELECT 1 FROM "CaseItem" c WHERE c.id = NEW.caseId AND c.organizationId = NEW.organizationId)
+  OR NOT EXISTS (SELECT 1 FROM "User" u WHERE u.id = NEW.userId AND u.organizationId = NEW.organizationId)
+  OR NOT EXISTS (SELECT 1 FROM "AiProviderConfig" p WHERE p.id = NEW.providerConfigId AND p.organizationId = NEW.organizationId)
+  OR (NEW.requestId IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM "AiGenerationRequest" r
+    WHERE r.id = NEW.requestId AND r.organizationId = NEW.organizationId AND r.caseId = NEW.caseId
+      AND r.userId = NEW.userId AND r.providerConfigId = NEW.providerConfigId AND r.modelCode = NEW.modelCode
+  ))
+)
+BEGIN
+    SELECT RAISE(FAIL, 'P10: AiUsageLedger tenant, actor, provider, or request integrity violation');
 END;
 
 -- 3. Immutability for AiUsageLedger (Append-Only)

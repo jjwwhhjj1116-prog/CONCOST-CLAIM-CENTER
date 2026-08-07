@@ -6,7 +6,7 @@ export interface AiProviderConfig {
   providerKind: string;
   name: string;
   baseUrl: string;
-  secretRef: string;
+  secretRefHint: string;
   status: string;
   allowedModelsJson: string;
   timeoutMs: number;
@@ -32,8 +32,8 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
   // Form State
   const [providerKind, setProviderKind] = useState('LOCAL_FAKE');
   const [name, setName] = useState('');
-  const [baseUrl, setBaseUrl] = useState('https://localhost/fake-ai');
-  const [secretRef, setSecretRef] = useState('ENV_LOCAL_FAKE_KEY');
+  const [baseUrl, setBaseUrl] = useState('https://local-fake.invalid/v1');
+  const [secretRef, setSecretRef] = useState('LOCAL_FAKE');
   const [allowedModels, setAllowedModels] = useState('fake-claim-v1, fake-analysis-v2');
   const [dailyBudgetUSD, setDailyBudgetUSD] = useState('100.00');
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -130,7 +130,7 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
   }
 
   return (
-    <div style={{ padding: '24px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+    <div className="p10-ai-config" style={{ padding: '24px', background: '#fff', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 600, color: '#1e293b', margin: 0 }}>P10 AI Gateway 관리자 설정</h2>
@@ -179,7 +179,7 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
                   </span>
                 </div>
                 <div style={{ fontSize: '0.8125rem', color: '#64748b', marginTop: '6px' }}>
-                  Base URL: <code>{p.baseUrl}</code> | Secret Ref: <code>{p.secretRef}</code> (설정여부: {p.hasSecretConfigured ? 'OK' : '미설정'})
+                  Base URL: <code>{p.baseUrl}</code> | Secret Ref: <code>{p.secretRefHint}</code> (설정여부: {p.hasSecretConfigured ? 'OK' : '미설정'})
                 </div>
                 <div style={{ fontSize: '0.8125rem', color: '#64748b', marginTop: '4px' }}>
                   허용 모델: {JSON.parse(p.allowedModelsJson || '[]').join(', ')} | 일일 예산: ${(p.dailyBudgetMicros / 1000000).toFixed(2)} USD
@@ -201,7 +201,7 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
       )}
 
       {testResult && (
-        <div style={{ padding: '12px 16px', background: testResult.ok ? '#f0fdf4' : '#fef2f2', border: `1px solid ${testResult.ok ? '#bbf7d0' : '#fecaca'}`, color: testResult.ok ? '#166534' : '#991b1b', borderRadius: '6px', marginBottom: '24px', fontSize: '0.875rem' }}>
+        <div role="status" style={{ padding: '12px 16px', background: testResult.ok ? '#f0fdf4' : '#fef2f2', border: `1px solid ${testResult.ok ? '#bbf7d0' : '#fecaca'}`, color: testResult.ok ? '#166534' : '#991b1b', borderRadius: '6px', marginBottom: '24px', fontSize: '0.875rem' }}>
           <strong>연결 테스트 결과 [{testResult.id}]:</strong> {testResult.ok ? '성공 (200 OK)' : '실패'} — {testResult.message}
         </div>
       )}
@@ -211,10 +211,18 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
         <h3 style={{ fontSize: '1rem', fontWeight: 600, color: '#1e293b', marginTop: 0, marginBottom: '16px' }}>신규 AI 공급자 등록 / 수정</h3>
         <form onSubmit={handleSaveProvider} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
           <div>
-            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>공급자 종류 (Provider Kind)</label>
+            <label htmlFor="p10-provider-kind" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>공급자 종류 (Provider Kind)</label>
             <select
+              id="p10-provider-kind"
               value={providerKind}
-              onChange={(e) => setProviderKind(e.target.value)}
+              onChange={(e) => {
+                const kind = e.target.value;
+                setProviderKind(kind);
+                if (kind === 'LOCAL_FAKE') { setBaseUrl('https://local-fake.invalid/v1'); setSecretRef('LOCAL_FAKE'); }
+                if (kind === 'OPENAI') { setBaseUrl('https://api.openai.com/v1'); setSecretRef('ENV_OPENAI_API_KEY'); }
+                if (kind === 'ANTHROPIC') { setBaseUrl('https://api.anthropic.com/v1'); setSecretRef('ENV_ANTHROPIC_API_KEY'); }
+                if (kind === 'GEMINI') { setBaseUrl('https://generativelanguage.googleapis.com/v1beta'); setSecretRef('ENV_GEMINI_API_KEY'); }
+              }}
               style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
             >
               <option value="LOCAL_FAKE">LOCAL_FAKE (Local Synthetic Engine)</option>
@@ -225,8 +233,9 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>공급자 이명 (Name)</label>
+            <label htmlFor="p10-provider-name" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>공급자 이름 (Name)</label>
             <input
+              id="p10-provider-name"
               type="text"
               value={name}
               placeholder="예: Local Synthetic Fake AI Engine"
@@ -237,11 +246,12 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>Base Endpoint URL (HTTPS / SSRF 검증)</label>
+            <label htmlFor="p10-base-url" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>Base Endpoint URL (HTTPS / SSRF 검증)</label>
             <input
+              id="p10-base-url"
               type="text"
               value={baseUrl}
-              placeholder="https://api.openai.com/v1 또는 https://localhost/fake-ai"
+              placeholder="https://api.openai.com/v1 또는 https://local-fake.invalid/v1"
               onChange={(e) => setBaseUrl(e.target.value)}
               style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
               required
@@ -249,11 +259,12 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>Secret Reference Name (원문 Key 저장 절대 금지)</label>
+            <label htmlFor="p10-secret-ref" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>Secret Reference Name (원문 Key 저장 절대 금지)</label>
             <input
+              id="p10-secret-ref"
               type="text"
               value={secretRef}
-              placeholder="ENV_OPENAI_API_KEY 또는 ENV_LOCAL_FAKE_KEY"
+              placeholder="ENV_OPENAI_API_KEY 또는 LOCAL_FAKE"
               onChange={(e) => setSecretRef(e.target.value)}
               style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #cbd5e1' }}
               required
@@ -261,8 +272,9 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>허용 모델 목록 (쉼표 구문)</label>
+            <label htmlFor="p10-allowed-models" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>허용 모델 목록 (쉼표 구분)</label>
             <input
+              id="p10-allowed-models"
               type="text"
               value={allowedModels}
               placeholder="fake-claim-v1, fake-analysis-v2"
@@ -273,8 +285,9 @@ export const AiConfigManager: React.FC<{ roles: string[] }> = ({ roles }) => {
           </div>
 
           <div>
-            <label style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>조직 일일 예산 한도 (USD)</label>
+            <label htmlFor="p10-daily-budget" style={{ display: 'block', fontSize: '0.875rem', fontWeight: 500, color: '#334155', marginBottom: '4px' }}>조직 일일 예산 한도 (USD)</label>
             <input
+              id="p10-daily-budget"
               type="number"
               step="0.01"
               value={dailyBudgetUSD}

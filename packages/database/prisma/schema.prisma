@@ -763,6 +763,7 @@ model AiUsageLedger {
   @@index([caseId])
   @@index([userId])
   @@index([requestId])
+  @@unique([requestId, transactionType])
 }
 
 model AiGenerationRequest {
@@ -774,6 +775,7 @@ model AiGenerationRequest {
   modelCode            String
   status               String                @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, CANCELED
   promptSha256         String
+  requestFingerprintSha256 String
   idempotencyKey       String
   reservedCostMicros   Int                   @default(0)
   actualCostMicros     Int                   @default(0)
@@ -806,5 +808,5 @@ model AiGenerationAttempt {
   createdAt            DateTime            @default(now())
   request              AiGenerationRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
 
-  @@index([requestId, attemptNumber])
+  @@unique([requestId, attemptNumber])
 }
