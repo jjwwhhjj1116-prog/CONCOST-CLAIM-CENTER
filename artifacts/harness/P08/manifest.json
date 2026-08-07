@@ -1,0 +1,100 @@
+{
+  "phase": "P08",
+  "status": "PASS",
+  "assessment": "CODEX_INDEPENDENT_VERIFIED_AFTER_PATCH",
+  "nextPhaseAllowed": true,
+  "verifiedAt": "2026-08-07T11:34:02+09:00",
+  "git": {
+    "branch": "feat/P08-report-template-catalog",
+    "p07ImplementationCommit": "b9fb97eef4961a5a309d731f122b61b831802863",
+    "antigravityStartCommit": "f5b39bf",
+    "antigravityImplementationCommit": "7abaaa4",
+    "antigravityPrematureHandoffCommit": "2605d6a",
+    "codexPatchCommit": "67e2fddccfbac69ab391071859d21f3e7b013c62",
+    "reviewedCommit": "67e2fddccfbac69ab391071859d21f3e7b013c62"
+  },
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/index.html",
+    "apps/web/src/templates/ReportTemplateCatalog.tsx",
+    "packages/database/prisma/migrations/20260807100000_p08_report_template_catalog/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "packages/database/src/seed.ts",
+    "scripts/harness-test.ts",
+    "scripts/p08-contract-test.ts",
+    "scripts/p08-e2e.ts",
+    "scripts/p08-security-test.ts"
+  ],
+  "cleanVerification": {
+    "checkout": "p08-clean-67e2fdd",
+    "commit": "67e2fddccfbac69ab391071859d21f3e7b013c62",
+    "nodeModulesPresentBeforeInstall": false,
+    "workingTreeCleanAfterGates": true,
+    "rawSourceMode": "INVENTORY_ONLY"
+  },
+  "referenceIntegrity": {
+    "localOriginalRepositoryMode": "RAW_SOURCE_VERIFIED",
+    "actualFiles": 32,
+    "inventoryFiles": 32,
+    "matchingSha256AndSize": 32,
+    "mismatches": 0,
+    "uniqueHashes": 32,
+    "gitTrackedOriginalFiles": 0
+  },
+  "productionSeed": {
+    "references": 32,
+    "standardBlocks": 8,
+    "reportTemplates": 0,
+    "activeTemplateVersions": 0,
+    "type05TemplatesOrMappings": 0
+  },
+  "commandsExecuted": [
+    "npx --yes pnpm@9.15.0 install --frozen-lockfile",
+    "npx --yes pnpm@9.15.0 db:reset",
+    "npx --yes pnpm@9.15.0 db:migrate",
+    "npx --yes pnpm@9.15.0 db:seed",
+    "npx --yes pnpm@9.15.0 lint",
+    "npx --yes pnpm@9.15.0 typecheck",
+    "npx --yes pnpm@9.15.0 test",
+    "npx --yes pnpm@9.15.0 build",
+    "npx --yes pnpm@9.15.0 test:e2e",
+    "npx --yes pnpm@9.15.0 test:security",
+    "npx --yes pnpm@9.15.0 audit --audit-level high"
+  ],
+  "tests": { "total": 81, "passed": 81, "failed": 0, "skipped": 0 },
+  "securityTests": { "total": 39, "passed": 39, "failed": 0, "skipped": 0, "p08": 9 },
+  "browserE2E": {
+    "engine": "Google Chrome via playwright-core",
+    "productionBuildServed": true,
+    "p06RegressionPassed": true,
+    "p07RegressionPassed": true,
+    "p08Passed": true,
+    "adminUiCreatePassed": true,
+    "independentApprovalActivationPassed": true,
+    "reportInstanceSnapshotPassed": true,
+    "type05NoFallbackPassed": true,
+    "responsive1024Passed": true,
+    "keyboardFocusPassed": true,
+    "zoom200Passed": true
+  },
+  "qualityGates": {
+    "install": "PASS",
+    "dbReset": "PASS",
+    "dbMigrate": "PASS",
+    "dbSeed": "PASS",
+    "lint": "PASS",
+    "typecheck": "PASS",
+    "test": "PASS",
+    "build": "PASS",
+    "e2e": "PASS",
+    "security": "PASS",
+    "auditHigh": "PASS"
+  },
+  "hygiene": {
+    "trackedCredentialFiles": 0,
+    "trackedSecretPatternFiles": 0,
+    "potentialCustomerPatternFiles": 0,
+    "realCustomerDataFound": false,
+    "referenceTemplateSourceFilesTracked": 0
+  }
+}

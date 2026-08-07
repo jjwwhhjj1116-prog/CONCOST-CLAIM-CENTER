@@ -1,0 +1,94 @@
+P08 CODEX CLEAN VERIFICATION COMMAND LOG
+Verified commit: 67e2fddccfbac69ab391071859d21f3e7b013c62
+Clean checkout: p08-clean-67e2fdd
+Verified at: 2026-08-07T11:34:02+09:00
+
+[PRECHECK]
+git rev-parse HEAD
+67e2fddccfbac69ab391071859d21f3e7b013c62
+Test-Path node_modules
+False
+
+[1] npx --yes pnpm@9.15.0 install --frozen-lockfile
+Exit code: 0
+Scope: all 6 workspace projects
+Lockfile is up to date, resolution step is skipped
+Packages: +215
+Progress: resolved 215, reused 112, downloaded 103, added 215, done
+postinstall: Prisma schema loaded from prisma\schema.prisma
+postinstall: Generated Prisma Client (v6.19.3)
+Done in 34.2s
+
+[2] npx --yes pnpm@9.15.0 db:reset
+Exit code: 0
+Database reset and migration SQL applied successfully.
+
+[3] npx --yes pnpm@9.15.0 db:migrate
+Exit code: 0
+Database migration SQL applied successfully.
+
+[4] npx --yes pnpm@9.15.0 db:seed
+Exit code: 0
+Database seeded with deterministic synthetic P08 fixtures.
+
+[5] npx --yes pnpm@9.15.0 lint
+Exit code: 0
+[Harness] Type-checking scripts, UI, web, database, and API workspaces...
+[Harness] Lint and JSON validation passed with zero warnings.
+
+[6] npx --yes pnpm@9.15.0 typecheck
+Exit code: 0
+[Harness] Type-checking scripts, UI, web, database, and API workspaces...
+
+[7] npx --yes pnpm@9.15.0 test
+Exit code: 0
+[P08-CONTRACT] local source mode: INVENTORY_ONLY (raw reference folder absent in clean checkout)
+P08 seed preserves 32 exact references, eight instruction-defined standard blocks, and zero pre-approved templates: PASS
+P08 API creates approved templates and immutable case snapshots without changing v1 after v2 activation: PASS
+tests 81
+pass 81
+fail 0
+skipped 0
+duration_ms 5320.9949
+
+[8] npx --yes pnpm@9.15.0 build
+Exit code: 0
+[Harness] Type-checking scripts, UI, web, database, and API workspaces...
+Prisma schema loaded from prisma\schema.prisma
+Generated Prisma Client (v6.19.3)
+vite v6.4.3 building for production...
+49 modules transformed.
+dist/index.html 8.80 kB | gzip 2.60 kB
+dist/assets/index-vyaJfbbG.js 215.06 kB | gzip 67.24 kB
+built in 494ms
+[Harness] UI, database, API, and production web build artifacts verified.
+
+[9] npx --yes pnpm@9.15.0 test:e2e
+Exit code: 0
+P06 browser E2E: browser-native upload, v02, final, authenticated download, links, transcript, action item, FINAL freeze and Staff RBAC PASSED
+P07 browser E2E: template, five inputs, manual version, role-switched approval, DOCX/PDF, history, Staff RBAC, 1024px, keyboard focus and 200% zoom PASSED
+P08 browser E2E: six types, TYPE-05 no-fallback, Admin UI create, Director approval/activation, PM snapshot, Staff RBAC, 1024px, focus and 200% zoom PASSED
+
+[10] npx --yes pnpm@9.15.0 test:security
+Exit code: 0
+P08 security rejects role, tenant, provenance, lifecycle, and rollback attacks: PASS
+tests 39
+pass 39
+fail 0
+skipped 0
+duration_ms 2257.9332
+Note: intentional AuditLog FK failure injection writes Prisma P2003 to stderr; rollback/orphan assertions pass and process exit code is 0.
+
+[11] npx --yes pnpm@9.15.0 audit --audit-level high
+Exit code: 0
+No known vulnerabilities found
+
+[RAW REFERENCE INDEPENDENT CHECK — ORIGINAL E REPOSITORY]
+{"RawSourceMode":true,"ActualFileCount":32,"InventoryCount":32,"HashAndSizeMatches":32,"MismatchCount":0,"UniqueActualHashes":32,"GitTrackedRawFiles":0}
+
+[TRACKED SECRET/CUSTOMER-DATA HYGIENE]
+{"TrackedCredentialFiles":0,"SecretPatternFiles":0,"PotentialCustomerPatternFiles":0,"TrackedRawReferenceFiles":0}
+
+[POSTCHECK]
+git status --short
+(no output — clean)
