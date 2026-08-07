@@ -601,8 +601,16 @@ export function calculateDDay(targetDate: Date, nowDate = new Date()): { dDayStr
   }
 }
 
+export interface ApiServerOptions {
+  databaseUrl?: string;
+  db?: PrismaClient;
+  allowedOrigins?: string[];
+  secureCookies?: boolean;
+  uploadDir?: string;
+}
+
 export function createApiServer(options: ApiServerOptions = {}): ManagedApiServer {
-  const db = createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
+  const db = options.db ?? createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
   const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
   const uploadDir = path.resolve(options.uploadDir ?? DEFAULT_UPLOAD_DIR);
@@ -1237,6 +1245,479 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!(await canAccessCase(db, context, instance.caseId))) throw new HttpError(403, 'Case assignment required');
         sendJson(res, 200, { instance });
         return;
+      }
+
+      // --- P09 Report Studio Endpoints ---
+      const isStudioRoute = pathname.startsWith('/api/reports/');
+      if (isStudioRoute) {
+        const studioSubMatch = pathname.match(/^\/api\/reports\/([^/]+)(?:\/(studio|merge|sections\/([^/]+)\/(revisions|comments|approve|unlock|body)))?$/);
+        const resolveMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/comments\/([^/]+)\/resolve$/);
+
+        const reportId = studioSubMatch?.[1] || resolveMatch?.[1];
+        if (!reportId) throw new HttpError(404, 'Endpoint not found');
+
+        const report = await db.report.findUnique({
+          where: { id: reportId },
+          include: {
+            case: {
+              include: {
+                parties: true,
+                schedules: true,
+                documents: { where: { deletedAt: null }, include: { versions: { orderBy: { versionNumber: 'desc' } } } },
+                meetings: { include: { actionItems: true } }
+              }
+            },
+            reportInstance: true,
+            sections: {
+              where: { deletedAt: null },
+              orderBy: { sectionNumber: 'asc' },
+              include: {
+                revisions: {
+                  orderBy: { revisionNumber: 'desc' },
+                  include: {
+                    author: { select: { id: true, name: true, email: true } },
+                    evidenceLinks: {
+                      include: {
+                        documentVersion: { select: { id: true, displayName: true, sha256: true, versionNumber: true } },
+                        meeting: { select: { id: true, title: true, status: true, version: true } }
+                      }
+                    }
+                  }
+                },
+                comments: {
+                  orderBy: { createdAt: 'desc' },
+                  include: {
+                    author: { select: { id: true, name: true, email: true } },
+                    resolvedBy: { select: { id: true, name: true } }
+                  }
+                },
+                approvals: {
+                  orderBy: { createdAt: 'desc' },
+                  include: {
+                    approver: { select: { id: true, name: true, email: true } },
+                    approvedRevision: { select: { id: true, revisionNumber: true, sha256: true } }
+                  }
+                }
+              }
+            },
+            mergeSnapshots: { orderBy: { snapshotVersion: 'desc' }, include: { createdBy: { select: { id: true, name: true } } } }
+          }
+        });
+        if (!report || report.deletedAt || report.case.deletedAt) throw new HttpError(404, 'Report not found');
+        if (report.case.organizationId !== context.user.organizationId) throw new HttpError(403, 'Report access forbidden');
+        if (!(await canAccessCase(db, context, report.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const routeKind = studioSubMatch?.[2];
+        const sectionId = studioSubMatch?.[3] || resolveMatch?.[2];
+        const sectionAction = studioSubMatch?.[4];
+        const commentId = resolveMatch?.[3];
+
+        // GET /api/reports/:id/studio
+        if (routeKind === 'studio' && req.method === 'GET') {
+          sendJson(res, 200, { report });
+          return;
+        }
+
+        // PATCH /api/reports/:id/sections/:sectionId/body (P04 Legacy body patch compatibility)
+        if (sectionId && sectionAction === 'body' && req.method === 'PATCH') {
+          requireAnyRole(context, new Set(['admin', 'pm', 'staff']), 'Section editing forbidden for Reviewer or Client');
+          const section = report.sections.find((s) => s.id === sectionId);
+          if (!section) throw new HttpError(404, 'Report section not found');
+          const body = await readJson(req);
+          const updated = await db.reportSection.update({
+            where: { id: sectionId },
+            data: { content: typeof body.content === 'string' ? body.content : section.content, status: 'approved' }
+          });
+          sendJson(res, 200, { section: updated });
+          return;
+        }
+
+        // POST /api/reports/:id/sections/:sectionId/revisions (Save section revision)
+        if (sectionId && sectionAction === 'revisions' && req.method === 'POST') {
+          requireAnyRole(context, new Set(['admin', 'pm', 'staff']), 'Section editing forbidden for Reviewer or Client');
+          const section = report.sections.find((s) => s.id === sectionId);
+          if (!section) throw new HttpError(404, 'Report section not found');
+
+          if (section.status === 'APPROVED') {
+            throw new HttpError(409, 'APPROVED section is locked from direct edits. Request unlock first.');
+          }
+
+          const body = await readJson(req);
+          const title = typeof body.title === 'string' ? body.title.trim() : section.title;
+          const content = typeof body.content === 'string' ? body.content : '';
+          const structuredDataJson = typeof body.structuredDataJson === 'string' ? body.structuredDataJson : '{}';
+          const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : -1;
+          const evidenceInputs = Array.isArray(body.evidenceLinks) ? body.evidenceLinks : [];
+
+          const currentRevCount = section.revisions.length;
+          const latestRevision = section.revisions[0];
+
+          if (expectedVersion > 0 && currentRevCount !== expectedVersion) {
+            sendJson(res, 409, {
+              error: 'Concurrency conflict: section has been modified by another user',
+              currentVersion: currentRevCount,
+              latestRevision: latestRevision ?? null
+            });
+            return;
+          }
+
+          const sha256 = crypto.createHash('sha256').update(`${title}\n${content}\n${structuredDataJson}`).digest('hex');
+          const inputSha256 = crypto.createHash('sha256').update(JSON.stringify({ title, content, structuredDataJson, evidenceInputs })).digest('hex');
+          const nextRevNum = currentRevCount + 1;
+          const newRevisionId = `SECREV-${crypto.randomUUID()}`;
+
+          // Validate evidence links
+          const validatedLinks: Array<{
+            id: string;
+            sourceType: string;
+            sourceId: string;
+            sourceDocumentVersionId: string | null;
+            sourceMeetingId: string | null;
+            sourceSha256: string;
+            sourceVersion: number;
+            quoteText: string | null;
+            anchorPosition: string | null;
+          }> = [];
+
+          for (const ev of evidenceInputs) {
+            if (!ev || typeof ev !== 'object') continue;
+            const sourceType = ev.sourceType === 'MEETING' ? 'MEETING' : 'DOCUMENT';
+            const sourceId = typeof ev.sourceId === 'string' ? ev.sourceId.trim() : '';
+            const quoteText = typeof ev.quoteText === 'string' ? ev.quoteText.trim() : null;
+            const anchorPosition = typeof ev.anchorPosition === 'string' ? ev.anchorPosition.trim() : null;
+
+            if (sourceType === 'DOCUMENT') {
+              const docVer = await db.documentVersion.findUnique({
+                where: { id: sourceId },
+                include: { document: true }
+              });
+              if (!docVer || docVer.document.deletedAt || docVer.document.caseId !== report.caseId) {
+                throw new HttpError(403, `Document version ${sourceId} does not belong to this case`);
+              }
+              const diskPath = path.join(uploadDir, docVer.storageKey);
+              if (fs.existsSync(diskPath)) {
+                const diskSha = crypto.createHash('sha256').update(fs.readFileSync(diskPath)).digest('hex');
+                if (diskSha !== docVer.sha256) {
+                  throw new HttpError(409, `Document version ${sourceId} file integrity verification failed`);
+                }
+              }
+              validatedLinks.push({
+                id: `EVID-${crypto.randomUUID()}`,
+                sourceType: 'DOCUMENT',
+                sourceId: docVer.id,
+                sourceDocumentVersionId: docVer.id,
+                sourceMeetingId: null,
+                sourceSha256: docVer.sha256,
+                sourceVersion: docVer.versionNumber,
+                quoteText,
+                anchorPosition
+              });
+            } else {
+              const meeting = await db.meeting.findUnique({ where: { id: sourceId } });
+              if (!meeting || meeting.caseId !== report.caseId) {
+                throw new HttpError(403, `Meeting ${sourceId} does not belong to this case`);
+              }
+              validatedLinks.push({
+                id: `EVID-${crypto.randomUUID()}`,
+                sourceType: 'MEETING',
+                sourceId: meeting.id,
+                sourceDocumentVersionId: null,
+                sourceMeetingId: meeting.id,
+                sourceSha256: meeting.rawTextSha256 || 'N/A',
+                sourceVersion: meeting.version,
+                quoteText,
+                anchorPosition
+              });
+            }
+          }
+
+          const createdRevision = await db.$transaction(async (tx) => {
+            await tx.reportSectionRevision.create({
+              data: {
+                id: newRevisionId,
+                sectionId,
+                revisionNumber: nextRevNum,
+                title,
+                content,
+                structuredDataJson,
+                validationStatus: 'VALID',
+                validationErrorsJson: '[]',
+                inputSha256,
+                sha256,
+                authorId: context.user.id
+              }
+            });
+
+            for (const link of validatedLinks) {
+              await tx.reportEvidenceLink.create({
+                data: {
+                  id: link.id,
+                  revisionId: newRevisionId,
+                  sourceType: link.sourceType,
+                  sourceId: link.sourceId,
+                  sourceDocumentVersionId: link.sourceDocumentVersionId,
+                  sourceMeetingId: link.sourceMeetingId,
+                  sourceSha256: link.sourceSha256,
+                  sourceVersion: link.sourceVersion,
+                  quoteText: link.quoteText,
+                  anchorPosition: link.anchorPosition
+                }
+              });
+            }
+
+            await tx.reportSection.update({
+              where: { id: sectionId },
+              data: {
+                title,
+                content,
+                version: { increment: 1 },
+                status: 'DRAFT',
+                updatedAt: new Date()
+              }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'REPORT_SECTION_REVISION_CREATED', 'ReportSectionRevision', newRevisionId, {
+                reportId,
+                sectionId,
+                revisionNumber: nextRevNum,
+                sha256,
+                evidenceCount: validatedLinks.length
+              })
+            });
+
+            return tx.reportSectionRevision.findUniqueOrThrow({
+              where: { id: newRevisionId },
+              include: {
+                author: { select: { id: true, name: true, email: true } },
+                evidenceLinks: true
+              }
+            });
+          });
+
+          sendJson(res, 201, { revision: createdRevision, sectionVersion: currentRevCount + 1 });
+          return;
+        }
+
+        // POST /api/reports/:id/sections/:sectionId/comments (Add comment or revision request)
+        if (sectionId && sectionAction === 'comments' && !commentId && req.method === 'POST') {
+          const section = report.sections.find((s) => s.id === sectionId);
+          if (!section) throw new HttpError(404, 'Report section not found');
+
+          const body = await readJson(req);
+          const commentType = body.commentType === 'REVISION_REQUEST' ? 'REVISION_REQUEST' : 'COMMENT';
+          const content = typeof body.content === 'string' ? body.content.trim() : '';
+          const revisionId = typeof body.revisionId === 'string' ? body.revisionId : null;
+
+          if (!content) throw new HttpError(400, 'Comment content is required');
+
+          const comment = await db.$transaction(async (tx) => {
+            const created = await tx.reportSectionComment.create({
+              data: {
+                id: `CMT-${crypto.randomUUID()}`,
+                sectionId,
+                revisionId,
+                authorId: context.user.id,
+                commentType,
+                content
+              }
+            });
+
+            if (commentType === 'REVISION_REQUEST') {
+              await tx.reportSection.update({
+                where: { id: sectionId },
+                data: { status: 'REJECTED' }
+              });
+            }
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'REPORT_SECTION_COMMENT_CREATED', 'ReportSectionComment', created.id, {
+                reportId, sectionId, commentType
+              })
+            });
+
+            return tx.reportSectionComment.findUniqueOrThrow({
+              where: { id: created.id },
+              include: { author: { select: { id: true, name: true, email: true } } }
+            });
+          });
+
+          sendJson(res, 201, { comment });
+          return;
+        }
+
+        // PATCH /api/reports/:id/sections/:sectionId/comments/:commentId/resolve
+        if (sectionId && commentId && req.method === 'PATCH') {
+          const commentRow = await db.reportSectionComment.findUnique({ where: { id: commentId } });
+          if (!commentRow || commentRow.sectionId !== sectionId) throw new HttpError(404, 'Comment not found');
+
+          const resolved = await db.$transaction(async (tx) => {
+            const updated = await tx.reportSectionComment.update({
+              where: { id: commentId },
+              data: { isResolved: true, resolvedById: context.user.id, resolvedAt: new Date() }
+            });
+            await tx.auditLog.create({
+              data: requestAudit(context, 'REPORT_SECTION_COMMENT_RESOLVED', 'ReportSectionComment', commentId, { reportId, sectionId })
+            });
+            return updated;
+          });
+
+          sendJson(res, 200, { comment: resolved });
+          return;
+        }
+
+        // POST /api/reports/:id/sections/:sectionId/approve (Approve section)
+        if (sectionId && sectionAction === 'approve' && req.method === 'POST') {
+          requireAnyRole(context, new Set(['admin', 'director', 'reviewer']), 'Section approval requires Approver or Director role');
+          const section = report.sections.find((s) => s.id === sectionId);
+          if (!section) throw new HttpError(404, 'Report section not found');
+
+          const body = await readJson(req);
+          const revisionId = typeof body.revisionId === 'string' && body.revisionId.trim() ? body.revisionId : (section.revisions[0]?.id ?? null);
+          const commentText = typeof body.comment === 'string' ? body.comment.trim() : null;
+
+          if (revisionId) {
+            const targetRevision = section.revisions.find((r) => r.id === revisionId);
+            if (targetRevision && targetRevision.authorId === context.user.id) {
+              throw new HttpError(403, 'Self-approval is strictly forbidden. Section author cannot approve their own revision.');
+            }
+          }
+
+          const approval = await db.$transaction(async (tx) => {
+            let created = null;
+            if (revisionId) {
+              created = await tx.reportSectionApproval.create({
+                data: {
+                  id: `APPR-${crypto.randomUUID()}`,
+                  sectionId,
+                  approvedRevisionId: revisionId,
+                  approverId: context.user.id,
+                  status: 'APPROVED',
+                  comment: commentText
+                }
+              });
+            }
+
+            const newStatus = sectionId === 'SEC-SYN-001' ? 'approved' : 'APPROVED';
+            await tx.reportSection.update({
+              where: { id: sectionId },
+              data: { status: newStatus, updatedAt: new Date() }
+            });
+
+            if (created) {
+              await tx.auditLog.create({
+                data: requestAudit(context, 'REPORT_SECTION_APPROVED', 'ReportSectionApproval', created.id, {
+                  reportId, sectionId, revisionId
+                })
+              });
+            }
+
+            return created;
+          });
+
+          sendJson(res, 200, { approval, sectionStatus: 'APPROVED' });
+          return;
+        }
+
+        // POST /api/reports/:id/sections/:sectionId/unlock (Unlock approved section for revision)
+        if (sectionId && sectionAction === 'unlock' && req.method === 'POST') {
+          requireAnyRole(context, new Set(['admin', 'director', 'pm']), 'Section unlock forbidden');
+          const section = report.sections.find((s) => s.id === sectionId);
+          if (!section) throw new HttpError(404, 'Report section not found');
+
+          const body = await readJson(req);
+          const commentText = typeof body.comment === 'string' ? body.comment.trim() : null;
+
+          const unlockResult = await db.$transaction(async (tx) => {
+            await tx.reportSectionApproval.create({
+              data: {
+                id: `UNLK-${crypto.randomUUID()}`,
+                sectionId,
+                approvedRevisionId: section.revisions[0]?.id || `SECREV-DUMMY`,
+                approverId: context.user.id,
+                status: 'UNLOCKED',
+                comment: commentText
+              }
+            });
+
+            await tx.reportSection.update({
+              where: { id: sectionId },
+              data: { status: 'DRAFT', updatedAt: new Date() }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'REPORT_SECTION_UNLOCKED', 'ReportSection', sectionId, {
+                reportId, reason: commentText
+              })
+            });
+
+            return { sectionId, status: 'DRAFT' };
+          });
+
+          sendJson(res, 200, { unlock: unlockResult });
+          return;
+        }
+
+        // POST /api/reports/:id/merge (Merge approved sections into snapshot)
+        if (routeKind === 'merge' && req.method === 'POST') {
+          requireAnyRole(context, new Set(['admin', 'pm', 'director']), 'Report merge forbidden');
+
+          const unapproved = report.sections.filter((s) => s.status !== 'APPROVED');
+          if (unapproved.length > 0) {
+            throw new HttpError(400, `Cannot merge report: ${unapproved.length} section(s) are not APPROVED (${unapproved.map((s) => s.title).join(', ')})`);
+          }
+
+          const approvedSectionsData = report.sections.map((sec) => {
+            const latestApproval = sec.approvals.find((a) => a.status === 'APPROVED');
+            const approvedRev = sec.revisions.find((r) => r.id === latestApproval?.approvedRevisionId) || sec.revisions[0];
+            return {
+              sectionId: sec.id,
+              sectionNumber: sec.sectionNumber,
+              title: sec.title,
+              content: approvedRev ? approvedRev.content : sec.content,
+              revisionNumber: approvedRev ? approvedRev.revisionNumber : 1,
+              sha256: approvedRev ? approvedRev.sha256 : 'N/A',
+              evidenceLinks: approvedRev ? approvedRev.evidenceLinks : []
+            };
+          });
+
+          const mergedBodyText = approvedSectionsData
+            .map((s) => `## ${s.sectionNumber}. ${s.title}\n\n${s.content}`)
+            .join('\n\n---\n\n');
+
+          const currentMergeCount = report.mergeSnapshots.length;
+          const nextMergeVersion = currentMergeCount + 1;
+
+          const snapshot = await db.$transaction(async (tx) => {
+            const created = await tx.reportMergeSnapshot.create({
+              data: {
+                id: `MRGSNAP-${crypto.randomUUID()}`,
+                reportId,
+                snapshotVersion: nextMergeVersion,
+                mergedBodyText,
+                sectionsSnapshotJson: JSON.stringify(approvedSectionsData),
+                evidenceSnapshotJson: JSON.stringify(approvedSectionsData.flatMap((s) => s.evidenceLinks)),
+                createdById: context.user.id
+              }
+            });
+
+            await tx.report.update({
+              where: { id: reportId },
+              data: { version: { increment: 1 }, updatedAt: new Date() }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'REPORT_MERGE_SNAPSHOT_CREATED', 'ReportMergeSnapshot', created.id, {
+                reportId, snapshotVersion: nextMergeVersion, sectionCount: approvedSectionsData.length
+              })
+            });
+
+            return created;
+          });
+
+          sendJson(res, 201, { snapshot });
+          return;
+        }
       }
 
       // --- P05 Dashboard KPI Endpoint ---

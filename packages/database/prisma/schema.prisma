@@ -46,6 +46,11 @@ model User {
   createdReportTemplateVersions ReportTemplateVersion[] @relation("ReportTemplateVersionCreator")
   approvedReportTemplateVersions ReportTemplateVersion[] @relation("ReportTemplateVersionApprover")
   createdReportInstances  ReportInstance[]         @relation("ReportInstanceCreator")
+  createdSectionRevisions ReportSectionRevision[] @relation("SectionRevisionAuthor")
+  createdSectionComments ReportSectionComment[]  @relation("SectionCommentAuthor")
+  resolvedSectionComments ReportSectionComment[] @relation("SectionCommentResolver")
+  approvedReportSections ReportSectionApproval[] @relation("SectionApprovalApprover")
+  createdReportMergeSnapshots ReportMergeSnapshot[] @relation("ReportMergeSnapshotCreator")
 }
 
 model Role {
@@ -218,6 +223,7 @@ model DocumentVersion {
   createdAt     DateTime @default(now())
   document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   uploadedBy    User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  evidenceLinks ReportEvidenceLink[]
 
   @@unique([documentId, versionNumber])
   @@index([documentId])
@@ -243,6 +249,7 @@ model Meeting {
   case          CaseItem            @relation(fields: [caseId], references: [id], onDelete: Cascade)
   createdBy     User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
   actionItems   MeetingActionItem[]
+  evidenceLinks ReportEvidenceLink[]
 
   @@index([caseId])
   @@index([meetingDate])
@@ -280,6 +287,7 @@ model Report {
   case      CaseItem        @relation(fields: [caseId], references: [id], onDelete: Cascade)
   reportInstance ReportInstance? @relation(fields: [reportInstanceId], references: [id], onDelete: Restrict)
   sections  ReportSection[]
+  mergeSnapshots ReportMergeSnapshot[]
 
   @@index([caseId, deletedAt])
 }
@@ -300,6 +308,9 @@ model ReportSection {
   updatedAt DateTime   @updatedAt
   report    Report     @relation(fields: [reportId], references: [id], onDelete: Cascade)
   documents Document[]
+  revisions ReportSectionRevision[]
+  comments  ReportSectionComment[]
+  approvals ReportSectionApproval[]
 
   @@index([reportId, deletedAt])
 }
@@ -579,4 +590,104 @@ model AuditLog {
 
   @@index([organizationId, createdAt])
   @@index([userId, createdAt])
+}
+
+model ReportSectionRevision {
+  id                    String                @id
+  sectionId             String
+  revisionNumber        Int
+  title                 String
+  content               String
+  structuredDataJson    String                @default("{}")
+  validationStatus      String                @default("VALID") // VALID, INVALID, WARNING
+  validationErrorsJson  String                @default("[]")
+  inputSha256           String
+  sha256                String
+  authorId              String
+  createdAt             DateTime              @default(now())
+  section               ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  author                User                  @relation("SectionRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  evidenceLinks         ReportEvidenceLink[]
+  comments              ReportSectionComment[]
+  approvals             ReportSectionApproval[]
+
+  @@unique([sectionId, revisionNumber])
+  @@index([sectionId])
+  @@index([authorId])
+}
+
+model ReportEvidenceLink {
+  id                      String                @id
+  revisionId              String
+  sourceType              String                // DOCUMENT, MEETING
+  sourceId                String
+  sourceDocumentVersionId String?
+  sourceMeetingId         String?
+  sourceSha256            String
+  sourceVersion           Int                   @default(1)
+  quoteText               String?
+  anchorPosition          String?
+  createdAt               DateTime              @default(now())
+  revision                ReportSectionRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  documentVersion         DocumentVersion?      @relation(fields: [sourceDocumentVersionId], references: [id], onDelete: SetNull)
+  meeting                 Meeting?              @relation(fields: [sourceMeetingId], references: [id], onDelete: SetNull)
+
+  @@index([revisionId])
+  @@index([sourceDocumentVersionId])
+  @@index([sourceMeetingId])
+}
+
+model ReportSectionComment {
+  id            String                 @id
+  sectionId     String
+  revisionId    String?
+  authorId      String
+  commentType   String                 @default("COMMENT") // COMMENT, REVISION_REQUEST
+  content       String
+  isResolved    Boolean                @default(false)
+  resolvedById  String?
+  resolvedAt    DateTime?
+  createdAt     DateTime               @default(now())
+  section       ReportSection          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  revision      ReportSectionRevision? @relation(fields: [revisionId], references: [id], onDelete: SetNull)
+  author        User                   @relation("SectionCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  resolvedBy    User?                  @relation("SectionCommentResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([sectionId])
+  @@index([revisionId])
+  @@index([authorId])
+}
+
+model ReportSectionApproval {
+  id                 String                @id
+  sectionId          String
+  approvedRevisionId String
+  approverId         String
+  status             String                @default("APPROVED") // APPROVED, REJECTED, UNLOCKED
+  comment            String?
+  createdAt          DateTime              @default(now())
+  section            ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  approvedRevision   ReportSectionRevision @relation(fields: [approvedRevisionId], references: [id], onDelete: Restrict)
+  approver           User                  @relation("SectionApprovalApprover", fields: [approverId], references: [id], onDelete: Restrict)
+
+  @@index([sectionId])
+  @@index([approvedRevisionId])
+  @@index([approverId])
+}
+
+model ReportMergeSnapshot {
+  id                    String   @id
+  reportId              String
+  snapshotVersion       Int
+  mergedBodyText        String
+  sectionsSnapshotJson  String
+  evidenceSnapshotJson  String
+  createdById           String
+  createdAt             DateTime @default(now())
+  report                Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  createdBy             User     @relation("ReportMergeSnapshotCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([reportId, snapshotVersion])
+  @@index([reportId])
+  @@index([createdById])
 }

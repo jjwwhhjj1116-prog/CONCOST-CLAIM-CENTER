@@ -548,7 +548,115 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         }
       }
 
-      // 16. Initial Audit Log
+      // 16. P09 Studio Seed Data
+      const p09ReportId = 'RPT-001';
+      const existingP09Report = await tx.report.findUnique({ where: { id: p09ReportId } });
+      if (!existingP09Report) {
+        await tx.report.create({
+          data: {
+            id: p09ReportId,
+            caseId: 'CASE-SYN-001',
+            title: '현장조사 및 손실산출 보고서 (P09 스튜디오)',
+            version: 1,
+            sections: {
+              create: [
+                {
+                  id: 'SEC-001',
+                  sectionNumber: 1,
+                  title: '제1장 사업 및 사건 개요',
+                  content: '본 보고서는 SYNTHETIC_CASE_01 사건에 대한 현장조사 및 손실 산출 분석 보고서입니다.',
+                  status: 'APPROVED',
+                  version: 1,
+                  revisions: {
+                    create: [
+                      {
+                        id: 'SECREV-001-1',
+                        revisionNumber: 1,
+                        title: '제1장 사업 및 사건 개요',
+                        content: '본 보고서는 SYNTHETIC_CASE_01 사건에 대한 현장조사 및 손실 산출 분석 보고서입니다.',
+                        structuredDataJson: '{}',
+                        validationStatus: 'VALID',
+                        inputSha256: crypto.createHash('sha256').update('SEC-001-v1').digest('hex'),
+                        sha256: crypto.createHash('sha256').update('SEC-001-v1-sha').digest('hex'),
+                        authorId: 'USR-PM'
+                      }
+                    ]
+                  },
+                  approvals: {
+                    create: [
+                      {
+                        id: 'APPR-001',
+                        approvedRevisionId: 'SECREV-001-1',
+                        approverId: 'USR-REVIEWER',
+                        status: 'APPROVED',
+                        comment: '제1장 사업 개요 승인 완료'
+                      }
+                    ]
+                  }
+                },
+                {
+                  id: 'SEC-002',
+                  sectionNumber: 2,
+                  title: '제2장 손실액 및 공사비 산출근거',
+                  content: '현장 실측 결과 피해 면적 450㎡에 대한 재시공 산출 비용은 128,500,000원입니다.',
+                  status: 'DRAFT',
+                  version: 1,
+                  revisions: {
+                    create: [
+                      {
+                        id: 'SECREV-002-1',
+                        revisionNumber: 1,
+                        title: '제2장 손실액 및 공사비 산출근거',
+                        content: '현장 실측 결과 피해 면적 450㎡에 대한 재시공 산출 비용은 128,500,000원입니다.',
+                        structuredDataJson: '{}',
+                        validationStatus: 'VALID',
+                        inputSha256: crypto.createHash('sha256').update('SEC-002-v1').digest('hex'),
+                        sha256: crypto.createHash('sha256').update('SEC-002-v1-sha').digest('hex'),
+                        authorId: 'USR-PM'
+                      }
+                    ]
+                  },
+                  comments: {
+                    create: [
+                      {
+                        id: 'CMT-002-1',
+                        authorId: 'USR-REVIEWER',
+                        commentType: 'COMMENT',
+                        content: '피해 면적 산출 단가 내역서 첨부 확인 요망'
+                      }
+                    ]
+                  }
+                },
+                {
+                  id: 'SEC-003',
+                  sectionNumber: 3,
+                  title: '제3장 종합 손실 의견',
+                  content: '상기 산출 결과를 종합할 때 피신청인의 시공 하자로 인한 클레임 청구액은 타당함.',
+                  status: 'DRAFT',
+                  version: 1,
+                  revisions: {
+                    create: [
+                      {
+                        id: 'SECREV-003-1',
+                        revisionNumber: 1,
+                        title: '제3장 종합 손실 의견',
+                        content: '상기 산출 결과를 종합할 때 피신청인의 시공 하자로 인한 클레임 청구액은 타당함.',
+                        structuredDataJson: '{}',
+                        validationStatus: 'VALID',
+                        inputSha256: crypto.createHash('sha256').update('SEC-003-v1').digest('hex'),
+                        sha256: crypto.createHash('sha256').update('SEC-003-v1-sha').digest('hex'),
+                        authorId: 'USR-PM'
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        });
+      }
+
+      // 17. Initial Audit Log
       await tx.auditLog.upsert({
         where: { id: 'AUD-SYN-001' },
         update: {},
