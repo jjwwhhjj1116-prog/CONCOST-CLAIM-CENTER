@@ -1,0 +1,56 @@
+{
+  "phase": "P10",
+  "status": "CODEX_CORRECTED_AND_REVIEWED",
+  "branch": "feat/P10-ai-gateway",
+  "originalImplementationCommit": "4158169",
+  "originalSubmissionCommit": "f9234ec",
+  "implementationCommit": "d7b085d859543431d56f1776ebcb01225c17ada9",
+  "reviewMode": "patch",
+  "cleanCheckout": "work/p10-clean-review-d7b085d",
+  "packageManager": "pnpm@9.15.0",
+  "commandsExecuted": [
+    "pnpm install --frozen-lockfile",
+    "pnpm db:reset",
+    "pnpm db:migrate",
+    "pnpm db:seed",
+    "pnpm lint",
+    "pnpm typecheck",
+    "pnpm test",
+    "pnpm build",
+    "pnpm test:e2e",
+    "pnpm test:security",
+    "pnpm audit --audit-level high"
+  ],
+  "gates": {
+    "passed": 11,
+    "failed": 0,
+    "test": { "passed": 87, "failed": 0, "skipped": 0 },
+    "security": { "passed": 41, "failed": 0, "skipped": 0 },
+    "e2e": { "runner": "playwright-core Chromium", "phases": ["P06", "P07", "P08", "P09", "P10"], "failed": 0 },
+    "audit": { "highOrCritical": 0 }
+  },
+  "changedFiles": [
+    "apps/api/src/ai/fake-adapter.ts",
+    "apps/api/src/ai/gateway-engine.ts",
+    "apps/api/src/ai/secret-resolver.ts",
+    "apps/api/src/ai/ssrf-guard.ts",
+    "apps/api/src/server.ts",
+    "apps/web/src/ai/AiConfigManager.tsx",
+    "apps/web/src/reports/ReportStudio.tsx",
+    "packages/database/prisma/migrations/20260807140000_p10_ai_gateway/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "packages/database/src/seed.ts",
+    "scripts/harness-test.ts",
+    "scripts/p10-contract-test.ts",
+    "scripts/p10-e2e.ts",
+    "scripts/p10-security-test.ts"
+  ],
+  "securityScan": {
+    "rawProviderSecrets": 0,
+    "customerData": 0,
+    "browserStorageSecretLeak": 0,
+    "trackedRawTemplateFiles": 0
+  },
+  "verdict": "PASS_WITH_NOTES",
+  "nextPhaseAllowed": true
+}
