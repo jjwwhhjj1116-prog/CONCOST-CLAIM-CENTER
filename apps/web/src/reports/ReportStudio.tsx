@@ -158,9 +158,129 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const [aiRequestId, setAiRequestId] = useState<string | null>(null);
   const [aiResultMsg, setAiResultMsg] = useState<string | null>(null);
 
+  // P11 Grounded AI Authoring State
+  const [selectedSources, setSelectedSources] = useState<Array<{ sourceType: 'MATERIAL' | 'MEETING'; sourceId: string; sourceVersionId: string }>>([]);
+  const [activeSelection, setActiveSelection] = useState<{ id: string; manifestSha256: string; items: any[] } | null>(null);
+  const [showCostModal, setShowCostModal] = useState<boolean>(false);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [activeSuggestion, setActiveSuggestion] = useState<any | null>(null);
+  const [applyPromptMode, setApplyPromptMode] = useState<string>('grounded_success');
+
   const canEdit = roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
   const canApprove = roles.some((role) => ['admin', 'director', 'reviewer'].includes(role));
   const canMerge = roles.some((role) => ['admin', 'director', 'pm'].includes(role));
+
+  const loadSuggestions = useCallback(async (secId: string) => {
+    if (!reportId) return;
+    try {
+      const res = await apiRequest<{ suggestions: any[] }>(`/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(secId)}/ai/suggestions`);
+      setSuggestions(res.suggestions);
+      if (res.suggestions.length > 0) {
+        setActiveSuggestion(res.suggestions[0]);
+      } else {
+        setActiveSuggestion(null);
+      }
+    } catch {
+      // Ignore load error
+    }
+  }, [reportId]);
+
+  const lockGroundingSelection = async () => {
+    if (!reportId || !activeSection || selectedSources.length === 0) {
+      setNotice('최소 하나 이상의 근거 자료를 선택해야 합니다.');
+      return;
+    }
+    try {
+      const res = await apiRequest<{ selection: { id: string; manifestSha256: string; items: any[] } }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/grounding/selections`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            providerId: 'CFG-LOCAL-FAKE-01',
+            modelCode: selectedAiModel,
+            sources: selectedSources
+          })
+        }
+      );
+      setActiveSelection(res.selection);
+      setShowCostModal(true);
+      setNotice(`근거 Manifest 고정 완료 (hash: ${res.selection.manifestSha256.slice(0, 10)})`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '근거 Manifest 고정에 실패했습니다.');
+    }
+  };
+
+  const generateGroundedSuggestion = async (overrideMode?: string) => {
+    if (!reportId || !activeSection || !activeSelection) return;
+    setShowCostModal(false);
+    setAiStatus('loading');
+    setAiResultMsg(null);
+    const mode = overrideMode || applyPromptMode;
+    try {
+      const res = await apiRequest<{ suggestion: any }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/ai/suggestions`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            selectionId: activeSelection.id,
+            promptMode: mode,
+            idempotencyKey: `IDEMP-STUDIO-${Date.now()}`
+          })
+        }
+      );
+      setAiStatus(res.suggestion.status === 'GENERATED' ? 'success' : 'error');
+      setActiveSuggestion(res.suggestion);
+      await loadSuggestions(activeSection.id);
+      setNotice(res.suggestion.status === 'GENERATED' ? 'AI 근거 초안 생성 완료' : 'AI 인용 검증 실패 (BLOCKED)');
+    } catch (err) {
+      setAiStatus('error');
+      setNotice(err instanceof Error ? err.message : 'AI 초안 생성 실패');
+    }
+  };
+
+  const applySuggestionToContent = async (suggestionId: string) => {
+    if (!reportId || !activeSection) return;
+    try {
+      const res = await apiRequest<{ revision: any; suggestion: any }>(
+        `/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/ai/suggestions/${encodeURIComponent(suggestionId)}/apply`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ expectedVersion: activeSection.version })
+        }
+      );
+      setDrafts((current) => ({
+        ...current,
+        [activeSection.id]: {
+          content: res.revision.content,
+          baseVersion: res.revision.revisionNumber,
+          dirty: false,
+          state: 'saved'
+        }
+      }));
+      updateSection(activeSection.id, (sec) => ({
+        ...sec,
+        version: res.revision.revisionNumber,
+        revisions: [res.revision, ...sec.revisions]
+      }));
+      await loadSuggestions(activeSection.id);
+      setNotice('AI 초안이 본문에 새 DRAFT 개정본으로 적용되었습니다.');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '본문 적용 실패');
+    }
+  };
+
+  const discardSuggestion = async (suggestionId: string) => {
+    if (!reportId || !activeSection) return;
+    try {
+      await apiRequest(`/api/reports/${encodeURIComponent(reportId)}/sections/${encodeURIComponent(activeSection.id)}/ai/suggestions/${encodeURIComponent(suggestionId)}`, {
+        method: 'DELETE'
+      });
+      await loadSuggestions(activeSection.id);
+      setNotice('AI 초안이 폐기되었습니다.');
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '초안 폐기 실패');
+    }
+  };
 
   const fetchAiData = useCallback(async (caseId: string) => {
     try {
@@ -528,7 +648,141 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
               {activeEvidence.length === 0 && <li className="p09-muted">새 근거 연결 없음</li>}
             </ul>
           </section>
+
+          {/* P11 Grounded AI Authoring Panel */}
+          <section className="p11-grounding-section">
+            <h4>근거 기반 AI 작성 <small>{selectedSources.length}개 선택됨</small></h4>
+            <div className="p11-source-checkboxes">
+              <p className="p09-editor-label">사건 자료 선택 (선택된 자료만 AI 전송)</p>
+              {report.case.documents.map((doc) => {
+                const latestVer = doc.versions[0];
+                if (!latestVer) return null;
+                const isChecked = selectedSources.some((s) => s.sourceType === 'MATERIAL' && s.sourceId === doc.id);
+                return (
+                  <label key={doc.id} className="p11-source-item">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedSources((curr) => [...curr, { sourceType: 'MATERIAL', sourceId: doc.id, sourceVersionId: latestVer.id }]);
+                        } else {
+                          setSelectedSources((curr) => curr.filter((s) => !(s.sourceType === 'MATERIAL' && s.sourceId === doc.id)));
+                        }
+                      }}
+                    />
+                    <span>[문서] {doc.title} (v{latestVer.versionNumber} · {latestVer.sha256.slice(0, 8)})</span>
+                  </label>
+                );
+              })}
+              {report.case.meetings.map((mtg) => {
+                const isChecked = selectedSources.some((s) => s.sourceType === 'MEETING' && s.sourceId === mtg.id);
+                return (
+                  <label key={mtg.id} className="p11-source-item">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedSources((curr) => [...curr, { sourceType: 'MEETING', sourceId: mtg.id, sourceVersionId: mtg.id }]);
+                        } else {
+                          setSelectedSources((curr) => curr.filter((s) => !(s.sourceType === 'MEETING' && s.sourceId === mtg.id)));
+                        }
+                      }}
+                    />
+                    <span>[회의록] {mtg.title} ({mtg.status} v{mtg.version})</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="p11-grounding-actions">
+              <Button disabled={!canEdit || selectedSources.length === 0} onClick={lockGroundingSelection}>
+                1. 근거 Manifest 고정
+              </Button>
+            </div>
+
+            {activeSelection && (
+              <div className="p11-selection-status" role="status">
+                <p>✓ Manifest 고정됨: <code>{activeSelection.manifestSha256.slice(0, 12)}</code> ({activeSelection.items.length}개 항목)</p>
+                <label>테스트 모드 선택
+                  <select value={applyPromptMode} onChange={(e) => setApplyPromptMode(e.target.value)}>
+                    <option value="grounded_success">Grounded Success (정상 인용)</option>
+                    <option value="TRIGGER_P11_UNGROUNDED">Ungrounded Value (근거 부족 [확인 필요])</option>
+                    <option value="TRIGGER_P11_CONFLICT">Conflict (상충 근거 경고)</option>
+                    <option value="TRIGGER_P11_MALFORMED_CITATION">Malformed Citation (앵커 오류 BLOCKED)</option>
+                    <option value="TRIGGER_P11_PROMPT_INJECTION">Prompt Injection (격리 처리)</option>
+                  </select>
+                </label>
+                <Button disabled={!canEdit} variant="secondary" onClick={() => generateGroundedSuggestion()}>
+                  2. AI 초안 생성 시작
+                </Button>
+              </div>
+            )}
+
+            {/* Suggestions & Citations List */}
+            {activeSuggestion && (
+              <div className="p11-suggestion-card">
+                <div className="p11-suggestion-header">
+                  <h5>AI 생성 초안 <span className={`p11-tag p11-tag-${activeSuggestion.status.toLowerCase()}`}>{activeSuggestion.status}</span></h5>
+                  <small>{new Date(activeSuggestion.createdAt).toLocaleTimeString()}</small>
+                </div>
+                <div className="p11-suggestion-summary">
+                  <p>{activeSuggestion.summaryText}</p>
+                </div>
+                <div className="p11-citations-list">
+                  <h6>인용 검증 내역 ({activeSuggestion.citations.length}건)</h6>
+                  {activeSuggestion.citations.map((cit: any, idx: number) => (
+                    <div key={cit.id || idx} className={`p11-citation-item p11-cit-${cit.status.toLowerCase()}`}>
+                      <span className="p11-cit-badge">{cit.status}</span>
+                      <p className="p11-cit-claim">"{cit.claimText}"</p>
+                      <p className="p11-cit-anchor">↳ 근거: {cit.sourceType} ({cit.sourceId}) · 앵커 #{cit.anchorIndex} "{cit.anchorText}"</p>
+                      {cit.status === 'CONFLICT' && <p className="p11-cit-alert">⚠ 상충 소스 발견: {cit.conflictSourceId}</p>}
+                      {cit.status === 'UNGROUNDED' && <p className="p11-cit-alert">⚠ 근거 없음: [확인 필요]</p>}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p11-suggestion-actions">
+                  <p className="p11-apply-notice"><small>※ 본문에 적용 시 기존 승인본은 변경되지 않으며, 새 미승인 DRAFT revision으로 등록됩니다.</small></p>
+                  <Button
+                    disabled={!canEdit || activeSection.status === 'APPROVED' || activeSuggestion.status !== 'GENERATED'}
+                    onClick={() => applySuggestionToContent(activeSuggestion.id)}
+                  >
+                    본문에 적용 (새 Revision 생성)
+                  </Button>
+                  <Button
+                    disabled={!canEdit || activeSuggestion.status === 'APPLIED'}
+                    variant="secondary"
+                    onClick={() => discardSuggestion(activeSuggestion.id)}
+                  >
+                    초안 폐기
+                  </Button>
+                </div>
+              </div>
+            )}
+          </section>
         </aside>
+
+        {/* Cost & Scope Confirmation Modal */}
+        {showCostModal && activeSelection && (
+          <div className="p09-modal-overlay" role="dialog" aria-labelledby="p11-modal-title" aria-modal="true">
+            <div className="p09-modal-card">
+              <h4 id="p11-modal-title">외부 전송 범위 및 예상 비용 확인</h4>
+              <p>선택하신 근거 자료만 AI Gateway를 통해 전송됩니다.</p>
+              <ul>
+                <li><strong>선택 자료 수:</strong> {activeSelection.items.length}개</li>
+                <li><strong>Manifest Hash:</strong> <code>{activeSelection.manifestSha256}</code></li>
+                <li><strong>선택 모델:</strong> {selectedAiModel}</li>
+                <li><strong>최대 예상 비용:</strong> $0.0020 USD (2,000 micros)</li>
+              </ul>
+              <div className="p09-modal-actions">
+                <Button onClick={() => generateGroundedSuggestion()}>전송 및 AI 초안 생성 시작</Button>
+                <Button variant="secondary" onClick={() => setShowCostModal(false)}>취소</Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <main className={`p09-pane p09-editor ${mobilePane === 'editor' ? 'is-active' : ''}`} aria-label="구조화 보고서 본문 편집기">
           <div className="p09-section-heading">

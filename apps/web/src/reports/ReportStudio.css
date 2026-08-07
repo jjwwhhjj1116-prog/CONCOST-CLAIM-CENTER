@@ -67,3 +67,86 @@
   .p09-save-state { text-align: left; }
   .p09-compare { grid-template-columns: 1fr; }
 }
+
+/* P11 Grounded AI Authoring Styles */
+.p11-grounding-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border-subtle, #e2e8f0);
+}
+.p11-source-checkboxes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.p11-source-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.p11-selection-status {
+  background: var(--color-bg-secondary, #f8fafc);
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-subtle, #cbd5e1);
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+.p11-suggestion-card {
+  margin-top: 1rem;
+  border: 1px solid var(--color-brand-primary, #2563eb);
+  border-radius: 8px;
+  padding: 1rem;
+  background: #f0f9ff;
+}
+.p11-suggestion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.p11-tag {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.p11-tag-generated { background: #dcfce7; color: #166534; }
+.p11-tag-blocked { background: #fee2e2; color: #991b1b; }
+.p11-tag-applied { background: #dbeafe; color: #1e40af; }
+.p11-tag-discarded { background: #f1f5f9; color: #64748b; }
+
+.p11-citations-list {
+  margin-top: 0.75rem;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 0.5rem;
+}
+.p11-citation-item {
+  font-size: 0.8rem;
+  padding: 0.4rem;
+  border-radius: 4px;
+  margin-top: 0.3rem;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+}
+.p11-cit-badge {
+  font-weight: bold;
+  margin-right: 0.4rem;
+  font-size: 0.75rem;
+}
+.p11-cit-valid .p11-cit-badge { color: #15803d; }
+.p11-cit-ungrounded .p11-cit-badge { color: #b45309; }
+.p11-cit-conflict .p11-cit-badge { color: #b91c1c; }
+.p11-cit-malformed .p11-cit-badge { color: #6b21a8; }
+.p11-cit-alert {
+  color: #c2410c;
+  font-weight: 600;
+  margin-top: 0.2rem;
+}
+.p11-apply-notice {
+  color: #475569;
+  margin-bottom: 0.5rem;
+}

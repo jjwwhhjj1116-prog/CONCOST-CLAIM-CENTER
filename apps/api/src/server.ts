@@ -3724,6 +3724,508 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
+      // ====================================================
+      // P11 Grounded AI Authoring Endpoints
+      // ====================================================
+
+      // 1. POST /api/reports/:reportId/sections/:sectionId/grounding/selections
+      const groundingSelectionMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/grounding\/selections$/);
+      if (groundingSelectionMatch && req.method === 'POST') {
+        const reportId = groundingSelectionMatch[1];
+        const sectionId = groundingSelectionMatch[2];
+
+        const reportRow = await db.report.findUnique({
+          where: { id: reportId },
+          include: { case: true, sections: { where: { id: sectionId } } }
+        });
+        if (!reportRow || reportRow.case.deletedAt || reportRow.sections.length === 0) {
+          throw new HttpError(404, 'Report or Section not found');
+        }
+        if (reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(403, 'Cross-tenant access forbidden');
+        }
+
+        const canCreate = context.roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
+        if (!canCreate) throw new HttpError(403, 'User does not have authoring permission');
+
+        const body = await readJson(req);
+        const providerId = typeof body.providerId === 'string' ? body.providerId.trim() : 'CFG-LOCAL-FAKE-01';
+        const modelCode = typeof body.modelCode === 'string' ? body.modelCode.trim() : 'fake-claim-v1';
+        const sourcesInput = Array.isArray(body.sources) ? body.sources : [];
+
+        if (sourcesInput.length === 0) {
+          throw new HttpError(400, 'At least one grounding source must be selected');
+        }
+
+        const sectionRow = reportRow.sections[0];
+        const validatedItems: Array<{
+          id: string;
+          sourceType: 'MATERIAL' | 'MEETING';
+          sourceId: string;
+          sourceVersionId: string;
+          sourceSha256: string;
+          allowedAnchorsJson: string;
+          orderIndex: number;
+        }> = [];
+
+        for (let idx = 0; idx < sourcesInput.length; idx++) {
+          const src = sourcesInput[idx];
+          const sourceType = src.sourceType === 'MEETING' ? 'MEETING' : 'MATERIAL';
+          const sourceId = String(src.sourceId ?? '').trim();
+          const sourceVersionId = String(src.sourceVersionId ?? '').trim();
+          const allowedAnchors = Array.isArray(src.allowedAnchors) ? src.allowedAnchors.map(Number) : [0];
+
+          if (!sourceId || !sourceVersionId) throw new HttpError(400, 'Invalid source specification');
+
+          if (sourceType === 'MATERIAL') {
+            const doc = await db.document.findUnique({
+              where: { id: sourceId },
+              include: { versions: { where: { id: sourceVersionId } } }
+            });
+            if (!doc || doc.caseId !== reportRow.caseId || doc.deletedAt) {
+              throw new HttpError(403, 'Cross-case or unauthorized grounding document source');
+            }
+            if (doc.versions.length === 0) throw new HttpError(404, 'Document version not found');
+            validatedItems.push({
+              id: `GITM-${crypto.randomUUID()}`,
+              sourceType: 'MATERIAL',
+              sourceId: doc.id,
+              sourceVersionId: doc.versions[0].id,
+              sourceSha256: doc.versions[0].sha256,
+              allowedAnchorsJson: JSON.stringify(allowedAnchors),
+              orderIndex: idx
+            });
+          } else {
+            const mtg = await db.meeting.findUnique({ where: { id: sourceId } });
+            if (!mtg || mtg.caseId !== reportRow.caseId) {
+              throw new HttpError(403, 'Cross-case or unauthorized grounding meeting source');
+            }
+            validatedItems.push({
+              id: `GITM-${crypto.randomUUID()}`,
+              sourceType: 'MEETING',
+              sourceId: mtg.id,
+              sourceVersionId: mtg.id,
+              sourceSha256: mtg.rawTextSha256 || crypto.createHash('sha256').update(mtg.rawText || '').digest('hex'),
+              allowedAnchorsJson: JSON.stringify(allowedAnchors),
+              orderIndex: idx
+            });
+          }
+        }
+
+        const casePolicy = await db.aiCasePolicy.findUnique({ where: { caseId: reportRow.caseId } });
+        const policyHash = crypto.createHash('sha256').update(JSON.stringify({
+          caseId: reportRow.caseId,
+          externalAiAllowed: casePolicy?.externalAiAllowed ?? false,
+          maxTokens: casePolicy?.maxTokensPerRequest ?? 4096,
+          maxCostMicros: casePolicy?.maxCostMicrosPerRequest ?? 1000000
+        })).digest('hex');
+
+        const instructionHash = crypto.createHash('sha256').update(`${sectionRow.title}\n${sectionRow.content}`).digest('hex');
+
+        const manifestPayload = {
+          organizationId: context.user.organizationId,
+          caseId: reportRow.caseId,
+          reportId: reportRow.id,
+          sectionId: sectionRow.id,
+          actorId: context.user.id,
+          providerId,
+          modelCode,
+          policyHash,
+          instructionHash,
+          items: validatedItems.map((item) => ({
+            sourceType: item.sourceType,
+            sourceId: item.sourceId,
+            sourceVersionId: item.sourceVersionId,
+            sourceSha256: item.sourceSha256,
+            allowedAnchors: item.allowedAnchorsJson
+          }))
+        };
+        const manifestSha256 = crypto.createHash('sha256').update(JSON.stringify(manifestPayload)).digest('hex');
+
+        const selectionId = `GSEL-${crypto.randomUUID()}`;
+        const selection = await db.$transaction(async (tx) => {
+          const created = await tx.aiGroundingSelection.create({
+            data: {
+              id: selectionId,
+              organizationId: context.user.organizationId,
+              caseId: reportRow.caseId,
+              reportId: reportRow.id,
+              sectionId: sectionRow.id,
+              actorId: context.user.id,
+              status: 'LOCKED',
+              policyHash,
+              providerId,
+              modelCode,
+              instructionHash,
+              manifestSha256,
+              items: {
+                create: validatedItems.map((item) => ({
+                  id: item.id,
+                  sourceType: item.sourceType,
+                  sourceId: item.sourceId,
+                  sourceVersionId: item.sourceVersionId,
+                  sourceSha256: item.sourceSha256,
+                  allowedAnchorsJson: item.allowedAnchorsJson,
+                  orderIndex: item.orderIndex
+                }))
+              }
+            },
+            include: { items: true }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'AI_GROUNDING_SELECTED', 'AiGroundingSelection', selectionId, {
+              caseId: reportRow.caseId,
+              manifestSha256,
+              itemCount: validatedItems.length
+            })
+          });
+
+          return created;
+        });
+
+        sendJson(res, 201, { selection });
+        return;
+      }
+
+      // 2. POST /api/reports/:reportId/sections/:sectionId/ai/suggestions
+      const suggestionCreateMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/ai\/suggestions$/);
+      if (suggestionCreateMatch && req.method === 'POST') {
+        const reportId = suggestionCreateMatch[1];
+        const sectionId = suggestionCreateMatch[2];
+
+        const reportRow = await db.report.findUnique({
+          where: { id: reportId },
+          include: { case: true, sections: { where: { id: sectionId } } }
+        });
+        if (!reportRow || reportRow.case.deletedAt || reportRow.sections.length === 0) {
+          throw new HttpError(404, 'Report or Section not found');
+        }
+        if (reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(403, 'Cross-tenant access forbidden');
+        }
+
+        const canCreate = context.roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
+        if (!canCreate) throw new HttpError(403, 'User does not have authoring permission');
+
+        const body = await readJson(req);
+        const selectionId = String(body.selectionId ?? '').trim();
+        const promptMode = String(body.promptMode ?? 'grounded_success').trim();
+        const idempotencyKey = String(body.idempotencyKey ?? `IDEMP-SUGG-${Date.now()}`).trim();
+
+        if (!selectionId) throw new HttpError(400, 'selectionId is required');
+
+        const selection = await db.aiGroundingSelection.findUnique({
+          where: { id: selectionId },
+          include: { items: true }
+        });
+        if (!selection || selection.sectionId !== sectionId || selection.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Grounding selection not found');
+        }
+
+        const promptText = `[P11 GROUNDED SUGGESTION - mode: ${promptMode}] Manifest: ${selection.manifestSha256}`;
+        const controller = new AbortController();
+
+        let gatewayResult;
+        try {
+          gatewayResult = await processAiGenerationRequest(db, {
+            organizationId: context.user.organizationId,
+            caseId: reportRow.caseId,
+            userId: context.user.id,
+            providerConfigId: selection.providerId,
+            modelCode: selection.modelCode,
+            prompt: promptText,
+            idempotencyKey,
+            auditLogFactory: (event: AiAuditEvent, targetId, metadata) => requestAudit(
+              context,
+              {
+                STARTED: 'AI_SUGGESTION_REQUESTED', COMPLETED: 'AI_SUGGESTION_COMPLETED', FAILED: 'AI_GENERATION_FAILED',
+                CANCELED: 'AI_GENERATION_CANCELED', POLICY_BLOCKED: 'AI_SUGGESTION_BLOCKED', BUDGET_BLOCKED: 'AI_SUGGESTION_BLOCKED'
+              }[event],
+              'AiDraftSuggestion',
+              targetId,
+              { caseId: reportRow.caseId, selectionId, promptMode, ...metadata }
+            )
+          }, { abortSignal: controller.signal });
+        } catch (err) {
+          if (err instanceof AiGatewayError) throw new HttpError(err.status, err.message);
+          throw err;
+        }
+
+        if (gatewayResult.status !== 'COMPLETED' || !gatewayResult.resultText) {
+          throw new HttpError(400, gatewayResult.redactedErrorMessage || 'AI generation failed');
+        }
+
+        let parsedOutput: { summary: string; claims: Array<{ claimIndex: number; claimText: string; sourceType: string; sourceId: string; sourceVersionId: string; sourceSha256: string; anchorIndex: number; anchorText: string; status: string; conflictSourceId?: string }> };
+        try {
+          parsedOutput = JSON.parse(gatewayResult.resultText);
+        } catch {
+          throw new HttpError(422, 'Provider returned unparseable suggestion output');
+        }
+
+        // Server-side Citation Validation against Selection Items
+        const validatedCitations: Array<{
+          id: string;
+          targetClaimIndex: number;
+          claimText: string;
+          sourceType: string;
+          sourceId: string;
+          sourceVersionId: string;
+          sourceSha256: string;
+          anchorIndex: number;
+          anchorText: string;
+          status: string;
+          conflictSourceId: string | null;
+        }> = [];
+
+        let isCitationValid = true;
+
+        for (const claim of parsedOutput.claims || []) {
+          const matchingItem = selection.items.find(
+            (itm) => itm.sourceId === claim.sourceId && itm.sourceType === claim.sourceType
+          );
+
+          let claimStatus = claim.status || 'VALID';
+          if (!matchingItem || claim.anchorIndex > 1000) {
+            claimStatus = 'MALFORMED';
+            isCitationValid = false;
+          }
+
+          validatedCitations.push({
+            id: `CIT-${crypto.randomUUID()}`,
+            targetClaimIndex: claim.claimIndex ?? 0,
+            claimText: claim.claimText,
+            sourceType: claim.sourceType,
+            sourceId: claim.sourceId,
+            sourceVersionId: claim.sourceVersionId,
+            sourceSha256: claim.sourceSha256,
+            anchorIndex: claim.anchorIndex,
+            anchorText: claim.anchorText,
+            status: claimStatus,
+            conflictSourceId: claim.conflictSourceId ?? null
+          });
+        }
+
+        const suggestionId = `SUGG-${crypto.randomUUID()}`;
+        const suggestionStatus = isCitationValid ? 'GENERATED' : 'BLOCKED';
+
+        const suggestion = await db.$transaction(async (tx) => {
+          const created = await tx.aiDraftSuggestion.create({
+            data: {
+              id: suggestionId,
+              selectionId: selection.id,
+              requestId: gatewayResult.requestId,
+              organizationId: context.user.organizationId,
+              caseId: reportRow.caseId,
+              reportId: reportRow.id,
+              sectionId: sectionId,
+              actorId: context.user.id,
+              status: suggestionStatus,
+              summaryText: parsedOutput.summary || 'AI 생성 초안',
+              promptMode,
+              idempotencyKey,
+              idempotencyFingerprint: selection.manifestSha256,
+              citations: {
+                create: validatedCitations.map((cit) => ({
+                  id: cit.id,
+                  targetClaimIndex: cit.targetClaimIndex,
+                  claimText: cit.claimText,
+                  sourceType: cit.sourceType,
+                  sourceId: cit.sourceId,
+                  sourceVersionId: cit.sourceVersionId,
+                  sourceSha256: cit.sourceSha256,
+                  anchorIndex: cit.anchorIndex,
+                  anchorText: cit.anchorText,
+                  status: cit.status,
+                  conflictSourceId: cit.conflictSourceId
+                }))
+              }
+            },
+            include: { citations: true, selection: { include: { items: true } } }
+          });
+
+          if (!isCitationValid) {
+            await tx.auditLog.create({
+              data: requestAudit(context, 'AI_CITATION_FAILED', 'AiDraftSuggestion', suggestionId, {
+                caseId: reportRow.caseId,
+                selectionId: selection.id,
+                reason: 'Malformed or missing anchor in provider citation'
+              })
+            });
+          }
+
+          return created;
+        });
+
+        sendJson(res, 201, { suggestion });
+        return;
+      }
+
+      // 3. GET /api/reports/:reportId/sections/:sectionId/ai/suggestions
+      const suggestionListMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/ai\/suggestions$/);
+      if (suggestionListMatch && req.method === 'GET') {
+        const reportId = suggestionListMatch[1];
+        const sectionId = suggestionListMatch[2];
+
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+
+        const suggestions = await db.aiDraftSuggestion.findMany({
+          where: { sectionId },
+          include: { citations: true, selection: { include: { items: true } }, appliedRevision: true },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        sendJson(res, 200, { suggestions });
+        return;
+      }
+
+      // 4. POST /api/reports/:reportId/sections/:sectionId/ai/suggestions/:suggestionId/apply
+      const suggestionApplyMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/ai\/suggestions\/([^/]+)\/apply$/);
+      if (suggestionApplyMatch && req.method === 'POST') {
+        const reportId = suggestionApplyMatch[1];
+        const sectionId = suggestionApplyMatch[2];
+        const suggestionId = suggestionApplyMatch[3];
+
+        const reportRow = await db.report.findUnique({
+          where: { id: reportId },
+          include: { case: true, sections: { where: { id: sectionId } } }
+        });
+        if (!reportRow || reportRow.case.deletedAt || reportRow.sections.length === 0) {
+          throw new HttpError(404, 'Report or Section not found');
+        }
+        if (reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(403, 'Cross-tenant access forbidden');
+        }
+
+        const canApply = context.roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
+        if (!canApply) throw new HttpError(403, 'User does not have authoring permission to apply suggestions');
+
+        const body = await readJson(req);
+        const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : -1;
+
+        const sectionRow = reportRow.sections[0];
+        if (sectionRow.status === 'APPROVED') {
+          throw new HttpError(400, 'Approved section must be unlocked before applying a new revision');
+        }
+        if (sectionRow.version !== expectedVersion) {
+          throw new HttpError(409, 'Stale section version conflict');
+        }
+
+        const suggestionRow = await db.aiDraftSuggestion.findUnique({
+          where: { id: suggestionId },
+          include: { citations: true }
+        });
+        if (!suggestionRow || suggestionRow.sectionId !== sectionId || suggestionRow.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Draft suggestion not found');
+        }
+        if (suggestionRow.status === 'APPLIED') {
+          throw new HttpError(409, 'Suggestion has already been applied');
+        }
+        if (suggestionRow.status === 'BLOCKED' || suggestionRow.status === 'DISCARDED') {
+          throw new HttpError(400, `Cannot apply suggestion in ${suggestionRow.status} state`);
+        }
+
+        const newRevisionId = `REV-${crypto.randomUUID()}`;
+        const newContent = suggestionRow.summaryText;
+        const sha256 = crypto.createHash('sha256').update(newContent).digest('hex');
+
+        const result = await db.$transaction(async (tx) => {
+          const lastRev = await tx.reportSectionRevision.findFirst({
+            where: { sectionId },
+            orderBy: { revisionNumber: 'desc' }
+          });
+          const newRevisionNumber = lastRev ? lastRev.revisionNumber + 1 : 1;
+
+          const createdRevision = await tx.reportSectionRevision.create({
+            data: {
+              id: newRevisionId,
+              sectionId,
+              revisionNumber: newRevisionNumber,
+              title: sectionRow.title,
+              content: newContent,
+              inputSha256: sha256,
+              sha256,
+              authorId: context.user.id
+            }
+          });
+
+          const updatedSection = await tx.reportSection.updateMany({
+            where: { id: sectionId, version: expectedVersion },
+            data: { version: { increment: 1 }, updatedAt: new Date() }
+          });
+          if (updatedSection.count !== 1) {
+            throw new HttpError(409, 'Stale section version conflict during apply transaction');
+          }
+
+          const updatedSuggestion = await tx.aiDraftSuggestion.update({
+            where: { id: suggestionId },
+            data: {
+              status: 'APPLIED',
+              appliedRevisionId: newRevisionId,
+              appliedAt: new Date(),
+              appliedActorId: context.user.id
+            }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'AI_SUGGESTION_APPLIED', 'AiDraftSuggestion', suggestionId, {
+              caseId: reportRow.caseId,
+              revisionId: newRevisionId,
+              revisionNumber: newRevisionNumber
+            })
+          });
+
+          return { revision: createdRevision, suggestion: updatedSuggestion };
+        });
+
+        sendJson(res, 200, { revision: result.revision, suggestion: result.suggestion });
+        return;
+      }
+
+      // 5. DELETE /api/reports/:reportId/sections/:sectionId/ai/suggestions/:suggestionId
+      const suggestionDiscardMatch = pathname.match(/^\/api\/reports\/([^/]+)\/sections\/([^/]+)\/ai\/suggestions\/([^/]+)$/);
+      if (suggestionDiscardMatch && req.method === 'DELETE') {
+        const reportId = suggestionDiscardMatch[1];
+        const sectionId = suggestionDiscardMatch[2];
+        const suggestionId = suggestionDiscardMatch[3];
+
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+
+        const canDiscard = context.roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
+        if (!canDiscard) throw new HttpError(403, 'User does not have permission to discard suggestions');
+
+        const suggestionRow = await db.aiDraftSuggestion.findUnique({ where: { id: suggestionId } });
+        if (!suggestionRow || suggestionRow.sectionId !== sectionId) {
+          throw new HttpError(404, 'Suggestion not found');
+        }
+
+        if (suggestionRow.status === 'APPLIED') {
+          throw new HttpError(409, 'Cannot discard an applied suggestion');
+        }
+
+        const updated = await db.$transaction(async (tx) => {
+          const sug = await tx.aiDraftSuggestion.update({
+            where: { id: suggestionId },
+            data: { status: 'DISCARDED' }
+          });
+          await tx.auditLog.create({
+            data: requestAudit(context, 'AI_SUGGESTION_DISCARDED', 'AiDraftSuggestion', suggestionId, {
+              caseId: reportRow.caseId
+            })
+          });
+          return sug;
+        });
+
+        sendJson(res, 200, { suggestion: updated });
+        return;
+      }
+
       throw new HttpError(404, 'Endpoint not found');
     })().catch((error: unknown) => {
       if (error instanceof HttpError) {

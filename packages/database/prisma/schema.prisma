@@ -20,6 +20,8 @@ model Organization {
   aiProviderConfigs AiProviderConfig[]
   aiUsageLedgers AiUsageLedger[]
   aiGenerationRequests AiGenerationRequest[]
+  groundingSelections AiGroundingSelection[]
+  draftSuggestions AiDraftSuggestion[]
 }
 
 model User {
@@ -56,6 +58,9 @@ model User {
   createdReportMergeSnapshots ReportMergeSnapshot[] @relation("ReportMergeSnapshotCreator")
   aiUsageLedgers AiUsageLedger[]
   aiGenerationRequests AiGenerationRequest[]
+  groundingSelections AiGroundingSelection[]
+  createdSuggestions AiDraftSuggestion[] @relation("SuggestionActor")
+  appliedSuggestions AiDraftSuggestion[] @relation("SuggestionAppliedActor")
 }
 
 model Role {
@@ -113,6 +118,8 @@ model CaseItem {
   aiPolicy       AiCasePolicy?
   aiUsageLedgers AiUsageLedger[]
   aiGenerationRequests AiGenerationRequest[]
+  groundingSelections AiGroundingSelection[]
+  draftSuggestions AiDraftSuggestion[]
 
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
@@ -296,6 +303,8 @@ model Report {
   reportInstance ReportInstance? @relation(fields: [reportInstanceId], references: [id], onDelete: Restrict)
   sections  ReportSection[]
   mergeSnapshots ReportMergeSnapshot[]
+  groundingSelections AiGroundingSelection[]
+  draftSuggestions AiDraftSuggestion[]
 
   @@index([caseId, deletedAt])
 }
@@ -319,6 +328,8 @@ model ReportSection {
   revisions ReportSectionRevision[]
   comments  ReportSectionComment[]
   approvals ReportSectionApproval[]
+  groundingSelections AiGroundingSelection[]
+  draftSuggestions AiDraftSuggestion[]
 
   @@index([reportId, deletedAt])
 }
@@ -613,8 +624,10 @@ model ReportSectionRevision {
   sha256                String
   authorId              String
   createdAt             DateTime              @default(now())
+  appliedSuggestionId   String?               @unique
   section               ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
   author                User                  @relation("SectionRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  appliedSuggestion     AiDraftSuggestion?    @relation("AppliedSuggestionRevision", fields: [appliedSuggestionId], references: [id], onDelete: Restrict)
   evidenceLinks         ReportEvidenceLink[]
   comments              ReportSectionComment[]
   approvals             ReportSectionApproval[]
@@ -790,6 +803,7 @@ model AiGenerationRequest {
   providerConfig       AiProviderConfig      @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
   attempts             AiGenerationAttempt[]
   ledgers              AiUsageLedger[]
+  suggestion           AiDraftSuggestion?
 
   @@unique([organizationId, caseId, userId, idempotencyKey])
   @@index([organizationId, status])
@@ -810,3 +824,105 @@ model AiGenerationAttempt {
 
   @@unique([requestId, attemptNumber])
 }
+
+// ----------------------------------------------------
+// P11 Grounded AI Authoring Models
+// ----------------------------------------------------
+
+model AiGroundingSelection {
+  id               String               @id
+  organizationId   String
+  caseId           String
+  reportId         String
+  sectionId        String
+  actorId          String
+  status           String               @default("LOCKED") // DRAFT, LOCKED, DISCARDED
+  policyHash       String
+  providerId       String
+  modelCode        String
+  instructionHash  String
+  manifestSha256   String
+  createdAt        DateTime             @default(now())
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case             CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report           Report               @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  section          ReportSection        @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  actor            User                 @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  items            AiGroundingItem[]
+  suggestions      AiDraftSuggestion[]
+
+  @@index([organizationId, caseId])
+  @@index([sectionId])
+  @@index([manifestSha256])
+}
+
+model AiGroundingItem {
+  id                 String               @id
+  selectionId        String
+  sourceType         String               // MATERIAL, MEETING
+  sourceId           String
+  sourceVersionId    String
+  sourceSha256       String
+  allowedAnchorsJson String               @default("[]") // Array of allowed paragraph indices or section anchors
+  orderIndex         Int                  @default(0)
+  selection          AiGroundingSelection @relation(fields: [selectionId], references: [id], onDelete: Restrict)
+
+  @@unique([selectionId, sourceType, sourceId, sourceVersionId])
+  @@index([selectionId])
+}
+
+model AiDraftSuggestion {
+  id                     String                @id
+  selectionId            String
+  requestId              String                @unique
+  organizationId         String
+  caseId                 String
+  reportId               String
+  sectionId              String
+  actorId                String
+  status                 String                @default("GENERATED") // GENERATED, BLOCKED, DISCARDED, APPLIED
+  summaryText            String
+  promptMode             String                @default("grounded_success")
+  idempotencyKey         String
+  idempotencyFingerprint String
+  appliedRevisionId      String?               @unique
+  appliedAt              DateTime?
+  appliedActorId         String?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  selection              AiGroundingSelection  @relation(fields: [selectionId], references: [id], onDelete: Restrict)
+  request                AiGenerationRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  organization           Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                   CaseItem              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report                 Report                @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  section                ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  actor                  User                  @relation("SuggestionActor", fields: [actorId], references: [id], onDelete: Restrict)
+  appliedActor           User?                 @relation("SuggestionAppliedActor", fields: [appliedActorId], references: [id], onDelete: Restrict)
+  appliedRevision        ReportSectionRevision? @relation("AppliedSuggestionRevision")
+  citations              AiCitation[]
+
+  @@unique([organizationId, caseId, sectionId, idempotencyKey])
+  @@index([selectionId])
+  @@index([requestId])
+  @@index([sectionId])
+}
+
+model AiCitation {
+  id               String            @id
+  suggestionId     String
+  targetClaimIndex Int
+  claimText        String
+  sourceType       String            // MATERIAL, MEETING
+  sourceId         String
+  sourceVersionId  String
+  sourceSha256     String
+  anchorIndex      Int
+  anchorText       String
+  status           String            @default("VALID") // VALID, UNGROUNDED, CONFLICT, MALFORMED
+  conflictSourceId String?
+  createdAt        DateTime          @default(now())
+  suggestion       AiDraftSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Restrict)
+
+  @@index([suggestionId])
+}
+

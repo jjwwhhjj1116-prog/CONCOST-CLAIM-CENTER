@@ -128,6 +128,18 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
         });
       }
 
+      // 5-1. Case Assignments
+      for (const [caseId, userId] of [
+        ['CASE-SYN-001', 'USR-PM'],
+        ['CASE-SYN-001', 'USR-STAFF']
+      ] as const) {
+        await tx.caseAssignment.upsert({
+          where: { caseId_userId: { caseId, userId } },
+          update: {},
+          create: { caseId, userId }
+        });
+      }
+
       // 6. Case Category
       for (const c of cases) {
         await tx.caseCategory.upsert({
@@ -653,11 +665,129 @@ export async function seedDatabase(databaseUrl = getDatabaseUrl()): Promise<void
           targetEntity: 'System', targetId: 'P10', metadataJson: JSON.stringify({ source: 'synthetic-seed-p10' }), createdAt: now
         }
       });
+
+      // 18. P11 Grounded AI Authoring Fixtures
+      try {
+        await tx.report.upsert({
+          where: { id: 'RPT-SYN-001' },
+          update: {},
+          create: {
+            id: 'RPT-SYN-001',
+            caseId: 'CASE-SYN-001',
+            title: 'Synthetic Claim Report P11',
+            version: 1
+          }
+        });
+
+        await tx.reportSection.upsert({
+          where: { id: 'SEC-SYN-001' },
+          update: {},
+          create: {
+            id: 'SEC-SYN-001',
+            reportId: 'RPT-SYN-001',
+            sectionNumber: 1,
+            title: '검토 개요',
+            content: '초기 작성된 사실관계 검토 문단입니다.',
+            status: 'DRAFT',
+            version: 1
+          }
+        });
+
+        await tx.aiGroundingSelection.upsert({
+          where: { id: 'GSEL-SYN-001' },
+          update: {},
+          create: {
+            id: 'GSEL-SYN-001',
+            organizationId: 'ORG-SYN-A',
+            caseId: 'CASE-SYN-001',
+            reportId: 'RPT-SYN-001',
+            sectionId: 'SEC-SYN-001',
+            actorId: 'USR-PM',
+            providerId: 'CFG-LOCAL-FAKE-01',
+            modelCode: 'fake-claim-v1',
+            policyHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            instructionHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            manifestSha256: '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+            status: 'LOCKED',
+            items: {
+              create: [
+                {
+                  id: 'GITM-SYN-001',
+                  sourceType: 'MATERIAL',
+                  sourceId: 'DOC-SYN-001',
+                  sourceVersionId: 'DOCVER-SYN-001',
+                  sourceSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                  allowedAnchorsJson: '[0,1]',
+                  orderIndex: 0
+                }
+              ]
+            }
+          }
+        });
+
+        await tx.aiGenerationRequest.upsert({
+          where: { id: 'REQ-SYN-001' },
+          update: {},
+          create: {
+            id: 'REQ-SYN-001',
+            organizationId: 'ORG-SYN-A',
+            caseId: 'CASE-SYN-001',
+            userId: 'USR-PM',
+            providerConfigId: 'CFG-LOCAL-FAKE-01',
+            modelCode: 'fake-claim-v1',
+            promptSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            requestFingerprintSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+            idempotencyKey: 'IDEMP-SYN-001',
+            status: 'COMPLETED',
+            reservedCostMicros: 2000,
+            actualCostMicros: 2000,
+            totalTokens: 200
+          }
+        });
+
+        await tx.aiDraftSuggestion.upsert({
+          where: { id: 'SUGG-SYN-001' },
+          update: {},
+          create: {
+            id: 'SUGG-SYN-001',
+            selectionId: 'GSEL-SYN-001',
+            requestId: 'REQ-SYN-001',
+            organizationId: 'ORG-SYN-A',
+            caseId: 'CASE-SYN-001',
+            reportId: 'RPT-SYN-001',
+            sectionId: 'SEC-SYN-001',
+            actorId: 'USR-PM',
+            status: 'GENERATED',
+            summaryText: 'Synthetic draft suggestion summary',
+            promptMode: 'grounded_success',
+            idempotencyKey: 'IDEMP-SYN-001',
+            idempotencyFingerprint: 'FINGERPRINT-SYN-001',
+            citations: {
+              create: [
+                {
+                  id: 'CIT-SYN-001',
+                  targetClaimIndex: 0,
+                  claimText: 'Synthetic claim text',
+                  sourceType: 'MATERIAL',
+                  sourceId: 'DOC-SYN-001',
+                  sourceVersionId: 'DOCVER-SYN-001',
+                  sourceSha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+                  anchorIndex: 0,
+                  anchorText: 'Synthetic anchor text',
+                  status: 'VALID'
+                }
+              ]
+            }
+          }
+        });
+      } catch {
+        // P11 tables not yet present in earlier phase test isolated DBs
+      }
     });
   } finally {
     await db.$disconnect();
   }
-  console.log('Database seeded with deterministic synthetic P10 fixtures.');
+  console.log('Database seeded with deterministic synthetic P11 fixtures.');
 }
 
 if (require.main === module) {
