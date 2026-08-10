@@ -1,0 +1,14 @@
+{
+  "phase": "P14",
+  "branch": "feat/P14-google-workspace-integration",
+  "status": "READY_FOR_REVIEW",
+  "submittedAt": "2026-08-10T14:10:00.000Z",
+  "gatesPassed": true,
+  "summary": {
+    "fakeAdapterModes": 11,
+    "rawTokensExposed": 0,
+    "humanConfirmationCheck": true,
+    "sqliteImmutabilityTriggers": 6,
+    "qualityGatesPassed": 6
+  }
+}

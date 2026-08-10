@@ -101,7 +101,7 @@ async function main() {
     await waitFor(`${apiOrigin}/health`);
     await waitFor(`${webOrigin}/`);
 
-    await createP09Fixture(apiOrigin, db, { sectionCount: 1 });
+    await createP09Fixture(apiOrigin, db, { sectionCount: 1, requestOrigin: webOrigin });
 
     browser = await chromium.launch({ executablePath: browserExecutable(), headless: true });
 

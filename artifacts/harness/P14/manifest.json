@@ -1,0 +1,30 @@
+{
+  "phase": "P14",
+  "name": "Google Workspace Fake Adapter Integration",
+  "status": "READY_FOR_REVIEW",
+  "submittedAt": "2026-08-10T14:10:00.000Z",
+  "harnessVersion": "1.0.0",
+  "deliverables": [
+    "apps/api/src/google-workspace/GoogleWorkspaceAdapter.ts",
+    "apps/api/src/google-workspace/GoogleWorkspaceFakeAdapter.ts",
+    "apps/api/src/server.ts",
+    "packages/database/prisma/schema.prisma",
+    "packages/database/prisma/migrations/20260810140000_p14_google_workspace_integration/migration.sql",
+    "apps/web/src/integrations/GoogleWorkspaceIntegration.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "apps/web/src/layout/AppShell.tsx",
+    "scripts/p14-test-support.ts",
+    "scripts/p14-contract-test.ts",
+    "scripts/p14-security-test.ts",
+    "scripts/p14-e2e.ts",
+    "package.json"
+  ],
+  "gates": {
+    "test:p14": "PASS",
+    "lint": "PASS",
+    "build": "PASS",
+    "test:security": "PASS",
+    "test": "PASS",
+    "test:e2e": "PASS"
+  }
+}

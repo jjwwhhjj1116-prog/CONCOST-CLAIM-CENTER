@@ -5,11 +5,11 @@ import * as path from 'node:path';
 import { CLAIM_TYPES, ROUTES, canAccessRoute, isSafeReturnTo, reviewerCapabilities, routeByPath, type RouteConfig } from '../apps/web/src/routes/Router';
 
 const root = path.join(__dirname, '..');
-const screenIds = ['AUTH-01', 'DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01', 'PROP-01', 'PROP-02', 'REPO-01', 'REPO-02', 'APPR-01', 'FEE-01', 'TPL-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'];
+const screenIds = ['AUTH-01', 'DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01', 'PROP-01', 'PROP-02', 'REPO-01', 'REPO-02', 'APPR-01', 'FEE-01', 'INTEG-01', 'TPL-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'];
 
 function validateRoutes(routes: RouteConfig[]): void {
   assert.deepStrictEqual(routes.map((route) => route.id), screenIds);
-  assert.strictEqual(new Set(routes.map((route) => route.path)).size, 20, 'Route paths must be unique');
+  assert.strictEqual(new Set(routes.map((route) => route.path)).size, 21, 'Route paths must be unique');
 }
 
 function validateReviewer(capabilities: Record<string, boolean>): void {

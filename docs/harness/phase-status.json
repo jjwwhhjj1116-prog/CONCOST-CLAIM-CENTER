@@ -1,7 +1,7 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-10T13:43:29+09:00",
-  "currentPhase": "P13",
+  "updatedAt": "2026-08-10T14:10:00+09:00",
+  "currentPhase": "P14",
   "nextPhaseAllowed": true,
   "phases": {
     "P00": { "status": "PASS", "updatedAt": "2026-08-06T01:10:00Z" },
@@ -237,9 +237,29 @@
     },
     "P14": {
       "name": "Google Workspace Integration",
-      "status": "IN_PROGRESS",
-      "gatePassed": false,
-      "startedAt": "2026-08-10T13:50:00+09:00"
+      "status": "READY_FOR_REVIEW",
+      "gatePassed": true,
+      "startedAt": "2026-08-10T13:50:00+09:00",
+      "submittedAt": "2026-08-10T14:10:00+09:00",
+      "deliverables": [
+        "apps/api/src/google-workspace/GoogleWorkspaceAdapter.ts",
+        "apps/api/src/google-workspace/GoogleWorkspaceFakeAdapter.ts",
+        "apps/api/src/server.ts",
+        "packages/database/prisma/schema.prisma",
+        "packages/database/prisma/migrations/20260810140000_p14_google_workspace_integration/migration.sql",
+        "apps/web/src/integrations/GoogleWorkspaceIntegration.tsx",
+        "apps/web/src/routes/Router.tsx",
+        "apps/web/src/layout/AppShell.tsx",
+        "scripts/p14-test-support.ts",
+        "scripts/p14-contract-test.ts",
+        "scripts/p14-security-test.ts",
+        "scripts/p14-e2e.ts",
+        "artifacts/harness/P14/manifest.json",
+        "artifacts/harness/P14/notes.md",
+        "artifacts/harness/P14/commands.log",
+        "docs/reviews/requests/P14-review-request.md",
+        "docs/reviews/requests/P14-review-request.json"
+      ]
     }
   }
 }
