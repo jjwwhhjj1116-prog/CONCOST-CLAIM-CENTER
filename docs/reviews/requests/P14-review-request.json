@@ -1,14 +1,22 @@
 {
   "phase": "P14",
-  "branch": "feat/P14-google-workspace-integration",
-  "status": "READY_FOR_REVIEW",
-  "submittedAt": "2026-08-10T14:10:00.000Z",
-  "gatesPassed": true,
-  "summary": {
-    "fakeAdapterModes": 11,
-    "rawTokensExposed": 0,
-    "humanConfirmationCheck": true,
-    "sqliteImmutabilityTriggers": 6,
-    "qualityGatesPassed": 6
-  }
+  "branch": "review/P14-codex",
+  "remoteBranch": "feat/P14-google-workspace-integration",
+  "status": "PASS_WITH_NOTES",
+  "implementationCommit": "5554f6c5187b698faebccfbc13956eeb1e794889",
+  "submittedAt": "2026-08-10T17:03:54+09:00",
+  "runtime": {
+    "node": "20.18.0",
+    "pnpm": "9.15.0"
+  },
+  "gatesPassed": 11,
+  "gatesRequired": 11,
+  "tests": {
+    "general": { "passed": 113, "failed": 0, "skipped": 0 },
+    "security": { "passed": 90, "failed": 0, "skipped": 0 },
+    "p14RealAdapter": { "passed": 22, "failed": 0 },
+    "p14ChromiumFlows": 10
+  },
+  "findings": { "critical": 0, "high": 0, "medium": 2, "low": 0 },
+  "nextPhaseAllowed": true
 }

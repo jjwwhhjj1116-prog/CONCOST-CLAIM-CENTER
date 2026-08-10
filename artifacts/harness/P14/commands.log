@@ -1,53 +1,65 @@
-[2026-08-10 14:00:00] pnpm test:p14
-> claim-center-report-studio-monorepo@0.1.0 test:p14 E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
-> tsx scripts/p14-contract-test.ts
---- Running P14 Google Workspace Integration Contract Test ---
-Database seeded with deterministic synthetic P11 fixtures.
-1. Testing GET /api/google-workspace/connection (Initial DISCONNECTED)...
-2. Testing OAuth init & callback flow...
-3. Testing Drive folder creation & idempotency...
-4. Testing Gmail attachments selective import...
-5. Testing Calendar event creation & Human Confirmation guard...
-6. Testing Docs export & Sheets import...
-7. Testing Disconnect & internal data preservation...
-✅ P14 Google Workspace Integration Contract Test Passed Cleanly!
+P14 FINAL CLEAN VERIFICATION
+reviewedAt=2026-08-10T17:03:54+09:00
+commit=5554f6c5187b698faebccfbc13956eeb1e794889
+checkout=clean detached worktree
+node=v20.18.0
+pnpm=9.15.0
 
-[2026-08-10 14:02:00] pnpm lint
-> claim-center-report-studio-monorepo@0.1.0 lint E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
-> tsx scripts/harness-check.ts lint
-[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...
+Launcher used for every gate:
+  NODE_EXE=C:\Users\user-owner\AppData\Local\Temp\codex-p14-npm-cache\_npx\2cfc43cf695f4f84\node_modules\node\bin\node.exe
+  PNPM_CLI=C:\Users\user-owner\AppData\Local\Temp\codex-p14-npm-cache\_npx\2cfc43cf695f4f84\node_modules\pnpm\bin\pnpm.cjs
+  Invocation: & $NODE_EXE $PNPM_CLI <command>
+
+[01] pnpm install --frozen-lockfile
+RESULT: PASS (38.3s)
+Scope: all 6 workspace projects
+Lockfile is up to date; 215 packages installed.
+Prisma Client v6.19.3 generated successfully.
+
+[02] pnpm db:reset
+RESULT: PASS (2.3s)
+Database reset and migration SQL applied successfully.
+
+[03] pnpm db:migrate
+RESULT: PASS (1.8s)
+Database migration SQL applied successfully.
+
+[04] pnpm db:seed
+RESULT: PASS (2.6s)
+Database seeded with deterministic synthetic P11 fixtures.
+
+[05] pnpm lint
+RESULT: PASS (24.1s)
 [Harness] Lint and JSON validation passed with zero warnings.
 
-[2026-08-10 14:04:00] pnpm build
-> claim-center-report-studio-monorepo@0.1.0 build E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
-> tsx scripts/harness-check.ts build
-[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...
-Vite build for production succeeded.
-[Harness] UI, database, API, and production web build artifacts verified.
+[06] pnpm typecheck
+RESULT: PASS (11.5s)
+[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces completed with 0 errors.
 
-[2026-08-10 14:05:00] tsx --test scripts/p14-security-test.ts
-▶ P14 Security Suite: Google Workspace Integration, OAuth, Immutability & Audits
-  ✔ 1 & 2. OAuth state reuse, expiry, and cross-tenant/cross-user callback protection (559.7042ms)
-  ✔ 3. Redirect URL domain allowlist enforcement (3.8617ms)
-  ✔ 4. Token redaction & 0 raw secrets in API payload or DB (5.602ms)
-  ✔ 5. Duplicate Drive folder creation concurrency & idempotency convergence (384.8193ms)
-  ✔ 7 & 8. Unselected Gmail attachments & Human confirmation guard for Calendar (11.0257ms)
-  ✔ 9. Cross-tenant & Non-existent case IDOR protection (10.9632ms)
-  ✔ 10 & 11. Rate limit retry-after & error mode handling (267.4398ms)
-  ✔ 13. Disconnect preserves internal case data, documents, and snapshots (505.7725ms)
-  ✔ 16. SQLite DB triggers prevent UPDATE and DELETE on immutable Google tables (135.4385ms)
-✔ P14 Security Suite: Google Workspace Integration, OAuth, Immutability & Audits (1888.1969ms)
+[07] pnpm test
+RESULT: PASS (15.1s)
+tests 113; pass 113; fail 0; skipped 0
+Includes P14 real-adapter tests 22/22.
 
-[2026-08-10 14:07:00] pnpm test
-> claim-center-report-studio-monorepo@0.1.0 test E:\■ 개발_TF팀\클레임센터 보고서 스튜디오
-> tsx --test scripts/harness-test.ts scripts/p09-contract-test.ts scripts/p10-contract-test.ts scripts/p11-contract-test.ts scripts/p12-contract-test.ts scripts/p13-contract-test.ts scripts/p14-contract-test.ts
-▶ Harness Phase Pipeline Checks
-  ✔ P14: Google Workspace Fake Adapter Integration (0.1478ms)
-✅ All contract test suites passed cleanly!
+[08] pnpm build
+RESULT: PASS (22.4s)
+Vite 6.4.3; 59 modules transformed.
+dist/index.html 18.33 kB (gzip 4.18 kB)
+dist/assets/index-Dm5WA5p1.css 24.15 kB (gzip 5.58 kB)
+dist/assets/index--zoPvZAq.js 337.02 kB (gzip 98.43 kB)
 
-[2026-08-10 14:09:00] pnpm test:e2e
---- Starting P14 Chromium Real E2E Test ---
-1. Admin login & Google Workspace connection...
-2. Testing Google Workspace connection health...
-3. Testing Disconnect & internal data preservation...
-✅ P14 Chromium Real E2E Test Passed Cleanly!
+[09] pnpm test:e2e
+RESULT: PASS (69.9s)
+P06 through P14 Chromium suites passed.
+P14 Full Chromium Vertical Slice: 10 flows passed.
+
+[10] pnpm test:security
+RESULT: PASS (47.8s)
+tests 90; pass 90; fail 0; skipped 0
+P14 adversarial security suite: 28/28 passed.
+
+[11] pnpm audit --audit-level high
+RESULT: PASS (1.4s)
+No known vulnerabilities found.
+
+FINAL: 11/11 required gates passed; Critical=0; High=0.

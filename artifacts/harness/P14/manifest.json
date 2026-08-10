@@ -1,30 +1,63 @@
 {
   "phase": "P14",
-  "name": "Google Workspace Fake Adapter Integration",
-  "status": "READY_FOR_REVIEW",
-  "submittedAt": "2026-08-10T14:10:00.000Z",
-  "harnessVersion": "1.0.0",
-  "deliverables": [
+  "name": "Google Workspace Integration",
+  "status": "PASS",
+  "verdict": "PASS_WITH_NOTES",
+  "reviewedAt": "2026-08-10T17:03:54+09:00",
+  "implementationCommit": "5554f6c5187b698faebccfbc13956eeb1e794889",
+  "runtime": {
+    "node": "20.18.0",
+    "pnpm": "9.15.0",
+    "verificationCheckout": "detached clean worktree at implementationCommit"
+  },
+  "changedFiles": [
+    "apps/api/src/google-workspace/GoogleCredentialProvider.ts",
     "apps/api/src/google-workspace/GoogleWorkspaceAdapter.ts",
     "apps/api/src/google-workspace/GoogleWorkspaceFakeAdapter.ts",
+    "apps/api/src/google-workspace/GoogleWorkspaceRealAdapter.ts",
     "apps/api/src/server.ts",
-    "packages/database/prisma/schema.prisma",
-    "packages/database/prisma/migrations/20260810140000_p14_google_workspace_integration/migration.sql",
+    "apps/web/src/integrations/GoogleWorkspaceCaseTools.css",
+    "apps/web/src/integrations/GoogleWorkspaceCaseTools.tsx",
     "apps/web/src/integrations/GoogleWorkspaceIntegration.tsx",
+    "apps/web/src/main.tsx",
     "apps/web/src/routes/Router.tsx",
-    "apps/web/src/layout/AppShell.tsx",
-    "scripts/p14-test-support.ts",
+    "package.json",
+    "packages/database/prisma/migrations/20260810141000_p14_google_workspace_invariants/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "scripts/p03-contract-test.ts",
     "scripts/p14-contract-test.ts",
-    "scripts/p14-security-test.ts",
     "scripts/p14-e2e.ts",
-    "package.json"
+    "scripts/p14-real-adapter-test.ts",
+    "scripts/p14-security-test.ts",
+    "scripts/p14-test-support.ts"
   ],
   "gates": {
-    "test:p14": "PASS",
-    "lint": "PASS",
-    "build": "PASS",
-    "test:security": "PASS",
-    "test": "PASS",
-    "test:e2e": "PASS"
+    "installFrozenLockfile": "PASS",
+    "databaseReset": "PASS",
+    "databaseMigrate": "PASS",
+    "databaseSeed": "PASS",
+    "lint": "PASS (0 errors, 0 warnings)",
+    "typecheck": "PASS (0 errors)",
+    "test": "PASS (113 passed, 0 failed, 0 skipped)",
+    "build": "PASS (59 modules; CSS 24.15 kB; JS 337.02 kB)",
+    "testE2e": "PASS (P06-P14; P14 10 flows)",
+    "testSecurity": "PASS (90 passed, 0 failed, 0 skipped)",
+    "auditHigh": "PASS (No known vulnerabilities found)"
+  },
+  "focusedVerification": {
+    "p14RealAdapter": "22 passed, 0 failed",
+    "p14Security": "28 passed, 0 failed",
+    "p14Chromium": "10 flows passed"
+  },
+  "findings": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 0
+  },
+  "secretScan": {
+    "realCredentialsFound": 0,
+    "customerDataFound": 0,
+    "syntheticCredentialFixturesOnly": true
   }
 }

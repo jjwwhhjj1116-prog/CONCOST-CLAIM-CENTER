@@ -1,21 +1,31 @@
-# P14 Google Workspace Integration Implementation Notes
+# P14 Google Workspace Integration — Codex 보정 및 검수 메모
 
-## Summary
-P14 Google Workspace 연동 Vertical Slice 구현을 완료했습니다.
-보안상 raw access token, refresh token, client secret 등은 절대 DB, API 응답, 브라우저 저장소, 로그에 노출되지 않도록 고안되었으며, 서버의 secret reference (`secretRef`) 및 SQLite Immutability DB 트리거를 적용했습니다.
+## 결과
 
-## Key Highlights
-1. **Zero-Token Exposure & Secret Reference**: OAuth callback 시 raw token 대신 `secretRef`로 추상화하여 저장하고 통신합니다.
-2. **Deterministic Fake Adapter**: 11가지 응답 모드(`SUCCESS`, `DUPLICATE_REPLAY`, `BAD_SCOPE`, `TOKEN_EXPIRED`, `RECONSENT_REQUIRED`, `RATE_LIMIT_RETRY_AFTER`, `SERVER_ERROR`, `TIMEOUT`, `USER_CANCEL`, `MALFORMED_PROVIDER_RESPONSE`, `REVOKE_FAILURE`)를 지원하여 모든 엣지 케이스를 격리 검증할 수 있습니다.
-3. **OAuth PKCE & State Security**: PKCE verifier reference, one-time state token(`usedAt`), 10분 TTL, tenant/actor binding 및 allowlist redirect 검증을 수행합니다.
-4. **Idempotency & Data Preservation**: 동일 사건 Drive 폴더 중복 생성을 수렴 방지하며, 연동 해제 시에도 내부 사건/자료/회의록/보고서 등 기존 데이터는 전혀 삭제되거나 훼손되지 않고 보존됩니다.
-5. **Human Confirmation Guard**: Calendar 일정 생성 시 사람의 명시적 확인(`humanConfirmed: true`)을 필수 검증합니다.
-6. **Immutable SQLite Triggers**: `GoogleResourceLink`, `GoogleImportSnapshot`, `GoogleSyncAttempt` 테이블의 UPDATE 및 DELETE를 DB 트리거 레벨에서 엄격히 영구 차단합니다.
+- 판정: `PASS_WITH_NOTES`
+- 구현 커밋: `5554f6c5187b698faebccfbc13956eeb1e794889`
+- 깨끗한 Node 20.18.0 / pnpm 9.15.0 체크아웃에서 11개 필수 게이트 전부 통과
+- 일반·계약 테스트 113/113, 보안 테스트 90/90, P14 real-adapter 22/22, Chromium P14 10개 흐름 통과
 
-## Quality Gate Verification
-- `pnpm test:p14`: PASS (계약 테스트 7/7)
-- `pnpm lint`: PASS (오류 및 경고 0건)
-- `pnpm build`: PASS (Next.js/Vite 및 타입체크 100%)
-- `pnpm test:security`: PASS (P04~P14 적대적 보안 테스트 47/47)
-- `pnpm test`: PASS (전체 일반/계약 테스트 91/91)
-- `pnpm test:e2e`: PASS (P06~P14 실제 Chromium E2E 테스트 9/9)
+## Codex가 직접 보완한 핵심
+
+1. OAuth Authorization Code + PKCE, one-time state, TTL, actor/organization/version CAS를 실제 서버 계약으로 구현했습니다.
+2. 운영용 Google adapter와 환경 기반 bootstrap을 추가하고, 고정 Google host·redirect allowlist·bounded timeout·안전한 응답 projection을 강제했습니다.
+3. access/refresh token은 조직 범위 AES-256-GCM vault에만 암호화 저장하고 DB에는 opaque `SECREF_*`만 저장합니다. 다른 조직 ref는 resolve/revoke/delete 전에 차단됩니다.
+4. Drive/Gmail/Calendar/Docs/Sheets를 CASE-04·CASE-06·MEET-01 실제 UI와 연결했습니다. Gmail은 P06 저장소, Docs/Sheets는 immutable provenance snapshot으로 연결됩니다.
+5. 동일 payload 재시도, 동시 요청, 외부 응답 유실, 429/5xx/timeout, stale version, audit rollback, 교차 사건·교차 조직 IDOR를 fail-closed 처리합니다.
+6. 불확실한 외부 mutation은 `RECONCILIATION_REQUIRED`로 격리하고 Admin 확인·감사 후에만 새 작업을 허용합니다.
+7. 1440/1024/640px, 200% 확대, 키보드·focus, 121개 resource, 100개 이력, 긴 이름, 401/403/409/offline/retry를 실제 Chromium으로 검증했습니다.
+8. 기존 `20260810140000` migration은 수정하지 않고 `20260810141000` additive invariant migration만 추가했습니다.
+
+## 알려진 제한 / P15 이관
+
+1. 실 Google 운영 계정과 고객자료는 지시대로 사용하지 않았습니다. 실제 provider는 주입 transport와 synthetic credential로 검증했으며, 운영 배포 전 별도 staging 계정 실증이 필요합니다.
+2. PKCE verifier는 현재 프로세스 메모리에 있으므로 서버 재시작·다중 인스턴스 중 callback 가용성이 떨어질 수 있습니다. P15에서 durable encrypted state store로 이전합니다.
+3. 현재 Node/SQLite/파일 vault 운영에는 영속 디스크와 검증된 백업·복구가 필요합니다. 사용자가 언급한 Cloudflare 전환은 D1 트랜잭션 재설계가 필요하므로 별도 배포 단계로 유지하고, P15에서 우선 로컬/Node 운영의 crash-safe backup·restore를 실증합니다.
+
+## 데이터 및 비밀정보
+
+- 실제 API key/token/customer data: 0건
+- 테스트 문자열: `.invalid` 도메인 및 `synthetic-*` credential fixture만 사용
+- 브라우저 DOM, URL, localStorage, sessionStorage, API 응답에 credential 원문: 0건

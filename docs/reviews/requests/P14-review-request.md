@@ -1,32 +1,43 @@
-# P14 Google Workspace Fake Adapter Integration Review Request
+# P14 Google Workspace Integration — 최종 검수 제출
 
-- **Phase**: P14 (Google Workspace Integration)
-- **Branch**: `feat/P14-google-workspace-integration`
-- **Submitted At**: 2026-08-10T14:10:00.000Z
-- **Author**: Antigravity Assistant
+- 브랜치: `review/P14-codex` (원격 제출 대상: `feat/P14-google-workspace-integration`)
+- 구현 커밋: `5554f6c5187b698faebccfbc13956eeb1e794889`
+- 제출 상태: `PASS_WITH_NOTES`
+- 검수 환경: clean detached checkout, Node 20.18.0, pnpm 9.15.0
 
-## Implementation Summary
-1. **Provider-Neutral Interface & Fake Adapter**:
-   - `GoogleWorkspaceAdapter.ts` & `GoogleWorkspaceFakeAdapter.ts`
-   - 11가지 결정론적 모드(`SUCCESS`, `DUPLICATE_REPLAY`, `BAD_SCOPE`, `TOKEN_EXPIRED`, `RECONSENT_REQUIRED`, `RATE_LIMIT_RETRY_AFTER`, `SERVER_ERROR`, `TIMEOUT`, `USER_CANCEL`, `MALFORMED_PROVIDER_RESPONSE`, `REVOKE_FAILURE`) 완벽 구현.
-2. **Zero-Token Exposure & Secret Reference**:
-   - Access token, Refresh token, Client secret은 DB, API payload, 브라우저 저장소, 로그에 저장/노출 0건.
-   - DB에는 `secretRef`만 저장하며 OAuth state는 PKCE verifier reference, one-time `usedAt`, 10분 TTL, actor/org binding을 검증합니다.
-3. **Data Model Additions & SQLite Immutability**:
-   - `GoogleWorkspaceConnection`, `GoogleOAuthState`, `GoogleSyncOperation`, `GoogleSyncAttempt`, `GoogleResourceLink`, `GoogleImportSnapshot` 6개 모델 추가.
-   - `GoogleResourceLink`, `GoogleImportSnapshot`, `GoogleSyncAttempt` 3개 테이블에 대한 UPDATE 및 DELETE 차단 SQLite DB 트리거 적용.
-4. **Vertical Service Flows**:
-   - Admin UI (`GoogleWorkspaceIntegration.tsx`): 4가지 뱃지 (`CONNECTED`, `EXPIRED`, `RECONSENT_REQUIRED`, `DISCONNECTED`), 권한 Scope 통제, 연결 테스트, 재동의, 연동 해제 버튼.
-   - Case Drive Folder: idempotency 수렴.
-   - Gmail Import: 사용자가 명시적으로 선택한 첨부만 수집 (`provenance` 저장).
-   - Calendar Event: 사람의 확인(`humanConfirmed: true`) 필수 검증.
-   - Docs Export & Sheets Import: 회의록 export 및 선택 범위 snapshot 보존.
-   - Disconnect: 연동 해제 시에도 내부 사건, 자료, 회의록, 보고서 snapshot 데이터 100% 온전히 보존.
+## 구현 범위
 
-## Quality Gates Verification
-- `pnpm test:p14`: 7 passed
-- `pnpm lint`: 0 errors / 0 warnings
-- `pnpm build`: production Vite build & typecheck 100% pass
-- `pnpm test:security`: 47 passed
-- `pnpm test`: 91 passed
-- `pnpm test:e2e`: Chromium real E2E passed
+- 결정론적 Fake adapter와 운영 Real Google adapter
+- OAuth Authorization Code + PKCE, one-time state, TTL, actor/org/version binding
+- 조직 범위 encrypted credential vault 및 opaque secret reference
+- Drive folder, 선택 Gmail 첨부의 P06 저장, 사람 확인 Calendar, 선택 회의록 Docs export, 선택 Sheets snapshot
+- strict schema, RBAC, 사건 배정, tenant isolation, optimistic version, scoped idempotency, bounded retry/timeout
+- immutable provenance, AuditLog 원자성, 불확실한 외부 mutation의 Admin reconciliation
+- Admin 연동 UI와 CASE-04/CASE-06/MEET-01 실제 API UI
+
+## 최종 게이트
+
+| 게이트 | 결과 |
+|---|---|
+| install --frozen-lockfile | PASS |
+| db:reset | PASS |
+| db:migrate | PASS |
+| db:seed | PASS |
+| lint | PASS, 0 warnings |
+| typecheck | PASS, 0 errors |
+| test | PASS, 113/113 |
+| build | PASS, 59 modules |
+| test:e2e | PASS, P06-P14; P14 10 flows |
+| test:security | PASS, 90/90 |
+| audit --audit-level high | PASS, 0 known vulnerabilities |
+
+## 독립 보정 결과
+
+- Critical: 0
+- High: 0
+- Medium: 2 (실 Google staging 미실증, PKCE state의 다중 인스턴스 가용성)
+- 실제 credential/customer data 포함: 0
+- `git diff-tree`와 manifest `changedFiles`: 19개 경로 1:1 일치
+
+증거: `artifacts/harness/P14/`
+Codex 보고서: `docs/reviews/P14-codex-review.md`
