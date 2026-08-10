@@ -1,0 +1,63 @@
+{
+  "phase": "P13",
+  "name": "Fees & Success Compensation Vertical Slice",
+  "status": "PASS_WITH_NOTES",
+  "generatedAt": "2026-08-10T13:43:29+09:00",
+  "branch": "feat/P13-fees-success-compensation",
+  "antigravityImplementationCommit": "851b3b9e032958bab0ab8745ba4f171ca44f1814",
+  "antigravitySubmissionCommit": "5e65eff7adf87d0e118668cac6f2d24767638f7e",
+  "implementationCommit": "5e7736a2ad21ae2361075bf73857ae783b3784bc",
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/src/fees/FeeSuccessCompensation.css",
+    "apps/web/src/fees/FeeSuccessCompensation.tsx",
+    "apps/web/src/main.tsx",
+    "packages/database/prisma/migrations/20260810120000_p13_fee_invariants/migration.sql",
+    "packages/database/prisma/schema.prisma",
+    "scripts/p13-contract-test.ts",
+    "scripts/p13-e2e.ts",
+    "scripts/p13-security-test.ts",
+    "scripts/p13-test-support.ts"
+  ],
+  "runtime": {
+    "node": "20.18.0",
+    "pnpm": "9.15.0",
+    "prisma": "6.19.3",
+    "browser": "Playwright Chromium"
+  },
+  "gates": {
+    "installFrozenLockfile": "PASS",
+    "dbReset": "PASS",
+    "dbMigrate": "PASS",
+    "dbSeed": "PASS",
+    "lint": "PASS (zero warnings)",
+    "typecheck": "PASS",
+    "test": "PASS (90 passed, 0 failed, 0 skipped)",
+    "build": "PASS (56 modules; index 18.33 kB; CSS 16.56 kB; JS 302.71 kB)",
+    "testE2e": "PASS (P06-P13: 8 real Chromium flows)",
+    "testSecurity": "PASS (62 passed, 0 failed, 0 skipped)",
+    "testP13Direct": "PASS (19 passed, 0 failed, 0 skipped)",
+    "auditHigh": "PASS (0 known vulnerabilities)"
+  },
+  "security": {
+    "credentialPatternMatches": 0,
+    "trackedEnvironmentFiles": 0,
+    "realCustomerDataFound": false,
+    "rawReferenceTemplateFilesTracked": false,
+    "changedFileEmailDomains": [
+      "example.invalid"
+    ]
+  },
+  "review": {
+    "verdict": "PASS_WITH_NOTES",
+    "findings": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 1
+    },
+    "nextPhaseAllowed": true,
+    "report": "docs/reviews/P13-codex-review.md",
+    "json": "docs/reviews/P13-codex-review.json"
+  }
+}

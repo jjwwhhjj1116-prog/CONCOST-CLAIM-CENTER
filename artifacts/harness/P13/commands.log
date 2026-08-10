@@ -1,0 +1,63 @@
+P13 INDEPENDENT REVIEW / PATCH-MODE VERIFICATION
+Date: 2026-08-10 KST
+Branch: feat/P13-fees-success-compensation
+Reviewed implementation: 5e7736a2ad21ae2361075bf73857ae783b3784bc
+Fresh verification checkout: work/p13-clean-5e7736a
+Runtime wrapper: npx --yes -p node@20.18.0 -p pnpm@9.15.0
+
+[PASS] node --version / pnpm --version
+  Node v20.18.0, pnpm 9.15.0.
+
+[PASS] pnpm install --frozen-lockfile
+  Exit 0. The committed lockfile was accepted in a clean checkout.
+
+[PASS] pnpm db:reset
+  Exit 0. All migrations, including the additive P13 invariant migration, applied.
+
+[PASS] pnpm db:migrate
+  Exit 0. No checksum drift; the current migration set is reproducible.
+
+[PASS] pnpm db:seed
+  Exit 0. Deterministic synthetic fixtures were seeded.
+
+[PASS] pnpm lint
+  Exit 0. ESLint and repository validation passed with zero warnings.
+
+[PASS] pnpm typecheck
+  Exit 0. Scripts, UI, web, database, document-engine and API workspaces passed.
+
+[PASS] pnpm test
+  Exit 0. 90 passed, 0 failed, 0 skipped.
+
+[PASS] pnpm build
+  Exit 0. Prisma client generated and Vite transformed 56 modules.
+  index.html 18.33 kB (gzip 4.18 kB)
+  CSS 16.56 kB (gzip 4.21 kB)
+  JS 302.71 kB (gzip 89.75 kB)
+
+[PASS] pnpm test:e2e
+  Exit 0. P06 through P13 completed 8 real Chromium workflows.
+  P13 covered estimate, independent approval, payment, unpaid-close governance,
+  assignment, 120+ case search, 100-row history, 1024/640 boundaries and permission denial.
+
+[PASS] pnpm test:security
+  Exit 0. 62 passed, 0 failed, 0 skipped.
+  Direct P13 contract/security coverage: 19 passed, 0 failed, 0 skipped.
+
+[PASS] pnpm audit --audit-level high
+  Exit 0. No known vulnerabilities found.
+
+[PASS] git diff-tree --no-commit-id --name-only -r 5e7736a2ad21ae2361075bf73857ae783b3784bc
+  The ten paths match manifest.changedFiles exactly.
+  The already-applied 20260810110000 migration is unchanged from its parent and is not in the diff.
+
+[PASS] credential and customer-data scan
+  Credential-pattern files: 0.
+  Tracked environment files: 0.
+  Tracked raw reference-template files: 0.
+  Real customer data in the reviewed change: 0.
+
+[ENVIRONMENT NOTE]
+  One first clean-checkout test invocation was rejected by Git safe.directory because the elevated
+  runtime wrapper and the sandbox clone had different owners. No source or global Git setting was
+  changed. The final run used a process-only safe.directory entry and passed 90/90.
