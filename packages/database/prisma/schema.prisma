@@ -1241,6 +1241,8 @@ model GoogleOAuthState {
   id              String    @id
   stateHash       String    @unique
   pkceVerifierRef String
+  pkceChallenge   String
+  connectionVersion Int?
   organizationId  String
   actorId         String
   redirectTarget  String
@@ -1263,6 +1265,8 @@ model GoogleSyncOperation {
   idempotencyKey     String?
   requestFingerprint String
   status             String               @default("PENDING") // PENDING, SUCCESS, FAILED, CANCELLED
+  resultJson         String?
+  completedAt        DateTime?
   actorId            String
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @updatedAt
@@ -1277,7 +1281,7 @@ model GoogleSyncOperation {
   @@index([organizationId, caseId])
   @@index([operationKind, status])
   @@index([actorId])
-  @@unique([organizationId, operationKind, idempotencyKey])
+  @@unique([organizationId, caseId, actorId, operationKind, idempotencyKey])
 }
 
 model GoogleSyncAttempt {
@@ -1293,6 +1297,7 @@ model GoogleSyncAttempt {
   operation GoogleSyncOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
 
   @@index([operationId])
+  @@unique([operationId, attemptNumber])
 }
 
 model GoogleResourceLink {
@@ -1336,6 +1341,7 @@ model GoogleImportSnapshot {
   @@index([organizationId, caseId])
   @@index([externalResourceId, sha256])
   @@index([createdById])
+  @@unique([organizationId, caseId, sourceType, externalResourceId, sha256])
 }
 
 

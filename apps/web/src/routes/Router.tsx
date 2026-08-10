@@ -9,6 +9,7 @@ import { ApprovalInbox } from '../reports/ApprovalInbox';
 import { AiConfigManager } from '../ai/AiConfigManager';
 import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
 import { GoogleWorkspaceIntegration } from '../integrations/GoogleWorkspaceIntegration';
+import { GoogleWorkspaceCaseTools } from '../integrations/GoogleWorkspaceCaseTools';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -147,12 +148,16 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
 
   if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {
+    const googleRoute = ['CASE-04', 'CASE-06', 'MEET-01'].includes(currentRoute.id)
+      ? currentRoute.id as 'CASE-04' | 'CASE-06' | 'MEET-01'
+      : null;
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
           <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
         </div>
         <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} />
+        {googleRoute && <GoogleWorkspaceCaseTools routeId={googleRoute} roles={roles} />}
       </section>
     );
   }

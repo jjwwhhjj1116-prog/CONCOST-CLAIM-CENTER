@@ -5,11 +5,14 @@ import * as path from 'node:path';
 import { CLAIM_TYPES, ROUTES, canAccessRoute, isSafeReturnTo, reviewerCapabilities, routeByPath, type RouteConfig } from '../apps/web/src/routes/Router';
 
 const root = path.join(__dirname, '..');
-const screenIds = ['AUTH-01', 'DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01', 'PROP-01', 'PROP-02', 'REPO-01', 'REPO-02', 'APPR-01', 'FEE-01', 'INTEG-01', 'TPL-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'];
+const requiredScreenIds = ['AUTH-01', 'DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01', 'PROP-01', 'PROP-02', 'REPO-01', 'REPO-02', 'APPR-01', 'FEE-01', 'TPL-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'];
+const approvedExtensionIds = ['INTEG-01'];
 
 function validateRoutes(routes: RouteConfig[]): void {
-  assert.deepStrictEqual(routes.map((route) => route.id), screenIds);
-  assert.strictEqual(new Set(routes.map((route) => route.path)).size, 21, 'Route paths must be unique');
+  const routeIds = routes.map((route) => route.id);
+  assert.deepStrictEqual(routeIds.filter((id) => !approvedExtensionIds.includes(id)), requiredScreenIds);
+  assert.deepStrictEqual(routeIds.filter((id) => approvedExtensionIds.includes(id)), approvedExtensionIds);
+  assert.strictEqual(new Set(routes.map((route) => route.path)).size, routes.length, 'Route paths must be unique');
 }
 
 function validateReviewer(capabilities: Record<string, boolean>): void {
@@ -33,9 +36,9 @@ function validateHistory(source: string): void {
   assert.match(source, /addEventListener\('popstate'/);
 }
 
-test('P03 exact 20 real route contracts', () => validateRoutes(ROUTES));
+test('P03 required 20 routes remain intact with the approved P14 integration extension', () => validateRoutes(ROUTES));
 
-test('P03 adversarial: a twenty-first route is rejected', () => {
+test('P03 adversarial: an unapproved route extension is rejected', () => {
   const changed = [...ROUTES, { id: 'EXTRA-01', path: '/extra', name: 'unauthorized' }];
   assert.throws(() => validateRoutes(changed));
 });

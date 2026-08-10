@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { createPrismaClient, resetDatabase, seedDatabase, type PrismaClient } from '@claim-studio/database';
 import { createApiServer, type ManagedApiServer } from '../apps/api/src/server';
+import type { GoogleWorkspaceAdapter } from '../apps/api/src/google-workspace/GoogleWorkspaceAdapter';
 import { createP09Fixture } from './p09-test-support';
 
 const root = path.resolve(__dirname, '..');
@@ -12,14 +13,24 @@ export interface P14TestContext {
   origin: string;
   fixture: Awaited<ReturnType<typeof createP09Fixture>>;
   caseId: string;
+  databasePath: string;
+  uploadDir: string;
   adminSession: any;
   directorSession: any;
   pmSession: any;
+  reviewerSession: any;
   staffSession: any;
   cleanup: () => Promise<void>;
 }
 
-export async function startP14Isolated(testName: string): Promise<P14TestContext> {
+export async function startP14Isolated(
+  testName: string,
+  options: {
+    allowTestGoogleModes?: boolean;
+    googleWorkspaceAdapterFactory?: (organizationId: string) => GoogleWorkspaceAdapter;
+    googleWorkspaceProviderTimeoutMs?: number;
+  } = {}
+): Promise<P14TestContext> {
   const unique = `${testName}-${process.pid}-${Date.now()}`;
   const databasePath = path.join(root, 'packages/database/.data', `${unique}.db`);
   const uploadDir = path.join(root, 'packages/database/.data', `${unique}-uploads`);
@@ -33,7 +44,10 @@ export async function startP14Isolated(testName: string): Promise<P14TestContext
     databaseUrl,
     allowedOrigins: ['http://127.0.0.1:3000'],
     secureCookies: false,
-    uploadDir
+    uploadDir,
+    allowTestGoogleModes: options.allowTestGoogleModes ?? true,
+    googleWorkspaceAdapterFactory: options.googleWorkspaceAdapterFactory,
+    googleWorkspaceProviderTimeoutMs: options.googleWorkspaceProviderTimeoutMs ?? 2_000
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -50,6 +64,7 @@ export async function startP14Isolated(testName: string): Promise<P14TestContext
   const adminSession = fixture.admin;
   const directorSession = fixture.director;
   const pmSession = fixture.pm;
+  const reviewerSession = fixture.reviewer;
   const staffSession = fixture.staff;
 
   const cleanup = async () => {
@@ -65,9 +80,12 @@ export async function startP14Isolated(testName: string): Promise<P14TestContext
     origin,
     fixture,
     caseId,
+    databasePath,
+    uploadDir,
     adminSession,
     directorSession,
     pmSession,
+    reviewerSession,
     staffSession,
     cleanup
   };

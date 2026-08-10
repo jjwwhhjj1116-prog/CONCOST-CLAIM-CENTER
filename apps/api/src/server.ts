@@ -15,7 +15,17 @@ import { assertSecretReference, resolveSecretReference, secretReferenceHint } fr
 import { executeFakeAdapterCall } from './ai/fake-adapter';
 import { processAiGenerationRequest, AiGatewayError, type AiAuditEvent } from './ai/gateway-engine';
 import { GoogleWorkspaceFakeAdapter } from './google-workspace/GoogleWorkspaceFakeAdapter';
-import { REQUIRED_GOOGLE_SCOPES, ALLOWED_REDIRECT_DOMAINS, type GoogleAdapterMode } from './google-workspace/GoogleWorkspaceAdapter';
+import { GoogleWorkspaceRealAdapter } from './google-workspace/GoogleWorkspaceRealAdapter';
+import {
+  decodeGoogleCredentialMasterKey,
+  EncryptedFileGoogleCredentialProvider
+} from './google-workspace/GoogleCredentialProvider';
+import {
+  REQUIRED_GOOGLE_SCOPES,
+  type GoogleAdapterMode,
+  type GoogleAdapterResponse,
+  type GoogleWorkspaceAdapter
+} from './google-workspace/GoogleWorkspaceAdapter';
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -37,6 +47,22 @@ const PROPOSAL_APPROVER_ROLES = new Set(['reviewer', 'director', 'ceo', 'admin']
 const REPORT_TEMPLATE_ADMIN_ROLES = new Set(['admin']);
 const REPORT_TEMPLATE_APPROVER_ROLES = new Set(['ceo', 'director']);
 const REPORT_INSTANCE_CREATOR_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
+const GOOGLE_ADMIN_ROLES = new Set(['admin']);
+const GOOGLE_CASE_MATERIAL_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
+const GOOGLE_CASE_SCHEDULE_ROLES = new Set(['ceo', 'director', 'pm', 'admin']);
+const GOOGLE_REDIRECT_TARGETS = new Set(['/integrations/google']);
+const GOOGLE_SUCCESS_CLASSES = new Set<GoogleAdapterMode>(['SUCCESS', 'DUPLICATE_REPLAY']);
+const GOOGLE_RETRYABLE_CLASSES = new Set<GoogleAdapterMode>(['RATE_LIMIT_RETRY_AFTER', 'SERVER_ERROR']);
+const GOOGLE_MUTATION_RETRYABLE_CLASSES = new Set<GoogleAdapterMode>(['RATE_LIMIT_RETRY_AFTER']);
+const GOOGLE_TEST_PROVIDER_TIMEOUT_MS = 2_000;
+const GOOGLE_RECONCILIATION_STALE_MS = 5 * 60 * 1000;
+const GOOGLE_RECONCILIATION_RESOLUTION = 'CONFIRMED_NO_EXTERNAL_SIDE_EFFECT';
+const GOOGLE_RECONCILIATION_CONFIRMATION = 'NO_EXTERNAL_RESOURCE_CONFIRMED';
+const GOOGLE_FAKE_MODES = new Set<GoogleAdapterMode>([
+  'SUCCESS', 'DUPLICATE_REPLAY', 'BAD_SCOPE', 'TOKEN_EXPIRED', 'RECONSENT_REQUIRED',
+  'RATE_LIMIT_RETRY_AFTER', 'SERVER_ERROR', 'TIMEOUT', 'USER_CANCEL',
+  'MALFORMED_PROVIDER_RESPONSE', 'REVOKE_FAILURE'
+]);
 const ALLOWED_PROPOSAL_PLACEHOLDERS = new Set([
   'CASE_NUMBER', 'CASE_TITLE', 'CLAIM_TYPE', 'ASSIGNED_USER', 'CLIENT_NAME', 'CREATED_DATE',
   'BACKGROUND', 'OBJECTIVE', 'METHOD', 'EXPECTED_OUTCOME', 'EXCLUSIONS'
@@ -116,10 +142,19 @@ interface SessionContext {
 
 export interface ApiServerOptions {
   databaseUrl?: string;
+  db?: PrismaClient;
   allowedOrigins?: string[];
   secureCookies?: boolean;
   uploadDir?: string;
   allowTestAiModes?: boolean;
+  allowTestGoogleModes?: boolean;
+  googleWorkspaceProviderTimeoutMs?: number;
+  /**
+   * Production Google Workspace access is explicit and injected. When omitted,
+   * Google endpoints fail closed unless allowTestGoogleModes enables the
+   * deterministic fake adapter for an isolated test server.
+   */
+  googleWorkspaceAdapterFactory?: (organizationId: string) => GoogleWorkspaceAdapter;
 }
 
 export interface ManagedApiServer extends http.Server {
@@ -317,6 +352,112 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown): void
   if (res.writableEnded) return;
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(JSON.stringify(data));
+}
+
+export function createGoogleWorkspaceAdapterFactoryFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env
+): ((organizationId: string) => GoogleWorkspaceAdapter) | undefined {
+  const mode = (environment.GOOGLE_WORKSPACE_PROVIDER_MODE ?? '').trim().toUpperCase();
+  if (!mode) return undefined;
+  if (mode !== 'REAL') throw new Error('GOOGLE_WORKSPACE_PROVIDER_MODE must be REAL when configured');
+
+  const resolveEnvironmentReference = (name: string): string => {
+    const secretRef = environment[name];
+    if (!secretRef) throw new Error(`${name} must contain an ENV_* secret reference`);
+    assertSecretReference(secretRef);
+    const value = environment[secretRef.slice(4)];
+    if (!value) throw new Error(`${name} could not be resolved`);
+    return value;
+  };
+
+  const clientId = resolveEnvironmentReference('GOOGLE_WORKSPACE_CLIENT_ID_REF');
+  const clientSecret = resolveEnvironmentReference('GOOGLE_WORKSPACE_CLIENT_SECRET_REF');
+  const masterKey = decodeGoogleCredentialMasterKey(resolveEnvironmentReference('GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF'));
+  const redirectUri = environment.GOOGLE_WORKSPACE_REDIRECT_URI;
+  if (!redirectUri) throw new Error('GOOGLE_WORKSPACE_REDIRECT_URI is required for REAL Google Workspace mode');
+  const redirectOrigin = new URL(redirectUri).origin;
+  const allowedRedirectOrigins = (environment.GOOGLE_WORKSPACE_REDIRECT_ORIGINS ?? redirectOrigin)
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (!allowedRedirectOrigins.includes(redirectOrigin)) throw new Error('Google Workspace redirect URI origin is not allowlisted');
+  if (!/^[A-Za-z0-9._-]{3,255}$/.test(clientId) || clientSecret.length < 8 || clientSecret.length > 4096) {
+    throw new Error('Google Workspace OAuth client configuration is invalid');
+  }
+  const vaultDirectory = path.resolve(
+    environment.GOOGLE_WORKSPACE_CREDENTIAL_VAULT_DIR
+      ?? path.join(process.cwd(), 'packages/database/.data/google-credentials')
+  );
+  const credentialProvider = new EncryptedFileGoogleCredentialProvider({ directory: vaultDirectory, masterKey });
+  return (organizationId) => new GoogleWorkspaceRealAdapter({
+    credentialProvider,
+    organizationId,
+    clientId,
+    clientSecret,
+    redirectUri,
+    allowedRedirectOrigins
+  });
+}
+
+function assertExactJsonFields(body: Record<string, unknown>, allowed: readonly string[], required: readonly string[] = []): void {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(body).find((key) => !allowedSet.has(key));
+  if (unknown) throw new HttpError(400, `Unknown request field: ${unknown}`);
+  const missing = required.find((key) => !(key in body));
+  if (missing) throw new HttpError(400, `Missing required request field: ${missing}`);
+}
+
+function strictString(value: unknown, label: string, minimum: number, maximum: number): string {
+  if (typeof value !== 'string') throw new HttpError(400, `${label} must be a string`);
+  const normalized = value.trim();
+  if (normalized.length < minimum || normalized.length > maximum) {
+    throw new HttpError(400, `${label} must be between ${minimum} and ${maximum} characters`);
+  }
+  return normalized;
+}
+
+function strictIdempotencyKey(value: unknown): string {
+  const key = strictString(value, 'idempotencyKey', 8, 120);
+  if (!/^[A-Za-z0-9._:-]+$/.test(key)) throw new HttpError(400, 'idempotencyKey contains forbidden characters');
+  return key;
+}
+
+function googleResponseStatus(responseClass: GoogleAdapterMode): number {
+  switch (responseClass) {
+    case 'TOKEN_EXPIRED': return 401;
+    case 'BAD_SCOPE': return 403;
+    case 'RECONSENT_REQUIRED': return 409;
+    case 'RATE_LIMIT_RETRY_AFTER': return 429;
+    case 'TIMEOUT': return 504;
+    case 'USER_CANCEL': return 409;
+    case 'SERVER_ERROR':
+    case 'MALFORMED_PROVIDER_RESPONSE':
+    case 'REVOKE_FAILURE': return 502;
+    default: return 400;
+  }
+}
+
+function safeGoogleProviderError(responseClass: GoogleAdapterMode): string {
+  switch (responseClass) {
+    case 'TOKEN_EXPIRED': return 'Google authorization expired';
+    case 'BAD_SCOPE': return 'Google authorization scope is insufficient';
+    case 'RECONSENT_REQUIRED': return 'Google authorization requires renewed consent';
+    case 'RATE_LIMIT_RETRY_AFTER': return 'Google request rate limit was reached';
+    case 'TIMEOUT': return 'Google provider request timed out';
+    case 'USER_CANCEL': return 'Google operation was cancelled by the user';
+    case 'MALFORMED_PROVIDER_RESPONSE': return 'Google provider returned an invalid response';
+    case 'REVOKE_FAILURE': return 'Google authorization revocation failed';
+    case 'SERVER_ERROR': return 'Google provider request failed';
+    default: return 'Google provider operation failed';
+  }
+}
+
+function sha256Hex(value: string | Buffer): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function base64UrlSha256(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('base64url');
 }
 
 function auditData(
@@ -843,23 +984,42 @@ export function calculateDDay(targetDate: Date, nowDate = new Date()): { dDayStr
   }
 }
 
-export interface ApiServerOptions {
-  databaseUrl?: string;
-  db?: PrismaClient;
-  allowedOrigins?: string[];
-  secureCookies?: boolean;
-  uploadDir?: string;
-}
-
 export function createApiServer(options: ApiServerOptions = {}): ManagedApiServer {
   const db = options.db ?? createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
   const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
   const uploadDir = path.resolve(options.uploadDir ?? DEFAULT_UPLOAD_DIR);
   const allowTestAiModes = options.allowTestAiModes === true;
+  const allowTestGoogleModes = options.allowTestGoogleModes === true;
+  const googleWorkspaceAdapterFactory = options.googleWorkspaceAdapterFactory
+    ?? createGoogleWorkspaceAdapterFactoryFromEnvironment();
+  const configuredGoogleTimeout = options.googleWorkspaceProviderTimeoutMs
+    ?? (process.env.GOOGLE_WORKSPACE_PROVIDER_TIMEOUT_MS ? Number(process.env.GOOGLE_WORKSPACE_PROVIDER_TIMEOUT_MS) : undefined)
+    ?? (googleWorkspaceAdapterFactory ? 30_000 : GOOGLE_TEST_PROVIDER_TIMEOUT_MS);
+  if (!Number.isSafeInteger(configuredGoogleTimeout) || configuredGoogleTimeout < 1_000 || configuredGoogleTimeout > 60_000) {
+    throw new Error('Google Workspace provider timeout must be an integer between 1000 and 60000 milliseconds');
+  }
+  const googleProviderTimeoutMs = configuredGoogleTimeout;
   ensureUploadDir(uploadDir);
   const inFlightAiRequests = new Map<string, AbortController>();
-  const globalGoogleAdapter = new GoogleWorkspaceFakeAdapter('SUCCESS');
+  type GoogleFakeModeController = Pick<GoogleWorkspaceFakeAdapter, 'setMode' | 'getMode'>;
+  const googleFakeAdapters = new Map<string, GoogleWorkspaceFakeAdapter>();
+  const googlePkceVault = new Map<string, string>();
+  const googleAdapterFor = (organizationId: string): GoogleWorkspaceAdapter => {
+    // Real adapters are request-scoped so an active credential reference cannot
+    // bleed across concurrent requests or a concurrent OAuth reconnect.
+    if (googleWorkspaceAdapterFactory) return googleWorkspaceAdapterFactory(organizationId);
+    if (!allowTestGoogleModes) throw new HttpError(503, 'Google Workspace provider is not configured');
+    let adapter = googleFakeAdapters.get(organizationId);
+    if (!adapter) {
+      adapter = new GoogleWorkspaceFakeAdapter('SUCCESS');
+      googleFakeAdapters.set(organizationId, adapter);
+    }
+    return adapter;
+  };
+  const fakeModeController = (adapter: GoogleWorkspaceAdapter): GoogleFakeModeController | null => (
+    adapter instanceof GoogleWorkspaceFakeAdapter ? adapter : null
+  );
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -6368,562 +6528,1705 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       // P14 Google Workspace Integration API Endpoints
       // -----------------------------------------------------------------------
 
-      // 0. POST /api/google-workspace/fake-mode (Test helper)
-      if (pathname === '/api/google-workspace/fake-mode' && req.method === 'POST') {
-        const body = (await readJson(req)) as { mode?: GoogleAdapterMode };
-        if (body.mode) globalGoogleAdapter.setMode(body.mode);
-        sendJson(res, 200, { currentMode: globalGoogleAdapter.getMode() });
-        return;
+      if (pathname === '/api/google-workspace/fake-mode' && req.method === 'POST' && !allowTestGoogleModes) {
+        requireAnyRole(context, GOOGLE_ADMIN_ROLES, 'Google Workspace administration requires Admin role');
+        throw new HttpError(404, 'Endpoint not found');
       }
+      const googleAdapter = googleAdapterFor(context.user.organizationId);
+      const googleProviderMode = fakeModeController(googleAdapter) ? 'FAKE' as const : 'REAL' as const;
+      type GoogleAttemptProjection = {
+        attemptNumber: number;
+        responseClass: GoogleAdapterMode;
+        redactedError?: string;
+        retryAt: Date | null;
+        durationMs: number;
+      };
+      type GoogleOperationRow = NonNullable<Awaited<ReturnType<typeof db.googleSyncOperation.findFirst>>>;
+      type GoogleOperationReservation = {
+        operation: GoogleOperationRow;
+        owner: boolean;
+        replay: null | { httpStatus: number; body: Record<string, unknown> };
+      };
 
-      // 1. GET /api/google-workspace/connection
-      if (pathname === '/api/google-workspace/connection' && req.method === 'GET') {
-        const conn = await db.googleWorkspaceConnection.findUnique({
-          where: { organizationId: context.user.organizationId }
-        });
-        if (!conn) {
-          sendJson(res, 200, {
-            connection: null,
-            status: 'DISCONNECTED',
-            requiredScopes: REQUIRED_GOOGLE_SCOPES
-          });
-          return;
-        }
+      const requireGoogleAdmin = (): void => {
+        requireAnyRole(context, GOOGLE_ADMIN_ROLES, 'Google Workspace administration requires Admin role');
+      };
+
+      const hasExactGoogleScopes = (scopes: string[]): boolean => (
+        scopes.length === REQUIRED_GOOGLE_SCOPES.length
+        && new Set(scopes).size === REQUIRED_GOOGLE_SCOPES.length
+        && scopes.every((scope) => (REQUIRED_GOOGLE_SCOPES as readonly string[]).includes(scope))
+      );
+
+      const publicConnection = (connection: {
+        id: string; status: string; grantedScopesJson: string; tokenExpiresAt: Date | null;
+        lastSyncedAt: Date | null; version: number; createdAt: Date;
+      }) => {
         let grantedScopes: string[] = [];
-        try { grantedScopes = JSON.parse(conn.grantedScopesJson); } catch { grantedScopes = []; }
-        sendJson(res, 200, {
-          connection: {
-            id: conn.id,
-            status: conn.status,
-            grantedScopes,
-            secretRef: conn.secretRef,
-            tokenExpiresAt: conn.tokenExpiresAt ? conn.tokenExpiresAt.toISOString() : null,
-            lastSyncedAt: conn.lastSyncedAt ? conn.lastSyncedAt.toISOString() : null,
-            version: conn.version,
-            createdAt: conn.createdAt.toISOString()
-          },
-          status: conn.status,
-          requiredScopes: REQUIRED_GOOGLE_SCOPES
-        });
-        return;
-      }
-
-      // 2. POST /api/google-workspace/connect/init
-      if (pathname === '/api/google-workspace/connect/init' && req.method === 'POST') {
-        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
-        if (!canManage) throw new HttpError(403, 'Google Workspace connection management requires Admin or Director role');
-
-        const body = (await readJson(req)) as { redirectTarget?: string };
-        const redirectTarget = body.redirectTarget?.trim() || '/integrations/google';
-
-        // Validate redirectTarget domain against allowlist
         try {
-          const parsedUrl = new URL(redirectTarget, 'http://127.0.0.1');
-          if (redirectTarget.startsWith('http://') || redirectTarget.startsWith('https://')) {
-            if (!ALLOWED_REDIRECT_DOMAINS.has(parsedUrl.hostname)) {
-              throw new HttpError(400, `Forbidden redirect domain: ${parsedUrl.hostname}`);
-            }
-          }
-        } catch (err) {
-          if (err instanceof HttpError) throw err;
-          throw new HttpError(400, 'Invalid redirect target');
-        }
-
-        const pkceVerifier = `pkce-verif-${crypto.randomUUID()}`;
-        const rawState = `st-${crypto.randomUUID()}`;
-        const stateHash = crypto.createHash('sha256').update(rawState).digest('hex');
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min TTL
-
-        await db.googleOAuthState.create({
-          data: {
-            id: `GOAUTH-${crypto.randomUUID()}`,
-            stateHash,
-            pkceVerifierRef: `sec-ref-${pkceVerifier.substring(0, 12)}`,
-            organizationId: context.user.organizationId,
-            actorId: context.user.id,
-            redirectTarget,
-            expiresAt
-          }
-        });
-
-        sendJson(res, 201, {
-          authUrl: `https://accounts.google.invalid/o/oauth2/v2/auth?response_type=code&state=${stateHash}&scope=${encodeURIComponent(REQUIRED_GOOGLE_SCOPES.join(' '))}`,
-          stateHash,
-          expiresAt: expiresAt.toISOString(),
-          redirectTarget
-        });
-        return;
-      }
-
-      // 3. POST /api/google-workspace/connect/callback
-      if (pathname === '/api/google-workspace/connect/callback' && req.method === 'POST') {
-        const body = (await readJson(req)) as { stateHash?: string; code?: string };
-        if (!body.stateHash || typeof body.stateHash !== 'string') throw new HttpError(400, 'stateHash is required');
-        if (!body.code || typeof body.code !== 'string') throw new HttpError(400, 'Authorization code is required');
-
-        const stateRecord = await db.googleOAuthState.findUnique({
-          where: { stateHash: body.stateHash }
-        });
-
-        if (!stateRecord) throw new HttpError(400, 'Invalid OAuth state token');
-        if (stateRecord.organizationId !== context.user.organizationId || stateRecord.actorId !== context.user.id) {
-          throw new HttpError(403, 'Cross-tenant or cross-user OAuth state binding violation');
-        }
-        if (stateRecord.usedAt) throw new HttpError(400, 'OAuth state token has already been used');
-        if (stateRecord.expiresAt < new Date()) throw new HttpError(400, 'OAuth state token has expired');
-
-        // Mark state token as used (one-time enforce)
-        await db.googleOAuthState.update({
-          where: { id: stateRecord.id },
-          data: { usedAt: new Date() }
-        });
-
-        // Store connection with secret reference (NO raw tokens stored)
-        const secretRef = `sec-ref-google-${crypto.randomUUID()}`;
-        const expiresAt = new Date(Date.now() + 3600 * 1000);
-
-        const connection = await db.googleWorkspaceConnection.upsert({
-          where: { organizationId: context.user.organizationId },
-          create: {
-            id: `GCONN-${crypto.randomUUID()}`,
-            organizationId: context.user.organizationId,
-            status: 'CONNECTED',
-            grantedScopesJson: JSON.stringify(REQUIRED_GOOGLE_SCOPES),
-            secretRef,
-            tokenExpiresAt: expiresAt,
-            lastSyncedAt: new Date(),
-            createdById: context.user.id
-          },
-          update: {
-            status: 'CONNECTED',
-            grantedScopesJson: JSON.stringify(REQUIRED_GOOGLE_SCOPES),
-            secretRef,
-            tokenExpiresAt: expiresAt,
-            lastSyncedAt: new Date(),
-            version: { increment: 1 }
-          }
-        });
-
-        await db.auditLog.create({
-          data: auditData(context, 'GOOGLE_WORKSPACE_CONNECTED', 'GoogleWorkspaceConnection', connection.id, {
-            status: connection.status,
-            redirectTarget: stateRecord.redirectTarget
-          })
-        });
-
-        sendJson(res, 200, {
-          connection: {
-            id: connection.id,
-            status: connection.status,
-            grantedScopes: REQUIRED_GOOGLE_SCOPES,
-            secretRef: connection.secretRef,
-            tokenExpiresAt: connection.tokenExpiresAt ? connection.tokenExpiresAt.toISOString() : null,
-            lastSyncedAt: connection.lastSyncedAt ? connection.lastSyncedAt.toISOString() : null,
-            version: connection.version
-          },
-          redirectTarget: stateRecord.redirectTarget
-        });
-        return;
-      }
-
-      // 4. POST /api/google-workspace/disconnect
-      if (pathname === '/api/google-workspace/disconnect' && req.method === 'POST') {
-        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
-        if (!canManage) throw new HttpError(403, 'Disconnecting Google Workspace requires Admin or Director role');
-
-        const conn = await db.googleWorkspaceConnection.findUnique({
-          where: { organizationId: context.user.organizationId }
-        });
-        if (!conn) throw new HttpError(404, 'Google Workspace connection not found');
-
-        // Revoke on provider (fake adapter)
-        await globalGoogleAdapter.revokeConnection(conn.secretRef);
-
-        const updated = await db.googleWorkspaceConnection.update({
-          where: { id: conn.id },
-          data: {
-            status: 'DISCONNECTED',
-            version: { increment: 1 }
-          }
-        });
-
-        await db.auditLog.create({
-          data: auditData(context, 'GOOGLE_WORKSPACE_DISCONNECTED', 'GoogleWorkspaceConnection', conn.id, {
-            previousStatus: conn.status
-          })
-        });
-
-        sendJson(res, 200, { connection: updated, status: updated.status, internalDataPreserved: true });
-        return;
-      }
-
-      // 5. POST /api/google-workspace/test
-      if (pathname === '/api/google-workspace/test' && req.method === 'POST') {
-        const conn = await db.googleWorkspaceConnection.findUnique({
-          where: { organizationId: context.user.organizationId }
-        });
-        if (!conn) throw new HttpError(404, 'Google Workspace connection not found');
-
-        let grantedScopes: string[] = [];
-        try { grantedScopes = JSON.parse(conn.grantedScopesJson); } catch { grantedScopes = []; }
-
-        const adapterResp = await globalGoogleAdapter.testConnection({
-          organizationId: conn.organizationId,
-          status: conn.status as any,
+          const parsed: unknown = JSON.parse(connection.grantedScopesJson);
+          grantedScopes = Array.isArray(parsed) && parsed.every((scope) => typeof scope === 'string') ? parsed : [];
+        } catch { /* malformed legacy rows expose no scopes */ }
+        const effectiveStatus = connection.status === 'CONNECTED'
+          && (!connection.tokenExpiresAt || connection.tokenExpiresAt <= new Date())
+          && !googleAdapter.getCredentialMetadata
+          ? 'EXPIRED'
+          : connection.status === 'CONNECTED' && !hasExactGoogleScopes(grantedScopes)
+            ? 'RECONSENT_REQUIRED'
+            : connection.status;
+        return {
+          id: connection.id,
+          status: effectiveStatus,
           grantedScopes,
-          secretRef: conn.secretRef,
-          tokenExpiresAt: conn.tokenExpiresAt
-        });
+          tokenExpiresAt: connection.tokenExpiresAt?.toISOString() ?? null,
+          lastSyncedAt: connection.lastSyncedAt?.toISOString() ?? null,
+          version: connection.version,
+          createdAt: connection.createdAt.toISOString(),
+          hasSecretConfigured: true
+        };
+      };
 
-        // Record attempt
-        const op = await db.googleSyncOperation.create({
-          data: {
-            id: `GSYNC-${crypto.randomUUID()}`,
-            organizationId: context.user.organizationId,
-            operationKind: 'CONNECTION_TEST',
-            requestFingerprint: crypto.createHash('sha256').update(`TEST:${Date.now()}`).digest('hex'),
-            status: adapterResp.responseClass === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
-            actorId: context.user.id
-          }
-        });
-
-        await db.googleSyncAttempt.create({
-          data: {
-            id: `GATT-${crypto.randomUUID()}`,
-            operationId: op.id,
-            attemptNumber: 1,
-            responseClass: adapterResp.responseClass,
-            redactedError: adapterResp.redactedError,
-            retryAt: adapterResp.retryAfterSeconds ? new Date(Date.now() + adapterResp.retryAfterSeconds * 1000) : null,
-            durationMs: adapterResp.durationMs
-          }
-        });
-
-        if (adapterResp.responseClass !== 'SUCCESS') {
-          sendJson(res, 400, {
-            ok: false,
-            responseClass: adapterResp.responseClass,
-            error: adapterResp.redactedError,
-            retryAfterSeconds: adapterResp.retryAfterSeconds
-          });
-          return;
+      const requireConnectedGoogle = async () => {
+        const connection = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+        if (!connection || connection.status === 'DISCONNECTED') throw new HttpError(409, 'Google Workspace is not connected');
+        if (connection.tokenExpiresAt && connection.tokenExpiresAt <= new Date() && !googleAdapter.getCredentialMetadata) {
+          throw new HttpError(401, 'Google Workspace token has expired');
         }
-
-        sendJson(res, 200, { ok: true, responseClass: 'SUCCESS' });
-        return;
-      }
-
-      // 6. POST /api/cases/:caseId/google/drive-folder
-      const driveMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/drive-folder$/);
-      if (driveMatch && req.method === 'POST') {
-        const caseId = driveMatch[1];
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
-          throw new HttpError(404, 'Case not found');
-        }
-
-        const body = (await readJson(req)) as { idempotencyKey?: string };
-        const idempotencyKey = body.idempotencyKey?.trim() || `DRIVE-CASE-${caseId}`;
-
-        // Check if existing folder resource link exists for this case (converge duplicate requests)
-        const existingLink = await db.googleResourceLink.findFirst({
-          where: {
-            organizationId: context.user.organizationId,
-            caseId,
-            entityType: 'CASE_DRIVE_FOLDER'
-          }
-        });
-
-        if (existingLink) {
-          sendJson(res, 200, {
-            resourceLink: existingLink,
-            isExisting: true,
-            folderId: existingLink.externalResourceId
-          });
-          return;
-        }
-
-        const adapterResp = await globalGoogleAdapter.createDriveFolder(caseId, caseRow.title, idempotencyKey);
-        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
-          throw new HttpError(400, adapterResp.redactedError || 'Failed to create Drive folder');
-        }
-
-        const resultData = adapterResp.data;
-
+        if (connection.status === 'EXPIRED') throw new HttpError(401, 'Google Workspace token has expired');
+        if (connection.status === 'RECONSENT_REQUIRED') throw new HttpError(409, 'Google Workspace re-consent is required');
+        if (connection.status !== 'CONNECTED') throw new HttpError(409, 'Google Workspace connection is unavailable');
+        let scopes: string[] = [];
         try {
-          const syncOp = await db.googleSyncOperation.create({
-            data: {
-              id: `GSYNC-${crypto.randomUUID()}`,
-              organizationId: context.user.organizationId,
-              caseId,
-              operationKind: 'DRIVE_FOLDER',
-              idempotencyKey,
-              requestFingerprint: crypto.createHash('sha256').update(`DRIVE:${caseId}:${idempotencyKey}`).digest('hex'),
-              status: 'SUCCESS',
-              actorId: context.user.id
+          const parsed: unknown = JSON.parse(connection.grantedScopesJson);
+          scopes = Array.isArray(parsed) ? parsed.filter((scope): scope is string => typeof scope === 'string') : [];
+        } catch { /* rejected below */ }
+        if (!hasExactGoogleScopes(scopes)) throw new HttpError(403, 'Google Workspace scopes do not match the approved least-privilege set');
+        googleAdapter.useCredential?.(connection.secretRef);
+        return { connection, scopes };
+      };
+
+      const requireGoogleCase = async (caseId: string, allowedRoles = GOOGLE_CASE_MATERIAL_ROLES) => {
+        requireAnyRole(context, allowedRoles, 'This Google case operation is not permitted for the current role');
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment is required for Google operations');
+        await requireConnectedGoogle();
+        return caseRow;
+      };
+
+      const projectGoogleDateCandidate = (item: {
+        id: string;
+        title: string;
+        dueDate: Date | null;
+        updatedAt: Date;
+        meeting: { id: string; version: number; rawTextSha256: string | null };
+      }) => {
+        if (!item.dueDate) throw new HttpError(409, 'Selected date candidate no longer has a due date');
+        const startDateTime = item.dueDate.toISOString();
+        const endDateTime = new Date(item.dueDate.getTime() + 60 * 60 * 1000).toISOString();
+        const originalLocation = `meeting:${item.meeting.id}:action-item:${item.id}`;
+        const excerpt = item.title.slice(0, 500);
+        const binding = {
+          id: item.id,
+          meetingId: item.meeting.id,
+          meetingVersion: item.meeting.version,
+          meetingRawTextSha256: item.meeting.rawTextSha256,
+          actionUpdatedAt: item.updatedAt.toISOString(),
+          startDateTime,
+          endDateTime,
+          originalLocation,
+          excerpt
+        };
+        return {
+          id: item.id,
+          candidateHash: sha256Hex(canonicalJson(binding)),
+          version: item.meeting.version,
+          startDateTime,
+          endDateTime,
+          confidence: 0.95,
+          sourceType: 'MEETING_ACTION_ITEM',
+          sourceEntityId: item.id,
+          originalLocation,
+          excerpt,
+          summary: item.title
+        };
+      };
+
+      const loadGoogleDateCandidates = async (caseId: string) => {
+        const actionItems = await db.meetingActionItem.findMany({
+          where: { dueDate: { not: null }, meeting: { caseId } },
+          include: { meeting: true },
+          orderBy: [{ dueDate: 'asc' }, { id: 'asc' }],
+          take: 100
+        });
+        return actionItems.map(projectGoogleDateCandidate);
+      };
+
+      const malformedGoogleProviderEnvelope = <T>(startedAt: number): GoogleAdapterResponse<T> => ({
+        responseClass: 'MALFORMED_PROVIDER_RESPONSE',
+        redactedError: safeGoogleProviderError('MALFORMED_PROVIDER_RESPONSE'),
+        durationMs: Math.max(0, Math.min(Date.now() - startedAt, 2_147_483_647))
+      });
+
+      const invokeGoogleProvider = async <T>(call: (signal: AbortSignal) => Promise<GoogleAdapterResponse<T>>): Promise<GoogleAdapterResponse<T>> => {
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeoutResponse = new Promise<GoogleAdapterResponse<T>>((resolve) => {
+            timeoutId = setTimeout(() => {
+              controller.abort();
+              resolve({
+                responseClass: 'TIMEOUT',
+                redactedError: safeGoogleProviderError('TIMEOUT'),
+                durationMs: Date.now() - startedAt
+              });
+            }, googleProviderTimeoutMs);
+          });
+          const rawResponse: unknown = await Promise.race([
+            Promise.resolve().then(() => call(controller.signal)),
+            timeoutResponse
+          ]);
+          if (!rawResponse || typeof rawResponse !== 'object' || Array.isArray(rawResponse)) {
+            return malformedGoogleProviderEnvelope<T>(startedAt);
+          }
+
+          const envelope = rawResponse as Record<string, unknown>;
+          if (typeof envelope.responseClass !== 'string' || !GOOGLE_FAKE_MODES.has(envelope.responseClass as GoogleAdapterMode)) {
+            return malformedGoogleProviderEnvelope<T>(startedAt);
+          }
+          if (typeof envelope.durationMs !== 'number' || !Number.isFinite(envelope.durationMs)
+            || envelope.durationMs < 0 || envelope.durationMs > 2_147_483_647) {
+            return malformedGoogleProviderEnvelope<T>(startedAt);
+          }
+          if (envelope.retryAfterSeconds !== undefined
+            && (typeof envelope.retryAfterSeconds !== 'number' || !Number.isFinite(envelope.retryAfterSeconds)
+              || envelope.retryAfterSeconds < 0 || envelope.retryAfterSeconds > 30)) {
+            return malformedGoogleProviderEnvelope<T>(startedAt);
+          }
+
+          const responseClass = envelope.responseClass as GoogleAdapterMode;
+          const durationMs = Math.trunc(envelope.durationMs);
+          if (GOOGLE_SUCCESS_CLASSES.has(responseClass)) {
+            if (!Object.prototype.hasOwnProperty.call(envelope, 'data') || envelope.data === undefined) {
+              return malformedGoogleProviderEnvelope<T>(startedAt);
+            }
+            return { responseClass, data: envelope.data as T, durationMs };
+          }
+
+          const normalized: GoogleAdapterResponse<T> = {
+            responseClass,
+            redactedError: safeGoogleProviderError(responseClass),
+            durationMs
+          };
+          if (responseClass === 'RATE_LIMIT_RETRY_AFTER' && typeof envelope.retryAfterSeconds === 'number') {
+            normalized.retryAfterSeconds = Math.ceil(envelope.retryAfterSeconds);
+          }
+          return normalized;
+        } catch {
+          return {
+            responseClass: 'SERVER_ERROR',
+            redactedError: safeGoogleProviderError('SERVER_ERROR'),
+            durationMs: Date.now() - startedAt
+          };
+        } finally {
+          if (timeoutId !== undefined) clearTimeout(timeoutId);
+        }
+      };
+
+      const syncGoogleCredentialMetadata = async (): Promise<void> => {
+        if (!googleAdapter.getCredentialMetadata) return;
+        try {
+          const connection = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+          if (!connection || connection.status !== 'CONNECTED') return;
+          const metadata = await googleAdapter.getCredentialMetadata(connection.secretRef);
+          if (!metadata || !Number.isFinite(metadata.expiresAt.getTime()) || !hasExactGoogleScopes(metadata.grantedScopes)) return;
+          const scopesJson = JSON.stringify(metadata.grantedScopes);
+          if (connection.tokenExpiresAt?.getTime() === metadata.expiresAt.getTime() && connection.grantedScopesJson === scopesJson) return;
+          await db.$transaction(async (tx) => {
+            const changed = await tx.googleWorkspaceConnection.updateMany({
+              where: { id: connection.id, version: connection.version, secretRef: connection.secretRef, status: 'CONNECTED' },
+              data: {
+                tokenExpiresAt: metadata.expiresAt,
+                grantedScopesJson: scopesJson,
+                lastSyncedAt: new Date(),
+                version: { increment: 1 }
+              }
+            });
+            if (changed.count === 1) {
+              await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_CREDENTIAL_METADATA_REFRESHED', 'GoogleWorkspaceConnection', connection.id, {
+                previousTokenExpiresAt: connection.tokenExpiresAt?.toISOString() ?? null,
+                tokenExpiresAt: metadata.expiresAt.toISOString()
+              }) });
             }
           });
+        } catch {
+          // Credential material stays opaque. A later successful provider call can
+          // retry this non-authoritative metadata projection without data loss.
+        }
+      };
 
-          const link = await db.googleResourceLink.create({
+      const executeGoogleCall = async <T>(
+        call: (signal: AbortSignal) => Promise<GoogleAdapterResponse<T>>,
+        retryableClasses: ReadonlySet<GoogleAdapterMode> = GOOGLE_RETRYABLE_CLASSES
+      ) => {
+        const attempts: GoogleAttemptProjection[] = [];
+        let response: GoogleAdapterResponse<T> | undefined;
+        for (let attemptNumber = 1; attemptNumber <= 3; attemptNumber += 1) {
+          response = await invokeGoogleProvider(call);
+          attempts.push({
+            attemptNumber,
+            responseClass: response.responseClass,
+            redactedError: response.redactedError,
+            retryAt: response.retryAfterSeconds ? new Date(Date.now() + response.retryAfterSeconds * 1000) : null,
+            durationMs: Math.max(0, Math.min(response.durationMs, 2_147_483_647))
+          });
+          if (GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !retryableClasses.has(response.responseClass) || attemptNumber === 3) break;
+          const providerDelayMs = typeof response.retryAfterSeconds === 'number' && Number.isFinite(response.retryAfterSeconds)
+            ? Math.max(0, Math.ceil(response.retryAfterSeconds * 1000))
+            : null;
+          const delayMs = providerDelayMs === null
+            ? Math.min(1000, 100 * (2 ** (attemptNumber - 1)))
+            : Math.min(30_000, providerDelayMs);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+        if (!response) throw new HttpError(502, 'Google provider produced no response');
+        if (GOOGLE_SUCCESS_CLASSES.has(response.responseClass)) await syncGoogleCredentialMetadata();
+        return { response, attempts };
+      };
+
+      const writeGoogleAttempts = async (tx: Prisma.TransactionClient, operationId: string, attempts: GoogleAttemptProjection[]): Promise<void> => {
+        for (const attempt of attempts) {
+          await tx.googleSyncAttempt.create({
             data: {
-              id: `GRLINK-${crypto.randomUUID()}`,
-              organizationId: context.user.organizationId,
-              caseId,
-              operationId: syncOp.id,
-              entityType: 'CASE_DRIVE_FOLDER',
-              internalEntityId: caseId,
-              externalResourceId: resultData.folderId,
-              resourceMetadataJson: JSON.stringify({
-                folderName: resultData.folderName,
-                webViewLink: resultData.webViewLink
-              })
+              id: `GATT-${crypto.randomUUID()}`,
+              operationId,
+              attemptNumber: attempt.attemptNumber,
+              responseClass: attempt.responseClass,
+              redactedError: attempt.redactedError,
+              retryAt: attempt.retryAt,
+              durationMs: attempt.durationMs
             }
           });
+        }
+      };
 
-          await db.auditLog.create({
-            data: auditData(context, 'GOOGLE_DRIVE_FOLDER_CREATED', 'GoogleResourceLink', link.id, {
-              caseId,
-              externalResourceId: resultData.folderId
-            })
-          });
+      const deletePendingGoogleOperation = async (operationId: string): Promise<void> => {
+        await db.googleSyncOperation.deleteMany({ where: { id: operationId, status: 'PENDING' } });
+      };
 
-          sendJson(res, 201, { resourceLink: link, isExisting: false, folderId: resultData.folderId });
-          return;
-        } catch (raceErr) {
-          const canonical = await db.googleResourceLink.findFirst({
+      const parseStoredOperation = (resultJson: string | null): { httpStatus: number; body: Record<string, unknown> } => {
+        if (!resultJson) throw new HttpError(409, 'Idempotent operation has no terminal result');
+        try {
+          const parsed = JSON.parse(resultJson) as { httpStatus?: unknown; body?: unknown };
+          if (!Number.isInteger(parsed.httpStatus) || !parsed.body || typeof parsed.body !== 'object' || Array.isArray(parsed.body)) throw new Error('invalid');
+          return { httpStatus: parsed.httpStatus as number, body: parsed.body as Record<string, unknown> };
+        } catch {
+          throw new HttpError(409, 'Stored Google operation result is invalid');
+        }
+      };
+
+      const reserveGoogleOperation = async (caseId: string, operationKind: string, idempotencyKey: string, fingerprint: string): Promise<GoogleOperationReservation> => {
+        const scope = {
+          organizationId: context.user.organizationId,
+          caseId,
+          actorId: context.user.id,
+          operationKind,
+          idempotencyKey
+        };
+        let existing = await db.googleSyncOperation.findFirst({ where: scope });
+        if (!existing) {
+          const unresolved = await db.googleSyncOperation.findFirst({
             where: {
               organizationId: context.user.organizationId,
               caseId,
-              entityType: 'CASE_DRIVE_FOLDER'
+              operationKind,
+              status: { in: ['PENDING', 'RECONCILIATION_REQUIRED'] }
+            },
+            select: { id: true, status: true }
+          });
+          if (unresolved?.status === 'RECONCILIATION_REQUIRED') {
+            throw new HttpError(409, 'A prior Google operation requires manual reconciliation before this action can be retried');
+          }
+          if (unresolved) throw new HttpError(409, 'A Google operation of this kind is already in progress for the case');
+          try {
+            const operation = await db.googleSyncOperation.create({
+              data: {
+                id: `GSYNC-${crypto.randomUUID()}`,
+                ...scope,
+                requestFingerprint: fingerprint,
+                status: 'PENDING'
+              }
+            });
+            return { operation, owner: true, replay: null };
+          } catch {
+            existing = await db.googleSyncOperation.findFirst({ where: scope });
+            if (!existing) {
+              const concurrent = await db.googleSyncOperation.findFirst({
+                where: {
+                  organizationId: context.user.organizationId,
+                  caseId,
+                  operationKind,
+                  status: { in: ['PENDING', 'RECONCILIATION_REQUIRED'] }
+                },
+                select: { status: true }
+              });
+              if (concurrent?.status === 'RECONCILIATION_REQUIRED') {
+                throw new HttpError(409, 'A prior Google operation requires manual reconciliation before this action can be retried');
+              }
+              throw new HttpError(409, concurrent
+                ? 'A Google operation of this kind is already in progress for the case'
+                : 'Concurrent Google operation reservation conflict');
+            }
+          }
+        }
+        if (!existing) throw new HttpError(409, 'Concurrent Google operation reservation conflict');
+        let canonical: GoogleOperationRow = existing;
+        if (canonical.requestFingerprint !== fingerprint) throw new HttpError(409, 'Idempotency key was already used with a different request');
+        for (let poll = 0; canonical.status === 'PENDING' && poll < 100; poll += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          const refreshed: GoogleOperationRow | null = await db.googleSyncOperation.findUnique({ where: { id: canonical.id } });
+          if (!refreshed) throw new HttpError(409, 'Concurrent Google operation was rolled back');
+          canonical = refreshed;
+        }
+        if (canonical.status === 'PENDING') throw new HttpError(409, 'Google operation is already in progress');
+        const stored = parseStoredOperation(canonical.resultJson);
+        if (canonical.status !== 'SUCCESS') {
+          throw new HttpError(stored.httpStatus, String(stored.body.error ?? 'Google operation failed'), {
+            responseClass: stored.body.responseClass
+          });
+        }
+        return {
+          operation: canonical,
+          owner: false,
+          replay: { httpStatus: 200, body: { ...stored.body, idempotentReplay: true } }
+        };
+      };
+
+      const failGoogleOperation = async (
+        operationId: string,
+        response: GoogleAdapterResponse<unknown>,
+        attempts: GoogleAttemptProjection[],
+        action: string
+      ): Promise<HttpError> => {
+        const status = googleResponseStatus(response.responseClass);
+        const body = {
+          error: response.redactedError ?? 'Google provider request failed',
+          responseClass: response.responseClass,
+          retryAfterSeconds: response.retryAfterSeconds ?? null
+        };
+        try {
+          await db.$transaction(async (tx) => {
+            await writeGoogleAttempts(tx, operationId, attempts);
+            const changed = await tx.googleSyncOperation.updateMany({
+              where: { id: operationId, status: 'PENDING' },
+              data: {
+                status: response.responseClass === 'USER_CANCEL' ? 'CANCELLED' : 'FAILED',
+                resultJson: JSON.stringify({ httpStatus: status, body }),
+                completedAt: new Date()
+              }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Google operation terminal transition conflict');
+            if (response.responseClass === 'TOKEN_EXPIRED' || response.responseClass === 'RECONSENT_REQUIRED') {
+              const connection = await tx.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+              if (connection) {
+                await tx.googleWorkspaceConnection.update({
+                  where: { id: connection.id },
+                  data: {
+                    status: response.responseClass === 'TOKEN_EXPIRED' ? 'EXPIRED' : 'RECONSENT_REQUIRED',
+                    version: { increment: 1 }
+                  }
+                });
+              }
+            }
+            await tx.auditLog.create({ data: requestAudit(context, action, 'GoogleSyncOperation', operationId, {
+              status: 'FAILED', responseClass: response.responseClass, attemptCount: attempts.length
+            }) });
+          });
+        } catch (error) {
+          await deletePendingGoogleOperation(operationId);
+          throw error;
+        }
+        return new HttpError(status, body.error, { responseClass: body.responseClass, retryAfterSeconds: body.retryAfterSeconds });
+      };
+
+      const markGoogleReconciliationRequired = async (
+        operationId: string,
+        attempts: GoogleAttemptProjection[],
+        externalResourceId: string
+      ): Promise<void> => {
+        const body = {
+          error: 'Google accepted the operation but local persistence did not complete; manual reconciliation is required',
+          responseClass: 'SERVER_ERROR',
+          reconciliationRequired: true,
+          externalResourceFingerprint: sha256Hex(externalResourceId).slice(0, 24)
+        };
+        try {
+          await db.$transaction(async (tx) => {
+            await writeGoogleAttempts(tx, operationId, attempts);
+            const changed = await tx.googleSyncOperation.updateMany({
+              where: { id: operationId, status: 'PENDING' },
+              data: {
+                status: 'RECONCILIATION_REQUIRED',
+                resultJson: JSON.stringify({ httpStatus: 503, body }),
+                completedAt: new Date()
+              }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Google reconciliation state transition conflict');
+          });
+        } catch {
+          // Leave the reservation PENDING if durable quarantine also fails. A retry then
+          // returns "in progress" without repeating the external mutation.
+        }
+      };
+
+      const failGoogleMutationOperation = async (
+        operationId: string,
+        response: GoogleAdapterResponse<unknown>,
+        attempts: GoogleAttemptProjection[],
+        action: string,
+        uncertaintyKey: string
+      ): Promise<HttpError> => {
+        if (response.responseClass === 'TIMEOUT' || response.responseClass === 'SERVER_ERROR' || response.responseClass === 'MALFORMED_PROVIDER_RESPONSE') {
+          await markGoogleReconciliationRequired(operationId, attempts, uncertaintyKey);
+          return new HttpError(googleResponseStatus(response.responseClass), safeGoogleProviderError(response.responseClass), {
+            responseClass: response.responseClass,
+            reconciliationRequired: true
+          });
+        }
+        return failGoogleOperation(operationId, response, attempts, action);
+      };
+
+      const validateGoogleProviderId = (value: unknown, label: string): string => {
+        if (typeof value !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(value)) {
+          throw new HttpError(502, `Google provider returned an invalid ${label}`);
+        }
+        return value;
+      };
+
+      const validateGoogleProviderText = (value: unknown, label: string, maximum = 500): string => {
+        if (typeof value !== 'string' || value.length < 1 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) {
+          throw new HttpError(502, `Google provider returned invalid ${label}`);
+        }
+        return value;
+      };
+
+      const validateGoogleProviderUrl = (value: unknown, service: 'drive' | 'calendar' | 'docs'): string => {
+        if (typeof value !== 'string' || value.length > 2000) throw new HttpError(502, 'Google provider returned an invalid resource URL');
+        try {
+          const parsed = new URL(value);
+          const allowedHosts = new Set([`${service}.google.com`, `${service}.google.invalid`]);
+          if (parsed.protocol !== 'https:' || !allowedHosts.has(parsed.hostname) || parsed.username || parsed.password) throw new Error('invalid');
+          return parsed.toString();
+        } catch {
+          throw new HttpError(502, 'Google provider returned an invalid resource URL');
+        }
+      };
+
+      const hasExactProviderKeys = (value: Record<string, unknown>, expected: string[]): boolean => (
+        canonicalJson(Object.keys(value).sort()) === canonicalJson([...expected].sort())
+      );
+
+      const projectGmailCandidates = (value: unknown) => {
+        if (!Array.isArray(value) || value.length > 100) throw new HttpError(502, 'Google Gmail candidate response is invalid');
+        const projected = value.map((candidate) => {
+          if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new HttpError(502, 'Google Gmail candidate response is invalid');
+          const item = candidate as Record<string, unknown>;
+          if (!hasExactProviderKeys(item, ['attachmentId', 'filename', 'mimeType', 'sizeBytes'])) throw new HttpError(502, 'Google Gmail candidate response contains unexpected data');
+          const attachmentId = validateGoogleProviderId(item.attachmentId, 'Gmail attachment ID');
+          const filename = validateGoogleProviderText(item.filename, 'Gmail attachment filename', 240);
+          const mimeType = validateGoogleProviderText(item.mimeType, 'Gmail attachment MIME type', 100).toLowerCase();
+          if (!Number.isInteger(item.sizeBytes) || Number(item.sizeBytes) < 1 || Number(item.sizeBytes) > UPLOAD_MAX_BYTES) {
+            throw new HttpError(502, 'Google Gmail attachment size is invalid');
+          }
+          return { attachmentId, filename, mimeType, sizeBytes: Number(item.sizeBytes) };
+        });
+        if (new Set(projected.map((item) => item.attachmentId)).size !== projected.length) throw new HttpError(502, 'Google Gmail candidate IDs are not unique');
+        return projected;
+      };
+
+      const projectSheetSources = (value: unknown) => {
+        if (!Array.isArray(value) || value.length > 100) throw new HttpError(502, 'Google Sheets source response is invalid');
+        const projected = value.map((candidate) => {
+          if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new HttpError(502, 'Google Sheets source response is invalid');
+          const item = candidate as Record<string, unknown>;
+          if (!hasExactProviderKeys(item, ['spreadsheetId', 'sheetName', 'allowedRange', 'displayName'])) throw new HttpError(502, 'Google Sheets source response contains unexpected data');
+          const spreadsheetId = validateGoogleProviderId(item.spreadsheetId, 'Sheets spreadsheet ID');
+          const sheetName = validateGoogleProviderText(item.sheetName, 'Sheets tab name', 100);
+          const allowedRange = validateGoogleProviderText(item.allowedRange, 'Sheets allowed range', 40).toUpperCase();
+          if (!/^[A-Z]{1,3}[1-9][0-9]{0,5}:[A-Z]{1,3}[1-9][0-9]{0,5}$/.test(allowedRange)) throw new HttpError(502, 'Google Sheets allowed range is invalid');
+          const displayName = validateGoogleProviderText(item.displayName, 'Sheets display name', 200);
+          return { spreadsheetId, sheetName, allowedRange, displayName };
+        });
+        if (new Set(projected.map((item) => `${item.spreadsheetId}:${item.sheetName}`)).size !== projected.length) throw new HttpError(502, 'Google Sheets source IDs are not unique');
+        return projected;
+      };
+
+      const bumpGoogleCaseVersion = async (tx: Prisma.TransactionClient, caseId: string, expectedVersion: number): Promise<number> => {
+        const changed = await tx.caseItem.updateMany({
+          where: { id: caseId, organizationId: context.user.organizationId, version: expectedVersion, deletedAt: null },
+          data: { version: { increment: 1 } }
+        });
+        if (changed.count !== 1) throw new HttpError(409, 'Case version conflict');
+        return expectedVersion + 1;
+      };
+
+      // Test-only deterministic mode. It is disabled by default and tenant-scoped.
+      if (pathname === '/api/google-workspace/fake-mode' && req.method === 'POST') {
+        requireGoogleAdmin();
+        const controller = fakeModeController(googleAdapter);
+        if (!allowTestGoogleModes || !controller) throw new HttpError(404, 'Endpoint not found');
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['mode'], ['mode']);
+        if (typeof body.mode !== 'string' || !GOOGLE_FAKE_MODES.has(body.mode as GoogleAdapterMode)) throw new HttpError(400, 'Invalid fake Google mode');
+        controller.setMode(body.mode as GoogleAdapterMode);
+        sendJson(res, 200, { currentMode: controller.getMode() });
+        return;
+      }
+
+      if (pathname === '/api/google-workspace/connection' && req.method === 'GET') {
+        requireGoogleAdmin();
+        const connection = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+        const history = await db.googleSyncOperation.findMany({
+          where: { organizationId: context.user.organizationId },
+          include: { attempts: { orderBy: { attemptNumber: 'desc' }, take: 1 } },
+          orderBy: { createdAt: 'desc' },
+          take: 100
+        });
+        const safeHistory = history.map((operation) => ({
+          id: operation.id,
+          operationKind: operation.operationKind,
+          status: operation.status,
+          responseClass: operation.attempts[0]?.responseClass ?? null,
+          redactedError: operation.attempts[0]?.redactedError ?? null,
+          createdAt: operation.createdAt.toISOString(),
+          completedAt: operation.completedAt?.toISOString() ?? null
+        }));
+        if (!connection) {
+          sendJson(res, 200, { connection: null, status: 'DISCONNECTED', providerMode: googleProviderMode, requiredScopes: REQUIRED_GOOGLE_SCOPES, history: safeHistory });
+          return;
+        }
+        const safeConnection = publicConnection(connection);
+        sendJson(res, 200, { connection: safeConnection, status: safeConnection.status, providerMode: googleProviderMode, requiredScopes: REQUIRED_GOOGLE_SCOPES, history: safeHistory });
+        return;
+      }
+
+      if (pathname === '/api/google-workspace/reconciliation' && req.method === 'GET') {
+        requireGoogleAdmin();
+        const staleBefore = new Date(Date.now() - GOOGLE_RECONCILIATION_STALE_MS);
+        const operations = await db.googleSyncOperation.findMany({
+          where: {
+            organizationId: context.user.organizationId,
+            caseId: { not: null },
+            OR: [
+              { status: 'RECONCILIATION_REQUIRED' },
+              { status: 'PENDING', updatedAt: { lte: staleBefore } }
+            ]
+          },
+          orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+          take: 100
+        });
+        sendJson(res, 200, {
+          resolution: GOOGLE_RECONCILIATION_RESOLUTION,
+          confirmation: GOOGLE_RECONCILIATION_CONFIRMATION,
+          stalePendingAfterSeconds: GOOGLE_RECONCILIATION_STALE_MS / 1000,
+          operations: operations.map((operation) => ({
+            id: operation.id,
+            caseId: operation.caseId,
+            operationKind: operation.operationKind,
+            status: operation.status,
+            createdAt: operation.createdAt.toISOString(),
+            updatedAt: operation.updatedAt.toISOString(),
+            expectedUpdatedAt: operation.updatedAt.toISOString()
+          }))
+        });
+        return;
+      }
+
+      const googleReconciliationResolveMatch = pathname.match(/^\/api\/google-workspace\/reconciliation\/([^/]+)\/resolve$/);
+      if (googleReconciliationResolveMatch && req.method === 'POST') {
+        requireGoogleAdmin();
+        const operationId = googleReconciliationResolveMatch[1];
+        const body = await readJson(req);
+        assertExactJsonFields(
+          body,
+          ['resolution', 'confirmation', 'verificationReference', 'expectedUpdatedAt'],
+          ['resolution', 'confirmation', 'verificationReference', 'expectedUpdatedAt']
+        );
+        if (body.resolution !== GOOGLE_RECONCILIATION_RESOLUTION) {
+          throw new HttpError(400, `resolution must equal ${GOOGLE_RECONCILIATION_RESOLUTION}`);
+        }
+        if (body.confirmation !== GOOGLE_RECONCILIATION_CONFIRMATION) {
+          throw new HttpError(400, `confirmation must equal ${GOOGLE_RECONCILIATION_CONFIRMATION}`);
+        }
+        const verificationReference = strictString(body.verificationReference, 'verificationReference', 8, 300);
+        if (/[\u0000-\u001f\u007f]/.test(verificationReference)
+          || /ya29\.|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization[_-]?code|-----BEGIN/i.test(verificationReference)) {
+          throw new HttpError(400, 'verificationReference contains forbidden credential-like data');
+        }
+        const expectedUpdatedAtText = strictString(body.expectedUpdatedAt, 'expectedUpdatedAt', 20, 40);
+        const expectedUpdatedAt = new Date(expectedUpdatedAtText);
+        if (Number.isNaN(expectedUpdatedAt.getTime()) || expectedUpdatedAt.toISOString() !== expectedUpdatedAtText) {
+          throw new HttpError(400, 'expectedUpdatedAt must be a canonical ISO timestamp');
+        }
+        const operation = await db.googleSyncOperation.findFirst({
+          where: { id: operationId, organizationId: context.user.organizationId }
+        });
+        if (!operation) throw new HttpError(404, 'Google reconciliation operation not found');
+        if (!operation.caseId) throw new HttpError(409, 'Only case-scoped Google operations can be reconciled');
+        if (operation.updatedAt.getTime() !== expectedUpdatedAt.getTime()) {
+          throw new HttpError(409, 'Google reconciliation operation version conflict');
+        }
+        if (operation.status !== 'RECONCILIATION_REQUIRED' && operation.status !== 'PENDING') {
+          throw new HttpError(409, 'Google operation is no longer eligible for reconciliation');
+        }
+        if (operation.status === 'PENDING' && operation.updatedAt.getTime() > Date.now() - GOOGLE_RECONCILIATION_STALE_MS) {
+          throw new HttpError(409, 'Pending Google operation is not old enough for manual reconciliation');
+        }
+
+        const verificationReferenceHash = sha256Hex(verificationReference);
+        const completedAt = new Date();
+        const resultBody = {
+          error: 'Operation was reconciled with no external side effect; submit a fresh idempotency key to retry',
+          responseClass: 'RECONCILED_NO_SIDE_EFFECT',
+          status: 'RECONCILED_NO_SIDE_EFFECT',
+          resolution: GOOGLE_RECONCILIATION_RESOLUTION,
+          confirmation: GOOGLE_RECONCILIATION_CONFIRMATION,
+          verificationReferenceHash,
+          resolvedById: context.user.id,
+          previousResultSha256: sha256Hex(operation.resultJson ?? 'PENDING')
+        };
+        const resolved = await db.$transaction(async (tx) => {
+          await tx.auditLog.create({ data: requestAudit(
+            context,
+            'GOOGLE_RECONCILIATION_RESOLVED',
+            'GoogleSyncOperation',
+            operation.id,
+            {
+              caseId: operation.caseId,
+              operationKind: operation.operationKind,
+              priorStatus: operation.status,
+              resolution: GOOGLE_RECONCILIATION_RESOLUTION,
+              confirmation: GOOGLE_RECONCILIATION_CONFIRMATION,
+              verificationReferenceHash,
+              verificationReferenceLength: verificationReference.length
+            }
+          ) });
+          const changed = await tx.googleSyncOperation.updateMany({
+            where: {
+              id: operation.id,
+              organizationId: context.user.organizationId,
+              status: operation.status,
+              updatedAt: expectedUpdatedAt
+            },
+            data: {
+              status: 'RECONCILED_NO_SIDE_EFFECT',
+              resultJson: JSON.stringify({ httpStatus: 409, body: resultBody }),
+              completedAt
             }
           });
-          if (canonical) {
-            sendJson(res, 200, { resourceLink: canonical, isExisting: true, folderId: canonical.externalResourceId });
-            return;
+          if (changed.count !== 1) throw new HttpError(409, 'Google reconciliation operation version conflict');
+          return tx.googleSyncOperation.findUniqueOrThrow({ where: { id: operation.id } });
+        });
+        sendJson(res, 200, {
+          operation: {
+            id: resolved.id,
+            caseId: resolved.caseId,
+            operationKind: resolved.operationKind,
+            status: resolved.status,
+            completedAt: resolved.completedAt?.toISOString() ?? null
+          },
+          resolution: GOOGLE_RECONCILIATION_RESOLUTION,
+          verificationReferenceHash
+        });
+        return;
+      }
+
+      if (pathname === '/api/google-workspace/connect/init' && req.method === 'POST') {
+        requireGoogleAdmin();
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['redirectTarget', 'expectedVersion'], ['expectedVersion']);
+        const redirectTarget = body.redirectTarget === undefined ? '/integrations/google' : strictString(body.redirectTarget, 'redirectTarget', 1, 100);
+        if (!GOOGLE_REDIRECT_TARGETS.has(redirectTarget) || !redirectTarget.startsWith('/') || redirectTarget.startsWith('//') || redirectTarget.includes('\\')) {
+          throw new HttpError(400, 'Redirect target is not an approved internal path');
+        }
+        const requestedConnectionVersion = body.expectedVersion === null
+          ? null
+          : boundedInteger(body.expectedVersion, -1, 1, 2_147_483_647, 'expectedVersion');
+        const connectionSnapshot = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+        if ((connectionSnapshot?.version ?? null) !== requestedConnectionVersion) throw new HttpError(409, 'Google connection version conflict');
+        const verifier = crypto.randomBytes(48).toString('base64url');
+        const verifierRef = `PKCE_${crypto.randomUUID().replace(/-/g, '_').toUpperCase()}`;
+        const challenge = base64UrlSha256(verifier);
+        const state = crypto.randomBytes(32).toString('base64url');
+        const stateHash = sha256Hex(state);
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        const stateId = `GOAUTH-${crypto.randomUUID()}`;
+        let authorizationUrl: string;
+        try {
+          authorizationUrl = googleAdapter.createAuthorizationUrl({
+            state,
+            codeChallenge: challenge,
+            scopes: REQUIRED_GOOGLE_SCOPES
+          });
+        } catch {
+          throw new HttpError(503, 'Google Workspace authorization provider is unavailable');
+        }
+        googlePkceVault.set(verifierRef, verifier);
+        try {
+          await db.$transaction(async (tx) => {
+            await tx.googleOAuthState.create({ data: {
+              id: stateId,
+              stateHash,
+              pkceVerifierRef: verifierRef,
+              pkceChallenge: challenge,
+              connectionVersion: connectionSnapshot?.version ?? null,
+              organizationId: context.user.organizationId,
+              actorId: context.user.id,
+              redirectTarget,
+              expiresAt
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_OAUTH_INITIATED', 'GoogleOAuthState', stateId, {
+              expiresAt: expiresAt.toISOString(), redirectTarget, pkceMethod: 'S256'
+            }) });
+          });
+        } catch (error) {
+          googlePkceVault.delete(verifierRef);
+          throw error;
+        }
+        sendJson(res, 201, { state, authorizationUrl, expiresAt: expiresAt.toISOString(), redirectTarget, providerMode: googleProviderMode });
+        return;
+      }
+
+      if (pathname === '/api/google-workspace/connect/callback' && req.method === 'POST') {
+        requireGoogleAdmin();
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['state', 'code'], ['state', 'code']);
+        const rawState = strictString(body.state, 'state', 32, 200);
+        const code = strictString(body.code, 'code', 8, 200);
+        const stateHash = sha256Hex(rawState);
+        const stateRecord = await db.googleOAuthState.findUnique({ where: { stateHash } });
+        if (!stateRecord) throw new HttpError(400, 'Invalid OAuth state');
+        if (stateRecord.organizationId !== context.user.organizationId || stateRecord.actorId !== context.user.id) throw new HttpError(403, 'OAuth state binding violation');
+        if (stateRecord.usedAt) throw new HttpError(409, 'OAuth state has already been used');
+        if (stateRecord.expiresAt <= new Date()) throw new HttpError(400, 'OAuth state has expired');
+        if (!GOOGLE_REDIRECT_TARGETS.has(stateRecord.redirectTarget)) throw new HttpError(400, 'Stored OAuth redirect target is invalid');
+        const verifier = googlePkceVault.get(stateRecord.pkceVerifierRef);
+        if (!verifier || base64UrlSha256(verifier) !== stateRecord.pkceChallenge) throw new HttpError(400, 'PKCE verifier is unavailable or invalid');
+        const exchange = await invokeGoogleProvider((signal) => googleAdapter.exchangeAuthorizationCode(code, verifier, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(exchange.responseClass) || !exchange.data) {
+          throw new HttpError(googleResponseStatus(exchange.responseClass), safeGoogleProviderError(exchange.responseClass), { responseClass: exchange.responseClass });
+        }
+        const rawExchangeData: unknown = exchange.data;
+        const exchangeRecord = rawExchangeData && typeof rawExchangeData === 'object' && !Array.isArray(rawExchangeData)
+          ? rawExchangeData as Record<string, unknown>
+          : null;
+        const fakeAdapter = fakeModeController(googleAdapter);
+        const rawSecretRef = exchangeRecord?.secretRef;
+        const validSecretReference = typeof rawSecretRef === 'string' && (
+          (fakeAdapter !== null && allowTestGoogleModes && rawSecretRef === 'LOCAL_FAKE_GOOGLE')
+          || (fakeAdapter === null && /^SECREF_GOOGLE_[A-Z0-9_-]{16,120}$/.test(rawSecretRef))
+        );
+        const validExchange = exchangeRecord !== null
+          && hasExactProviderKeys(exchangeRecord, ['grantedScopes', 'secretRef', 'expiresInSeconds'])
+          && Array.isArray(exchangeRecord.grantedScopes)
+          && exchangeRecord.grantedScopes.every((scope) => typeof scope === 'string')
+          && validSecretReference
+          && Number.isSafeInteger(exchangeRecord.expiresInSeconds)
+          && Number(exchangeRecord.expiresInSeconds) >= 60
+          && Number(exchangeRecord.expiresInSeconds) <= 86_400;
+        if (!validExchange) {
+          if (typeof rawSecretRef === 'string') {
+            try { await googleAdapter.discardCredentialReference?.(rawSecretRef); } catch { /* fail closed */ }
           }
-          throw raceErr;
+          googlePkceVault.delete(stateRecord.pkceVerifierRef);
+          throw new HttpError(502, 'Google OAuth provider returned an invalid response');
+        }
+        const exchangeData = {
+          grantedScopes: [...exchangeRecord.grantedScopes as string[]],
+          secretRef: rawSecretRef as string,
+          expiresInSeconds: Number(exchangeRecord.expiresInSeconds)
+        };
+        const exchangedSecretRef = exchangeData.secretRef;
+        let connection;
+        let previousSecretRef: string | null = null;
+        try {
+          if (!hasExactGoogleScopes(exchangeData.grantedScopes)) {
+            throw new HttpError(403, 'OAuth response scopes do not match the approved least-privilege set');
+          }
+          const missingScope = REQUIRED_GOOGLE_SCOPES.find((scope) => !exchangeData.grantedScopes.includes(scope));
+          if (missingScope) throw new HttpError(403, 'OAuth response did not grant all required scopes');
+          const now = new Date();
+          const tokenExpiresAt = new Date(now.getTime() + exchangeData.expiresInSeconds * 1000);
+          connection = await db.$transaction(async (tx) => {
+          const consumed = await tx.googleOAuthState.updateMany({
+            where: { id: stateRecord.id, usedAt: null, expiresAt: { gt: now } },
+            data: { usedAt: now }
+          });
+          if (consumed.count !== 1) throw new HttpError(409, 'OAuth state was already consumed');
+          const current = await tx.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+          let stored;
+          if (current) {
+            previousSecretRef = current.secretRef;
+            if (stateRecord.connectionVersion === null || current.version !== stateRecord.connectionVersion) throw new HttpError(409, 'Google connection changed after OAuth initiation');
+            const changed = await tx.googleWorkspaceConnection.updateMany({
+              where: { id: current.id, version: current.version },
+              data: {
+                status: 'CONNECTED',
+                grantedScopesJson: JSON.stringify(exchangeData.grantedScopes),
+                secretRef: exchangeData.secretRef,
+                tokenExpiresAt,
+                lastSyncedAt: now,
+                version: { increment: 1 }
+              }
+            });
+            if (changed.count !== 1) throw new HttpError(409, 'Google connection version conflict');
+            stored = await tx.googleWorkspaceConnection.findUniqueOrThrow({ where: { id: current.id } });
+          } else {
+            if (stateRecord.connectionVersion !== null) throw new HttpError(409, 'Google connection changed after OAuth initiation');
+            stored = await tx.googleWorkspaceConnection.create({ data: {
+              id: `GCONN-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              status: 'CONNECTED',
+              grantedScopesJson: JSON.stringify(exchangeData.grantedScopes),
+              secretRef: exchangeData.secretRef,
+              tokenExpiresAt,
+              lastSyncedAt: now,
+              createdById: context.user.id
+            } });
+          }
+          await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_WORKSPACE_CONNECTED', 'GoogleWorkspaceConnection', stored.id, {
+            redirectTarget: stateRecord.redirectTarget, grantedScopeCount: exchangeData.grantedScopes.length
+          }) });
+            return stored;
+          });
+        } catch (error) {
+          try {
+            await googleAdapter.discardCredentialReference?.(exchangedSecretRef);
+          } catch { /* local persistence still fails closed; never expose credential material */ }
+          googlePkceVault.delete(stateRecord.pkceVerifierRef);
+          throw error;
+        }
+        googlePkceVault.delete(stateRecord.pkceVerifierRef);
+        let previousCredentialRetired = true;
+        if (previousSecretRef && previousSecretRef !== exchangeData.secretRef) {
+          const retired = await invokeGoogleProvider((signal) => googleAdapter.revokeConnection(previousSecretRef!, signal));
+          let localCredentialDiscarded = true;
+          try { await googleAdapter.discardCredentialReference?.(previousSecretRef); }
+          catch { localCredentialDiscarded = false; }
+          previousCredentialRetired = GOOGLE_SUCCESS_CLASSES.has(retired.responseClass)
+            && retired.data?.revoked === true
+            && localCredentialDiscarded;
+          if (!previousCredentialRetired) {
+            await db.auditLog.create({ data: requestAudit(context, 'GOOGLE_OLD_CREDENTIAL_PURGED_AFTER_REVOKE_FAILURE', 'GoogleWorkspaceConnection', connection.id, {
+              responseClass: retired.responseClass,
+              previousSecretRefHash: sha256Hex(previousSecretRef),
+              localCredentialDiscarded
+            }) }).catch(() => undefined);
+          }
+        }
+        sendJson(res, 200, {
+          connection: publicConnection(connection),
+          redirectTarget: stateRecord.redirectTarget,
+          previousCredentialRetired
+        });
+        return;
+      }
+
+      if (pathname === '/api/google-workspace/disconnect' && req.method === 'POST') {
+        requireGoogleAdmin();
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['expectedVersion'], ['expectedVersion']);
+        const expectedVersion = boundedInteger(body.expectedVersion, -1, 1, 2_147_483_647, 'expectedVersion');
+        const connection = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+        if (!connection) throw new HttpError(404, 'Google Workspace connection not found');
+        if (connection.version !== expectedVersion) throw new HttpError(409, 'Google connection version conflict');
+        const revoked = await invokeGoogleProvider((signal) => googleAdapter.revokeConnection(connection.secretRef, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(revoked.responseClass) || revoked.data?.revoked !== true) {
+          await db.auditLog.create({ data: requestAudit(context, 'GOOGLE_WORKSPACE_DISCONNECT_FAILED', 'GoogleWorkspaceConnection', connection.id, {
+            responseClass: revoked.responseClass
+          }) });
+          throw new HttpError(googleResponseStatus(revoked.responseClass), safeGoogleProviderError(revoked.responseClass), { responseClass: revoked.responseClass });
+        }
+        const updated = await db.$transaction(async (tx) => {
+          const changed = await tx.googleWorkspaceConnection.updateMany({
+            // Refresh metadata may legitimately advance version while the
+            // provider revoke is in flight. The opaque reference is the
+            // authoritative identity of the credential that was revoked.
+            where: {
+              id: connection.id,
+              organizationId: context.user.organizationId,
+              secretRef: connection.secretRef,
+              status: { not: 'DISCONNECTED' }
+            },
+            data: { status: 'DISCONNECTED', version: { increment: 1 } }
+          });
+          const latest = await tx.googleWorkspaceConnection.findUniqueOrThrow({ where: { id: connection.id } });
+          if (changed.count === 0) {
+            if (latest.secretRef === connection.secretRef && latest.status === 'DISCONNECTED') return latest;
+            throw new HttpError(409, 'Google connection changed while revocation was in progress');
+          }
+          await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_WORKSPACE_DISCONNECTED', 'GoogleWorkspaceConnection', connection.id, {
+            previousStatus: connection.status,
+            requestedVersion: expectedVersion,
+            appliedVersion: latest.version,
+            internalDataPreserved: true
+          }) });
+          return latest;
+        });
+        let credentialPurged = true;
+        try { await googleAdapter.discardCredentialReference?.(connection.secretRef); }
+        catch {
+          credentialPurged = false;
+          await db.auditLog.create({ data: requestAudit(context, 'GOOGLE_CREDENTIAL_PURGE_FAILED', 'GoogleWorkspaceConnection', connection.id, {
+            secretRefHash: sha256Hex(connection.secretRef)
+          }) }).catch(() => undefined);
+        }
+        sendJson(res, 200, {
+          connection: publicConnection(updated),
+          status: updated.status,
+          internalDataPreserved: true,
+          credentialPurged
+        });
+        return;
+      }
+
+      if (pathname === '/api/google-workspace/test' && req.method === 'POST') {
+        requireGoogleAdmin();
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['expectedVersion'], ['expectedVersion']);
+        const { connection, scopes } = await requireConnectedGoogle();
+        const expectedVersion = boundedInteger(body.expectedVersion, -1, 1, 2_147_483_647, 'expectedVersion');
+        if (connection.version !== expectedVersion) throw new HttpError(409, 'Google connection version conflict');
+        const operation = await db.googleSyncOperation.create({ data: {
+          id: `GSYNC-${crypto.randomUUID()}`,
+          organizationId: context.user.organizationId,
+          operationKind: 'CONNECTION_TEST',
+          requestFingerprint: sha256Hex(`CONNECTION_TEST:${connection.id}:${connection.version}`),
+          status: 'PENDING',
+          actorId: context.user.id
+        } });
+        const { response, attempts } = await executeGoogleCall((signal) => googleAdapter.testConnection({
+          organizationId: connection.organizationId,
+          status: connection.status as 'CONNECTED' | 'EXPIRED' | 'RECONSENT_REQUIRED' | 'DISCONNECTED',
+          grantedScopes: scopes,
+          secretRef: connection.secretRef,
+          tokenExpiresAt: connection.tokenExpiresAt
+        }, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !response.data?.ok) throw await failGoogleOperation(operation.id, response, attempts, 'GOOGLE_CONNECTION_TEST_FAILED');
+        const resultBody = { ok: true, responseClass: response.responseClass, attemptCount: attempts.length };
+        try {
+          await db.$transaction(async (tx) => {
+            await writeGoogleAttempts(tx, operation.id, attempts);
+            await tx.googleSyncOperation.update({ where: { id: operation.id }, data: {
+              status: 'SUCCESS', resultJson: JSON.stringify({ httpStatus: 200, body: resultBody }), completedAt: new Date()
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_CONNECTION_TESTED', 'GoogleSyncOperation', operation.id, {
+              responseClass: response.responseClass, attemptCount: attempts.length
+            }) });
+          });
+        } catch (error) {
+          await deletePendingGoogleOperation(operation.id);
+          throw error;
+        }
+        sendJson(res, 200, resultBody);
+        return;
+      }
+
+      const workspaceMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/workspace$/);
+      if (workspaceMatch && req.method === 'GET') {
+        const caseId = workspaceMatch[1];
+        requireAnyRole(context, GOOGLE_CASE_MATERIAL_ROLES, 'Google case workspace requires a material-access role');
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment is required');
+        const resourceQuery = (url.searchParams.get('resourceQuery') ?? '').trim();
+        if (resourceQuery.length > 100) throw new HttpError(400, 'resourceQuery must be at most 100 characters');
+        const rawLimit = url.searchParams.get('resourceLimit');
+        const resourceLimit = rawLimit === null ? 100 : boundedInteger(Number(rawLimit), 100, 1, 200, 'resourceLimit');
+        const connection = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
+        const safeConnection = connection ? publicConnection(connection) : null;
+        const resources = await db.googleResourceLink.findMany({
+          where: {
+            organizationId: context.user.organizationId,
+            caseId,
+            ...(resourceQuery ? { OR: [
+              { entityType: { contains: resourceQuery } },
+              { externalResourceId: { contains: resourceQuery } },
+              { internalEntityId: { contains: resourceQuery } },
+              { resourceMetadataJson: { contains: resourceQuery } }
+            ] } : {})
+          },
+          orderBy: { createdAt: 'desc' },
+          take: resourceLimit
+        });
+        const history = await db.googleSyncOperation.findMany({
+          where: { organizationId: context.user.organizationId, caseId },
+          include: { attempts: { orderBy: { attemptNumber: 'desc' }, take: 1 } },
+          orderBy: { createdAt: 'desc' },
+          take: 100
+        });
+        const meetings = await db.meeting.findMany({ where: { caseId }, select: {
+          id: true, title: true, meetingDate: true, status: true, version: true
+        }, orderBy: { meetingDate: 'desc' }, take: 100 });
+        const dateCandidates = await loadGoogleDateCandidates(caseId);
+        let gmailAttachments: unknown[] = [];
+        let sheetSources: unknown[] = [];
+        let gmailSourceStatus: { responseClass: GoogleAdapterMode; retryAfterSeconds: number | null } | null = null;
+        let sheetSourceStatus: { responseClass: GoogleAdapterMode; retryAfterSeconds: number | null } | null = null;
+        if (safeConnection?.status === 'CONNECTED') {
+          // Real adapters are intentionally request-scoped. Bind this request to
+          // the exact opaque reference stored on the tenant connection before
+          // listing any provider-owned source data.
+          await requireConnectedGoogle();
+          const [gmail, sheets] = await Promise.all([
+            invokeGoogleProvider((signal) => googleAdapter.listGmailAttachments(caseId, signal)),
+            invokeGoogleProvider((signal) => googleAdapter.listSheetSources(caseId, signal))
+          ]);
+          if (GOOGLE_SUCCESS_CLASSES.has(gmail.responseClass) || GOOGLE_SUCCESS_CLASSES.has(sheets.responseClass)) {
+            await syncGoogleCredentialMetadata();
+          }
+          gmailSourceStatus = { responseClass: gmail.responseClass, retryAfterSeconds: gmail.retryAfterSeconds ?? null };
+          sheetSourceStatus = { responseClass: sheets.responseClass, retryAfterSeconds: sheets.retryAfterSeconds ?? null };
+          if (GOOGLE_SUCCESS_CLASSES.has(gmail.responseClass) && gmail.data) {
+            try { gmailAttachments = projectGmailCandidates(gmail.data); }
+            catch { gmailSourceStatus = { responseClass: 'MALFORMED_PROVIDER_RESPONSE', retryAfterSeconds: null }; }
+          }
+          if (GOOGLE_SUCCESS_CLASSES.has(sheets.responseClass) && sheets.data) {
+            try { sheetSources = projectSheetSources(sheets.data); }
+            catch { sheetSourceStatus = { responseClass: 'MALFORMED_PROVIDER_RESPONSE', retryAfterSeconds: null }; }
+          }
+        }
+        sendJson(res, 200, {
+          caseVersion: caseRow.version,
+          connectionStatus: safeConnection?.status ?? 'DISCONNECTED',
+          resources: resources.map((resource) => {
+            let metadata: Record<string, unknown> = {};
+            try {
+              const parsed: unknown = JSON.parse(resource.resourceMetadataJson);
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) metadata = parsed as Record<string, unknown>;
+            } catch { /* malformed legacy metadata is presented as empty */ }
+            return {
+              id: resource.id,
+              organizationId: resource.organizationId,
+              caseId: resource.caseId,
+              operationId: resource.operationId,
+              entityType: resource.entityType,
+              internalEntityId: resource.internalEntityId,
+              externalResourceId: resource.externalResourceId,
+              createdAt: resource.createdAt,
+              name: metadata.name ?? metadata.folderName ?? metadata.filename ?? metadata.summary ?? metadata.title ?? resource.entityType,
+              webViewLink: metadata.webViewLink ?? metadata.htmlLink ?? null,
+              provenance: metadata.provenance ?? null,
+              metadata
+            };
+          }),
+          history: history.map((operation) => ({
+            id: operation.id,
+            operationKind: operation.operationKind,
+            status: operation.status,
+            responseClass: operation.attempts[0]?.responseClass ?? null,
+            redactedError: operation.attempts[0]?.redactedError ?? null,
+            createdAt: operation.createdAt.toISOString(),
+            completedAt: operation.completedAt?.toISOString() ?? null
+          })),
+          gmailAttachments,
+          gmailSourceStatus,
+          meetings,
+          sheetSources,
+          sheetSourceStatus,
+          dateCandidates
+        });
+        return;
+      }
+
+      const driveMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/drive-folder$/);
+      if (driveMatch && req.method === 'POST') {
+        const caseId = driveMatch[1];
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['idempotencyKey', 'expectedCaseVersion'], ['idempotencyKey', 'expectedCaseVersion']);
+        const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
+        const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
+        const caseRow = await requireGoogleCase(caseId);
+        const fingerprint = sha256Hex(canonicalJson({ caseId, expectedVersion }));
+        const reservation = await reserveGoogleOperation(caseId, 'DRIVE_FOLDER', idempotencyKey, fingerprint);
+        if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }
+        const existingLink = await db.googleResourceLink.findFirst({ where: {
+          organizationId: context.user.organizationId, caseId, entityType: 'CASE_DRIVE_FOLDER', internalEntityId: caseId
+        } });
+        if (existingLink) {
+          await deletePendingGoogleOperation(reservation.operation.id);
+          sendJson(res, 200, { resourceLink: existingLink, folderId: existingLink.externalResourceId, isExisting: true, caseVersion: caseRow.version, idempotentReplay: true });
+          return;
+        }
+        if (caseRow.version !== expectedVersion) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(409, 'Case version conflict'); }
+        const { response, attempts } = await executeGoogleCall(
+          (signal) => googleAdapter.createDriveFolder(caseId, caseRow.title.slice(0, 100), idempotencyKey, signal),
+          GOOGLE_MUTATION_RETRYABLE_CLASSES
+        );
+        if (!GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !response.data) {
+          throw await failGoogleMutationOperation(
+            reservation.operation.id,
+            response,
+            attempts,
+            'GOOGLE_DRIVE_FOLDER_FAILED',
+            `${caseId}:DRIVE_FOLDER:${fingerprint}`
+          );
+        }
+        const rawData = response.data as unknown as Record<string, unknown>;
+        let data: { folderId: string; folderName: string; webViewLink: string; isExisting: boolean };
+        try {
+          if (!hasExactProviderKeys(rawData, ['folderId', 'folderName', 'webViewLink', 'isExisting'])) throw new HttpError(502, 'Google Drive provider response contains unexpected data');
+          if (typeof rawData.isExisting !== 'boolean') throw new HttpError(502, 'Google provider returned an invalid Drive folder status');
+          data = {
+            folderId: validateGoogleProviderId(rawData.folderId, 'Drive folder ID'),
+            folderName: validateGoogleProviderText(rawData.folderName, 'Drive folder name', 200),
+            webViewLink: validateGoogleProviderUrl(rawData.webViewLink, 'drive'),
+            isExisting: rawData.isExisting
+          };
+        } catch (error) {
+          await markGoogleReconciliationRequired(reservation.operation.id, attempts, typeof rawData.folderId === 'string' ? rawData.folderId : 'INVALID_DRIVE_RESOURCE');
+          throw error;
+        }
+        try {
+          const result = await db.$transaction(async (tx) => {
+            const caseVersion = await bumpGoogleCaseVersion(tx, caseId, expectedVersion);
+            await writeGoogleAttempts(tx, reservation.operation.id, attempts);
+            const link = await tx.googleResourceLink.create({ data: {
+              id: `GRLINK-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationId: reservation.operation.id,
+              entityType: 'CASE_DRIVE_FOLDER',
+              internalEntityId: caseId,
+              externalResourceId: data.folderId,
+              resourceMetadataJson: JSON.stringify({ folderName: data.folderName, webViewLink: data.webViewLink })
+            } });
+            const resultBody = { resourceLink: link, folderId: data.folderId, isExisting: false, caseVersion };
+            await tx.googleSyncOperation.update({ where: { id: reservation.operation.id }, data: {
+              status: 'SUCCESS', resultJson: JSON.stringify({ httpStatus: 201, body: resultBody }), completedAt: new Date()
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_DRIVE_FOLDER_CREATED', 'GoogleResourceLink', link.id, {
+              caseId, operationId: reservation.operation.id, attemptCount: attempts.length
+            }) });
+            return resultBody;
+          });
+          sendJson(res, 201, result);
+          return;
+        } catch (error) {
+          const canonical = await db.googleResourceLink.findFirst({ where: { organizationId: context.user.organizationId, caseId, entityType: 'CASE_DRIVE_FOLDER', internalEntityId: caseId } });
+          if (canonical) { sendJson(res, 200, { resourceLink: canonical, folderId: canonical.externalResourceId, isExisting: true, idempotentReplay: true }); return; }
+          await markGoogleReconciliationRequired(reservation.operation.id, attempts, data.folderId);
+          throw error;
         }
       }
 
-      // 7. POST /api/cases/:caseId/google/import-gmail
       const gmailMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/import-gmail$/);
       if (gmailMatch && req.method === 'POST') {
         const caseId = gmailMatch[1];
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
-          throw new HttpError(404, 'Case not found');
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['attachmentIds', 'idempotencyKey', 'expectedCaseVersion'], ['attachmentIds', 'idempotencyKey', 'expectedCaseVersion']);
+        if (!Array.isArray(body.attachmentIds) || body.attachmentIds.length < 1 || body.attachmentIds.length > 10 || !body.attachmentIds.every((id) => typeof id === 'string')) {
+          throw new HttpError(400, 'attachmentIds must contain between 1 and 10 selected IDs');
         }
-
-        const body = (await readJson(req)) as { attachmentIds?: string[] };
-        const selectedIds = Array.isArray(body.attachmentIds) ? body.attachmentIds : [];
-        if (selectedIds.length === 0) throw new HttpError(400, 'At least one attachment ID must be selected');
-
-        const adapterResp = await globalGoogleAdapter.importGmailAttachments(caseId, selectedIds);
-        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
-          throw new HttpError(400, adapterResp.redactedError || 'Failed to import Gmail attachments');
+        const selectedIds = body.attachmentIds.map((id) => strictString(id, 'attachmentId', 1, 100));
+        if (new Set(selectedIds).size !== selectedIds.length) throw new HttpError(400, 'attachmentIds must be unique');
+        const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
+        const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
+        const caseRow = await requireGoogleCase(caseId);
+        const fingerprint = sha256Hex(canonicalJson({ caseId, selectedIds: [...selectedIds].sort(), expectedVersion }));
+        const reservation = await reserveGoogleOperation(caseId, 'GMAIL_IMPORT', idempotencyKey, fingerprint);
+        if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }
+        if (caseRow.version !== expectedVersion) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(409, 'Case version conflict'); }
+        const { response: candidates, attempts: candidateAttempts } = await executeGoogleCall((signal) => googleAdapter.listGmailAttachments(caseId, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(candidates.responseClass) || !candidates.data) {
+          throw await failGoogleOperation(reservation.operation.id, candidates, candidateAttempts, 'GMAIL_IMPORT_FAILED');
         }
+        let safeCandidates: ReturnType<typeof projectGmailCandidates>;
+        try {
+          safeCandidates = projectGmailCandidates(candidates.data);
+        } catch {
+          const malformed: GoogleAdapterResponse<unknown> = { responseClass: 'MALFORMED_PROVIDER_RESPONSE', redactedError: safeGoogleProviderError('MALFORMED_PROVIDER_RESPONSE'), durationMs: candidates.durationMs };
+          const projectedAttempts = candidateAttempts.map((attempt, index) => index === candidateAttempts.length - 1
+            ? { ...attempt, responseClass: 'MALFORMED_PROVIDER_RESPONSE' as const, redactedError: malformed.redactedError }
+            : attempt);
+          throw await failGoogleOperation(reservation.operation.id, malformed, projectedAttempts, 'GMAIL_IMPORT_FAILED');
+        }
+        const candidateIds = new Set(safeCandidates.map((candidate) => candidate.attachmentId));
+        if (selectedIds.some((id) => !candidateIds.has(id))) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(400, 'An attachment was not selected from the current Gmail candidate list'); }
+        const duplicate = await db.googleImportSnapshot.findFirst({ where: {
+          organizationId: context.user.organizationId, caseId, sourceType: 'GMAIL_ATTACHMENT', externalResourceId: { in: selectedIds }
+        } });
+        if (duplicate) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(409, 'A selected Gmail attachment was already imported'); }
+        const { response, attempts } = await executeGoogleCall((signal) => googleAdapter.importGmailAttachments(caseId, selectedIds, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !response.data) throw await failGoogleOperation(reservation.operation.id, response, attempts, 'GMAIL_IMPORT_FAILED');
+        const providerAttachmentIds = response.data.items.map((item) => item.attachmentId);
+        const selectedAttachmentSet = [...selectedIds].sort();
+        const providerAttachmentSet = [...providerAttachmentIds].sort();
+        if (
+          response.data.importedCount !== selectedIds.length
+          || response.data.items.length !== selectedIds.length
+          || new Set(providerAttachmentIds).size !== providerAttachmentIds.length
+          || canonicalJson(providerAttachmentSet) !== canonicalJson(selectedAttachmentSet)
+        ) {
+          const malformedResponse: GoogleAdapterResponse<unknown> = {
+            responseClass: 'MALFORMED_PROVIDER_RESPONSE',
+            redactedError: 'Google Gmail provider response did not match the selected attachment set',
+            durationMs: response.durationMs
+          };
+          const malformedAttempts = attempts.map((attempt, index) => index === attempts.length - 1
+            ? { ...attempt, responseClass: 'MALFORMED_PROVIDER_RESPONSE' as const, redactedError: malformedResponse.redactedError }
+            : attempt);
+          throw await failGoogleOperation(reservation.operation.id, malformedResponse, malformedAttempts, 'GMAIL_IMPORT_FAILED');
+        }
+        const writtenPaths: string[] = [];
+        try {
+          const prepared = response.data.items.map((item) => {
+            const buffer = Buffer.from(item.contentBase64, 'base64');
+            const verified = validateFileSecurity(item.filename, item.mimeType, buffer);
+            if (buffer.length !== item.sizeBytes || sha256Hex(buffer) !== item.sha256) throw new HttpError(502, 'Gmail attachment integrity verification failed');
+            const documentId = `DOC-GMAIL-${crypto.randomUUID()}`;
+            const versionId = `DOCVER-${crypto.randomUUID()}`;
+            const storageKey = `storage-${crypto.randomUUID()}${verified.extension}`;
+            const diskPath = safeStoragePath(uploadDir, storageKey);
+            return { item, buffer, verified, documentId, versionId, storageKey, diskPath };
+          });
+          for (const file of prepared) {
+            fs.writeFileSync(file.diskPath, file.buffer, { flag: 'wx' });
+            writtenPaths.push(file.diskPath);
+          }
+          const result = await db.$transaction(async (tx) => {
+            const caseVersion = await bumpGoogleCaseVersion(tx, caseId, expectedVersion);
+            await writeGoogleAttempts(tx, reservation.operation.id, attempts);
+            const snapshots = [];
+            const documents = [];
+            for (const file of prepared) {
+              const title = `Gmail 첨부: ${file.verified.cleanFilename}`.slice(0, 200);
+              await tx.document.create({ data: {
+                id: file.documentId, caseId, title, category: 'EVIDENCE', source: 'RECEIVED', version: 1
+              } });
+              await tx.documentVersion.create({ data: {
+                id: file.versionId,
+                documentId: file.documentId,
+                versionNumber: 1,
+                originalName: file.verified.cleanFilename,
+                displayName: `${caseRow.caseNumber}_GMAIL_${sanitizeDisplayName(file.verified.cleanFilename)}`.slice(0, 240),
+                storageKey: file.storageKey,
+                fileSize: file.buffer.length,
+                mimeType: file.verified.mimeType,
+                sha256: file.item.sha256,
+                uploadedById: context.user.id
+              } });
+              const document = await tx.document.update({ where: { id: file.documentId }, data: { currentVersionId: file.versionId } });
+              const snapshot = await tx.googleImportSnapshot.create({ data: {
+                id: `GSNAP-${crypto.randomUUID()}`,
+                organizationId: context.user.organizationId,
+                caseId,
+                operationId: reservation.operation.id,
+                sourceType: 'GMAIL_ATTACHMENT',
+                externalResourceId: file.item.attachmentId,
+                sha256: file.item.sha256,
+                provenanceJson: JSON.stringify({
+                  attachmentId: file.item.attachmentId,
+                  filename: file.verified.cleanFilename,
+                  mimeType: file.verified.mimeType,
+                  fileSize: file.buffer.length,
+                  documentId: file.documentId,
+                  documentVersionId: file.versionId,
+                  importedBy: context.user.id
+                }),
+                createdById: context.user.id
+              } });
+              await tx.googleResourceLink.create({ data: {
+                id: `GRLINK-${crypto.randomUUID()}`,
+                organizationId: context.user.organizationId,
+                caseId,
+                operationId: reservation.operation.id,
+                entityType: 'GMAIL_ATTACHMENT',
+                internalEntityId: file.versionId,
+                externalResourceId: file.item.attachmentId,
+                resourceMetadataJson: JSON.stringify({ filename: file.verified.cleanFilename, documentVersionId: file.versionId })
+              } });
+              await tx.auditLog.create({ data: requestAudit(context, 'DOCUMENT_CREATED', 'Document', file.documentId, {
+                source: 'GMAIL_ATTACHMENT', sha256: file.item.sha256, operationId: reservation.operation.id
+              }) });
+              documents.push(document);
+              snapshots.push(snapshot);
+            }
+            const resultBody = { importedCount: snapshots.length, snapshots, documents, caseVersion };
+            await tx.googleSyncOperation.update({ where: { id: reservation.operation.id }, data: {
+              status: 'SUCCESS', resultJson: JSON.stringify({ httpStatus: 201, body: resultBody }), completedAt: new Date()
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GMAIL_ATTACHMENTS_IMPORTED', 'GoogleSyncOperation', reservation.operation.id, {
+              caseId, importedCount: snapshots.length, attachmentIds: selectedIds
+            }) });
+            return resultBody;
+          });
+          sendJson(res, 201, result);
+          return;
+        } catch (error) {
+          for (const diskPath of writtenPaths) fs.rmSync(diskPath, { force: true });
+          await deletePendingGoogleOperation(reservation.operation.id);
+          throw error;
+        }
+      }
 
-        const importData = adapterResp.data;
-
-        const snapshots = [];
-        for (const item of importData.items) {
-          const snapshot = await db.googleImportSnapshot.create({
-            data: {
-              id: `GSNAP-${crypto.randomUUID()}`,
+      const calendarMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/calendar-event$/);
+      if (calendarMatch && req.method === 'POST') {
+        const caseId = calendarMatch[1];
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['dateCandidateId', 'candidateHash', 'humanConfirmed', 'idempotencyKey', 'expectedCaseVersion'],
+          ['dateCandidateId', 'candidateHash', 'humanConfirmed', 'idempotencyKey', 'expectedCaseVersion']);
+        if (body.humanConfirmed !== true) throw new HttpError(400, 'Human confirmation is required before Calendar creation');
+        const dateCandidateId = strictString(body.dateCandidateId, 'dateCandidateId', 1, 100);
+        const candidateHash = strictString(body.candidateHash, 'candidateHash', 64, 64);
+        if (!/^[0-9a-f]{64}$/.test(candidateHash)) throw new HttpError(400, 'candidateHash must be a lowercase SHA-256 value');
+        const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
+        const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
+        const caseRow = await requireGoogleCase(caseId, GOOGLE_CASE_SCHEDULE_ROLES);
+        const candidate = (await loadGoogleDateCandidates(caseId)).find((entry) => entry.id === dateCandidateId);
+        if (!candidate) throw new HttpError(400, 'Date candidate was not selected from this case');
+        if (candidate.candidateHash !== candidateHash) throw new HttpError(409, 'Date candidate changed; review the refreshed provenance before confirming');
+        const internalEntityId = `CAL-${sha256Hex(canonicalJson({ caseId, dateCandidateId, candidateHash })).slice(0, 24)}`;
+        const fingerprint = sha256Hex(canonicalJson({ caseId, dateCandidateId, candidateHash, expectedVersion }));
+        const reservation = await reserveGoogleOperation(caseId, 'CALENDAR_EVENT', idempotencyKey, fingerprint);
+        if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }
+        const existing = await db.googleResourceLink.findFirst({ where: { organizationId: context.user.organizationId, caseId, entityType: 'CALENDAR_EVENT', internalEntityId } });
+        if (existing) { await deletePendingGoogleOperation(reservation.operation.id); sendJson(res, 200, { resourceLink: existing, eventId: existing.externalResourceId, caseVersion: caseRow.version, idempotentReplay: true }); return; }
+        if (caseRow.version !== expectedVersion) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(409, 'Case version conflict'); }
+        const { response, attempts } = await executeGoogleCall(
+          (signal) => googleAdapter.createCalendarEvent(caseId, {
+            summary: candidate.summary,
+            description: `Confirmed from ${candidate.originalLocation}`,
+            startDateTime: candidate.startDateTime,
+            endDateTime: candidate.endDateTime,
+            humanConfirmed: true,
+            sourceParagraphText: candidate.excerpt
+          }, idempotencyKey, signal),
+          GOOGLE_MUTATION_RETRYABLE_CLASSES
+        );
+        if (!GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !response.data) {
+          throw await failGoogleMutationOperation(
+            reservation.operation.id,
+            response,
+            attempts,
+            'GOOGLE_CALENDAR_EVENT_FAILED',
+            `${caseId}:CALENDAR_EVENT:${fingerprint}`
+          );
+        }
+        const rawData = response.data as unknown as Record<string, unknown>;
+        let data: { eventId: string; htmlLink: string; summary: string };
+        try {
+          if (!hasExactProviderKeys(rawData, ['eventId', 'htmlLink', 'summary'])) throw new HttpError(502, 'Google Calendar provider response contains unexpected data');
+          data = {
+            eventId: validateGoogleProviderId(rawData.eventId, 'Calendar event ID'),
+            htmlLink: validateGoogleProviderUrl(rawData.htmlLink, 'calendar'),
+            summary: validateGoogleProviderText(rawData.summary, 'Calendar summary', 500)
+          };
+          if (data.summary !== candidate.summary) throw new HttpError(502, 'Google provider Calendar summary did not match the confirmed candidate');
+        } catch (error) {
+          await markGoogleReconciliationRequired(reservation.operation.id, attempts, typeof rawData.eventId === 'string' ? rawData.eventId : 'INVALID_CALENDAR_RESOURCE');
+          throw error;
+        }
+        try {
+          const result = await db.$transaction(async (tx) => {
+            const currentSource = await tx.meetingActionItem.findUnique({ where: { id: dateCandidateId }, include: { meeting: true } });
+            if (!currentSource || currentSource.meeting.caseId !== caseId) throw new HttpError(409, 'Date candidate source changed during Calendar creation');
+            const currentCandidate = projectGoogleDateCandidate(currentSource);
+            if (currentCandidate.candidateHash !== candidateHash) throw new HttpError(409, 'Date candidate source changed during Calendar creation');
+            const caseVersion = await bumpGoogleCaseVersion(tx, caseId, expectedVersion);
+            await writeGoogleAttempts(tx, reservation.operation.id, attempts);
+            const link = await tx.googleResourceLink.create({ data: {
+              id: `GRLINK-${crypto.randomUUID()}`,
               organizationId: context.user.organizationId,
               caseId,
-              sourceType: 'GMAIL_ATTACHMENT',
-              externalResourceId: item.attachmentId,
-              sha256: item.sha256,
-              provenanceJson: JSON.stringify({
-                attachmentId: item.attachmentId,
-                filename: item.filename,
-                importedAt: new Date().toISOString(),
-                importedBy: context.user.id
-              }),
-              createdById: context.user.id
-            }
+              operationId: reservation.operation.id,
+              entityType: 'CALENDAR_EVENT',
+              internalEntityId,
+              externalResourceId: data.eventId,
+              resourceMetadataJson: JSON.stringify({
+                summary: data.summary,
+                htmlLink: data.htmlLink,
+                startDateTime: candidate.startDateTime,
+                endDateTime: candidate.endDateTime,
+                provenance: {
+                  dateCandidateId,
+                  candidateHash,
+                  confidence: candidate.confidence,
+                  sourceType: candidate.sourceType,
+                  sourceEntityId: candidate.sourceEntityId,
+                  originalLocation: candidate.originalLocation,
+                  excerpt: candidate.excerpt
+                },
+                humanConfirmedBy: context.user.id
+              })
+            } });
+            const resultBody = { event: data, resourceLink: link, caseVersion };
+            await tx.googleSyncOperation.update({ where: { id: reservation.operation.id }, data: {
+              status: 'SUCCESS', resultJson: JSON.stringify({ httpStatus: 201, body: resultBody }), completedAt: new Date()
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_CALENDAR_EVENT_CREATED', 'GoogleResourceLink', link.id, {
+              caseId, operationId: reservation.operation.id, dateCandidateId, candidateHash, humanConfirmed: true
+            }) });
+            return resultBody;
           });
-          snapshots.push(snapshot);
+          sendJson(res, 201, result);
+          return;
+        } catch (error) {
+          await markGoogleReconciliationRequired(reservation.operation.id, attempts, data.eventId);
+          throw error;
         }
-
-        await db.auditLog.create({
-          data: auditData(context, 'GMAIL_ATTACHMENTS_IMPORTED', 'GoogleImportSnapshot', snapshots[0]?.id || caseId, {
-            caseId,
-            importedCount: snapshots.length
-          })
-        });
-
-        sendJson(res, 201, { importedCount: snapshots.length, snapshots });
-        return;
       }
 
-      // 8. POST /api/cases/:caseId/google/calendar-event
-      const calMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/calendar-event$/);
-      if (calMatch && req.method === 'POST') {
-        const caseId = calMatch[1];
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
-          throw new HttpError(404, 'Case not found');
-        }
-
-        const body = (await readJson(req)) as {
-          summary?: string;
-          description?: string;
-          startDateTime?: string;
-          endDateTime?: string;
-          humanConfirmed?: boolean;
-          sourceParagraphText?: string;
-        };
-
-        if (body.humanConfirmed !== true) {
-          throw new HttpError(400, 'Human confirmation checkbox must be explicitly checked before creating Calendar event');
-        }
-
-        if (!body.summary || !body.startDateTime || !body.endDateTime) {
-          throw new HttpError(400, 'summary, startDateTime, and endDateTime are required');
-        }
-
-        const adapterResp = await globalGoogleAdapter.createCalendarEvent(caseId, {
-          summary: body.summary,
-          description: body.description || '',
-          startDateTime: body.startDateTime,
-          endDateTime: body.endDateTime,
-          humanConfirmed: true,
-          sourceParagraphText: body.sourceParagraphText
-        });
-
-        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
-          throw new HttpError(400, adapterResp.redactedError || 'Failed to create Calendar event');
-        }
-
-        const calData = adapterResp.data;
-
-        const resourceLink = await db.googleResourceLink.create({
-          data: {
-            id: `GRLINK-${crypto.randomUUID()}`,
-            organizationId: context.user.organizationId,
-            caseId,
-            entityType: 'CALENDAR_EVENT',
-            internalEntityId: `CAL-EVT-${crypto.randomUUID()}`,
-            externalResourceId: calData.eventId,
-            resourceMetadataJson: JSON.stringify({
-              summary: calData.summary,
-              htmlLink: calData.htmlLink,
-              humanConfirmedAt: new Date().toISOString(),
-              humanConfirmedBy: context.user.id
-            })
-          }
-        });
-
-        await db.auditLog.create({
-          data: auditData(context, 'GOOGLE_CALENDAR_EVENT_CREATED', 'GoogleResourceLink', resourceLink.id, {
-            caseId,
-            eventId: calData.eventId
-          })
-        });
-
-        sendJson(res, 201, { event: calData, resourceLink });
-        return;
-      }
-
-      // 9. POST /api/cases/:caseId/google/export-docs
       const docsMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/export-docs$/);
       if (docsMatch && req.method === 'POST') {
         const caseId = docsMatch[1];
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
-          throw new HttpError(404, 'Case not found');
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['meetingId', 'versionNumber', 'idempotencyKey', 'expectedCaseVersion'], ['meetingId', 'versionNumber', 'idempotencyKey', 'expectedCaseVersion']);
+        const meetingId = strictString(body.meetingId, 'meetingId', 1, 100);
+        const versionNumber = boundedInteger(body.versionNumber, -1, 1, 2_147_483_647, 'versionNumber');
+        const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
+        const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
+        const caseRow = await requireGoogleCase(caseId);
+        const meeting = await db.meeting.findUnique({ where: { id: meetingId } });
+        if (!meeting || meeting.caseId !== caseId) throw new HttpError(404, 'Selected meeting does not belong to this case');
+        if (meeting.version !== versionNumber) throw new HttpError(409, 'Selected meeting version is stale');
+        const internalEntityId = `${meeting.id}:v${versionNumber}`;
+        const content = [meeting.rawText, meeting.summary, meeting.decisions].filter((part): part is string => Boolean(part)).join('\n\n');
+        if (!content) throw new HttpError(409, 'Selected meeting version has no exportable content');
+        const contentSha256 = sha256Hex(content);
+        const fingerprint = sha256Hex(canonicalJson({ caseId, meetingId, versionNumber, contentSha256, expectedVersion }));
+        const reservation = await reserveGoogleOperation(caseId, 'DOCS_EXPORT', idempotencyKey, fingerprint);
+        if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }
+        const existing = await db.googleResourceLink.findFirst({ where: { organizationId: context.user.organizationId, caseId, entityType: 'DOCS_EXPORT', internalEntityId } });
+        if (existing) { await deletePendingGoogleOperation(reservation.operation.id); sendJson(res, 200, { resourceLink: existing, documentId: existing.externalResourceId, caseVersion: caseRow.version, idempotentReplay: true }); return; }
+        if (caseRow.version !== expectedVersion) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(409, 'Case version conflict'); }
+        const { response, attempts } = await executeGoogleCall(
+          (signal) => googleAdapter.exportDocs(caseId, meetingId, versionNumber, meeting.title.slice(0, 200), content, idempotencyKey, signal),
+          GOOGLE_MUTATION_RETRYABLE_CLASSES
+        );
+        if (!GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !response.data) {
+          throw await failGoogleMutationOperation(
+            reservation.operation.id,
+            response,
+            attempts,
+            'GOOGLE_DOCS_EXPORT_FAILED',
+            `${caseId}:DOCS_EXPORT:${fingerprint}`
+          );
         }
-
-        const body = (await readJson(req)) as {
-          meetingId?: string;
-          versionNumber?: number;
-          title?: string;
-          content?: string;
-        };
-
-        if (!body.meetingId || !body.content) throw new HttpError(400, 'meetingId and content are required');
-
-        const adapterResp = await globalGoogleAdapter.exportDocs(caseId, body.meetingId, body.versionNumber || 1, body.title || '회의록 Export', body.content);
-        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
-          throw new HttpError(400, adapterResp.redactedError || 'Failed to export Docs');
-        }
-
-        const docsData = adapterResp.data;
-
-        const resourceLink = await db.googleResourceLink.create({
-          data: {
-            id: `GRLINK-${crypto.randomUUID()}`,
-            organizationId: context.user.organizationId,
-            caseId,
-            entityType: 'DOCS_EXPORT',
-            internalEntityId: body.meetingId,
-            externalResourceId: docsData.documentId,
-            resourceMetadataJson: JSON.stringify({
-              title: docsData.title,
-              webViewLink: docsData.webViewLink,
-              version: docsData.version
-            })
+        const rawData = response.data as unknown as Record<string, unknown>;
+        let data: { documentId: string; title: string; webViewLink: string; version: number };
+        try {
+          if (!hasExactProviderKeys(rawData, ['documentId', 'title', 'webViewLink', 'version'])) throw new HttpError(502, 'Google Docs provider response contains unexpected data');
+          data = {
+            documentId: validateGoogleProviderId(rawData.documentId, 'Docs document ID'),
+            title: validateGoogleProviderText(rawData.title, 'Docs title', 200),
+            webViewLink: validateGoogleProviderUrl(rawData.webViewLink, 'docs'),
+            version: Number(rawData.version)
+          };
+          if (!Number.isInteger(rawData.version) || data.version !== versionNumber || data.title !== meeting.title.slice(0, 200)) {
+            throw new HttpError(502, 'Google provider Docs response did not match the selected meeting version');
           }
-        });
-
-        sendJson(res, 201, { exportResult: docsData, resourceLink });
-        return;
+        } catch (error) {
+          await markGoogleReconciliationRequired(reservation.operation.id, attempts, typeof rawData.documentId === 'string' ? rawData.documentId : 'INVALID_DOCS_RESOURCE');
+          throw error;
+        }
+        try {
+          const result = await db.$transaction(async (tx) => {
+            const currentMeeting = await tx.meeting.findUnique({ where: { id: meetingId } });
+            if (!currentMeeting || currentMeeting.caseId !== caseId || currentMeeting.version !== versionNumber) throw new HttpError(409, 'Meeting changed during Docs export');
+            const caseVersion = await bumpGoogleCaseVersion(tx, caseId, expectedVersion);
+            await writeGoogleAttempts(tx, reservation.operation.id, attempts);
+            const snapshot = await tx.googleImportSnapshot.create({ data: {
+              id: `GSNAP-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationId: reservation.operation.id,
+              sourceType: 'DOCS_TEXT',
+              externalResourceId: data.documentId,
+              sha256: contentSha256,
+              version: versionNumber,
+              provenanceJson: JSON.stringify({
+                meetingId,
+                meetingVersion: versionNumber,
+                contentSha256,
+                exportedDocumentId: data.documentId,
+                exportedBy: context.user.id
+              }),
+              createdById: context.user.id
+            } });
+            const link = await tx.googleResourceLink.create({ data: {
+              id: `GRLINK-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationId: reservation.operation.id,
+              entityType: 'DOCS_EXPORT',
+              internalEntityId,
+              externalResourceId: data.documentId,
+              resourceMetadataJson: JSON.stringify({
+                title: data.title,
+                webViewLink: data.webViewLink,
+                meetingId,
+                versionNumber,
+                contentSha256,
+                snapshotId: snapshot.id
+              })
+            } });
+            const resultBody = { exportResult: data, snapshot, resourceLink: link, caseVersion };
+            await tx.googleSyncOperation.update({ where: { id: reservation.operation.id }, data: {
+              status: 'SUCCESS', resultJson: JSON.stringify({ httpStatus: 201, body: resultBody }), completedAt: new Date()
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_DOCS_EXPORTED', 'GoogleResourceLink', link.id, {
+              caseId, meetingId, versionNumber, operationId: reservation.operation.id
+            }) });
+            return resultBody;
+          });
+          sendJson(res, 201, result);
+          return;
+        } catch (error) {
+          await markGoogleReconciliationRequired(reservation.operation.id, attempts, data.documentId);
+          throw error;
+        }
       }
 
-      // 10. POST /api/cases/:caseId/google/import-sheets
       const sheetsMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/import-sheets$/);
       if (sheetsMatch && req.method === 'POST') {
         const caseId = sheetsMatch[1];
-        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
-        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
-          throw new HttpError(404, 'Case not found');
+        const body = await readJson(req);
+        assertExactJsonFields(body, ['spreadsheetId', 'sheetName', 'rangeA1', 'idempotencyKey', 'expectedCaseVersion'], ['spreadsheetId', 'sheetName', 'rangeA1', 'idempotencyKey', 'expectedCaseVersion']);
+        const spreadsheetId = strictString(body.spreadsheetId, 'spreadsheetId', 1, 100);
+        const sheetName = strictString(body.sheetName, 'sheetName', 1, 100);
+        const rangeA1 = strictString(body.rangeA1, 'rangeA1', 5, 40).toUpperCase();
+        const rangeMatch = rangeA1.match(/^([A-Z]{1,3})([1-9][0-9]{0,5}):([A-Z]{1,3})([1-9][0-9]{0,5})$/);
+        const columnNumber = (letters: string): number => letters.split('').reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0);
+        if (!rangeMatch) throw new HttpError(400, 'rangeA1 must be a bounded A1 rectangle');
+        const startColumn = columnNumber(rangeMatch[1]);
+        const startRow = Number(rangeMatch[2]);
+        const endColumn = columnNumber(rangeMatch[3]);
+        const endRow = Number(rangeMatch[4]);
+        const rows = endRow - startRow + 1;
+        const columns = endColumn - startColumn + 1;
+        if (rows < 1 || columns < 1 || rows > 200 || columns > 26 || rows * columns > 1000) throw new HttpError(400, 'Sheets range exceeds the 200-row, 26-column, or 1000-cell limit');
+        const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
+        const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
+        const caseRow = await requireGoogleCase(caseId);
+        const fingerprint = sha256Hex(canonicalJson({ caseId, spreadsheetId, sheetName, rangeA1, expectedVersion }));
+        const reservation = await reserveGoogleOperation(caseId, 'SHEETS_IMPORT', idempotencyKey, fingerprint);
+        if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }
+        if (caseRow.version !== expectedVersion) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(409, 'Case version conflict'); }
+        const { response: sources, attempts: sourceAttempts } = await executeGoogleCall((signal) => googleAdapter.listSheetSources(caseId, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(sources.responseClass) || !sources.data) {
+          throw await failGoogleOperation(reservation.operation.id, sources, sourceAttempts, 'GOOGLE_SHEETS_IMPORT_FAILED');
         }
-
-        const body = (await readJson(req)) as {
-          spreadsheetId?: string;
-          sheetName?: string;
-          rangeA1?: string;
-        };
-
-        if (!body.spreadsheetId || !body.sheetName || !body.rangeA1) {
-          throw new HttpError(400, 'spreadsheetId, sheetName, and rangeA1 are required');
+        let safeSources: ReturnType<typeof projectSheetSources>;
+        try {
+          safeSources = projectSheetSources(sources.data);
+        } catch {
+          const malformed: GoogleAdapterResponse<unknown> = { responseClass: 'MALFORMED_PROVIDER_RESPONSE', redactedError: safeGoogleProviderError('MALFORMED_PROVIDER_RESPONSE'), durationMs: sources.durationMs };
+          const projectedAttempts = sourceAttempts.map((attempt, index) => index === sourceAttempts.length - 1
+            ? { ...attempt, responseClass: 'MALFORMED_PROVIDER_RESPONSE' as const, redactedError: malformed.redactedError }
+            : attempt);
+          throw await failGoogleOperation(reservation.operation.id, malformed, projectedAttempts, 'GOOGLE_SHEETS_IMPORT_FAILED');
         }
-
-        const adapterResp = await globalGoogleAdapter.importSheets(caseId, {
-          spreadsheetId: body.spreadsheetId,
-          sheetName: body.sheetName,
-          rangeA1: body.rangeA1
-        });
-
-        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
-          throw new HttpError(400, adapterResp.redactedError || 'Failed to import Sheets range');
+        const source = safeSources.find((candidate) => candidate.spreadsheetId === spreadsheetId && candidate.sheetName === sheetName);
+        if (!source) { await deletePendingGoogleOperation(reservation.operation.id); throw new HttpError(400, 'Sheets source was not selected from the current allowlist'); }
+        const allowed = source.allowedRange.match(/^([A-Z]{1,3})([1-9][0-9]{0,5}):([A-Z]{1,3})([1-9][0-9]{0,5})$/);
+        if (!allowed || startColumn < columnNumber(allowed[1]) || startRow < Number(allowed[2]) || endColumn > columnNumber(allowed[3]) || endRow > Number(allowed[4])) {
+          await deletePendingGoogleOperation(reservation.operation.id);
+          throw new HttpError(400, 'Sheets range is outside the selected source allowlist');
         }
-
-        const sheetsData = adapterResp.data;
-
-        const snapshot = await db.googleImportSnapshot.create({
-          data: {
-            id: `GSNAP-${crypto.randomUUID()}`,
-            organizationId: context.user.organizationId,
-            caseId,
-            sourceType: 'SHEETS_RANGE',
-            externalResourceId: `${body.spreadsheetId}!${body.sheetName}:${body.rangeA1}`,
-            sha256: sheetsData.sha256,
-            provenanceJson: JSON.stringify({
-              spreadsheetId: body.spreadsheetId,
-              sheetName: body.sheetName,
-              rangeA1: body.rangeA1,
-              rowCount: sheetsData.rowCount,
-              columnCount: sheetsData.columnCount
-            }),
-            createdById: context.user.id
+        const { response, attempts } = await executeGoogleCall((signal) => googleAdapter.importSheets(caseId, { spreadsheetId, sheetName, rangeA1 }, signal));
+        if (!GOOGLE_SUCCESS_CLASSES.has(response.responseClass) || !response.data) throw await failGoogleOperation(reservation.operation.id, response, attempts, 'GOOGLE_SHEETS_IMPORT_FAILED');
+        const data = response.data;
+        let parsedValues: Record<string, unknown> | null = null;
+        let providerRows: unknown[][] = [];
+        let providerHeaders: unknown[] = [];
+        try {
+          const valueBytes = Buffer.byteLength(data.valuesJson, 'utf8');
+          if (valueBytes < 2 || valueBytes > 1_000_000) throw new Error('valuesJson size is outside the accepted boundary');
+          const parsed: unknown = JSON.parse(data.valuesJson);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('valuesJson must be an object');
+          parsedValues = parsed as Record<string, unknown>;
+          const allowedKeys = ['headers', 'range', 'rows', 'sheetName', 'spreadsheetId'];
+          if (canonicalJson(Object.keys(parsedValues).sort()) !== canonicalJson(allowedKeys)) throw new Error('valuesJson contains unexpected fields');
+          if (parsedValues.spreadsheetId !== spreadsheetId || parsedValues.sheetName !== sheetName || parsedValues.range !== rangeA1) {
+            throw new Error('valuesJson source binding mismatch');
           }
-        });
-
-        sendJson(res, 201, { snapshot, valuesJson: sheetsData.valuesJson });
-        return;
+          if (!Array.isArray(parsedValues.headers) || !parsedValues.headers.every((value) => typeof value === 'string')) throw new Error('invalid header row');
+          if (!Array.isArray(parsedValues.rows) || !parsedValues.rows.every((row) => Array.isArray(row))) throw new Error('invalid sheet rows');
+          providerHeaders = parsedValues.headers;
+          providerRows = parsedValues.rows as unknown[][];
+          const validCell = (value: unknown): boolean => value === null || ['string', 'number', 'boolean'].includes(typeof value);
+          if (!providerRows.every((row) => row.every(validCell))) throw new Error('invalid sheet cell type');
+          const observedColumnCount = Math.max(providerHeaders.length, ...providerRows.map((row) => row.length));
+          if (!Number.isInteger(data.rowCount) || !Number.isInteger(data.columnCount)
+            || data.rowCount !== providerRows.length || data.columnCount !== observedColumnCount
+            || data.rowCount < 0 || data.rowCount > rows || data.columnCount < 1 || data.columnCount > columns
+            || providerHeaders.length !== data.columnCount || providerRows.some((row) => row.length > data.columnCount)) {
+            throw new Error('sheet dimensions do not match the selected range');
+          }
+          if (!/^[0-9a-f]{64}$/.test(data.sha256) || sha256Hex(Buffer.from(data.valuesJson, 'utf8')) !== data.sha256) {
+            throw new Error('sheet snapshot hash mismatch');
+          }
+          if (!/^[A-Za-z0-9._:-]{1,200}$/.test(data.snapshotId)) throw new Error('invalid provider snapshot identifier');
+        } catch {
+          const malformedResponse: GoogleAdapterResponse<unknown> = {
+            responseClass: 'MALFORMED_PROVIDER_RESPONSE',
+            redactedError: 'Google Sheets provider response failed integrity and range validation',
+            durationMs: response.durationMs
+          };
+          const malformedAttempts = attempts.map((attempt, index) => index === attempts.length - 1
+            ? { ...attempt, responseClass: 'MALFORMED_PROVIDER_RESPONSE' as const, redactedError: malformedResponse.redactedError }
+            : attempt);
+          throw await failGoogleOperation(reservation.operation.id, malformedResponse, malformedAttempts, 'GOOGLE_SHEETS_IMPORT_FAILED');
+        }
+        try {
+          const result = await db.$transaction(async (tx) => {
+            const caseVersion = await bumpGoogleCaseVersion(tx, caseId, expectedVersion);
+            await writeGoogleAttempts(tx, reservation.operation.id, attempts);
+            const externalResourceId = `${spreadsheetId}!${sheetName}:${rangeA1}`;
+            const snapshot = await tx.googleImportSnapshot.create({ data: {
+              id: `GSNAP-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationId: reservation.operation.id,
+              sourceType: 'SHEETS_RANGE',
+              externalResourceId,
+              sha256: data.sha256,
+              provenanceJson: JSON.stringify({
+                spreadsheetId,
+                sheetName,
+                rangeA1,
+                allowedRange: source.allowedRange,
+                rowCount: data.rowCount,
+                columnCount: data.columnCount,
+                providerSnapshotId: data.snapshotId,
+                importedBy: context.user.id
+              }),
+              createdById: context.user.id
+            } });
+            const link = await tx.googleResourceLink.create({ data: {
+              id: `GRLINK-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationId: reservation.operation.id,
+              entityType: 'SHEETS_RANGE',
+              internalEntityId: snapshot.id,
+              externalResourceId,
+              resourceMetadataJson: JSON.stringify({ snapshotId: snapshot.id, providerSnapshotId: data.snapshotId, rowCount: data.rowCount, columnCount: data.columnCount })
+            } });
+            const resultBody = { snapshot, resourceLink: link, valuesJson: data.valuesJson, caseVersion };
+            await tx.googleSyncOperation.update({ where: { id: reservation.operation.id }, data: {
+              status: 'SUCCESS', resultJson: JSON.stringify({ httpStatus: 201, body: resultBody }), completedAt: new Date()
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'GOOGLE_SHEETS_IMPORTED', 'GoogleImportSnapshot', snapshot.id, {
+              caseId, operationId: reservation.operation.id, spreadsheetId, sheetName, rangeA1
+            }) });
+            return resultBody;
+          });
+          sendJson(res, 201, result);
+          return;
+        } catch (error) { await deletePendingGoogleOperation(reservation.operation.id); throw error; }
       }
 
       throw new HttpError(404, 'Endpoint not found');

@@ -40,8 +40,25 @@ export interface GmailImportResult {
     attachmentId: string;
     documentId: string;
     filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    contentBase64: string;
     sha256: string;
   }>;
+}
+
+export interface GmailAttachmentCandidate {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+export interface SheetSourceCandidate {
+  spreadsheetId: string;
+  sheetName: string;
+  allowedRange: string;
+  displayName: string;
 }
 
 export interface CalendarEventInput {
@@ -89,13 +106,27 @@ export interface GoogleAdapterResponse<T> {
 }
 
 export interface GoogleWorkspaceAdapter {
-  testConnection(connection: GoogleWorkspaceConnectionInfo): Promise<GoogleAdapterResponse<{ ok: boolean }>>;
-  createDriveFolder(caseId: string, caseTitle: string, idempotencyKey?: string): Promise<GoogleAdapterResponse<DriveFolderResult>>;
-  importGmailAttachments(caseId: string, selectedAttachmentIds: string[]): Promise<GoogleAdapterResponse<GmailImportResult>>;
-  createCalendarEvent(caseId: string, input: CalendarEventInput): Promise<GoogleAdapterResponse<CalendarEventResult>>;
-  exportDocs(caseId: string, meetingId: string, versionNumber: number, title: string, content: string): Promise<GoogleAdapterResponse<DocsExportResult>>;
-  importSheets(caseId: string, input: SheetsImportInput): Promise<GoogleAdapterResponse<SheetsImportResult>>;
-  revokeConnection(secretRef: string): Promise<GoogleAdapterResponse<{ revoked: boolean }>>;
+  /** Selects an opaque server-side credential reference before connected calls. */
+  useCredential?(secretRef: string): void;
+  /** Removes newly exchanged credential material when local persistence fails. */
+  discardCredentialReference?(secretRef: string): Promise<void>;
+  /** Returns non-secret metadata after an adapter refreshes a credential. */
+  getCredentialMetadata?(secretRef: string): Promise<{ expiresAt: Date; grantedScopes: string[] } | null>;
+  createAuthorizationUrl(input: {
+    state: string;
+    codeChallenge: string;
+    scopes: readonly string[];
+  }): string;
+  exchangeAuthorizationCode(code: string, pkceVerifier: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<{ grantedScopes: string[]; secretRef: string; expiresInSeconds: number }>>;
+  testConnection(connection: GoogleWorkspaceConnectionInfo, signal?: AbortSignal): Promise<GoogleAdapterResponse<{ ok: boolean }>>;
+  listGmailAttachments(caseId: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<GmailAttachmentCandidate[]>>;
+  listSheetSources(caseId: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<SheetSourceCandidate[]>>;
+  createDriveFolder(caseId: string, caseTitle: string, idempotencyKey?: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<DriveFolderResult>>;
+  importGmailAttachments(caseId: string, selectedAttachmentIds: string[], signal?: AbortSignal): Promise<GoogleAdapterResponse<GmailImportResult>>;
+  createCalendarEvent(caseId: string, input: CalendarEventInput, idempotencyKey: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<CalendarEventResult>>;
+  exportDocs(caseId: string, meetingId: string, versionNumber: number, title: string, content: string, idempotencyKey: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<DocsExportResult>>;
+  importSheets(caseId: string, input: SheetsImportInput, signal?: AbortSignal): Promise<GoogleAdapterResponse<SheetsImportResult>>;
+  revokeConnection(secretRef: string, signal?: AbortSignal): Promise<GoogleAdapterResponse<{ revoked: boolean }>>;
 }
 
 export const REQUIRED_GOOGLE_SCOPES = [
