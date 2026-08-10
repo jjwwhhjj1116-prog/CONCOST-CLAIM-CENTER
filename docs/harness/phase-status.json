@@ -234,6 +234,12 @@
         "docs/reviews/P13-codex-review.json",
         "docs/harness/P14-antigravity-handoff.md"
       ]
+    },
+    "P14": {
+      "name": "Google Workspace Integration",
+      "status": "IN_PROGRESS",
+      "gatePassed": false,
+      "startedAt": "2026-08-10T13:50:00+09:00"
     }
   }
 }
