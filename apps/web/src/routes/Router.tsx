@@ -7,6 +7,7 @@ import { ReportStudio } from '../reports/ReportStudio';
 import { ReportList } from '../reports/ReportList';
 import { ApprovalInbox } from '../reports/ApprovalInbox';
 import { AiConfigManager } from '../ai/AiConfigManager';
+import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -213,6 +214,14 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
     return (
       <section className="route-view" aria-labelledby="route-title">
         <AiConfigManager roles={roles} />
+      </section>
+    );
+  }
+
+  if (currentRoute.id === 'FEE-01') {
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <FeeSuccessCompensation roles={roles} onNavigate={onNavigate} />
       </section>
     );
   }

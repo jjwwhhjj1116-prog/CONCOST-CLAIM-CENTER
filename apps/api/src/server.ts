@@ -5512,6 +5512,435 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
+      // -----------------------------------------------------------------------
+      // P13 Fee & Success Compensation API Endpoints
+      // -----------------------------------------------------------------------
+      function calculateFeeHalfUp(baseAmount: bigint, feeRateBps: number, isTaxInclusive: boolean) {
+        if (baseAmount < 0n) throw new HttpError(400, 'Base amount cannot be negative');
+        if (feeRateBps < 0 || feeRateBps > 100000) throw new HttpError(400, 'Fee rate bps must be between 0 and 100000');
+
+        const calculatedFee = (baseAmount * BigInt(feeRateBps) + 5000n) / 10000n;
+        let taxAmount = 0n;
+        let totalClaimFee = 0n;
+
+        if (isTaxInclusive) {
+          totalClaimFee = calculatedFee;
+          const preTax = (calculatedFee * 10n + 5n) / 11n;
+          taxAmount = calculatedFee - preTax;
+        } else {
+          taxAmount = (calculatedFee * 10n + 5n) / 100n;
+          totalClaimFee = calculatedFee + taxAmount;
+        }
+        return { calculatedFee, taxAmount, totalClaimFee };
+      }
+
+      // 1. GET /api/cases/:caseId/fee-compensation
+      const feeGetMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-compensation$/);
+      if (feeGetMatch && req.method === 'GET') {
+        const caseId = feeGetMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const config = await db.caseFeeConfig.findUnique({ where: { caseId } });
+        const calculations = await db.caseFeeCalculation.findMany({
+          where: { caseId },
+          include: { actor: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' }
+        });
+        const payments = await db.caseFeePayment.findMany({
+          where: { caseId },
+          include: { actor: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' }
+        });
+        const audits = await db.caseFeeAudit.findMany({
+          where: { caseId },
+          include: { actor: { select: { id: true, name: true, email: true } } },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        const finalCalc = calculations.find((c) => c.calcType === 'FINAL');
+        const estCalc = calculations.find((c) => c.calcType === 'ESTIMATED');
+        const activeCalc = finalCalc || estCalc;
+
+        const totalClaimFee = activeCalc ? activeCalc.totalClaimFee : 0n;
+        const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0n);
+        const rawUnpaid = totalClaimFee - totalPaid;
+        const unpaidBalance = rawUnpaid > 0n ? rawUnpaid : 0n;
+
+        sendJson(res, 200, {
+          config: config ? {
+            ...config,
+            contractAmount: config.contractAmount.toString(),
+            baseAmount: config.baseAmount.toString()
+          } : null,
+          calculations: calculations.map((c) => ({
+            ...c,
+            contractAmount: c.contractAmount.toString(),
+            baseAmount: c.baseAmount.toString(),
+            calculatedFee: c.calculatedFee.toString(),
+            taxAmount: c.taxAmount.toString(),
+            totalClaimFee: c.totalClaimFee.toString()
+          })),
+          payments: payments.map((p) => ({
+            ...p,
+            amount: p.amount.toString()
+          })),
+          audits: audits.map((a) => ({
+            ...a,
+            unpaidBalance: a.unpaidBalance.toString()
+          })),
+          summary: {
+            contractAmount: (config?.contractAmount ?? 0n).toString(),
+            baseAmount: (config?.baseAmount ?? 0n).toString(),
+            feeRateBps: config?.feeRateBps ?? 0,
+            hasSuccessFee: config?.hasSuccessFee ?? true,
+            isTaxInclusive: config?.isTaxInclusive ?? false,
+            confirmedFee: (finalCalc?.totalClaimFee ?? 0n).toString(),
+            estimatedFee: (estCalc?.totalClaimFee ?? 0n).toString(),
+            totalPaid: totalPaid.toString(),
+            unpaidBalance: unpaidBalance.toString(),
+            status: config?.status ?? 'DRAFT'
+          }
+        });
+        return;
+      }
+
+      // 2. POST /api/cases/:caseId/fee-compensation/calculate
+      const feeCalcMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-compensation\/calculate$/);
+      if (feeCalcMatch && req.method === 'POST') {
+        const caseId = feeCalcMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const canWrite = context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r.toLowerCase()));
+        if (!canWrite) throw new HttpError(403, 'Fee compensation entry requires PM or higher role');
+
+        const body = (await readJson(req)) as {
+          contractAmount?: string | number;
+          hasSuccessFee?: boolean;
+          baseAmount?: string | number;
+          feeRateBps?: number;
+          isTaxInclusive?: boolean;
+          calcType?: 'ESTIMATED' | 'FINAL';
+          idempotencyKey?: string;
+        };
+
+        const calcType = body.calcType === 'FINAL' ? 'FINAL' : 'ESTIMATED';
+
+        if (calcType === 'FINAL') {
+          const canFinalize = context.roles.some((r) => ['admin', 'director', 'ceo'].includes(r.toLowerCase()));
+          if (!canFinalize) throw new HttpError(403, 'Final fee approval requires Director or CEO role');
+        }
+
+        if (body.idempotencyKey) {
+          const existingCalc = await db.caseFeeCalculation.findUnique({
+            where: { idempotencyKey: body.idempotencyKey }
+          });
+          if (existingCalc) {
+            sendJson(res, 200, {
+              calculation: {
+                ...existingCalc,
+                contractAmount: existingCalc.contractAmount.toString(),
+                baseAmount: existingCalc.baseAmount.toString(),
+                calculatedFee: existingCalc.calculatedFee.toString(),
+                taxAmount: existingCalc.taxAmount.toString(),
+                totalClaimFee: existingCalc.totalClaimFee.toString()
+              },
+              idempotentReplay: true
+            });
+            return;
+          }
+        }
+
+        const contractAmount = BigInt(String(body.contractAmount ?? 0));
+        const baseAmount = BigInt(String(body.baseAmount ?? 0));
+        const feeRateBps = Number(body.feeRateBps ?? 0);
+        const hasSuccessFee = body.hasSuccessFee !== false;
+        const isTaxInclusive = body.isTaxInclusive === true;
+
+        if (contractAmount < 0n || baseAmount < 0n) throw new HttpError(400, 'Amounts cannot be negative');
+        if (feeRateBps < 0 || feeRateBps > 100000) throw new HttpError(400, 'Fee rate bps must be between 0 and 100000');
+
+        const { calculatedFee, taxAmount, totalClaimFee } = calculateFeeHalfUp(baseAmount, feeRateBps, isTaxInclusive);
+
+        const calcResult = await db.$transaction(async (tx) => {
+          let config = await tx.caseFeeConfig.findUnique({ where: { caseId } });
+          const configId = config ? config.id : `FEECFG-${crypto.randomUUID()}`;
+
+          if (!config) {
+            config = await tx.caseFeeConfig.create({
+              data: {
+                id: configId,
+                organizationId: context.user.organizationId,
+                caseId,
+                contractAmount,
+                hasSuccessFee,
+                baseAmount,
+                feeRateBps,
+                isTaxInclusive,
+                status: calcType === 'FINAL' ? 'CONFIRMED' : 'DRAFT',
+                version: 1
+              }
+            });
+          } else {
+            config = await tx.caseFeeConfig.update({
+              where: { id: configId },
+              data: {
+                contractAmount,
+                hasSuccessFee,
+                baseAmount,
+                feeRateBps,
+                isTaxInclusive,
+                status: calcType === 'FINAL' ? 'CONFIRMED' : config.status,
+                version: { increment: 1 }
+              }
+            });
+          }
+
+          const calcId = `FEECALC-${crypto.randomUUID()}`;
+          const calcRecord = await tx.caseFeeCalculation.create({
+            data: {
+              id: calcId,
+              organizationId: context.user.organizationId,
+              caseId,
+              feeConfigId: configId,
+              calcType,
+              contractAmount,
+              baseAmount,
+              feeRateBps,
+              isTaxInclusive,
+              calculatedFee,
+              taxAmount,
+              totalClaimFee,
+              formulaVersion: 'HALF_UP_BPS_V1',
+              actorId: context.user.id,
+              idempotencyKey: body.idempotencyKey || null
+            }
+          });
+
+          await tx.caseFeeAudit.create({
+            data: {
+              id: `FEEAUDIT-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              action: calcType === 'FINAL' ? 'FINALIZED' : 'CALCULATED',
+              unpaidBalance: totalClaimFee,
+              detailsJson: JSON.stringify({ calcId, calculatedFee: calculatedFee.toString(), totalClaimFee: totalClaimFee.toString() }),
+              actorId: context.user.id
+            }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, calcType === 'FINAL' ? 'FEE_FINALIZED' : 'FEE_CALCULATED', 'CaseFeeCalculation', calcId, {
+              caseId,
+              calcType,
+              totalClaimFee: totalClaimFee.toString()
+            })
+          });
+
+          return calcRecord;
+        });
+
+        sendJson(res, 201, {
+          calculation: {
+            ...calcResult,
+            contractAmount: calcResult.contractAmount.toString(),
+            baseAmount: calcResult.baseAmount.toString(),
+            calculatedFee: calcResult.calculatedFee.toString(),
+            taxAmount: calcResult.taxAmount.toString(),
+            totalClaimFee: calcResult.totalClaimFee.toString()
+          },
+          idempotentReplay: false
+        });
+        return;
+      }
+
+      // 3. POST /api/cases/:caseId/fee-compensation/payments
+      const feePayMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-compensation\/payments$/);
+      if (feePayMatch && req.method === 'POST') {
+        const caseId = feePayMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const canWrite = context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r.toLowerCase()));
+        if (!canWrite) throw new HttpError(403, 'Payment recording requires PM or higher role');
+
+        const body = (await readJson(req)) as {
+          amount?: string | number;
+          paymentDate?: string;
+          paymentType?: 'PARTIAL' | 'FULL' | 'ADJUSTMENT';
+          invoiceStatus?: 'NOT_ISSUED' | 'ISSUED' | 'EXEMPT';
+          invoiceIssuedAt?: string;
+          invoiceNumber?: string;
+          note?: string;
+          idempotencyKey?: string;
+        };
+
+        if (body.idempotencyKey) {
+          const existingPayment = await db.caseFeePayment.findUnique({
+            where: { idempotencyKey: body.idempotencyKey }
+          });
+          if (existingPayment) {
+            sendJson(res, 200, {
+              payment: {
+                ...existingPayment,
+                amount: existingPayment.amount.toString()
+              },
+              idempotentReplay: true
+            });
+            return;
+          }
+        }
+
+        const config = await db.caseFeeConfig.findUnique({ where: { caseId } });
+        if (!config) throw new HttpError(400, 'Fee configuration must exist before recording payment');
+
+        const amount = BigInt(String(body.amount ?? 0));
+        const paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
+
+        const payResult = await db.$transaction(async (tx) => {
+          const payId = `FEEPAY-${crypto.randomUUID()}`;
+          const payRecord = await tx.caseFeePayment.create({
+            data: {
+              id: payId,
+              organizationId: context.user.organizationId,
+              caseId,
+              feeConfigId: config.id,
+              paymentType: body.paymentType || 'PARTIAL',
+              amount,
+              paymentDate,
+              invoiceStatus: body.invoiceStatus || 'NOT_ISSUED',
+              invoiceIssuedAt: body.invoiceIssuedAt ? new Date(body.invoiceIssuedAt) : null,
+              invoiceNumber: body.invoiceNumber || null,
+              note: body.note || null,
+              actorId: context.user.id,
+              idempotencyKey: body.idempotencyKey || null
+            }
+          });
+
+          const allPayments = await tx.caseFeePayment.findMany({ where: { caseId } });
+          const totalPaid = allPayments.reduce((acc, p) => acc + p.amount, 0n);
+          const lastCalc = await tx.caseFeeCalculation.findFirst({
+            where: { caseId },
+            orderBy: { createdAt: 'desc' }
+          });
+          const totalClaimFee = lastCalc ? lastCalc.totalClaimFee : 0n;
+          const rawUnpaid = totalClaimFee - totalPaid;
+          const unpaidBalance = rawUnpaid > 0n ? rawUnpaid : 0n;
+
+          await tx.caseFeeAudit.create({
+            data: {
+              id: `FEEAUDIT-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              action: 'PAYMENT_ADDED',
+              unpaidBalance,
+              detailsJson: JSON.stringify({ payId, amount: amount.toString(), totalPaid: totalPaid.toString() }),
+              actorId: context.user.id
+            }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'FEE_PAYMENT_RECORDED', 'CaseFeePayment', payId, {
+              caseId,
+              amount: amount.toString(),
+              unpaidBalance: unpaidBalance.toString()
+            })
+          });
+
+          return payRecord;
+        });
+
+        sendJson(res, 201, {
+          payment: {
+            ...payResult,
+            amount: payResult.amount.toString()
+          },
+          idempotentReplay: false
+        });
+        return;
+      }
+
+      // 4. POST /api/cases/:caseId/close-with-unpaid-check
+      const closeCheckMatch = pathname.match(/^\/api\/cases\/([^/]+)\/close-with-unpaid-check$/);
+      if (closeCheckMatch && req.method === 'POST') {
+        const caseId = closeCheckMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const canWrite = context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r.toLowerCase()));
+        if (!canWrite) throw new HttpError(403, 'Case closure requires PM or higher role');
+
+        const body = await readJson(req) as { forceClose?: boolean };
+
+        const lastCalc = await db.caseFeeCalculation.findFirst({
+          where: { caseId },
+          orderBy: { createdAt: 'desc' }
+        });
+        const payments = await db.caseFeePayment.findMany({ where: { caseId } });
+        const totalClaimFee = lastCalc ? lastCalc.totalClaimFee : 0n;
+        const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0n);
+        const rawUnpaid = totalClaimFee - totalPaid;
+        const unpaidBalance = rawUnpaid > 0n ? rawUnpaid : 0n;
+
+        if (unpaidBalance > 0n && !body.forceClose) {
+          await db.caseFeeAudit.create({
+            data: {
+              id: `FEEAUDIT-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              action: 'UNPAID_CLOSE_ATTEMPTED',
+              unpaidBalance,
+              detailsJson: JSON.stringify({ rejected: true, reason: 'Unpaid balance remains' }),
+              actorId: context.user.id
+            }
+          });
+          throw new HttpError(409, 'Unpaid balance remains for this case', {
+            unpaidBalance: unpaidBalance.toString(),
+            requiresConfirmation: true
+          });
+        }
+
+        const updatedCase = await db.$transaction(async (tx) => {
+          const updated = await tx.caseItem.update({
+            where: { id: caseId },
+            data: { status: 'CLOSED' }
+          });
+
+          await tx.caseFeeAudit.create({
+            data: {
+              id: `FEEAUDIT-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              action: unpaidBalance > 0n ? 'UNPAID_CLOSED' : 'CLOSED',
+              unpaidBalance,
+              detailsJson: JSON.stringify({ forced: body.forceClose || false }),
+              actorId: context.user.id
+            }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'CASE_CLOSED', 'CaseItem', caseId, {
+              unpaidBalance: unpaidBalance.toString(),
+              forced: body.forceClose || false
+            })
+          });
+
+          return updated;
+        });
+
+        sendJson(res, 200, { case: updatedCase, unpaidBalance: unpaidBalance.toString() });
+        return;
+      }
+
       throw new HttpError(404, 'Endpoint not found');
     })().catch((error: unknown) => {
       if (error instanceof HttpError) {

@@ -26,6 +26,10 @@ model Organization {
   reportFinalizations ReportFinalization[]
   reportOutputArtifacts ReportOutputArtifact[]
   reportOutputDownloads ReportOutputDownload[]
+  feeConfigs            CaseFeeConfig[]
+  feeCalculations       CaseFeeCalculation[]
+  feePayments           CaseFeePayment[]
+  feeAudits             CaseFeeAudit[]
 }
 
 model User {
@@ -70,6 +74,9 @@ model User {
   finalizedReports       ReportFinalization[]  @relation("ReportFinalizedBy")
   approvedFinalizationSections ReportFinalizationSection[] @relation("FinalizationSectionApprovedBy")
   downloadedReportOutputs ReportOutputDownload[] @relation("ReportOutputDownloadedBy")
+  feeCalculations        CaseFeeCalculation[]  @relation("FeeCalculatedBy")
+  feePayments            CaseFeePayment[]      @relation("FeePaymentRecordedBy")
+  feeAudits              CaseFeeAudit[]        @relation("FeeAuditActor")
 }
 
 model Role {
@@ -131,8 +138,12 @@ model CaseItem {
   reviewRequests        ReportReviewRequest[]
   finalizations         ReportFinalization[]
   outputArtifacts       ReportOutputArtifact[]
-  outputDownloads       ReportOutputDownload[]
+  downloadedReportOutputs ReportOutputDownload[]
   draftSuggestions AiDraftSuggestion[]
+  feeConfig             CaseFeeConfig?
+  feeCalculations       CaseFeeCalculation[]
+  feePayments           CaseFeePayment[]
+  feeAudits             CaseFeeAudit[]
 
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
@@ -1084,5 +1095,99 @@ model ReportOutputDownload {
   @@index([organizationId, caseId])
   @@index([artifactId])
   @@index([downloadedById])
+}
+
+model CaseFeeConfig {
+  id             String   @id
+  organizationId String
+  caseId         String   @unique
+  contractAmount BigInt   @default(0)
+  hasSuccessFee  Boolean  @default(true)
+  baseAmount     BigInt   @default(0)
+  feeRateBps     Int      @default(0)
+  isTaxInclusive Boolean  @default(false)
+  status         String   @default("DRAFT")
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  calculations CaseFeeCalculation[]
+  payments     CaseFeePayment[]
+
+  @@index([organizationId, caseId])
+}
+
+model CaseFeeCalculation {
+  id             String   @id
+  organizationId String
+  caseId         String
+  feeConfigId    String
+  calcType       String   @default("ESTIMATED")
+  contractAmount BigInt   @default(0)
+  baseAmount     BigInt   @default(0)
+  feeRateBps     Int      @default(0)
+  isTaxInclusive Boolean  @default(false)
+  calculatedFee  BigInt   @default(0)
+  taxAmount      BigInt   @default(0)
+  totalClaimFee  BigInt   @default(0)
+  formulaVersion String   @default("HALF_UP_BPS_V1")
+  actorId        String
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem      @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  feeConfig    CaseFeeConfig @relation(fields: [feeConfigId], references: [id], onDelete: Restrict)
+  actor        User          @relation("FeeCalculatedBy", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([feeConfigId])
+  @@index([actorId])
+}
+
+model CaseFeePayment {
+  id              String    @id
+  organizationId  String
+  caseId          String
+  feeConfigId     String
+  paymentType     String    @default("PARTIAL")
+  amount          BigInt    @default(0)
+  paymentDate     DateTime  @default(now())
+  invoiceStatus   String    @default("NOT_ISSUED")
+  invoiceIssuedAt DateTime?
+  invoiceNumber   String?
+  note            String?
+  actorId         String
+  idempotencyKey  String?   @unique
+  createdAt       DateTime  @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem      @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  feeConfig    CaseFeeConfig @relation(fields: [feeConfigId], references: [id], onDelete: Restrict)
+  actor        User          @relation("FeePaymentRecordedBy", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([feeConfigId])
+  @@index([actorId])
+}
+
+model CaseFeeAudit {
+  id             String   @id
+  organizationId String
+  caseId         String
+  action         String
+  unpaidBalance  BigInt   @default(0)
+  detailsJson    String   @default("{}")
+  actorId        String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem     @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  actor        User         @relation("FeeAuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([actorId])
 }
 
