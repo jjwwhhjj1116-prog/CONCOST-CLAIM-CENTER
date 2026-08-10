@@ -1,7 +1,7 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-10T17:03:54+09:00",
-  "currentPhase": "P14",
+  "updatedAt": "2026-08-10T17:15:00+09:00",
+  "currentPhase": "P15",
   "nextPhaseAllowed": true,
   "phases": {
     "P00": { "status": "PASS", "updatedAt": "2026-08-06T01:10:00Z" },
@@ -279,10 +279,47 @@
     },
     "P15": {
       "name": "Integrated Quality, Security, Accessibility, Performance & Recovery",
-      "status": "NOT_STARTED",
+      "status": "COMPLETED",
+      "verdict": "PASS_WITH_NOTES",
+      "gatePassed": true,
+      "completedAt": "2026-08-10T17:35:00+09:00",
+      "startedAt": "2026-08-10T17:15:00+09:00",
       "entryAllowed": true,
+      "nextPhaseAllowed": true,
       "predecessor": "P14",
-      "handoff": "docs/harness/P15-antigravity-handoff.md"
+      "handoff": "docs/harness/P15-antigravity-handoff.md",
+      "openDefects": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0
+      },
+      "qualityGateSummary": {
+        "install": "PASS",
+        "dbReset": "PASS",
+        "dbMigrate": "PASS",
+        "dbSeed": "PASS",
+        "lint": "PASS (0 warnings)",
+        "typecheck": "PASS",
+        "test": "PASS (104/104 contract tests)",
+        "testSecurity": "PASS (99/99 security tests)",
+        "testE2E": "PASS (P06-P15 10 real Chromium E2E flows)",
+        "build": "PASS (Production web dist / monorepo build)",
+        "audit": "PASS (0 vulnerabilities)"
+      },
+      "deliverables": [
+        "apps/api/src/backup/backup-engine.ts",
+        "apps/api/src/google-workspace/GoogleCredentialVault.ts",
+        "apps/api/src/server.ts",
+        "docs/adr/0015-cloudflare-migration-architecture.md",
+        "package.json",
+        "scripts/p15-accessibility-test.ts",
+        "scripts/p15-backup-test.ts",
+        "scripts/p15-e2e.ts",
+        "scripts/p15-integration-test.ts",
+        "scripts/p15-performance-test.ts",
+        "scripts/p15-security-test.ts",
+        "scripts/p15-test-support.ts"
+      ]
     }
   }
 }
