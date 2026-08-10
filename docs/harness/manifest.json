@@ -1,0 +1,30 @@
+{
+  "phase": "P13",
+  "status": "READY_FOR_REVIEW",
+  "generatedAt": "2026-08-10T11:12:00+09:00",
+  "commitHash": "bd67534",
+  "gateResults": {
+    "repoCleanliness": "PASSED",
+    "gateScripts": "PASSED",
+    "outputStructure": "PASSED",
+    "schemaContract": "PASSED",
+    "contractTests": "PASSED (89/89 passed)",
+    "securityTests": "PASSED (43/43 passed)",
+    "e2eTests": "PASSED (P06~P13 8/8 Chromium Real E2E passed)",
+    "buildCheck": "PASSED",
+    "lintCheck": "PASSED",
+    "vulnerabilities": 0,
+    "piiLeak": 0
+  },
+  "artifacts": [
+    "packages/database/prisma/schema.prisma",
+    "packages/database/prisma/migrations/20260810110000_p13_fees_success_compensation/migration.sql",
+    "apps/api/src/server.ts",
+    "apps/web/src/fees/FeeSuccessCompensation.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "scripts/p13-test-support.ts",
+    "scripts/p13-contract-test.ts",
+    "scripts/p13-security-test.ts",
+    "scripts/p13-e2e.ts"
+  ]
+}

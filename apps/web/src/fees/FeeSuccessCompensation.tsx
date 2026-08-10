@@ -428,6 +428,7 @@ export const FeeSuccessCompensation: React.FC<FeeCompensationProps> = ({ roles, 
                 <div>
                   <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '4px' }}>입금 금액 (원):</label>
                   <input
+                    id="payment-amount-input"
                     type="number"
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(e.target.value)}

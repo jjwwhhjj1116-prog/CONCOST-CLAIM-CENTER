@@ -22,30 +22,25 @@ function browserExecutable(): string {
   return 'google-chrome';
 }
 
-function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse, distDir: string) {
-  const urlPath = (req.url || '/').split('?')[0];
-  let safePath = path.normalize(path.join(distDir, urlPath));
-  if (!safePath.startsWith(distDir)) {
-    res.statusCode = 403;
-    res.end('Forbidden');
-    return;
-  }
-  if (fs.existsSync(safePath) && fs.statSync(safePath).isDirectory()) {
-    safePath = path.join(safePath, 'index.html');
-  }
-  if (!fs.existsSync(safePath)) {
-    safePath = path.join(distDir, 'index.html');
-  }
-  const ext = path.extname(safePath);
+function serveStaticFile(req: http.IncomingMessage, res: http.ServerResponse, webDist: string, webOrigin: string): void {
+  const urlPath = decodeURIComponent(new URL(req.url || '/', webOrigin).pathname);
+  const requested = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
+  const candidate = path.resolve(webDist, requested);
+  const safe = candidate.startsWith(`${path.resolve(webDist)}${path.sep}`);
+  const filePath = safe && fs.existsSync(candidate) && fs.statSync(candidate).isFile() ? candidate : path.join(webDist, 'index.html');
+  const ext = path.extname(filePath).toLowerCase();
   const mimeTypes: Record<string, string> = {
     '.html': 'text/html; charset=utf-8',
-    '.js': 'application/javascript',
+    '.js': 'text/javascript',
     '.css': 'text/css',
-    '.json': 'application/json'
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.svg': 'image/svg+xml'
   };
   res.statusCode = 200;
   res.setHeader('Content-Type', mimeTypes[ext] || 'application/octet-stream');
-  fs.createReadStream(safePath).pipe(res);
+  fs.createReadStream(filePath).pipe(res);
 }
 
 async function waitFor(url: string): Promise<void> {
@@ -70,12 +65,15 @@ async function newPage(browser: Browser, apiOrigin: string, viewport = { width: 
 }
 
 async function login(page: Page, webOrigin: string, email: string) {
-  await page.goto(`${webOrigin}/#/login`, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#email');
-  await page.fill('#email', email);
-  await page.fill('#password', 'Password123!');
-  await page.click('button[type="submit"]');
-  await page.waitForSelector('text=로그인 상태');
+  const loginUrl = `${webOrigin}/login`;
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded' });
+  const emailInput = page.locator('#email').or(page.getByLabel('이메일'));
+  await emailInput.waitFor({ state: 'visible', timeout: 10000 });
+  await emailInput.fill(email);
+  const passwordInput = page.locator('#password').or(page.getByLabel('비밀번호'));
+  await passwordInput.fill('Password123!');
+  await page.getByRole('button', { name: '로그인' }).click();
+  await page.waitForSelector('.session-identity', { timeout: 15000 });
 }
 
 async function main() {
@@ -89,11 +87,12 @@ async function main() {
   await seedDatabase(databaseUrl);
   const db = createPrismaClient(databaseUrl);
 
+  let webOrigin = '';
   const webDist = path.join(root, 'apps/web/dist');
-  const web = createServer((req, res) => serveStaticFile(req, res, webDist));
+  const web = createServer((req, res) => serveStaticFile(req, res, webDist, webOrigin));
   await new Promise<void>((resolve) => web.listen(0, '127.0.0.1', resolve));
   const webPort = (web.address() as any).port;
-  const webOrigin = `http://127.0.0.1:${webPort}`;
+  webOrigin = `http://127.0.0.1:${webPort}`;
 
   const api = createApiServer({
     databaseUrl,
@@ -118,7 +117,7 @@ async function main() {
     const { page: pmPage } = await newPage(browser, apiOrigin);
     await login(pmPage, webOrigin, 'pm@example.invalid');
 
-    await pmPage.goto(`${webOrigin}/#/success-fee`, { waitUntil: 'domcontentloaded' });
+    await pmPage.goto(`${webOrigin}/success-fee`, { waitUntil: 'domcontentloaded' });
     await pmPage.waitForSelector('text=FEE-01 손해사정 비용 & 성공보수 정산 관리');
 
     // Click Calculate Estimated
@@ -130,7 +129,7 @@ async function main() {
     const { page: directorPage } = await newPage(browser, apiOrigin);
     await login(directorPage, webOrigin, 'director@example.invalid');
 
-    await directorPage.goto(`${webOrigin}/#/success-fee`, { waitUntil: 'domcontentloaded' });
+    await directorPage.goto(`${webOrigin}/success-fee`, { waitUntil: 'domcontentloaded' });
     await directorPage.waitForSelector('text=FEE-01 손해사정 비용 & 성공보수 정산 관리');
 
     await directorPage.getByRole('button', { name: '최종 보수 승인 확정 (CEO/Director)' }).click();
@@ -139,6 +138,7 @@ async function main() {
 
     // 3. Payment Addition & Unpaid Balance Update
     console.log('3. Payment recording & Unpaid balance update...');
+    await directorPage.fill('#payment-amount-input', '10000000');
     await directorPage.getByRole('button', { name: '수납 내역 추가' }).click();
     await directorPage.waitForSelector('text=수납 내역이 추가되었습니다');
 

@@ -204,7 +204,8 @@
       ]
     },
     "P13": {
-      "status": "IN_PROGRESS",
+      "status": "READY_FOR_REVIEW",
+      "gatePassed": true,
       "startedAt": "2026-08-10T11:05:00+09:00"
     }
   }
