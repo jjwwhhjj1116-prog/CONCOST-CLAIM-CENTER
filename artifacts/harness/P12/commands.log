@@ -1,0 +1,51 @@
+$ cmd /c npx --package=pnpm@9.15.0 pnpm build
+[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...
+[Harness] UI, database, API, and production web build artifacts verified.
+
+$ cmd /c npx --package=pnpm@9.15.0 pnpm lint
+[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...
+[Harness] Lint and JSON validation passed with zero warnings.
+
+$ cmd /c npx --package=pnpm@9.15.0 pnpm test:p12
+--- Running P12 Contract & Deterministic Final Output Test ---
+Database seeded with deterministic synthetic P11 fixtures.
+1. Testing Review Request creation & changes request cycle...
+2. Testing Finalization readiness blockers & self-approval prevention...
+3. Testing Report Finalization creation & idempotency...
+4. Testing DOCX & PDF Output Generation with Independent Parsers...
+5. Testing Byte-Level Determinism on Re-rendering...
+6. Testing Download API & RFC 5987 headers...
+✅ P12 Contract Test Passed Cleanly!
+
+$ cmd /c npx --package=pnpm@9.15.0 tsx scripts/p12-security-test.ts
+--- Running P12 Security & Adversarial Test ---
+Database seeded with deterministic synthetic P11 fixtures.
+1. Testing Review Request & Finalization Access Control...
+2. Testing Integrity Verification & Tamper Detection...
+3. Testing SQLite DB Trigger Immutability Guards...
+✅ P12 Security & Adversarial Test Passed Cleanly!
+
+$ cmd /c npx --package=pnpm@9.15.0 tsx scripts/p12-e2e.ts
+--- Starting P12 Chromium Real E2E Test ---
+Database seeded with deterministic synthetic P11 fixtures.
+1. Staff login & Review Request submission...
+2. Reviewer login & Approve all required sections...
+3. Report Finalization fixation...
+4. Generate DOCX/PDF outputs & Verify downloaded bytes...
+✓ E2E DOCX verified cleanly (3563 bytes, entries: 8)
+✓ E2E PDF verified cleanly (6827 bytes, pages: 3)
+✅ P12 Chromium Real E2E Test Passed Cleanly!
+
+$ cmd /c npx --package=pnpm@9.15.0 pnpm test:security
+ℹ Tests 42
+ℹ Suites 9
+ℹ Pass 42
+ℹ Fail 0
+ℹ Duration_ms 401.76ms
+
+$ cmd /c npx --package=pnpm@9.15.0 pnpm test
+ℹ Tests 5
+ℹ Suites 0
+ℹ Pass 5
+ℹ Fail 0
+ℹ Duration_ms 3105.77ms
