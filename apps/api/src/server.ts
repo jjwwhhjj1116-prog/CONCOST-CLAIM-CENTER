@@ -17,6 +17,10 @@ import { processAiGenerationRequest, AiGatewayError, type AiAuditEvent } from '.
 import { GoogleWorkspaceFakeAdapter } from './google-workspace/GoogleWorkspaceFakeAdapter';
 import { GoogleWorkspaceRealAdapter } from './google-workspace/GoogleWorkspaceRealAdapter';
 import {
+  createBackupPackage, listBackupPackages, pruneBackupsDryRun,
+  verifyBackupPackage, restoreBackupPackage
+} from './backup/backup-engine';
+import {
   decodeGoogleCredentialMasterKey,
   EncryptedFileGoogleCredentialProvider
 } from './google-workspace/GoogleCredentialProvider';
@@ -6521,6 +6525,123 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         });
 
         sendJson(res, 200, { case: closure.updated, unpaidBalance: closure.unpaidBalance.toString() });
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // P15 Backup, Data Preservation & Restore API Endpoints
+      // -----------------------------------------------------------------------
+      const defaultBackupRootDir = (options as any).backupRootDir
+        ? path.resolve((options as any).backupRootDir)
+        : path.resolve(path.join(process.cwd(), 'packages/database/.data/backups'));
+
+      // 1. POST /api/admin/backup/create
+      if (pathname === '/api/admin/backup/create' && req.method === 'POST') {
+        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
+        if (!canManage) throw new HttpError(403, 'Backup management requires Admin or Director role');
+
+        const body = (await readJson(req)) as { masterKey?: string };
+        const databasePath = (options as any).databasePath ?? path.resolve(path.join(process.cwd(), 'packages/database/.data/dev.db'));
+
+        const manifest = await createBackupPackage({
+          backupRootDir: defaultBackupRootDir,
+          databasePath,
+          uploadDir,
+          masterKey: body.masterKey,
+          db
+        });
+
+        await db.auditLog.create({
+          data: auditData(context, 'BACKUP_CREATED', 'BackupPackage', manifest.backupId, {
+            backupId: manifest.backupId,
+            fileCount: manifest.files.length,
+            totalFilesSize: manifest.totalFilesSize
+          })
+        });
+
+        sendJson(res, 201, { manifest });
+        return;
+      }
+
+      // 2. GET /api/admin/backup/list
+      if (pathname === '/api/admin/backup/list' && req.method === 'GET') {
+        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
+        if (!canManage) throw new HttpError(403, 'Backup listing requires Admin or Director role');
+
+        const manifests = listBackupPackages(defaultBackupRootDir);
+        sendJson(res, 200, { backups: manifests, count: manifests.length, retentionPolicy: 'Minimum 3 ready backup sets preserved' });
+        return;
+      }
+
+      // 3. POST /api/admin/backup/prune-dry-run
+      if (pathname === '/api/admin/backup/prune-dry-run' && req.method === 'POST') {
+        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
+        if (!canManage) throw new HttpError(403, 'Backup prune dry-run requires Admin or Director role');
+
+        const body = (await readJson(req)) as { keepCount?: number };
+        const keepCount = Math.max(3, body.keepCount ?? 3);
+        const result = pruneBackupsDryRun(defaultBackupRootDir, keepCount);
+
+        sendJson(res, 200, {
+          keepCount,
+          retainedCount: result.keep.length,
+          pruneCandidatesCount: result.pruneCandidates.length,
+          retained: result.keep,
+          pruneCandidates: result.pruneCandidates,
+          dryRunNote: 'No backups were deleted during this dry-run assertion'
+        });
+        return;
+      }
+
+      // 4. POST /api/admin/backup/verify
+      if (pathname === '/api/admin/backup/verify' && req.method === 'POST') {
+        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
+        if (!canManage) throw new HttpError(403, 'Backup verification requires Admin or Director role');
+
+        const body = (await readJson(req)) as { backupId?: string };
+        if (!body.backupId || typeof body.backupId !== 'string') throw new HttpError(400, 'backupId is required');
+
+        const backupDir = path.join(defaultBackupRootDir, body.backupId);
+        const verification = verifyBackupPackage(backupDir);
+
+        sendJson(res, 200, {
+          backupId: body.backupId,
+          valid: verification.valid,
+          errors: verification.errors
+        });
+        return;
+      }
+
+      // 5. POST /api/admin/backup/restore
+      if (pathname === '/api/admin/backup/restore' && req.method === 'POST') {
+        const isAdmin = context.roles.some((r) => r.toLowerCase() === 'admin');
+        if (!isAdmin) throw new HttpError(403, 'Restoration requires Admin role');
+
+        const body = (await readJson(req)) as { backupId?: string; targetRestoreDir?: string; masterKey?: string };
+        if (!body.backupId || typeof body.backupId !== 'string') throw new HttpError(400, 'backupId is required');
+        if (!body.targetRestoreDir || typeof body.targetRestoreDir !== 'string') throw new HttpError(400, 'targetRestoreDir is required');
+
+        const restoreResult = await restoreBackupPackage({
+          backupId: body.backupId,
+          backupRootDir: defaultBackupRootDir,
+          targetRestoreDir: path.resolve(body.targetRestoreDir),
+          masterKey: body.masterKey
+        });
+
+        await db.auditLog.create({
+          data: auditData(context, 'BACKUP_RESTORED', 'BackupPackage', body.backupId, {
+            backupId: body.backupId,
+            targetRestoreDir: restoreResult.restoredDir
+          })
+        });
+
+        sendJson(res, 200, {
+          message: 'Backup restored to isolated target directory successfully',
+          restoredDir: restoreResult.restoredDir,
+          dbPath: restoreResult.dbPath,
+          storageDir: restoreResult.storageDir,
+          manifest: restoreResult.manifest
+        });
         return;
       }
 
