@@ -383,7 +383,7 @@ export function generateReportDocxBuffer(options: ReportDocxRenderOptions): Buff
   // Sections
   for (const sec of options.sections) {
     bodyXml += `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="28"/></w:rPr><w:t>제 ${sec.sectionNumber} 장. ${escapeXml(sec.title)}</w:t></w:r></w:p>`;
-    bodyXml += `<w:p><w:r><w:rPr><w:i/><w:sz w:val="18"/></w:rPr><w:t>[승인 revision: ${escapeXml(sec.approvedRevisionId)} | Hash: ${escapeXml(sec.approvedRevisionHash.slice(0, 8))}... | 승인자: ${escapeXml(sec.approvedByUserId)}]</w:t></w:r></w:p>`;
+    bodyXml += `<w:p><w:r><w:rPr><w:i/><w:sz w:val="18"/></w:rPr><w:t>[승인 revision: ${escapeXml(sec.approvedRevisionId)} | Hash: ${escapeXml(sec.approvedRevisionHash)} | 승인자: ${escapeXml(sec.approvedByUserId)}]</w:t></w:r></w:p>`;
     
     const paragraphs = sec.content.split('\n');
     for (const line of paragraphs) {
@@ -472,20 +472,26 @@ export function validateReportDocxBuffer(buffer: Buffer): DocxValidationResult {
   }
 
   const contentTypes = entries.get('[Content_Types].xml')?.toString('utf8');
+  const rootRels = entries.get('_rels/.rels')?.toString('utf8');
   const documentXml = entries.get('word/document.xml')?.toString('utf8');
   const docRels = entries.get('word/_rels/document.xml.rels')?.toString('utf8');
   const header1 = entries.get('word/header1.xml')?.toString('utf8');
   const footer1 = entries.get('word/footer1.xml')?.toString('utf8');
+  const styles = entries.get('word/styles.xml')?.toString('utf8');
+  const settings = entries.get('word/settings.xml')?.toString('utf8');
   const coreProps = entries.get('docProps/core.xml')?.toString('utf8');
 
-  if (!contentTypes || !documentXml || !docRels || !header1 || !footer1 || !coreProps) {
+  if (!contentTypes || !rootRels || !documentXml || !docRels || !header1 || !footer1 || !styles || !settings || !coreProps) {
     return { isValid: false };
   }
 
+  if (!rootRels.includes('Target="word/document.xml"') || !rootRels.includes('Target="docProps/core.xml"')) return { isValid: false };
   if (!contentTypes.includes('/word/header1.xml') || !contentTypes.includes('/word/footer1.xml')) return { isValid: false };
-  if (!docRels.includes('header1.xml') || !docRels.includes('footer1.xml')) return { isValid: false };
+  if (!contentTypes.includes('/word/styles.xml') || !contentTypes.includes('/word/settings.xml')) return { isValid: false };
+  if (!docRels.includes('header1.xml') || !docRels.includes('footer1.xml') || !docRels.includes('styles.xml') || !docRels.includes('settings.xml')) return { isValid: false };
   if (!footer1.includes('PAGE') || !footer1.includes('NUMPAGES')) return { isValid: false };
   if (!documentXml.includes('w:headerReference') || !documentXml.includes('w:footerReference')) return { isValid: false };
+  if (!styles.includes('<w:styles') || !settings.includes('<w:settings') || !documentXml.includes('</w:document>')) return { isValid: false };
 
   const sectionsFound: string[] = [];
   const sectionMatches = documentXml.matchAll(/제 (\d+) 장\.\s*([\s\S]*?)<\/w:t>/g);

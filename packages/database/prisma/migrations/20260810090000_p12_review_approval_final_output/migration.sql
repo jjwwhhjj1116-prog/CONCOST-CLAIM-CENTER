@@ -106,7 +106,8 @@ CREATE TABLE "ReportOutputDownload" (
 
 -- CreateIndex
 CREATE INDEX "ReportReviewRequest_organizationId_caseId_idx" ON "ReportReviewRequest"("organizationId", "caseId");
-CREATE INDEX "ReportReviewRequest_reportId_idx" ON "ReportReviewRequest"("reportId");
+CREATE UNIQUE INDEX "ReportReviewRequest_reportId_eventNumber_key" ON "ReportReviewRequest"("reportId", "eventNumber");
+CREATE UNIQUE INDEX "ReportReviewRequest_reportId_requestedById_idempotencyKey_key" ON "ReportReviewRequest"("reportId", "requestedById", "idempotencyKey");
 CREATE INDEX "ReportReviewRequest_requestedById_idx" ON "ReportReviewRequest"("requestedById");
 CREATE INDEX "ReportReviewRequest_assignedReviewerId_idx" ON "ReportReviewRequest"("assignedReviewerId");
 
@@ -149,10 +150,21 @@ FOR EACH ROW BEGIN
       WHERE r."id" = NEW."reportId" AND c."id" = NEW."caseId"
         AND c."organizationId" = NEW."organizationId" AND u."organizationId" = NEW."organizationId"
         AND r."deletedAt" IS NULL AND c."deletedAt" IS NULL
-    ) THEN RAISE(ABORT, 'P12_REVIEW_REQUEST_SCOPE_INVALID') END;
+    )
+    OR (NEW."assignedReviewerId" IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM "User" reviewer
+      JOIN "UserRole" ur ON ur."userId" = reviewer."id"
+      WHERE reviewer."id" = NEW."assignedReviewerId"
+        AND reviewer."organizationId" = NEW."organizationId"
+        AND reviewer."isActive" = 1
+        AND ur."roleId" IN ('admin', 'reviewer', 'director', 'ceo')
+    )) THEN RAISE(ABORT, 'P12_REVIEW_REQUEST_SCOPE_INVALID') END;
 END;
 
 CREATE TRIGGER "P12_review_request_immutable_delete" BEFORE DELETE ON "ReportReviewRequest"
+FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P12_REVIEW_REQUEST_IMMUTABLE'); END;
+
+CREATE TRIGGER "P12_review_request_immutable_update" BEFORE UPDATE ON "ReportReviewRequest"
 FOR EACH ROW BEGIN SELECT RAISE(ABORT, 'P12_REVIEW_REQUEST_IMMUTABLE'); END;
 
 CREATE TRIGGER "P12_finalization_insert_guard"
@@ -186,8 +198,21 @@ FOR EACH ROW BEGIN
       SELECT 1 FROM "ReportFinalization" f
       JOIN "ReportSection" s ON s."id" = NEW."sectionId"
       JOIN "ReportSectionRevision" r ON r."id" = NEW."approvedRevisionId" AND r."sectionId" = s."id"
+      JOIN "ReportSectionApproval" a ON a."sectionId" = s."id"
+        AND a."approvedRevisionId" = r."id" AND a."approverId" = NEW."approvedByUserId"
+        AND a."status" = 'APPROVED'
       WHERE f."id" = NEW."finalizationId" AND f."reportId" = s."reportId"
         AND r."sha256" = NEW."approvedRevisionHash"
+        AND r."title" = NEW."title" AND r."content" = NEW."content"
+        AND r."validationStatus" = 'VALID' AND r."validationErrorsJson" = '[]'
+        AND NOT EXISTS (
+          SELECT 1 FROM "ReportSectionRevision" newer
+          WHERE newer."sectionId" = s."id" AND newer."revisionNumber" > r."revisionNumber"
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "ReportSectionApproval" later
+          WHERE later."sectionId" = s."id" AND later."eventNumber" > a."eventNumber"
+        )
     ) THEN RAISE(ABORT, 'P12_FINALIZATION_SECTION_SCOPE_INVALID') END;
 END;
 

@@ -22,6 +22,11 @@ async function main(): Promise<void> {
     assert.equal(revRes.status, 201);
     const requestId = revRes.body.reviewRequest.id;
 
+    const invalidAssignee = await requestJson(origin, `/api/reports/${reportId}/review-requests`, 'POST', {
+      assignedReviewerId: 'USR-STAFF', comment: 'Staff cannot be assigned as independent reviewer'
+    }, pm);
+    assert.equal(invalidAssignee.status, 400);
+
     // Staff attempts to request changes (Staff does NOT have reviewer role) -> 403
     const staffChange = await requestJson(origin, `/api/reports/${reportId}/review-requests/${requestId}/changes-requested`, 'POST', {
       comment: 'Staff cannot review'
@@ -60,6 +65,12 @@ async function main(): Promise<void> {
     const finRes = await requestJson(origin, `/api/reports/${reportId}/finalizations`, 'POST', {}, reviewer);
     assert.equal(finRes.status, 201);
     const finalizationId = finRes.body.finalization.id;
+
+    const staffOutput = await requestJson(origin, `/api/reports/${reportId}/finalizations/${finalizationId}/outputs`, 'POST', {
+      format: 'DOCX'
+    }, staff);
+    assert.equal(staffOutput.status, 403, 'Staff must not generate final output artifacts');
+    assert.equal(await db.reportOutputArtifact.count({ where: { finalizationId } }), 0);
 
     // Generate output legitimately
     const outRes = await requestJson(origin, `/api/reports/${reportId}/finalizations/${finalizationId}/outputs`, 'POST', {
@@ -105,6 +116,15 @@ async function main(): Promise<void> {
       assert.ok(err, 'DELETE on ReportOutputArtifact must throw error');
     }
     assert.ok(deleteRejected, 'Database trigger must prevent DELETE on ReportOutputArtifact');
+
+    let reviewUpdateRejected = false;
+    try {
+      await db.$executeRawUnsafe(`UPDATE "ReportReviewRequest" SET "status" = 'APPROVED' WHERE "id" = '${requestId}'`);
+    } catch (err) {
+      reviewUpdateRejected = true;
+      assert.ok(err);
+    }
+    assert.ok(reviewUpdateRejected, 'Review history must be append-only');
 
     console.log('✅ P12 Security & Adversarial Test Passed Cleanly!');
   } finally {

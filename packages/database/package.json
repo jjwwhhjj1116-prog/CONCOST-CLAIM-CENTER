@@ -6,7 +6,7 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "pnpm run generate && tsc -b",
+    "build": "prisma generate --schema prisma/schema.prisma && tsc -b",
     "db:migrate": "tsx src/db-cli.ts migrate",
     "db:seed": "tsx src/seed.ts",
     "db:reset": "tsx src/db-cli.ts reset",

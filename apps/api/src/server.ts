@@ -17,7 +17,9 @@ import { processAiGenerationRequest, AiGatewayError, type AiAuditEvent } from '.
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
+  'http://127.0.0.1:3000',
   'http://localhost:5173',
+  'http://127.0.0.1:5173',
   'http://127.0.0.1:4173',
   'http://localhost:4173'
 ];
@@ -62,6 +64,13 @@ const FILE_POLICIES: Record<string, readonly string[]> = {
   '.txt': ['text/plain'],
   '.hwp': ['application/x-hwp', 'application/haansofthwp']
 };
+
+function assertReportOutputSignature(format: string, bytes: Buffer): void {
+  const valid = format === 'DOCX'
+    ? bytes.length >= 4 && bytes.subarray(0, 2).toString('ascii') === 'PK'
+    : format === 'PDF' && bytes.length >= 8 && bytes.subarray(0, 5).toString('ascii') === '%PDF-' && bytes.subarray(-6).toString('ascii').includes('%%EOF');
+  if (!valid) throw new HttpError(409, 'Output artifact MIME/signature verification failed');
+}
 
 export const CASE_STATUSES = [
   'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
@@ -125,6 +134,17 @@ function sanitizeDisplayName(rawName: string): string {
   clean = path.basename(clean);
   clean = clean.replace(/[^a-zA-Z0-9가-힣._-]/g, '_');
   return clean || 'unnamed_file';
+}
+
+function asciiDownloadFilename(safeName: string): string {
+  const extension = path.extname(safeName).replace(/[^a-zA-Z0-9.]/g, '');
+  const stem = path.basename(safeName, path.extname(safeName))
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7E]/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[_\.]+|[_\.]+$/g, '');
+  return `${stem || 'report_output'}${extension}`;
 }
 
 export function renderProposalTemplate(
@@ -1993,9 +2013,19 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
         });
 
-        const schedules = await db.schedule.findMany({
-          where: { case: caseWhere }
-        });
+        const [schedules, recentCases] = await Promise.all([
+          db.schedule.findMany({
+            where: { case: caseWhere },
+            include: { case: { select: { id: true, caseNumber: true, title: true } } },
+            orderBy: { date: 'asc' }
+          }),
+          db.caseItem.findMany({
+            where: caseWhere,
+            select: { id: true, caseNumber: true, title: true, claimType: true, status: true, updatedAt: true },
+            orderBy: { updatedAt: 'desc' },
+            take: 5
+          })
+        ]);
 
         let todayTasksCount = 0;
         let delayedCount = 0;
@@ -2014,7 +2044,152 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           inProgressCount,
           reviewingDocsCount,
           todayTasksCount,
-          delayedCount
+          delayedCount,
+          recentCases,
+          upcomingSchedules: schedules
+            .filter((schedule) => schedule.date >= now)
+            .slice(0, 5)
+            .map((schedule) => ({
+              id: schedule.id,
+              title: schedule.title,
+              type: schedule.type,
+              date: schedule.date,
+              case: schedule.case,
+              dDayInfo: calculateDDay(schedule.date, now)
+            }))
+        });
+        return;
+      }
+
+      // --- Usable report workspace list (REPO-01) ---
+      if (pathname === '/api/reports' && req.method === 'GET') {
+        const isAdminOrExec = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
+        const query = url.searchParams.get('q')?.trim() ?? '';
+        const caseScope: Prisma.CaseItemWhereInput = {
+          organizationId: context.user.organizationId,
+          deletedAt: null,
+          ...(!isAdminOrExec ? { assignments: { some: { userId: context.user.id } } } : {})
+        };
+        const reports = await db.report.findMany({
+          where: {
+            deletedAt: null,
+            case: caseScope,
+            ...(query ? {
+              OR: [
+                { title: { contains: query } },
+                { case: { title: { contains: query } } },
+                { case: { caseNumber: { contains: query } } }
+              ]
+            } : {})
+          },
+          include: {
+            case: { select: { id: true, caseNumber: true, title: true, claimType: true, status: true } },
+            reportInstance: { select: { templateNameSnapshot: true, templateVersionNumberSnapshot: true } },
+            sections: {
+              where: { deletedAt: null },
+              select: { id: true, status: true, isRequired: true }
+            },
+            finalizations: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, createdAt: true } },
+            outputArtifacts: { select: { id: true, format: true } }
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: 100
+        });
+        sendJson(res, 200, {
+          reports: reports.map((report) => ({
+            id: report.id,
+            title: report.title,
+            version: report.version,
+            updatedAt: report.updatedAt,
+            case: report.case,
+            templateName: report.reportInstance?.templateNameSnapshot ?? '사용자 정의 보고서',
+            templateVersion: report.reportInstance?.templateVersionNumberSnapshot ?? null,
+            sectionCount: report.sections.length,
+            requiredSectionCount: report.sections.filter((section) => section.isRequired).length,
+            approvedSectionCount: report.sections.filter((section) => section.status === 'APPROVED').length,
+            finalized: report.finalizations.length > 0,
+            outputFormats: [...new Set(report.outputArtifacts.map((artifact) => artifact.format))]
+          }))
+        });
+        return;
+      }
+
+      // --- Actionable review and approval inbox (APPR-01) ---
+      if (pathname === '/api/review-requests' && req.method === 'GET') {
+        const allowedStatuses = new Set(['PENDING', 'CHANGES_REQUESTED', 'RESUBMITTED', 'APPROVED']);
+        const requestedStatus = url.searchParams.get('status')?.trim().toUpperCase() ?? '';
+        const query = url.searchParams.get('q')?.trim() ?? '';
+        if (requestedStatus && !allowedStatuses.has(requestedStatus)) throw new HttpError(400, 'Invalid review request status');
+
+        const isAdminOrExec = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
+        const events = await db.reportReviewRequest.findMany({
+          where: {
+            organizationId: context.user.organizationId,
+            case: {
+              deletedAt: null,
+              ...(!isAdminOrExec ? { assignments: { some: { userId: context.user.id } } } : {})
+            },
+            ...(query ? {
+              OR: [
+                { report: { title: { contains: query } } },
+                { case: { title: { contains: query } } },
+                { case: { caseNumber: { contains: query } } },
+                { requestedBy: { name: { contains: query } } },
+                { assignedReviewer: { name: { contains: query } } }
+              ]
+            } : {})
+          },
+          include: {
+            case: { select: { id: true, caseNumber: true, title: true, claimType: true } },
+            report: {
+              select: {
+                id: true,
+                title: true,
+                version: true,
+                sections: { where: { deletedAt: null }, select: { id: true, status: true, isRequired: true } }
+              }
+            },
+            requestedBy: { select: { id: true, name: true, email: true } },
+            assignedReviewer: { select: { id: true, name: true, email: true } }
+          },
+          orderBy: [{ createdAt: 'desc' }, { eventNumber: 'desc' }],
+          take: 500
+        });
+
+        const seenReports = new Set<string>();
+        const latestEvents = events.filter((event) => {
+          if (seenReports.has(event.reportId)) return false;
+          seenReports.add(event.reportId);
+          return true;
+        });
+        const visibleEvents = requestedStatus
+          ? latestEvents.filter((event) => event.status === requestedStatus)
+          : latestEvents;
+        const summary = Object.fromEntries([...allowedStatuses].map((status) => [
+          status,
+          latestEvents.filter((event) => event.status === status).length
+        ]));
+
+        sendJson(res, 200, {
+          summary: { total: latestEvents.length, ...summary },
+          reviewRequests: visibleEvents.map((event) => ({
+            id: event.id,
+            eventNumber: event.eventNumber,
+            status: event.status,
+            comment: event.comment,
+            createdAt: event.createdAt,
+            requestedBy: event.requestedBy,
+            assignedReviewer: event.assignedReviewer,
+            case: event.case,
+            report: {
+              id: event.report.id,
+              title: event.report.title,
+              version: event.report.version,
+              sectionCount: event.report.sections.length,
+              requiredSectionCount: event.report.sections.filter((section) => section.isRequired).length,
+              approvedSectionCount: event.report.sections.filter((section) => section.status === 'APPROVED').length
+            }
+          }))
         });
         return;
       }
@@ -4537,20 +4712,35 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : undefined;
 
         if (assignedReviewerId) {
-          const reviewer = await db.user.findUnique({ where: { id: assignedReviewerId } });
-          if (!reviewer || reviewer.organizationId !== context.user.organizationId) {
+          const reviewer = await db.user.findUnique({ where: { id: assignedReviewerId }, include: { roles: true } });
+          if (!reviewer || reviewer.organizationId !== context.user.organizationId || !reviewer.isActive) {
             throw new HttpError(404, 'Assigned reviewer not found in organization');
+          }
+          if (!reviewer.roles.some((entry) => ['admin', 'reviewer', 'director', 'ceo'].includes(entry.roleId))) {
+            throw new HttpError(400, 'Assigned user does not have a reviewer role');
+          }
+        }
+
+        const idempotencyFingerprint = idempotencyKey
+          ? sha256Text(canonicalJson({ reportId, requestedById: context.user.id, assignedReviewerId: assignedReviewerId || null, comment: comment || null }))
+          : null;
+        if (idempotencyKey) {
+          const existing = await db.reportReviewRequest.findFirst({
+            where: { reportId, requestedById: context.user.id, idempotencyKey },
+            include: { requestedBy: true, assignedReviewer: true }
+          });
+          if (existing) {
+            if (existing.idempotencyFingerprint !== idempotencyFingerprint) throw new HttpError(409, 'Idempotency key payload mismatch');
+            sendJson(res, 200, { reviewRequest: existing, idempotentReplay: true });
+            return;
           }
         }
 
         const reviewRequestId = `REVREQ-${crypto.randomUUID()}`;
-        const lastReq = await db.reportReviewRequest.findFirst({
-          where: { reportId },
-          orderBy: { eventNumber: 'desc' }
-        });
-        const eventNumber = lastReq ? lastReq.eventNumber + 1 : 1;
 
         const reviewRequest = await db.$transaction(async (tx) => {
+          const lastReq = await tx.reportReviewRequest.findFirst({ where: { reportId }, orderBy: { eventNumber: 'desc' } });
+          const eventNumber = lastReq ? lastReq.eventNumber + 1 : 1;
           const reqItem = await tx.reportReviewRequest.create({
             data: {
               id: reviewRequestId,
@@ -4562,7 +4752,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               status: 'PENDING',
               comment: comment || null,
               idempotencyKey: idempotencyKey || null,
-              idempotencyFingerprint: idempotencyKey ? sha256Text(`${reportId}:${context.user.id}:${eventNumber}`) : null,
+              idempotencyFingerprint,
               eventNumber
             },
             include: { requestedBy: true, assignedReviewer: true }
@@ -4609,24 +4799,34 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!['PENDING', 'RESUBMITTED'].includes(reqRow.status)) {
           throw new HttpError(409, `Cannot request changes on review request in status ${reqRow.status}`);
         }
+        const latestReviewEvent = await db.reportReviewRequest.findFirst({ where: { reportId }, orderBy: { eventNumber: 'desc' } });
+        if (!latestReviewEvent || latestReviewEvent.id !== requestId) throw new HttpError(409, 'Review request is not the latest event');
+        if (reqRow.assignedReviewerId && reqRow.assignedReviewerId !== context.user.id && !context.roles.includes('admin')) {
+          throw new HttpError(403, 'Review request is assigned to another reviewer');
+        }
 
         const updatedReq = await db.$transaction(async (tx) => {
-          const updated = await tx.reportReviewRequest.update({
-            where: { id: requestId },
+          const updated = await tx.reportReviewRequest.create({
             data: {
+              id: `REVREQ-${crypto.randomUUID()}`,
+              organizationId: reqRow.organizationId,
+              caseId: reqRow.caseId,
+              reportId,
+              requestedById: reqRow.requestedById,
+              assignedReviewerId: context.user.id,
               status: 'CHANGES_REQUESTED',
               comment,
-              assignedReviewerId: context.user.id,
-              updatedAt: new Date()
+              eventNumber: reqRow.eventNumber + 1
             },
             include: { requestedBy: true, assignedReviewer: true }
           });
 
           await tx.auditLog.create({
-            data: requestAudit(context, 'REPORT_CHANGES_REQUESTED', 'ReportReviewRequest', requestId, {
+            data: requestAudit(context, 'REPORT_CHANGES_REQUESTED', 'ReportReviewRequest', updated.id, {
               caseId: reportRow.caseId,
               reportId,
-              reviewerId: context.user.id
+              reviewerId: context.user.id,
+              previousEventId: requestId
             })
           });
 
@@ -4657,26 +4857,37 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (reqRow.status !== 'CHANGES_REQUESTED') {
           throw new HttpError(409, `Cannot resubmit review request in status ${reqRow.status}`);
         }
+        const latestReviewEvent = await db.reportReviewRequest.findFirst({ where: { reportId }, orderBy: { eventNumber: 'desc' } });
+        if (!latestReviewEvent || latestReviewEvent.id !== requestId) throw new HttpError(409, 'Review request is not the latest event');
+        if (reqRow.requestedById !== context.user.id && !context.roles.some((role) => ['admin', 'pm', 'staff', 'ceo'].includes(role))) {
+          throw new HttpError(403, 'Only the requester or a case manager may resubmit review');
+        }
 
         const body = await readJson(req);
         assertOnlyKeys(body, new Set(['comment']), 'resubmit review request');
         const comment = typeof body.comment === 'string' ? body.comment.trim() : undefined;
 
         const updatedReq = await db.$transaction(async (tx) => {
-          const updated = await tx.reportReviewRequest.update({
-            where: { id: requestId },
+          const updated = await tx.reportReviewRequest.create({
             data: {
+              id: `REVREQ-${crypto.randomUUID()}`,
+              organizationId: reqRow.organizationId,
+              caseId: reqRow.caseId,
+              reportId,
+              requestedById: context.user.id,
+              assignedReviewerId: reqRow.assignedReviewerId,
               status: 'RESUBMITTED',
               comment: comment || reqRow.comment,
-              updatedAt: new Date()
+              eventNumber: reqRow.eventNumber + 1
             },
             include: { requestedBy: true, assignedReviewer: true }
           });
 
           await tx.auditLog.create({
-            data: requestAudit(context, 'REPORT_REVIEW_RESUBMITTED', 'ReportReviewRequest', requestId, {
+            data: requestAudit(context, 'REPORT_REVIEW_RESUBMITTED', 'ReportReviewRequest', updated.id, {
               caseId: reportRow.caseId,
-              reportId
+              reportId,
+              previousEventId: requestId
             })
           });
 
@@ -4719,7 +4930,11 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             sections: {
               where: { deletedAt: null },
               include: {
-                revisions: { orderBy: { revisionNumber: 'desc' }, take: 1, include: { author: true, evidenceLinks: true } },
+                revisions: {
+                  orderBy: { revisionNumber: 'desc' },
+                  take: 1,
+                  include: { author: true, evidenceLinks: true, appliedSuggestion: { include: { citations: true } } }
+                },
                 approvals: { where: { status: 'APPROVED' }, orderBy: { eventNumber: 'desc' }, take: 1, include: { approver: true } },
                 comments: { where: { isResolved: false } },
                 draftSuggestions: { where: { status: { in: ['GENERATED', 'PROCESSING'] } } }
@@ -4741,8 +4956,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!canFinalize) throw new HttpError(403, 'User does not have permission to finalize report');
 
         const body = await readJson(req);
-        assertOnlyKeys(body, new Set(['idempotencyKey']), 'report finalization');
+        assertOnlyKeys(body, new Set(['idempotencyKey', 'expectedVersion']), 'report finalization');
         const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : undefined;
+        const expectedVersion = boundedInteger(body.expectedVersion, reportRow.version, 1, Number.MAX_SAFE_INTEGER, 'expectedVersion');
+        if (expectedVersion !== reportRow.version) throw new HttpError(409, 'Stale report version', { currentVersion: reportRow.version });
 
         // Perform strict readiness validations
         if (!reportRow.reportInstance) throw new HttpError(409, 'Report must be linked to a ReportInstance');
@@ -4760,6 +4977,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           approvedRevisionHash: string;
           approvedByUserId: string;
           approvedAt: string;
+          evidence: Array<{ sourceType: string; sourceId: string; sourceSha256: string; sourceVersion: number; targetParagraphIndex: number }>;
         }> = [];
 
         let evidenceCountTotal = 0;
@@ -4788,6 +5006,20 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             if (latestRevision.validationStatus !== 'VALID') {
               blockers.push(`Section ${sec.sectionNumber} approved revision is invalid (${latestRevision.validationStatus})`);
             }
+            try {
+              const validationErrors = JSON.parse(latestRevision.validationErrorsJson) as unknown;
+              if (!Array.isArray(validationErrors) || validationErrors.length > 0) {
+                blockers.push(`Section ${sec.sectionNumber} approved revision has validation errors`);
+              }
+            } catch {
+              blockers.push(`Section ${sec.sectionNumber} approved revision validation payload is malformed`);
+            }
+            if (latestRevision.appliedSuggestion) {
+              if (latestRevision.appliedSuggestion.status !== 'APPLIED'
+                || latestRevision.appliedSuggestion.citations.some((citation) => citation.status !== 'VALID')) {
+                blockers.push(`Section ${sec.sectionNumber} contains unresolved AI provenance or citations`);
+              }
+            }
             if (sec.comments.length > 0) {
               blockers.push(`Section ${sec.sectionNumber} has ${sec.comments.length} unresolved comments/revision requests`);
               unresolvedFlagCountTotal += sec.comments.length;
@@ -4810,12 +5042,21 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             canonicalSectionsData.push({
               sectionId: sec.id,
               sectionNumber: sec.sectionNumber,
-              title: sec.title,
+              title: latestRevision.title,
               content: latestRevision.content,
               approvedRevisionId: latestRevision.id,
               approvedRevisionHash: latestRevision.sha256,
               approvedByUserId: latestApproval.approverId,
-              approvedAt: latestApproval.createdAt.toISOString()
+              approvedAt: latestApproval.createdAt.toISOString(),
+              evidence: latestRevision.evidenceLinks
+                .map((link) => ({
+                  sourceType: link.sourceType,
+                  sourceId: link.sourceId,
+                  sourceSha256: link.sourceSha256,
+                  sourceVersion: link.sourceVersion,
+                  targetParagraphIndex: link.targetParagraphIndex
+                }))
+                .sort((a, b) => `${a.sourceType}:${a.sourceId}:${a.targetParagraphIndex}`.localeCompare(`${b.sourceType}:${b.sourceId}:${b.targetParagraphIndex}`))
             });
           }
         }
@@ -4835,6 +5076,39 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         };
 
         const canonicalSnapshotHash = sha256Text(canonicalJson(canonicalSnapshotPayload));
+        const readinessFingerprintFor = (sections: typeof reportRow.sections): string => sha256Text(canonicalJson(sections.map((section) => ({
+          id: section.id,
+          version: section.version,
+          sectionNumber: section.sectionNumber,
+          title: section.title,
+          status: section.status,
+          isRequired: section.isRequired,
+          revision: section.revisions[0] ? {
+            id: section.revisions[0].id,
+            revisionNumber: section.revisions[0].revisionNumber,
+            title: section.revisions[0].title,
+            content: section.revisions[0].content,
+            sha256: section.revisions[0].sha256,
+            validationStatus: section.revisions[0].validationStatus,
+            validationErrorsJson: section.revisions[0].validationErrorsJson,
+            authorId: section.revisions[0].authorId,
+            evidence: section.revisions[0].evidenceLinks.map((link) => ({ id: link.id, sourceSha256: link.sourceSha256 })),
+            suggestion: section.revisions[0].appliedSuggestion ? {
+              id: section.revisions[0].appliedSuggestion.id,
+              status: section.revisions[0].appliedSuggestion.status,
+              citations: section.revisions[0].appliedSuggestion.citations.map((citation) => ({ id: citation.id, status: citation.status }))
+            } : null
+          } : null,
+          approval: section.approvals[0] ? {
+            id: section.approvals[0].id,
+            eventNumber: section.approvals[0].eventNumber,
+            approvedRevisionId: section.approvals[0].approvedRevisionId,
+            approverId: section.approvals[0].approverId
+          } : null,
+          unresolvedCommentIds: section.comments.map((comment) => comment.id).sort(),
+          pendingSuggestionIds: section.draftSuggestions.map((suggestion) => suggestion.id).sort()
+        }))));
+        const observedReadinessFingerprint = readinessFingerprintFor(reportRow.sections);
 
         // Check existing finalization
         const existingFinalization = await db.reportFinalization.findUnique({
@@ -4849,7 +5123,35 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
         const finalizationId = `FIN-${crypto.randomUUID()}`;
 
-        const finalization = await db.$transaction(async (tx) => {
+        const finalizationResult = await db.$transaction(async (tx) => {
+          const currentReport = await tx.report.findUnique({ where: { id: reportId }, select: { version: true, deletedAt: true, reportInstanceId: true, case: { select: { organizationId: true, deletedAt: true } } } });
+          if (!currentReport || currentReport.deletedAt || currentReport.case.deletedAt
+            || currentReport.case.organizationId !== context.user.organizationId
+            || currentReport.version !== reportRow.version || currentReport.reportInstanceId !== reportRow.reportInstanceId) {
+            throw new HttpError(409, 'Report changed while finalization was being prepared');
+          }
+          const currentSections = await tx.reportSection.findMany({
+            where: { reportId, deletedAt: null },
+            include: {
+              revisions: {
+                orderBy: { revisionNumber: 'desc' },
+                take: 1,
+                include: { author: true, evidenceLinks: true, appliedSuggestion: { include: { citations: true } } }
+              },
+              approvals: { where: { status: 'APPROVED' }, orderBy: { eventNumber: 'desc' }, take: 1, include: { approver: true } },
+              comments: { where: { isResolved: false } },
+              draftSuggestions: { where: { status: { in: ['GENERATED', 'PROCESSING'] } } }
+            },
+            orderBy: { sectionNumber: 'asc' }
+          });
+          if (readinessFingerprintFor(currentSections) !== observedReadinessFingerprint) {
+            throw new HttpError(409, 'Section approval state changed during finalization');
+          }
+          const concurrentExisting = await tx.reportFinalization.findUnique({
+            where: { reportId_canonicalSnapshotHash: { reportId, canonicalSnapshotHash } },
+            include: { sections: true, finalizedBy: true }
+          });
+          if (concurrentExisting) return { finalization: concurrentExisting, created: false };
           const fin = await tx.reportFinalization.create({
             data: {
               id: finalizationId,
@@ -4892,10 +5194,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             })
           });
 
-          return fin;
+          return { finalization: fin, created: true };
         });
 
-        sendJson(res, 201, { finalization, idempotentReplay: false });
+        sendJson(res, finalizationResult.created ? 201 : 200, {
+          finalization: finalizationResult.finalization,
+          idempotentReplay: !finalizationResult.created
+        });
         return;
       }
 
@@ -4928,6 +5233,9 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           throw new HttpError(404, 'Report not found');
         }
         if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+        if (!context.roles.some((role) => ['admin', 'director', 'reviewer', 'ceo'].includes(role))) {
+          throw new HttpError(403, 'User does not have permission to generate final report outputs');
+        }
 
         const body = await readJson(req);
         assertOnlyKeys(body, new Set(['format', 'idempotencyKey']), 'report output creation');
@@ -4950,6 +5258,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           include: { documentVersion: true }
         });
         if (existingArtifact) {
+          const existingPath = safeStoragePath(uploadDir, existingArtifact.storageKey);
+          if (!fs.existsSync(existingPath) || !fs.statSync(existingPath).isFile()) throw new HttpError(409, 'Existing output artifact storage file is missing');
+          const existingBytes = fs.readFileSync(existingPath);
+          assertReportOutputSignature(existingArtifact.format, existingBytes);
+          if (existingBytes.length !== existingArtifact.byteSize || sha256Text(existingBytes) !== existingArtifact.sha256) {
+            throw new HttpError(409, 'Existing output artifact integrity verification failed');
+          }
           sendJson(res, 200, { artifact: existingArtifact, idempotentReplay: true });
           return;
         }
@@ -5013,9 +5328,27 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const storageKey = `storage-report-${sha256}${fileExt}`;
         const targetPath = safeStoragePath(uploadDir, storageKey);
 
-        // Save file to disk
+        // Claim the content-addressed path exclusively. Concurrent requests never delete another request's file.
         fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-        fs.writeFileSync(targetPath, buffer);
+        let createdStorageFile = false;
+        try {
+          fs.writeFileSync(targetPath, buffer, { flag: 'wx' });
+          createdStorageFile = true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          const concurrentArtifact = await db.reportOutputArtifact.findUnique({
+            where: { finalizationId_format: { finalizationId, format } },
+            include: { documentVersion: true }
+          });
+          if (!concurrentArtifact) throw new HttpError(409, 'Output generation is already in progress');
+          const existingBytes = fs.readFileSync(targetPath);
+          assertReportOutputSignature(concurrentArtifact.format, existingBytes);
+          if (existingBytes.length !== concurrentArtifact.byteSize || sha256Text(existingBytes) !== concurrentArtifact.sha256) {
+            throw new HttpError(409, 'Concurrent output artifact integrity verification failed');
+          }
+          sendJson(res, 200, { artifact: concurrentArtifact, idempotentReplay: true });
+          return;
+        }
 
         // Atomic DB insertion & P06 Document / DocumentVersion creation
         try {
@@ -5089,7 +5422,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           return;
         } catch (error) {
           // Clean up disk file on DB rollback
-          if (fs.existsSync(targetPath)) {
+          if (createdStorageFile && fs.existsSync(targetPath)) {
             fs.unlinkSync(targetPath);
           }
           throw error;
@@ -5136,6 +5469,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         const fileBytes = fs.readFileSync(filePath);
+        assertReportOutputSignature(artifact.format, fileBytes);
         const actualSha256 = sha256Text(fileBytes);
         if (fileBytes.length !== artifact.byteSize || actualSha256 !== artifact.sha256) {
           throw new HttpError(409, 'Output artifact integrity verification failed');
@@ -5167,12 +5501,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         });
 
         const safeFilename = sanitizeDisplayName(artifact.documentVersion.originalName);
+        const fallbackFilename = asciiDownloadFilename(safeFilename);
         const encodedFilename = encodeURIComponent(safeFilename);
 
         res.statusCode = 200;
         res.setHeader('Content-Type', artifact.documentVersion.mimeType);
         res.setHeader('Content-Length', artifact.byteSize);
-        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodedFilename}`);
+        res.setHeader('Content-Disposition', `attachment; filename="${fallbackFilename}"; filename*=UTF-8''${encodedFilename}`);
         res.end(fileBytes);
         return;
       }

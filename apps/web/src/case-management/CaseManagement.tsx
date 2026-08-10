@@ -18,7 +18,15 @@ interface CaseRecord {
   status: string; version: number; category?: CaseCategory | null; parties: Party[]; schedules: Schedule[];
   activityTimeline?: Activity[];
 }
-interface Kpi { totalCases: number; inProgressCount: number; reviewingDocsCount: number; todayTasksCount: number; delayedCount: number }
+interface Kpi {
+  totalCases: number;
+  inProgressCount: number;
+  reviewingDocsCount: number;
+  todayTasksCount: number;
+  delayedCount: number;
+  recentCases: Array<Pick<CaseRecord, 'id' | 'caseNumber' | 'title' | 'claimType' | 'status'> & { updatedAt: string }>;
+  upcomingSchedules: Array<Schedule & { case: { id: string; caseNumber: string; title: string } }>;
+}
 
 interface DocumentVersion {
   id: string; versionNumber: number; originalName: string; displayName: string; fileSize: number;
@@ -81,19 +89,62 @@ function fileMimeType(file: File): string {
   return extension ? known[extension] ?? 'application/octet-stream' : 'application/octet-stream';
 }
 
-function DashboardPage(): React.ReactElement {
+function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }): React.ReactElement {
   const [kpi, setKpi] = useState<Kpi | null>(null);
   const [error, setError] = useState('');
   useEffect(() => { void apiRequest<Kpi>('/api/dashboard/kpi').then(setKpi).catch((reason: unknown) => setError(String(reason))); }, []);
   if (error) return <ErrorBox error={error} />;
   if (!kpi) return <p role="status">대시보드 데이터를 불러오는 중입니다.</p>;
   const cards = [
-    ['오늘 해야 할 일', kpi.todayTasksCount], ['지연된 일', kpi.delayedCount], ['진행 중 사건', kpi.inProgressCount],
-    ['검토할 문서', kpi.reviewingDocsCount], ['전체 접근 사건', kpi.totalCases]
+    { label: '오늘 일정', value: kpi.todayTasksCount, tone: 'blue', hint: '오늘 처리할 기일과 회의' },
+    { label: '기한 경과', value: kpi.delayedCount, tone: 'red', hint: '확인이 필요한 지난 일정' },
+    { label: '진행 중 사건', value: kpi.inProgressCount, tone: 'cyan', hint: `전체 ${kpi.totalCases}건 중 진행 중` },
+    { label: '검토 대기', value: kpi.reviewingDocsCount, tone: 'amber', hint: '승인 또는 의견이 필요한 문서' }
   ];
-  return <div className="kpi-grid" aria-label="사건관리 핵심 지표">{cards.map(([label, value]) => (
-    <Card key={label} title={String(label)}><strong className="kpi-value" data-kpi={label}>{value}</strong></Card>
-  ))}</div>;
+  return <div className="dashboard-page">
+    <section className="dashboard-hero">
+      <div>
+        <span className="workspace-eyebrow">CLAIM OPERATIONS</span>
+        <h3>오늘의 클레임 업무를 시작하세요</h3>
+        <p>사건 일정, 보고서 검토, 최종 출력까지 우선순위가 높은 업무를 한 화면에서 확인합니다.</p>
+      </div>
+      <div className="dashboard-quick-actions" aria-label="빠른 실행">
+        <Button onClick={() => onNavigate('/cases/new')}>+ 새 사건 등록</Button>
+        <Button variant="secondary" onClick={() => onNavigate('/reports')}>보고서 작업공간</Button>
+      </div>
+    </section>
+
+    <div className="dashboard-kpi-grid" aria-label="사건관리 핵심 지표">{cards.map((card) => (
+      <article className={`dashboard-kpi dashboard-kpi--${card.tone}`} key={card.label}>
+        <span>{card.label}</span>
+        <strong className="kpi-value" data-kpi={card.label}>{card.value}</strong>
+        <small>{card.hint}</small>
+      </article>
+    ))}</div>
+
+    <div className="dashboard-columns">
+      <Card title="최근 업데이트 사건">
+        {kpi.recentCases.length ? <ul className="dashboard-work-list">{kpi.recentCases.map((record) => (
+          <li key={record.id}>
+            <button onClick={() => onNavigate(`/cases/detail?caseId=${encodeURIComponent(record.id)}`)}>
+              <span><strong>{record.title}</strong><small>{record.caseNumber} · {record.claimType}</small></span>
+              <span className="dashboard-status">{STATUS_LABELS[record.status] ?? record.status}</span>
+            </button>
+          </li>
+        ))}</ul> : <p className="empty-box">최근 사건이 없습니다.</p>}
+      </Card>
+      <Card title="다가오는 일정">
+        {kpi.upcomingSchedules.length ? <ul className="dashboard-work-list">{kpi.upcomingSchedules.map((schedule) => (
+          <li key={schedule.id}>
+            <button onClick={() => onNavigate(`/cases/schedule?caseId=${encodeURIComponent(schedule.case.id)}`)}>
+              <span><strong>{schedule.title}</strong><small>{schedule.case.caseNumber} · {new Date(schedule.date).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></span>
+              <span className="dashboard-status">{schedule.dDayInfo?.dDayStr ?? schedule.type}</span>
+            </button>
+          </li>
+        ))}</ul> : <p className="empty-box">예정된 일정이 없습니다.</p>}
+      </Card>
+    </div>
+  </div>;
 }
 
 function CaseListPage({ onNavigate }: { onNavigate: (path: string) => void }): React.ReactElement {
@@ -493,7 +544,7 @@ function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'partie
 }
 
 export function CaseManagement({ routeId, onNavigate }: { routeId: string; onNavigate: (path: string) => void }): React.ReactElement {
-  if (routeId === 'DASH-01') return <DashboardPage />;
+  if (routeId === 'DASH-01') return <DashboardPage onNavigate={onNavigate} />;
   if (routeId === 'CASE-01') return <CaseListPage onNavigate={onNavigate} />;
   if (routeId === 'CASE-02') return <CaseCreatePage onNavigate={onNavigate} />;
   if (routeId === 'CASE-03') return <CaseDetailPage section="overview" onNavigate={onNavigate} />;

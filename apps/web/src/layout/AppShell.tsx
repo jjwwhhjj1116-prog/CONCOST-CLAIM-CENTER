@@ -1,6 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Drawer, SkipLink } from '@claim-studio/ui';
-import { ROUTES, type UserRole } from '../routes/Router';
+import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
+
+const NAVIGATION_GROUPS = [
+  { label: '홈', routeIds: ['DASH-01'] },
+  { label: '사건 업무', routeIds: ['CASE-01', 'CASE-02', 'MEET-01'] },
+  { label: '문서·보고서', routeIds: ['PROP-01', 'PROP-02', 'REPO-01', 'TPL-01', 'APPR-01'] },
+  { label: '운영 관리', routeIds: ['FEE-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'] }
+] as const;
 
 export interface AppShellProps {
   currentPath: string;
@@ -41,17 +48,26 @@ export const AppShell: React.FC<AppShellProps> = ({
 
   const navigation = (
     <nav className="navigation-list" aria-label="주요 화면">
-      {ROUTES.filter((route) => route.id !== 'AUTH-01').map((route) => (
-        <a
-          key={route.id}
-          href={route.path}
-          onClick={(event) => go(event, route.path)}
-          aria-current={currentPath === route.path ? 'page' : undefined}
-          className="navigation-link"
-        >
-          <span className="text-ellipsis">{route.name}</span><small>{route.id}</small>
-        </a>
-      ))}
+      {NAVIGATION_GROUPS.map((group) => {
+        const routes = group.routeIds
+          .map((id) => ROUTES.find((route) => route.id === id))
+          .filter((route) => route && canAccessRoute(route, roles));
+        if (routes.length === 0) return null;
+        return <section className="navigation-group" key={group.label} aria-label={group.label}>
+          <h2>{group.label}</h2>
+          {routes.map((route) => route && (
+            <a
+              key={route.id}
+              href={route.path}
+              onClick={(event) => go(event, route.path)}
+              aria-current={currentPath === route.path ? 'page' : undefined}
+              className="navigation-link"
+            >
+              <span className="text-ellipsis">{route.name}</span><small>{route.id}</small>
+            </a>
+          ))}
+        </section>;
+      })}
     </nav>
   );
 
@@ -61,10 +77,12 @@ export const AppShell: React.FC<AppShellProps> = ({
       <header className="topbar">
         <div className="brand-group">
           {isTablet && <Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button>}
-          <h1>클레임센터 보고서 스튜디오</h1>
+          <span className="brand-mark" aria-hidden="true">CC</span>
+          <div className="brand-copy"><h1>클레임센터</h1><small>REPORT STUDIO</small></div>
         </div>
         <div className="session-tools">
-          <span aria-label="현재 사용자 역할">{userName} · {roles.join(', ').toUpperCase()}</span>
+          <span className="session-avatar" aria-hidden="true">{userName.slice(0, 1)}</span>
+          <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
         </div>
       </header>

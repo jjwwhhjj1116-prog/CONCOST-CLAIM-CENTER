@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card } from '@claim-studio/ui';
-import { ApiError, apiRequest } from '../api';
+import { ApiError, apiDownload, apiRequest } from '../api';
 import type { UserRole } from '../routes/Router';
 
 export interface ReportStudioProps {
@@ -340,12 +340,12 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   };
 
   const handleCreateFinalization = async () => {
-    if (!reportId) return;
+    if (!reportId || !report) return;
     setFinalizing(true);
     try {
       const res = await apiRequest<{ finalization: ReportFinalization }>(`/api/reports/${encodeURIComponent(reportId)}/finalizations`, {
         method: 'POST',
-        body: JSON.stringify({ idempotencyKey: `FIN-${Date.now()}` })
+        body: JSON.stringify({ idempotencyKey: `FIN-${reportId}-${report.version}`, expectedVersion: report.version })
       });
       setNotice(`최종 확정 완료 (Canonical Hash: ${res.finalization.canonicalSnapshotHash.slice(0, 12)}...)`);
       setShowFinalizationModal(false);
@@ -374,6 +374,21 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
       setNotice(err instanceof Error ? err.message : `${format} 문서 출력에 실패했습니다.`);
     } finally {
       setGeneratingOutput(false);
+    }
+  };
+
+  const handleDownloadOutput = async (artifact: ReportOutputArtifact) => {
+    try {
+      const result = await apiDownload(`/api/reports/${encodeURIComponent(reportId ?? '')}/outputs/${encodeURIComponent(artifact.id)}/download`);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = result.filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setNotice(`${artifact.format} 파일 다운로드를 시작했습니다.`);
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '출력 파일 다운로드에 실패했습니다.');
     }
   };
 
@@ -872,11 +887,9 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
         {readiness.blockers.length > 0 && (
           <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', padding: '8px 12px', fontSize: '0.8125rem', color: '#991b1b' }}>
             <strong style={{ display: 'block', marginBottom: '4px' }}>최종 확정 차단 항목 ({readiness.blockers.length}건):</strong>
-            <ul style={{ margin: 0, paddingLeft: '18px' }}>
+            <ul className="p12-blocker-list">
               {readiness.blockers.map((b, idx) => (
-                <li key={idx} style={{ cursor: b.sectionId ? 'pointer' : 'default', textDecoration: b.sectionId ? 'underline' : 'none' }} onClick={() => b.sectionId && selectSection(b.sectionId)}>
-                  {b.message}
-                </li>
+                <li key={idx}>{b.sectionId ? <button type="button" onClick={() => selectSection(b.sectionId!)}>{b.message}</button> : b.message}</li>
               ))}
             </ul>
           </div>
@@ -910,6 +923,18 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
             <div style={{ background: '#f8fafc', padding: '8px 12px', borderRadius: '4px', fontSize: '0.8125rem', margin: '8px 0' }}>
               <div><strong>승인 장 수:</strong> {readiness.approvedCount} / {readiness.totalCount}</div>
               <div><strong>예상 Output 파일명:</strong> {report.title}_final</div>
+              <div><strong>보고서 버전:</strong> v{report.version}</div>
+            </div>
+            <div className="p12-confirm-list" aria-label="최종 확정 승인 개정 목록">
+              {report.sections.filter((section) => section.status === 'APPROVED').map((section) => {
+                const revision = section.revisions[0];
+                const approval = section.approvals[0];
+                return <div key={section.id}>
+                  <strong>{section.sectionNumber}. {revision?.title ?? section.title}</strong>
+                  <span>REV-{revision?.revisionNumber ?? '-'} · {revision?.sha256.slice(0, 12) ?? 'hash 없음'}…</span>
+                  <span>승인자 {approval?.approver.name ?? '기록 없음'} · {approval ? new Date(approval.createdAt).toLocaleString('ko-KR') : '-'}</span>
+                </div>;
+              })}
             </div>
             <div className="p09-modal-actions" style={{ marginTop: '16px' }}>
               <Button disabled={finalizing} onClick={() => void handleCreateFinalization()}>
@@ -1248,7 +1273,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
                   <Button
                     size="sm"
-                    disabled={generatingOutput}
+                    disabled={generatingOutput || !canFinalize}
                     onClick={() => void handleGenerateOutput(finalizations[0].id, 'DOCX')}
                   >
                     DOCX 출력 생성
@@ -1256,7 +1281,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                   <Button
                     size="sm"
                     variant="secondary"
-                    disabled={generatingOutput}
+                    disabled={generatingOutput || !canFinalize}
                     onClick={() => void handleGenerateOutput(finalizations[0].id, 'PDF')}
                   >
                     PDF 출력 생성
@@ -1267,14 +1292,9 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
                     <div key={art.id} style={{ padding: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', marginBottom: '6px', fontSize: '0.8125rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
                         <span>[{art.format}] {art.documentVersion.displayName}</span>
-                        <a
-                          href={`/api/reports/outputs/${art.id}/download`}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: '#2563eb', textDecoration: 'underline' }}
-                        >
+                        <button className="p12-download-button" type="button" onClick={() => void handleDownloadOutput(art)}>
                           다운로드 ({(art.byteSize / 1024).toFixed(1)} KB)
-                        </a>
+                        </button>
                       </div>
                       <small style={{ color: '#64748b', display: 'block' }}>SHA-256: {art.sha256.slice(0, 16)}...</small>
                     </div>

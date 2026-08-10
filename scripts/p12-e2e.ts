@@ -113,12 +113,12 @@ async function main(): Promise<void> {
           id: `REV-E2E-${secId}`,
           sectionId: secId,
           revisionNumber: 1,
-          authorId: 'USR-STAFF-001',
+          authorId: 'USR-STAFF',
           title: sec.title,
           content: `제 ${sec.sectionNumber} 장 검토 본문 내용입니다.`,
           validationStatus: 'VALID',
-          inputSha256: 'sha256-e2e-rev',
-          sha256: 'sha256-e2e-rev'
+          inputSha256: 'e'.repeat(64),
+          sha256: 'e'.repeat(64)
         }
       });
     }
@@ -127,7 +127,10 @@ async function main(): Promise<void> {
     console.log('2. Reviewer login & Approve all required sections...');
     const { page: reviewerPage } = await newPage(browser);
     await login(reviewerPage, 'reviewer@example.invalid');
-    await reviewerPage.goto(`${webOrigin}/cases/CASE-SYN-001/reports/${encodeURIComponent(fixture.reportId)}/studio`, { waitUntil: 'domcontentloaded' });
+    await reviewerPage.goto(`${webOrigin}/approval`, { waitUntil: 'domcontentloaded' });
+    await reviewerPage.waitForSelector('text=검토·승인 작업함');
+    await reviewerPage.getByRole('button', { name: '보고서 검토 열기' }).click();
+    await reviewerPage.waitForURL(`${webOrigin}/cases/CASE-SYN-001/reports/${encodeURIComponent(fixture.reportId)}/studio`);
 
     // Approve section 1
     await reviewerPage.getByRole('button', { name: '최신 VALID 개정 승인' }).click();
@@ -159,10 +162,10 @@ async function main(): Promise<void> {
     await reviewerPage.getByRole('button', { name: 'PDF 출력 생성' }).click();
     await reviewerPage.waitForSelector('text=PDF 문서 출력이 완료되었습니다');
 
-    // Trigger DOCX Download via link
+    // Trigger DOCX Download through the authenticated UI API client.
     const [docxDownload] = await Promise.all([
       reviewerPage.waitForEvent('download'),
-      reviewerPage.getByRole('link', { name: /다운로드/ }).first().click()
+      reviewerPage.locator('.p12-artifact-list > div').filter({ hasText: '[DOCX]' }).getByRole('button', { name: /다운로드/ }).click()
     ]);
     const docxStream = await docxDownload.createReadStream();
     const docxChunks: Buffer[] = [];
@@ -175,10 +178,10 @@ async function main(): Promise<void> {
     assert.ok(docxVal.isValid, `E2E Downloaded DOCX validation failed: ${docxVal.error ?? 'unknown'}`);
     console.log(`✓ E2E DOCX verified cleanly (${docxBuffer.length} bytes, entries: ${docxVal.entryCount})`);
 
-    // Trigger PDF Download via link
+    // Trigger PDF Download through the authenticated UI API client.
     const [pdfDownload] = await Promise.all([
       reviewerPage.waitForEvent('download'),
-      reviewerPage.getByRole('link', { name: /다운로드/ }).last().click()
+      reviewerPage.locator('.p12-artifact-list > div').filter({ hasText: '[PDF]' }).getByRole('button', { name: /다운로드/ }).click()
     ]);
     const pdfStream = await pdfDownload.createReadStream();
     const pdfChunks: Buffer[] = [];

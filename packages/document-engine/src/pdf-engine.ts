@@ -156,12 +156,58 @@ export interface ReportPdfRenderOptions {
 }
 
 export function generateReportPdfBuffer(options: ReportPdfRenderOptions): Buffer {
-  // Build PDF Page structures dynamically
-  // Page 1: Cover Page
-  // Page 2: Table of Contents
-  // Page 3..N: Section pages (1 section per page for clean separation and 100-section support)
+  const maxLinesPerPage = 44;
+  const wrapLine = (value: string, width = 64): string[] => {
+    const normalized = value.replace(/\t/g, '    ');
+    if (!normalized) return [''];
+    const characters = Array.from(normalized);
+    const lines: string[] = [];
+    for (let offset = 0; offset < characters.length; offset += width) lines.push(characters.slice(offset, offset + width).join(''));
+    return lines;
+  };
+  const chunks = <T>(values: T[], size: number): T[][] => {
+    const result: T[][] = [];
+    for (let offset = 0; offset < values.length; offset += size) result.push(values.slice(offset, offset + size));
+    return result.length ? result : [[]];
+  };
 
-  const totalPages = 2 + options.sections.length;
+  const pageBodies: string[][] = [[
+    `TITLE: ${options.title}`,
+    `CASE: ${options.caseNumber} | TYPE: ${options.claimType}`,
+    `FINALIZED_BY: ${options.finalizedBy} | DATE: ${options.finalizedAt}`,
+    `CANONICAL_SNAPSHOT_HASH: ${options.canonicalSnapshotHash}`,
+    `TOTAL_SECTIONS: ${options.sections.length}`
+  ]];
+
+  const tocEntries = options.sections.flatMap((section) => wrapLine(`Section ${section.sectionNumber}: ${section.title}`));
+  chunks(tocEntries, maxLinesPerPage - 3).forEach((tocChunk, index) => {
+    pageBodies.push([
+      index === 0 ? 'TABLE OF CONTENTS' : 'TABLE OF CONTENTS (CONTINUED)',
+      '----------------------------------------',
+      ...tocChunk
+    ]);
+  });
+
+  for (const section of options.sections) {
+    const contentLines = section.content
+      ? section.content.split(/\r?\n/).flatMap((line) => wrapLine(line))
+      : ['[EMPTY SECTION]'];
+    const firstHeader = [
+      `Section ${section.sectionNumber}: ${section.title}`,
+      `APPROVED_REVISION: ${section.approvedRevisionId} | HASH: ${section.approvedRevisionHash}`,
+      `APPROVED_BY: ${section.approvedByUserId} | DATE: ${section.approvedAt}`,
+      '----------------------------------------'
+    ];
+    const firstCapacity = maxLinesPerPage - firstHeader.length;
+    pageBodies.push([...firstHeader, ...contentLines.slice(0, firstCapacity)]);
+    const remaining = contentLines.slice(firstCapacity);
+    chunks(remaining, maxLinesPerPage - 2).forEach((bodyChunk, index) => {
+      if (remaining.length === 0 && index === 0) return;
+      pageBodies.push([`Section ${section.sectionNumber} (CONTINUED)`, '----------------------------------------', ...bodyChunk]);
+    });
+  }
+
+  const totalPages = pageBodies.length;
   const pageObjectIds: number[] = [];
   const contentObjectIds: number[] = [];
 
@@ -175,34 +221,7 @@ export function generateReportPdfBuffer(options: ReportPdfRenderOptions): Buffer
   // Page Obj ID = 6 + i*2
   // Content Obj ID = 7 + i*2
 
-  const coverLines = [
-    `TITLE: ${options.title}`,
-    `CASE: ${options.caseNumber} | TYPE: ${options.claimType}`,
-    `FINALIZED_BY: ${options.finalizedBy} | DATE: ${options.finalizedAt}`,
-    `CANONICAL_SNAPSHOT_HASH: ${options.canonicalSnapshotHash}`,
-    `TOTAL_SECTIONS: ${options.sections.length} | PAGE 1 OF ${totalPages}`
-  ];
-
-  const tocLines = [
-    `TABLE OF CONTENTS`,
-    '----------------------------------------',
-    ...options.sections.map((s) => `Section ${s.sectionNumber}: ${s.title}`)
-  ];
-
-  const pagesContent: string[][] = [coverLines, tocLines];
-
-  for (let i = 0; i < options.sections.length; i++) {
-    const sec = options.sections[i];
-    const secLines = [
-      `Section ${sec.sectionNumber}: ${sec.title}`,
-      `APPROVED_REVISION: ${sec.approvedRevisionId} | HASH: ${sec.approvedRevisionHash.slice(0, 16)}...`,
-      `APPROVED_BY: ${sec.approvedByUserId} | DATE: ${sec.approvedAt}`,
-      '----------------------------------------',
-      ...sec.content.split('\n'),
-      `[PAGE ${3 + i} OF ${totalPages}]`
-    ];
-    pagesContent.push(secLines);
-  }
+  const pagesContent = pageBodies.map((body, index) => [...body, `[PAGE ${index + 1} OF ${totalPages}]`]);
 
   const objects: string[] = [];
   const kidsList: string[] = [];
@@ -265,7 +284,8 @@ export function generateReportPdfBuffer(options: ReportPdfRenderOptions): Buffer
   for (const offset of offsets) {
     pdfString += `${String(offset).padStart(10, '0')} 00000 n \n`;
   }
-  pdfString += `trailer\n<< /Size ${totalObjCount + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  const documentId = options.canonicalSnapshotHash.slice(0, 32).padEnd(32, '0');
+  pdfString += `trailer\n<< /Size ${totalObjCount + 1} /Root 1 0 R /Info 5 0 R /ID [<${documentId}><${documentId}>] >>\nstartxref\n${xrefStart}\n%%EOF\n`;
 
   return Buffer.from(pdfString, 'ascii');
 }
@@ -292,13 +312,33 @@ export function validateReportPdfBuffer(buffer: Buffer): PdfValidationResult {
   const xref = buffer.subarray(startXref).toString('ascii');
   const countMatch = xref.match(/^xref\n0 (\d+)\n/);
   if (!countMatch) return { isValid: false };
+  const xrefObjectCount = Number(countMatch[1]);
+  const xrefRows = xref.match(/^xref\n0 \d+\n0000000000 65535 f \n([\s\S]*?)trailer\n/)?.[1]?.trimEnd().split('\n');
+  if (!xrefRows || xrefRows.length !== xrefObjectCount - 1) return { isValid: false };
+  for (let objectId = 1; objectId < xrefObjectCount; objectId++) {
+    const row = xrefRows[objectId - 1].match(/^(\d{10}) 00000 n ?$/);
+    if (!row) return { isValid: false };
+    const objectOffset = Number(row[1]);
+    if (buffer.subarray(objectOffset, objectOffset + String(objectId).length + 6).toString('ascii') !== `${objectId} 0 obj`) {
+      return { isValid: false };
+    }
+  }
 
   if (!xref.includes('/Root 1 0 R') || !xref.includes('/Info 5 0 R')) return { isValid: false };
+  if (!/\/ID \[<[0-9a-fA-F]{32}><[0-9a-fA-F]{32}>\]/.test(xref)) return { isValid: false };
 
   const pageCountMatch = value.match(/2 0 obj\n<< \/Type \/Pages \/Kids \[([\s\S]*?)\] \/Count (\d+) >>/);
   if (!pageCountMatch) return { isValid: false };
   const pageCount = Number(pageCountMatch[2]);
   if (pageCount < 2) return { isValid: false };
+  const kidReferences = [...pageCountMatch[1].matchAll(/(\d+) 0 R/g)];
+  if (kidReferences.length !== pageCount) return { isValid: false };
+  const pageObjects = [...value.matchAll(/\d+ 0 obj\n<< \/Type \/Page \/Parent 2 0 R/g)];
+  if (pageObjects.length !== pageCount) return { isValid: false };
+
+  for (const streamObject of value.matchAll(/\d+ 0 obj\n<< \/Length (\d+) >>\nstream\n([\s\S]*?)endstream\nendobj/g)) {
+    if (Buffer.byteLength(streamObject[2], 'ascii') !== Number(streamObject[1])) return { isValid: false };
+  }
 
   const extractedLines: string[] = [];
   const streamMatches = value.matchAll(/stream\n([\s\S]*?)endstream/g);
@@ -325,6 +365,9 @@ export function validateReportPdfBuffer(buffer: Buffer): PdfValidationResult {
   if (!metadata.FinalizationId || !metadata.SnapshotHash || extractedLines.length < 5) {
     return { isValid: false };
   }
+  const pageMarkers = extractedLines.filter((line) => /^\[PAGE \d+ OF \d+\]$/.test(line));
+  if (pageMarkers.length !== pageCount
+    || pageMarkers.some((marker, index) => marker !== `[PAGE ${index + 1} OF ${pageCount}]`)) return { isValid: false };
 
   return {
     isValid: true,

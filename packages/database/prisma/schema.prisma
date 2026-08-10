@@ -976,7 +976,8 @@ model ReportReviewRequest {
   assignedReviewer       User?         @relation("ReportReviewAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, caseId])
-  @@index([reportId])
+  @@unique([reportId, eventNumber])
+  @@unique([reportId, requestedById, idempotencyKey])
   @@index([requestedById])
   @@index([assignedReviewerId])
 }
