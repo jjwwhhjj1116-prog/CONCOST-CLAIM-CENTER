@@ -358,6 +358,10 @@ async function authenticate(db: PrismaClient, req: http.IncomingMessage, cookies
 
 async function canAccessCase(db: PrismaClient, context: SessionContext, caseId: string): Promise<boolean> {
   if (context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role))) return true;
+  return hasCaseAssignment(db, context, caseId);
+}
+
+async function hasCaseAssignment(db: PrismaClient, context: SessionContext, caseId: string): Promise<boolean> {
   return Boolean(await db.caseAssignment.findUnique({ where: { caseId_userId: { caseId, userId: context.user.id } } }));
 }
 
@@ -2199,6 +2203,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const q = url.searchParams.get('q')?.trim() ?? '';
         const claimType = url.searchParams.get('claimType')?.trim();
         const status = url.searchParams.get('status')?.trim();
+        const assignedOnly = url.searchParams.get('assignedOnly') === 'true';
         const requestedPage = Number(url.searchParams.get('page') || 1);
         const requestedLimit = Number(url.searchParams.get('limit') || 50);
         const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
@@ -2211,7 +2216,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const where: Prisma.CaseItemWhereInput = {
           organizationId: context.user.organizationId,
           deletedAt: null,
-          ...(!isAdminOrExec ? { assignments: { some: { userId: context.user.id } } } : {}),
+          ...(!isAdminOrExec || assignedOnly ? { assignments: { some: { userId: context.user.id } } } : {}),
           ...(claimType ? { claimType } : {}),
           ...(status ? { status } : {}),
           ...(q
@@ -2496,6 +2501,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const toStatus = typeof body.toStatus === 'string' ? body.toStatus.trim() : '';
         const reason = typeof body.reason === 'string' ? body.reason.trim() : null;
         const version = typeof body.version === 'number' ? body.version : -1;
+
+        if (toStatus === 'CLOSED') {
+          throw new HttpError(409, 'Use /api/cases/:caseId/close-with-unpaid-check for fee-governed closure');
+        }
 
         const allowedNext = VALID_STATUS_TRANSITIONS[caseRow.status] ?? [];
         if (!allowedNext.includes(toStatus)) {
@@ -5515,23 +5524,179 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       // -----------------------------------------------------------------------
       // P13 Fee & Success Compensation API Endpoints
       // -----------------------------------------------------------------------
+      const MAX_KRW_AMOUNT = 9_000_000_000_000_000n;
+      const FEE_RATE_BPS_MAX = 10_000;
+      const FEE_FORMULA_VERSION = 'KRW_INTEGER_HALF_UP_BPS_TAX_V3';
+      const PAYMENT_TYPES = new Set(['PARTIAL', 'FULL', 'ADJUSTMENT']);
+      const INVOICE_STATUSES = new Set(['NOT_ISSUED', 'ISSUED', 'EXEMPT']);
+
+      function parseKrwInteger(value: unknown, label: string, allowZero = true): bigint {
+        const text = typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : typeof value === 'string' ? value.trim() : '';
+        if (!/^(0|[1-9]\d*)$/.test(text)) throw new HttpError(400, `${label} must be a non-negative KRW integer string`);
+        const parsed = BigInt(text);
+        if ((!allowZero && parsed === 0n) || parsed > MAX_KRW_AMOUNT) {
+          throw new HttpError(400, `${label} must be between ${allowZero ? '0' : '1'} and ${MAX_KRW_AMOUNT.toString()}`);
+        }
+        return parsed;
+      }
+
+      function parseFeeRateBps(value: unknown): number {
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > FEE_RATE_BPS_MAX) {
+          throw new HttpError(400, `Fee rate bps must be an integer between 0 and ${FEE_RATE_BPS_MAX}`);
+        }
+        return value;
+      }
+
+      function parseExpectedVersion(value: unknown, label: string): number {
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) throw new HttpError(400, `${label} is required`);
+        return value;
+      }
+
+      function parseIdempotencyKey(value: unknown): string | null {
+        if (value === undefined || value === null || value === '') return null;
+        if (typeof value !== 'string' || value.length < 8 || value.length > 160 || !/^[A-Za-z0-9._:-]+$/.test(value)) {
+          throw new HttpError(400, 'Invalid idempotency key');
+        }
+        return value;
+      }
+
+      function parseIsoDate(value: unknown, label: string): Date {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new HttpError(400, `${label} must be YYYY-MM-DD`);
+        const parsed = new Date(`${value}T00:00:00.000Z`);
+        if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new HttpError(400, `${label} is invalid`);
+        return parsed;
+      }
+
+      const signedPaymentAmount = (payment: { paymentType: string; amount: bigint }) => payment.paymentType === 'ADJUSTMENT' ? -payment.amount : payment.amount;
+
+      async function resolveScopedIdempotencyRace<T extends { idempotencyFingerprint: string | null }>(
+        idempotencyKey: string | null,
+        expectedFingerprint: string,
+        lookup: () => Promise<T | null>
+      ): Promise<T | null> {
+        if (!idempotencyKey) return null;
+        for (let attempt = 0; attempt < 7; attempt += 1) {
+          const canonical = await lookup();
+          if (canonical) {
+            if (canonical.idempotencyFingerprint !== expectedFingerprint) throw new HttpError(409, 'Idempotency key payload mismatch');
+            return canonical;
+          }
+          if (attempt < 6) await new Promise((resolve) => setTimeout(resolve, Math.min(5 * (2 ** attempt), 40)));
+        }
+        return null;
+      }
+
       function calculateFeeHalfUp(baseAmount: bigint, feeRateBps: number, isTaxInclusive: boolean) {
         if (baseAmount < 0n) throw new HttpError(400, 'Base amount cannot be negative');
-        if (feeRateBps < 0 || feeRateBps > 100000) throw new HttpError(400, 'Fee rate bps must be between 0 and 100000');
+        if (feeRateBps < 0 || feeRateBps > FEE_RATE_BPS_MAX) throw new HttpError(400, 'Fee rate bps is out of range');
 
-        const calculatedFee = (baseAmount * BigInt(feeRateBps) + 5000n) / 10000n;
+        const roundedFee = (baseAmount * BigInt(feeRateBps) + 5000n) / 10000n;
+        let calculatedFee = roundedFee;
         let taxAmount = 0n;
         let totalClaimFee = 0n;
 
         if (isTaxInclusive) {
-          totalClaimFee = calculatedFee;
-          const preTax = (calculatedFee * 10n + 5n) / 11n;
-          taxAmount = calculatedFee - preTax;
+          totalClaimFee = roundedFee;
+          calculatedFee = (roundedFee * 10n + 5n) / 11n;
+          taxAmount = totalClaimFee - calculatedFee;
         } else {
-          taxAmount = (calculatedFee * 10n + 5n) / 100n;
+          taxAmount = (calculatedFee + 5n) / 10n;
           totalClaimFee = calculatedFee + taxAmount;
         }
         return { calculatedFee, taxAmount, totalClaimFee };
+      }
+
+      // P13 approver assignment is an explicit workflow step. A case author who
+      // is already assigned may add an active Director/CEO from the same tenant;
+      // this prevents the independent-approval policy from deadlocking real
+      // UI-created cases that initially assign only their creator.
+      const feeApproverMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-approvers$/);
+      if (feeApproverMatch && req.method === 'GET') {
+        const caseId = feeApproverMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+        requireAnyRole(context, new Set(['pm', 'director', 'ceo']), 'Approver assignment requires PM or higher role');
+
+        const query = (url.searchParams.get('q') ?? '').trim().toLocaleLowerCase();
+        const tenantUsers = await db.user.findMany({
+          where: { organizationId: context.user.organizationId, isActive: true },
+          include: {
+            roles: { include: { role: true } },
+            assignments: { where: { caseId }, select: { caseId: true } }
+          },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }]
+        });
+        const approvers = tenantUsers
+          .map((user) => ({
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            roles: user.roles.map((item) => item.role.name.toLowerCase()),
+            assigned: user.assignments.length > 0
+          }))
+          .filter((user) => user.roles.some((role) => role === 'director' || role === 'ceo'))
+          .filter((user) => !query || `${user.name} ${user.email}`.toLocaleLowerCase().includes(query))
+          .slice(0, 50);
+        sendJson(res, 200, { approvers });
+        return;
+      }
+
+      if (feeApproverMatch && req.method === 'POST') {
+        const caseId = feeApproverMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+        requireAnyRole(context, new Set(['pm', 'director', 'ceo']), 'Approver assignment requires PM or higher role');
+        if (caseRow.status === 'CLOSED') throw new HttpError(409, 'Approvers cannot be assigned to a closed case');
+
+        const body = await readJson(req) as { userId?: string; expectedCaseVersion?: number };
+        const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
+        if (!userId) throw new HttpError(400, 'userId is required');
+        const expectedCaseVersion = parseExpectedVersion(body.expectedCaseVersion, 'expectedCaseVersion');
+        const target = await db.user.findUnique({
+          where: { id: userId },
+          include: { roles: { include: { role: true } } }
+        });
+        const targetRoles = target?.roles.map((item) => item.role.name.toLowerCase()) ?? [];
+        if (!target || target.organizationId !== context.user.organizationId || !target.isActive || !targetRoles.some((role) => role === 'director' || role === 'ceo')) {
+          throw new HttpError(400, 'An active Director or CEO in the same organization is required');
+        }
+
+        let idempotentReplay = Boolean(await db.caseAssignment.findUnique({ where: { caseId_userId: { caseId, userId } } }));
+        if (!idempotentReplay) {
+          try {
+            await db.$transaction(async (tx) => {
+              const updated = await tx.caseItem.updateMany({
+                where: { id: caseId, organizationId: context.user.organizationId, version: expectedCaseVersion, status: { not: 'CLOSED' }, deletedAt: null },
+                data: { version: { increment: 1 } }
+              });
+              if (updated.count !== 1) throw new HttpError(409, 'Stale case version for approver assignment');
+              await tx.caseAssignment.create({ data: { caseId, userId } });
+              await tx.auditLog.create({
+                data: requestAudit(context, 'FEE_APPROVER_ASSIGNED', 'CaseAssignment', `${caseId}:${userId}`, {
+                  caseId,
+                  approverId: userId,
+                  approverRoles: targetRoles.filter((role) => role === 'director' || role === 'ceo')
+                })
+              });
+            });
+          } catch (reason) {
+            idempotentReplay = Boolean(await db.caseAssignment.findUnique({ where: { caseId_userId: { caseId, userId } } }));
+            if (!idempotentReplay) throw reason;
+          }
+        }
+        const currentCase = await db.caseItem.findUniqueOrThrow({ where: { id: caseId } });
+        sendJson(res, idempotentReplay ? 200 : 201, {
+          assignment: { caseId, userId, name: target.name, email: target.email, roles: targetRoles },
+          idempotentReplay,
+          caseVersion: currentCase.version
+        });
+        return;
       }
 
       // 1. GET /api/cases/:caseId/fee-compensation
@@ -5542,30 +5707,36 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
           throw new HttpError(404, 'Case not found');
         }
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
-        const config = await db.caseFeeConfig.findUnique({ where: { caseId } });
+        const config = await db.caseFeeConfig.findFirst({ where: { caseId, organizationId: context.user.organizationId } });
         const calculations = await db.caseFeeCalculation.findMany({
-          where: { caseId },
+          where: { caseId, organizationId: context.user.organizationId },
           include: { actor: { select: { id: true, name: true, email: true } } },
           orderBy: { createdAt: 'desc' }
         });
         const payments = await db.caseFeePayment.findMany({
-          where: { caseId },
+          where: { caseId, organizationId: context.user.organizationId },
           include: { actor: { select: { id: true, name: true, email: true } } },
           orderBy: { createdAt: 'desc' }
         });
         const audits = await db.caseFeeAudit.findMany({
-          where: { caseId },
+          where: { caseId, organizationId: context.user.organizationId },
           include: { actor: { select: { id: true, name: true, email: true } } },
           orderBy: { createdAt: 'desc' }
         });
 
-        const finalCalc = calculations.find((c) => c.calcType === 'FINAL');
+        const authoritativeFinal = calculations.find((c) =>
+          c.calcType === 'FINAL' && c.formulaVersion === FEE_FORMULA_VERSION && c.sourceCalculationId !== null
+        );
+        const finalCalc = authoritativeFinal ?? (
+          caseRow.status === 'CLOSED' ? calculations.find((c) => c.calcType === 'FINAL') : undefined
+        );
         const estCalc = calculations.find((c) => c.calcType === 'ESTIMATED');
         const activeCalc = finalCalc || estCalc;
 
         const totalClaimFee = activeCalc ? activeCalc.totalClaimFee : 0n;
-        const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0n);
+        const totalPaid = payments.reduce((acc, p) => acc + signedPaymentAmount(p), 0n);
         const rawUnpaid = totalClaimFee - totalPaid;
         const unpaidBalance = rawUnpaid > 0n ? rawUnpaid : 0n;
 
@@ -5593,6 +5764,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           })),
           summary: {
             contractAmount: (config?.contractAmount ?? 0n).toString(),
+            billingDate: config?.billingDate.toISOString().slice(0, 10) ?? '',
             baseAmount: (config?.baseAmount ?? 0n).toString(),
             feeRateBps: config?.feeRateBps ?? 0,
             hasSuccessFee: config?.hasSuccessFee ?? true,
@@ -5601,13 +5773,18 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             estimatedFee: (estCalc?.totalClaimFee ?? 0n).toString(),
             totalPaid: totalPaid.toString(),
             unpaidBalance: unpaidBalance.toString(),
-            status: config?.status ?? 'DRAFT'
+            status: config?.status ?? 'DRAFT',
+            version: config?.version ?? 0,
+            caseVersion: caseRow.version,
+            caseStatus: caseRow.status,
+            latestEstimateId: estCalc?.id ?? null,
+            latestEstimateActorId: estCalc?.actorId ?? null
           }
         });
         return;
       }
 
-      // 2. POST /api/cases/:caseId/fee-compensation/calculate
+      // 2. POST /api/cases/:caseId/fee-compensation/calculate (estimate only)
       const feeCalcMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-compensation\/calculate$/);
       if (feeCalcMatch && req.method === 'POST') {
         const caseId = feeCalcMatch[1];
@@ -5615,32 +5792,41 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
           throw new HttpError(404, 'Case not found');
         }
-
-        const canWrite = context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r.toLowerCase()));
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+        const canWrite = context.roles.some((r) => ['pm', 'director', 'ceo'].includes(r.toLowerCase()));
         if (!canWrite) throw new HttpError(403, 'Fee compensation entry requires PM or higher role');
+        if (caseRow.status === 'CLOSED') throw new HttpError(409, 'Closed cases cannot accept fee mutations');
 
         const body = (await readJson(req)) as {
           contractAmount?: string | number;
           hasSuccessFee?: boolean;
+          billingDate?: string;
           baseAmount?: string | number;
           feeRateBps?: number;
           isTaxInclusive?: boolean;
           calcType?: 'ESTIMATED' | 'FINAL';
+          expectedVersion?: number;
           idempotencyKey?: string;
         };
 
-        const calcType = body.calcType === 'FINAL' ? 'FINAL' : 'ESTIMATED';
-
-        if (calcType === 'FINAL') {
-          const canFinalize = context.roles.some((r) => ['admin', 'director', 'ceo'].includes(r.toLowerCase()));
-          if (!canFinalize) throw new HttpError(403, 'Final fee approval requires Director or CEO role');
+        if (body.calcType === 'FINAL') throw new HttpError(400, 'Use the independent /finalize endpoint for final approval');
+        const expectedVersion = parseExpectedVersion(body.expectedVersion, 'expectedVersion');
+        const idempotencyKey = parseIdempotencyKey(body.idempotencyKey);
+        const contractAmount = parseKrwInteger(body.contractAmount, 'Contract amount');
+        const baseAmount = parseKrwInteger(body.baseAmount, 'Base amount');
+        if (typeof body.hasSuccessFee !== 'boolean' || typeof body.isTaxInclusive !== 'boolean') {
+          throw new HttpError(400, 'hasSuccessFee and isTaxInclusive must be booleans');
         }
+        const hasSuccessFee = body.hasSuccessFee;
+        const billingDate = parseIsoDate(body.billingDate, 'billingDate');
+        const feeRateBps = hasSuccessFee ? parseFeeRateBps(body.feeRateBps) : 0;
+        const isTaxInclusive = hasSuccessFee ? body.isTaxInclusive : false;
+        const idempotencyFingerprint = sha256Text(JSON.stringify({ contractAmount: contractAmount.toString(), hasSuccessFee, billingDate: body.billingDate, baseAmount: baseAmount.toString(), feeRateBps, isTaxInclusive, expectedVersion }));
 
-        if (body.idempotencyKey) {
-          const existingCalc = await db.caseFeeCalculation.findUnique({
-            where: { idempotencyKey: body.idempotencyKey }
-          });
+        if (idempotencyKey) {
+          const existingCalc = await db.caseFeeCalculation.findFirst({ where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey } });
           if (existingCalc) {
+            if (existingCalc.idempotencyFingerprint !== idempotencyFingerprint) throw new HttpError(409, 'Idempotency key payload mismatch');
             sendJson(res, 200, {
               calculation: {
                 ...existingCalc,
@@ -5656,18 +5842,33 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           }
         }
 
-        const contractAmount = BigInt(String(body.contractAmount ?? 0));
-        const baseAmount = BigInt(String(body.baseAmount ?? 0));
-        const feeRateBps = Number(body.feeRateBps ?? 0);
-        const hasSuccessFee = body.hasSuccessFee !== false;
-        const isTaxInclusive = body.isTaxInclusive === true;
+        const currentConfig = await db.caseFeeConfig.findUnique({ where: { caseId } });
+        if (currentConfig?.status === 'CONFIRMED' || (currentConfig?.version ?? 0) !== expectedVersion) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeeCalculation.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey }
+          }));
+          if (canonical) {
+            sendJson(res, 200, {
+              calculation: {
+                ...canonical,
+                contractAmount: canonical.contractAmount.toString(),
+                baseAmount: canonical.baseAmount.toString(),
+                calculatedFee: canonical.calculatedFee.toString(),
+                taxAmount: canonical.taxAmount.toString(),
+                totalClaimFee: canonical.totalClaimFee.toString()
+              },
+              idempotentReplay: true
+            });
+            return;
+          }
+          if (currentConfig?.status === 'CONFIRMED') throw new HttpError(409, 'Confirmed fee terms are immutable; record a separate adjustment event');
+          throw new HttpError(409, 'Stale fee configuration version');
+        }
+        const { calculatedFee, taxAmount, totalClaimFee } = hasSuccessFee ? calculateFeeHalfUp(baseAmount, feeRateBps, isTaxInclusive) : { calculatedFee: 0n, taxAmount: 0n, totalClaimFee: 0n };
 
-        if (contractAmount < 0n || baseAmount < 0n) throw new HttpError(400, 'Amounts cannot be negative');
-        if (feeRateBps < 0 || feeRateBps > 100000) throw new HttpError(400, 'Fee rate bps must be between 0 and 100000');
-
-        const { calculatedFee, taxAmount, totalClaimFee } = calculateFeeHalfUp(baseAmount, feeRateBps, isTaxInclusive);
-
-        const calcResult = await db.$transaction(async (tx) => {
+        let calcResult;
+        try {
+          calcResult = await db.$transaction(async (tx) => {
           let config = await tx.caseFeeConfig.findUnique({ where: { caseId } });
           const configId = config ? config.id : `FEECFG-${crypto.randomUUID()}`;
 
@@ -5679,26 +5880,29 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
                 caseId,
                 contractAmount,
                 hasSuccessFee,
+                billingDate,
                 baseAmount,
                 feeRateBps,
                 isTaxInclusive,
-                status: calcType === 'FINAL' ? 'CONFIRMED' : 'DRAFT',
+                status: 'DRAFT',
                 version: 1
               }
             });
           } else {
-            config = await tx.caseFeeConfig.update({
-              where: { id: configId },
+            const updated = await tx.caseFeeConfig.updateMany({
+              where: { id: configId, version: expectedVersion, status: 'DRAFT' },
               data: {
                 contractAmount,
                 hasSuccessFee,
+                billingDate,
                 baseAmount,
                 feeRateBps,
                 isTaxInclusive,
-                status: calcType === 'FINAL' ? 'CONFIRMED' : config.status,
                 version: { increment: 1 }
               }
             });
+            if (updated.count !== 1) throw new HttpError(409, 'Concurrent fee configuration update');
+            config = await tx.caseFeeConfig.findUniqueOrThrow({ where: { id: configId } });
           }
 
           const calcId = `FEECALC-${crypto.randomUUID()}`;
@@ -5708,17 +5912,21 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               organizationId: context.user.organizationId,
               caseId,
               feeConfigId: configId,
-              calcType,
+              calcType: 'ESTIMATED',
               contractAmount,
+              hasSuccessFee,
+              billingDate,
               baseAmount,
               feeRateBps,
               isTaxInclusive,
               calculatedFee,
               taxAmount,
               totalClaimFee,
-              formulaVersion: 'HALF_UP_BPS_V1',
+              formulaVersion: FEE_FORMULA_VERSION,
+              feeConfigVersion: config.version,
               actorId: context.user.id,
-              idempotencyKey: body.idempotencyKey || null
+              idempotencyKey,
+              idempotencyFingerprint
             }
           });
 
@@ -5727,7 +5935,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               id: `FEEAUDIT-${crypto.randomUUID()}`,
               organizationId: context.user.organizationId,
               caseId,
-              action: calcType === 'FINAL' ? 'FINALIZED' : 'CALCULATED',
+              action: 'CALCULATED',
               unpaidBalance: totalClaimFee,
               detailsJson: JSON.stringify({ calcId, calculatedFee: calculatedFee.toString(), totalClaimFee: totalClaimFee.toString() }),
               actorId: context.user.id
@@ -5735,15 +5943,33 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           });
 
           await tx.auditLog.create({
-            data: requestAudit(context, calcType === 'FINAL' ? 'FEE_FINALIZED' : 'FEE_CALCULATED', 'CaseFeeCalculation', calcId, {
+            data: requestAudit(context, 'FEE_CALCULATED', 'CaseFeeCalculation', calcId, {
               caseId,
-              calcType,
+              calcType: 'ESTIMATED',
               totalClaimFee: totalClaimFee.toString()
             })
           });
 
-          return calcRecord;
-        });
+            return calcRecord;
+          });
+        } catch (reason) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeeCalculation.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey }
+          }));
+          if (!canonical) throw reason;
+          sendJson(res, 200, {
+            calculation: {
+              ...canonical,
+              contractAmount: canonical.contractAmount.toString(),
+              baseAmount: canonical.baseAmount.toString(),
+              calculatedFee: canonical.calculatedFee.toString(),
+              taxAmount: canonical.taxAmount.toString(),
+              totalClaimFee: canonical.totalClaimFee.toString()
+            },
+            idempotentReplay: true
+          });
+          return;
+        }
 
         sendJson(res, 201, {
           calculation: {
@@ -5759,7 +5985,87 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
-      // 3. POST /api/cases/:caseId/fee-compensation/payments
+      // 3. POST /api/cases/:caseId/fee-compensation/finalize
+      const feeFinalizeMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-compensation\/finalize$/);
+      if (feeFinalizeMatch && req.method === 'POST') {
+        const caseId = feeFinalizeMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) throw new HttpError(404, 'Case not found');
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+        requireAnyRole(context, new Set(['director', 'ceo']), 'Final fee approval requires Director or CEO role');
+        if (caseRow.status === 'CLOSED') throw new HttpError(409, 'Closed cases cannot accept fee mutations');
+
+        const body = await readJson(req) as { calculationId?: string; expectedVersion?: number; idempotencyKey?: string };
+        const calculationId = typeof body.calculationId === 'string' ? body.calculationId : '';
+        if (!calculationId) throw new HttpError(400, 'calculationId is required');
+        const expectedVersion = parseExpectedVersion(body.expectedVersion, 'expectedVersion');
+        const idempotencyKey = parseIdempotencyKey(body.idempotencyKey);
+        const idempotencyFingerprint = sha256Text(JSON.stringify({ calculationId, expectedVersion }));
+
+        if (idempotencyKey) {
+          const replay = await db.caseFeeCalculation.findFirst({ where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey, calcType: 'FINAL' } });
+          if (replay) {
+            if (replay.idempotencyFingerprint !== idempotencyFingerprint) throw new HttpError(409, 'Idempotency key payload mismatch');
+            sendJson(res, 200, { calculation: { ...replay, contractAmount: replay.contractAmount.toString(), baseAmount: replay.baseAmount.toString(), calculatedFee: replay.calculatedFee.toString(), taxAmount: replay.taxAmount.toString(), totalClaimFee: replay.totalClaimFee.toString() }, idempotentReplay: true });
+            return;
+          }
+        }
+
+        const config = await db.caseFeeConfig.findUnique({ where: { caseId } });
+        if (!config || config.status !== 'DRAFT' || config.version !== expectedVersion) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeeCalculation.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey, calcType: 'FINAL' }
+          }));
+          if (canonical) {
+            sendJson(res, 200, { calculation: { ...canonical, contractAmount: canonical.contractAmount.toString(), baseAmount: canonical.baseAmount.toString(), calculatedFee: canonical.calculatedFee.toString(), taxAmount: canonical.taxAmount.toString(), totalClaimFee: canonical.totalClaimFee.toString() }, idempotentReplay: true });
+            return;
+          }
+          if (!config || config.status !== 'DRAFT') throw new HttpError(409, 'Only a draft fee configuration can be finalized');
+          throw new HttpError(409, 'Stale fee configuration version');
+        }
+        const estimate = await db.caseFeeCalculation.findFirst({ where: { id: calculationId, caseId, organizationId: context.user.organizationId, feeConfigId: config.id, calcType: 'ESTIMATED' } });
+        if (!estimate) throw new HttpError(404, 'Estimated calculation not found');
+        const latestEstimate = await db.caseFeeCalculation.findFirst({ where: { caseId, calcType: 'ESTIMATED' }, orderBy: { createdAt: 'desc' } });
+        if (latestEstimate?.id !== estimate.id) throw new HttpError(409, 'Only the latest estimate can be finalized');
+        if (estimate.formulaVersion !== FEE_FORMULA_VERSION) {
+          throw new HttpError(409, 'Legacy fee estimates must be recalculated with the current formula before final approval');
+        }
+        if (estimate.actorId === context.user.id) throw new HttpError(403, 'Self-approval is forbidden');
+
+        let finalRecord;
+        try {
+          finalRecord = await db.$transaction(async (tx) => {
+            const finalId = `FEECALC-${crypto.randomUUID()}`;
+            const created = await tx.caseFeeCalculation.create({ data: {
+              id: finalId, organizationId: context.user.organizationId, caseId, feeConfigId: config.id, calcType: 'FINAL',
+              contractAmount: estimate.contractAmount, hasSuccessFee: estimate.hasSuccessFee, billingDate: estimate.billingDate,
+              baseAmount: estimate.baseAmount, feeRateBps: estimate.feeRateBps,
+              isTaxInclusive: estimate.isTaxInclusive, calculatedFee: estimate.calculatedFee, taxAmount: estimate.taxAmount,
+              totalClaimFee: estimate.totalClaimFee, formulaVersion: estimate.formulaVersion,
+              feeConfigVersion: estimate.feeConfigVersion, sourceCalculationId: estimate.id,
+              actorId: context.user.id, idempotencyKey, idempotencyFingerprint
+            } });
+            const confirmed = await tx.caseFeeConfig.findUniqueOrThrow({ where: { id: config.id } });
+            if (confirmed.status !== 'CONFIRMED' || confirmed.version !== expectedVersion + 1) {
+              throw new HttpError(409, 'Final approval did not atomically confirm fee terms');
+            }
+            await tx.caseFeeAudit.create({ data: { id: `FEEAUDIT-${crypto.randomUUID()}`, organizationId: context.user.organizationId, caseId, action: 'FINALIZED', unpaidBalance: estimate.totalClaimFee, detailsJson: JSON.stringify({ finalId, sourceCalculationId: estimate.id, totalClaimFee: estimate.totalClaimFee.toString() }), actorId: context.user.id } });
+            await tx.auditLog.create({ data: requestAudit(context, 'FEE_FINALIZED', 'CaseFeeCalculation', finalId, { caseId, sourceCalculationId: estimate.id, totalClaimFee: estimate.totalClaimFee.toString() }) });
+            return created;
+          });
+        } catch (reason) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeeCalculation.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey, calcType: 'FINAL' }
+          }));
+          if (!canonical) throw reason;
+          sendJson(res, 200, { calculation: { ...canonical, contractAmount: canonical.contractAmount.toString(), baseAmount: canonical.baseAmount.toString(), calculatedFee: canonical.calculatedFee.toString(), taxAmount: canonical.taxAmount.toString(), totalClaimFee: canonical.totalClaimFee.toString() }, idempotentReplay: true });
+          return;
+        }
+        sendJson(res, 201, { calculation: { ...finalRecord, contractAmount: finalRecord.contractAmount.toString(), baseAmount: finalRecord.baseAmount.toString(), calculatedFee: finalRecord.calculatedFee.toString(), taxAmount: finalRecord.taxAmount.toString(), totalClaimFee: finalRecord.totalClaimFee.toString() }, idempotentReplay: false });
+        return;
+      }
+
+      // 4. POST /api/cases/:caseId/fee-compensation/payments
       const feePayMatch = pathname.match(/^\/api\/cases\/([^/]+)\/fee-compensation\/payments$/);
       if (feePayMatch && req.method === 'POST') {
         const caseId = feePayMatch[1];
@@ -5767,9 +6073,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
           throw new HttpError(404, 'Case not found');
         }
-
-        const canWrite = context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r.toLowerCase()));
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
+        const canWrite = context.roles.some((r) => ['pm', 'director', 'ceo'].includes(r.toLowerCase()));
         if (!canWrite) throw new HttpError(403, 'Payment recording requires PM or higher role');
+        if (caseRow.status === 'CLOSED') throw new HttpError(409, 'Closed cases cannot accept fee mutations');
 
         const body = (await readJson(req)) as {
           amount?: string | number;
@@ -5779,14 +6086,29 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           invoiceIssuedAt?: string;
           invoiceNumber?: string;
           note?: string;
+          expectedVersion?: number;
           idempotencyKey?: string;
         };
 
-        if (body.idempotencyKey) {
-          const existingPayment = await db.caseFeePayment.findUnique({
-            where: { idempotencyKey: body.idempotencyKey }
-          });
+        const expectedVersion = parseExpectedVersion(body.expectedVersion, 'expectedVersion');
+        const idempotencyKey = parseIdempotencyKey(body.idempotencyKey);
+        const amount = parseKrwInteger(body.amount, 'Payment amount', false);
+        const paymentType = typeof body.paymentType === 'string' && PAYMENT_TYPES.has(body.paymentType) ? body.paymentType : '';
+        const invoiceStatus = typeof body.invoiceStatus === 'string' && INVOICE_STATUSES.has(body.invoiceStatus) ? body.invoiceStatus : '';
+        if (!paymentType) throw new HttpError(400, 'Invalid payment type');
+        if (!invoiceStatus) throw new HttpError(400, 'Invalid invoice status');
+        const paymentDate = parseIsoDate(body.paymentDate, 'paymentDate');
+        const invoiceIssuedAt = body.invoiceIssuedAt ? parseIsoDate(body.invoiceIssuedAt, 'invoiceIssuedAt') : null;
+        const invoiceNumber = typeof body.invoiceNumber === 'string' ? body.invoiceNumber.trim() : '';
+        const note = typeof body.note === 'string' ? body.note.trim() : '';
+        if (invoiceNumber.length > 120 || note.length > 1000) throw new HttpError(400, 'Invoice number or note is too long');
+        if (invoiceStatus === 'ISSUED' && (!invoiceNumber || !invoiceIssuedAt)) throw new HttpError(400, 'Issued invoice requires number and issue date');
+        const idempotencyFingerprint = sha256Text(JSON.stringify({ amount: amount.toString(), paymentType, paymentDate: body.paymentDate, invoiceStatus, invoiceIssuedAt: body.invoiceIssuedAt ?? null, invoiceNumber, note, expectedVersion }));
+
+        if (idempotencyKey) {
+          const existingPayment = await db.caseFeePayment.findFirst({ where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey } });
           if (existingPayment) {
+            if (existingPayment.idempotencyFingerprint !== idempotencyFingerprint) throw new HttpError(409, 'Idempotency key payload mismatch');
             sendJson(res, 200, {
               payment: {
                 ...existingPayment,
@@ -5799,12 +6121,53 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
 
         const config = await db.caseFeeConfig.findUnique({ where: { caseId } });
-        if (!config) throw new HttpError(400, 'Fee configuration must exist before recording payment');
+        if (!config || config.status !== 'CONFIRMED' || config.version !== expectedVersion) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeePayment.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey }
+          }));
+          if (canonical) {
+            sendJson(res, 200, { payment: { ...canonical, amount: canonical.amount.toString() }, idempotentReplay: true });
+            return;
+          }
+          if (!config || config.status !== 'CONFIRMED') throw new HttpError(409, 'Final fee approval is required before recording payment');
+          throw new HttpError(409, 'Stale fee configuration version');
+        }
+        const finalCalc = await db.caseFeeCalculation.findFirst({
+          where: {
+            caseId,
+            organizationId: context.user.organizationId,
+            feeConfigId: config.id,
+            calcType: 'FINAL',
+            formulaVersion: FEE_FORMULA_VERSION,
+            sourceCalculationId: { not: null }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+        if (!finalCalc) throw new HttpError(409, 'A current independently sourced final fee calculation is required');
+        const existingPayments = await db.caseFeePayment.findMany({ where: { caseId, organizationId: context.user.organizationId } });
+        const currentPaid = existingPayments.reduce((acc, payment) => acc + signedPaymentAmount(payment), 0n);
+        const outstanding = finalCalc.totalClaimFee - currentPaid;
+        const paymentConflict = paymentType === 'ADJUSTMENT'
+          ? (amount > currentPaid ? 'Adjustment cannot exceed recorded payments' : null)
+          : (outstanding <= 0n || amount > outstanding
+              ? 'Payment exceeds unpaid balance'
+              : (paymentType === 'FULL' && amount !== outstanding ? 'FULL payment must equal the unpaid balance' : null));
+        if (paymentConflict) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeePayment.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey }
+          }));
+          if (canonical) {
+            sendJson(res, 200, { payment: { ...canonical, amount: canonical.amount.toString() }, idempotentReplay: true });
+            return;
+          }
+          throw new HttpError(409, paymentConflict);
+        }
 
-        const amount = BigInt(String(body.amount ?? 0));
-        const paymentDate = body.paymentDate ? new Date(body.paymentDate) : new Date();
-
-        const payResult = await db.$transaction(async (tx) => {
+        let payResult;
+        try {
+          payResult = await db.$transaction(async (tx) => {
+          const updated = await tx.caseFeeConfig.updateMany({ where: { id: config.id, version: expectedVersion, status: 'CONFIRMED' }, data: { version: { increment: 1 } } });
+          if (updated.count !== 1) throw new HttpError(409, 'Concurrent payment conflict');
           const payId = `FEEPAY-${crypto.randomUUID()}`;
           const payRecord = await tx.caseFeePayment.create({
             data: {
@@ -5812,25 +6175,22 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               organizationId: context.user.organizationId,
               caseId,
               feeConfigId: config.id,
-              paymentType: body.paymentType || 'PARTIAL',
+              paymentType,
               amount,
               paymentDate,
-              invoiceStatus: body.invoiceStatus || 'NOT_ISSUED',
-              invoiceIssuedAt: body.invoiceIssuedAt ? new Date(body.invoiceIssuedAt) : null,
-              invoiceNumber: body.invoiceNumber || null,
-              note: body.note || null,
+              invoiceStatus,
+              invoiceIssuedAt,
+              invoiceNumber: invoiceNumber || null,
+              note: note || null,
               actorId: context.user.id,
-              idempotencyKey: body.idempotencyKey || null
+              idempotencyKey,
+              idempotencyFingerprint
             }
           });
 
           const allPayments = await tx.caseFeePayment.findMany({ where: { caseId } });
-          const totalPaid = allPayments.reduce((acc, p) => acc + p.amount, 0n);
-          const lastCalc = await tx.caseFeeCalculation.findFirst({
-            where: { caseId },
-            orderBy: { createdAt: 'desc' }
-          });
-          const totalClaimFee = lastCalc ? lastCalc.totalClaimFee : 0n;
+          const totalPaid = allPayments.reduce((acc, p) => acc + signedPaymentAmount(p), 0n);
+          const totalClaimFee = finalCalc.totalClaimFee;
           const rawUnpaid = totalClaimFee - totalPaid;
           const unpaidBalance = rawUnpaid > 0n ? rawUnpaid : 0n;
 
@@ -5854,8 +6214,16 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             })
           });
 
-          return payRecord;
-        });
+            return payRecord;
+          });
+        } catch (reason) {
+          const canonical = await resolveScopedIdempotencyRace(idempotencyKey, idempotencyFingerprint, () => db.caseFeePayment.findFirst({
+            where: { organizationId: context.user.organizationId, caseId, actorId: context.user.id, idempotencyKey }
+          }));
+          if (!canonical) throw reason;
+          sendJson(res, 200, { payment: { ...canonical, amount: canonical.amount.toString() }, idempotentReplay: true });
+          return;
+        }
 
         sendJson(res, 201, {
           payment: {
@@ -5867,7 +6235,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         return;
       }
 
-      // 4. POST /api/cases/:caseId/close-with-unpaid-check
+      // 5. POST /api/cases/:caseId/close-with-unpaid-check
       const closeCheckMatch = pathname.match(/^\/api\/cases\/([^/]+)\/close-with-unpaid-check$/);
       if (closeCheckMatch && req.method === 'POST') {
         const caseId = closeCheckMatch[1];
@@ -5875,25 +6243,45 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
           throw new HttpError(404, 'Case not found');
         }
+        if (!(await hasCaseAssignment(db, context, caseId))) throw new HttpError(403, 'Case assignment required');
 
-        const canWrite = context.roles.some((r) => ['admin', 'pm', 'director', 'ceo'].includes(r.toLowerCase()));
+        const canWrite = context.roles.some((r) => ['pm', 'director', 'ceo'].includes(r.toLowerCase()));
         if (!canWrite) throw new HttpError(403, 'Case closure requires PM or higher role');
 
-        const body = await readJson(req) as { forceClose?: boolean };
+        const body = await readJson(req) as { forceClose?: boolean; caseVersion?: number; feeVersion?: number };
+        if (body.forceClose !== undefined && typeof body.forceClose !== 'boolean') throw new HttpError(400, 'forceClose must be a boolean');
+        const forceClose = body.forceClose === true;
+        const caseVersion = parseExpectedVersion(body.caseVersion, 'caseVersion');
+        const feeVersion = parseExpectedVersion(body.feeVersion, 'feeVersion');
+        if (caseRow.status !== 'SUCCESS_FEE') throw new HttpError(409, 'Case must be in SUCCESS_FEE before closure');
+        if (caseRow.version !== caseVersion) throw new HttpError(409, 'Stale case version');
+        if (forceClose && !context.roles.some((role) => ['director', 'ceo'].includes(role.toLowerCase()))) throw new HttpError(403, 'Forced unpaid closure requires Director or CEO role');
 
-        const lastCalc = await db.caseFeeCalculation.findFirst({
-          where: { caseId },
+        const config = await db.caseFeeConfig.findUnique({ where: { caseId } });
+        if (!config || config.version !== feeVersion) throw new HttpError(409, 'Stale or missing fee configuration');
+        if (config.status !== 'CONFIRMED') throw new HttpError(409, 'Independent final fee approval is required before closure');
+        const finalCalc = await db.caseFeeCalculation.findFirst({
+          where: {
+            caseId,
+            organizationId: context.user.organizationId,
+            feeConfigId: config.id,
+            calcType: 'FINAL',
+            formulaVersion: FEE_FORMULA_VERSION,
+            sourceCalculationId: { not: null }
+          },
           orderBy: { createdAt: 'desc' }
         });
-        const payments = await db.caseFeePayment.findMany({ where: { caseId } });
-        const totalClaimFee = lastCalc ? lastCalc.totalClaimFee : 0n;
-        const totalPaid = payments.reduce((acc, p) => acc + p.amount, 0n);
+        if (!finalCalc) throw new HttpError(409, 'Final fee approval is required before closure');
+        const payments = await db.caseFeePayment.findMany({ where: { caseId, organizationId: context.user.organizationId } });
+        const totalClaimFee = finalCalc?.totalClaimFee ?? 0n;
+        const totalPaid = payments.reduce((acc, p) => acc + signedPaymentAmount(p), 0n);
         const rawUnpaid = totalClaimFee - totalPaid;
+        if (rawUnpaid < 0n) throw new HttpError(409, 'Payment ledger exceeds the approved fee and must be reconciled before closure');
         const unpaidBalance = rawUnpaid > 0n ? rawUnpaid : 0n;
 
-        if (unpaidBalance > 0n && !body.forceClose) {
-          await db.caseFeeAudit.create({
-            data: {
+        if (unpaidBalance > 0n && !forceClose) {
+          await db.$transaction(async (tx) => {
+            await tx.caseFeeAudit.create({ data: {
               id: `FEEAUDIT-${crypto.randomUUID()}`,
               organizationId: context.user.organizationId,
               caseId,
@@ -5901,7 +6289,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
               unpaidBalance,
               detailsJson: JSON.stringify({ rejected: true, reason: 'Unpaid balance remains' }),
               actorId: context.user.id
-            }
+            } });
+            await tx.auditLog.create({ data: requestAudit(context, 'CASE_CLOSE_BLOCKED_UNPAID', 'CaseItem', caseId, { unpaidBalance: unpaidBalance.toString() }) });
           });
           throw new HttpError(409, 'Unpaid balance remains for this case', {
             unpaidBalance: unpaidBalance.toString(),
@@ -5909,35 +6298,66 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           });
         }
 
-        const updatedCase = await db.$transaction(async (tx) => {
-          const updated = await tx.caseItem.update({
-            where: { id: caseId },
-            data: { status: 'CLOSED' }
+        const closure = await db.$transaction(async (tx) => {
+          const lockedFee = await tx.caseFeeConfig.updateMany({
+            where: { id: config.id, caseId, organizationId: context.user.organizationId, version: feeVersion, status: 'CONFIRMED' },
+            data: { version: { increment: 1 } }
           });
+          if (lockedFee.count !== 1) throw new HttpError(409, 'Concurrent fee mutation prevented case closure');
+
+          const currentFinal = await tx.caseFeeCalculation.findFirst({
+            where: {
+              caseId,
+              organizationId: context.user.organizationId,
+              feeConfigId: config.id,
+              calcType: 'FINAL',
+              formulaVersion: FEE_FORMULA_VERSION,
+              sourceCalculationId: { not: null }
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          if (!currentFinal) throw new HttpError(409, 'Final fee approval is required before closure');
+          const currentPayments = await tx.caseFeePayment.findMany({ where: { caseId, organizationId: context.user.organizationId } });
+          const currentPaid = currentPayments.reduce((acc, payment) => acc + signedPaymentAmount(payment), 0n);
+          const currentRawUnpaid = currentFinal.totalClaimFee - currentPaid;
+          if (currentRawUnpaid < 0n) throw new HttpError(409, 'Payment ledger exceeds the approved fee and must be reconciled before closure');
+          const currentUnpaid = currentRawUnpaid > 0n ? currentRawUnpaid : 0n;
+          if (currentUnpaid > 0n && !forceClose) {
+            throw new HttpError(409, 'Unpaid balance changed during case closure', {
+              unpaidBalance: currentUnpaid.toString(),
+              requiresConfirmation: true
+            });
+          }
+
+          const changed = await tx.caseItem.updateMany({ where: { id: caseId, version: caseVersion, status: 'SUCCESS_FEE', deletedAt: null }, data: { status: 'CLOSED', version: { increment: 1 } } });
+          if (changed.count !== 1) throw new HttpError(409, 'Concurrent case closure conflict');
+          const updated = await tx.caseItem.findUniqueOrThrow({ where: { id: caseId } });
+
+          await tx.statusHistory.create({ data: { id: `STHIST-${crypto.randomUUID()}`, caseId, fromStatus: 'SUCCESS_FEE', toStatus: 'CLOSED', changedById: context.user.id, reason: currentUnpaid > 0n ? 'Director-approved closure with unpaid balance' : 'Fee settlement complete' } });
 
           await tx.caseFeeAudit.create({
             data: {
               id: `FEEAUDIT-${crypto.randomUUID()}`,
               organizationId: context.user.organizationId,
               caseId,
-              action: unpaidBalance > 0n ? 'UNPAID_CLOSED' : 'CLOSED',
-              unpaidBalance,
-              detailsJson: JSON.stringify({ forced: body.forceClose || false }),
+              action: currentUnpaid > 0n ? 'UNPAID_CLOSED' : 'CLOSED',
+              unpaidBalance: currentUnpaid,
+              detailsJson: JSON.stringify({ forced: forceClose }),
               actorId: context.user.id
             }
           });
 
           await tx.auditLog.create({
             data: requestAudit(context, 'CASE_CLOSED', 'CaseItem', caseId, {
-              unpaidBalance: unpaidBalance.toString(),
-              forced: body.forceClose || false
+              unpaidBalance: currentUnpaid.toString(),
+              forced: forceClose
             })
           });
 
-          return updated;
+          return { updated, unpaidBalance: currentUnpaid };
         });
 
-        sendJson(res, 200, { case: updatedCase, unpaidBalance: unpaidBalance.toString() });
+        sendJson(res, 200, { case: closure.updated, unpaidBalance: closure.unpaidBalance.toString() });
         return;
       }
 

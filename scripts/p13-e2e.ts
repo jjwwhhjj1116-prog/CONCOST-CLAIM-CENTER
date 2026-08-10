@@ -86,6 +86,62 @@ async function main() {
   await resetDatabase(databaseUrl);
   await seedDatabase(databaseUrl);
   const db = createPrismaClient(databaseUrl);
+  const overflowCases = Array.from({ length: 120 }, (_, index) => ({
+    id: `CASE-P13-OVERFLOW-${String(index + 1).padStart(3, '0')}`,
+    organizationId: 'ORG-SYN-A',
+    caseNumber: `CASE-P13-${String(index + 1).padStart(4, '0')}`,
+    title: `SYNTHETIC_OVERFLOW_CASE_${String(index + 1).padStart(3, '0')}`,
+    claimType: 'TYPE-01',
+    status: 'INQUIRY',
+    assignedUserId: 'USR-PM',
+    createdAt: new Date(Date.now() + index + 1),
+    updatedAt: new Date(Date.now() + index + 1)
+  }));
+  await db.caseItem.createMany({ data: overflowCases });
+  await db.caseAssignment.createMany({
+    data: overflowCases.map((item) => ({ caseId: item.id, userId: 'USR-PM' }))
+  });
+  await db.caseAssignment.create({ data: { caseId: 'CASE-SYN-LONG', userId: 'USR-DIRECTOR' } });
+  const historyBillingDate = new Date('2026-07-01T00:00:00.000Z');
+  const historyConfig = await db.caseFeeConfig.create({
+    data: {
+      id: 'FEECFG-P13-HISTORY', organizationId: 'ORG-SYN-A', caseId: 'CASE-SYN-LONG',
+      contractAmount: 1_000n, hasSuccessFee: true, billingDate: historyBillingDate,
+      baseAmount: 1_000n, feeRateBps: 10_000, isTaxInclusive: false, status: 'DRAFT', version: 1
+    }
+  });
+  const historyEstimate = await db.caseFeeCalculation.create({
+    data: {
+      id: 'FEECALC-P13-HISTORY-ESTIMATE', organizationId: 'ORG-SYN-A', caseId: 'CASE-SYN-LONG',
+      feeConfigId: historyConfig.id, calcType: 'ESTIMATED', contractAmount: 1_000n,
+      hasSuccessFee: true, billingDate: historyBillingDate, baseAmount: 1_000n, feeRateBps: 10_000,
+      isTaxInclusive: false, calculatedFee: 1_000n, taxAmount: 100n, totalClaimFee: 1_100n,
+      formulaVersion: 'KRW_INTEGER_HALF_UP_BPS_TAX_V3', feeConfigVersion: 1,
+      actorId: 'USR-PM', idempotencyKey: 'P13-HISTORY-ESTIMATE', idempotencyFingerprint: 'P13-HISTORY-ESTIMATE'
+    }
+  });
+  await db.caseFeeCalculation.create({
+    data: {
+      id: 'FEECALC-P13-HISTORY-FINAL', organizationId: 'ORG-SYN-A', caseId: 'CASE-SYN-LONG',
+      feeConfigId: historyConfig.id, calcType: 'FINAL', contractAmount: 1_000n,
+      hasSuccessFee: true, billingDate: historyBillingDate, baseAmount: 1_000n, feeRateBps: 10_000,
+      isTaxInclusive: false, calculatedFee: 1_000n, taxAmount: 100n, totalClaimFee: 1_100n,
+      formulaVersion: 'KRW_INTEGER_HALF_UP_BPS_TAX_V3', feeConfigVersion: 1,
+      sourceCalculationId: historyEstimate.id, actorId: 'USR-DIRECTOR',
+      idempotencyKey: 'P13-HISTORY-FINAL', idempotencyFingerprint: 'P13-HISTORY-FINAL'
+    }
+  });
+  await db.caseFeePayment.createMany({
+    data: Array.from({ length: 100 }, (_, index) => ({
+      id: `FEEPAY-P13-HISTORY-${String(index + 1).padStart(3, '0')}`,
+      organizationId: 'ORG-SYN-A', caseId: 'CASE-SYN-LONG', feeConfigId: historyConfig.id,
+      paymentType: 'PARTIAL', amount: 1n, paymentDate: new Date(`2026-07-${String((index % 28) + 1).padStart(2, '0')}T00:00:00.000Z`),
+      invoiceStatus: 'NOT_ISSUED', note: `Synthetic payment boundary ${index + 1}`,
+      actorId: 'USR-PM', idempotencyKey: `P13-HISTORY-PAY-${index + 1}`,
+      idempotencyFingerprint: `P13-HISTORY-PAY-${index + 1}`,
+      createdAt: new Date(Date.now() + index + 1)
+    }))
+  });
 
   let webOrigin = '';
   const webDist = path.join(root, 'apps/web/dist');
@@ -118,11 +174,128 @@ async function main() {
     await login(pmPage, webOrigin, 'pm@example.invalid');
 
     await pmPage.goto(`${webOrigin}/success-fee`, { waitUntil: 'domcontentloaded' });
-    await pmPage.waitForSelector('text=FEE-01 손해사정 비용 & 성공보수 정산 관리');
+    await pmPage.getByRole('heading', { name: '비용·성공보수 정산' }).waitFor();
+    await assertVisibleText(pmPage, '예상 계산 → 독립 승인 → 수납 → 미수 확인까지 한 화면에서 관리합니다.');
 
-    // Click Calculate Estimated
-    await pmPage.getByRole('button', { name: '예상 보수 계산 (PM/Admin)' }).click();
-    await pmPage.waitForSelector('text=예상 성공보수가 계산되었습니다');
+    // The target is outside the first 100 assigned cases and must remain reachable by server-side search.
+    await pmPage.getByLabel('사건 검색').fill('AAAAAAAAAAAA');
+    await pmPage.locator('#fee-case-select option[value="CASE-SYN-LONG"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-SYN-LONG');
+    await pmPage.getByText('102건', { exact: true }).waitFor();
+    await pmPage.getByText('수납·조정 이력 (100)').waitFor();
+    const historyRows = await pmPage.locator('.fee-history details').nth(1).locator('tbody tr').count();
+    if (historyRows !== 100) throw new Error(`Expected 100 rendered payment rows, received ${historyRows}`);
+
+    // A slower response for the previously selected case must never overwrite the newly selected case.
+    await pmPage.getByLabel('사건 검색').fill('SYNTHETIC_OVERFLOW_CASE_1');
+    await pmPage.locator('#fee-case-select option[value="CASE-P13-OVERFLOW-120"]').waitFor({ state: 'attached' });
+    await pmPage.locator('#fee-case-select option[value="CASE-P13-OVERFLOW-119"]').waitFor({ state: 'attached' });
+    let releaseSlowRequest!: () => void;
+    const slowRequestStarted = new Promise<void>((resolve) => { releaseSlowRequest = resolve; });
+    await pmPage.route('**/api/cases/CASE-P13-OVERFLOW-120/fee-compensation', async (route) => {
+      releaseSlowRequest();
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      await route.continue();
+    });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-P13-OVERFLOW-120');
+    await slowRequestStarted;
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-P13-OVERFLOW-119');
+    await pmPage.waitForFunction(() => document.querySelector('[data-testid="fee-page"]')?.getAttribute('data-loaded-case-id') === 'CASE-P13-OVERFLOW-119');
+    await pmPage.waitForTimeout(600);
+    const loadedAfterOutOfOrderResponse = await pmPage.getByTestId('fee-page').getAttribute('data-loaded-case-id');
+    if (loadedAfterOutOfOrderResponse !== 'CASE-P13-OVERFLOW-119') {
+      throw new Error(`Stale fee response overwrote selected case: ${loadedAfterOutOfOrderResponse}`);
+    }
+    await pmPage.unroute('**/api/cases/CASE-P13-OVERFLOW-120/fee-compensation');
+
+    await pmPage.getByLabel('사건 검색').fill('CASE-2026-0001');
+    await pmPage.locator('#fee-case-select option[value="CASE-SYN-001"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-SYN-001');
+    await pmPage.getByLabel('계약 금액 (원)').waitFor();
+
+    // A failed first load followed by retry must not carry case A's calculation draft into case B.
+    await pmPage.getByLabel('계약 금액 (원)').fill('111');
+    await pmPage.getByLabel('기준 금액 (원)').fill('222');
+    await pmPage.getByLabel('성공보수 요율 (%)').fill('3.33');
+    let failLongCaseOnce = true;
+    await pmPage.route('**/api/cases/CASE-SYN-LONG/fee-compensation', async (route) => {
+      if (failLongCaseOnce) {
+        failLongCaseOnce = false;
+        await route.abort('failed');
+        return;
+      }
+      await route.continue();
+    });
+    await pmPage.getByLabel('사건 검색').fill('AAAAAAAAAAAA');
+    await pmPage.locator('#fee-case-select option[value="CASE-SYN-LONG"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-SYN-LONG');
+    await pmPage.getByRole('alert').waitFor();
+    await pmPage.getByRole('button', { name: '최신 데이터 다시 불러오기' }).click();
+    await pmPage.waitForFunction(() => document.querySelector('[data-testid="fee-page"]')?.getAttribute('data-loaded-case-id') === 'CASE-SYN-LONG');
+    if (await pmPage.getByLabel('계약 금액 (원)').inputValue() !== '1000') throw new Error('Contract amount draft leaked across a failed case load retry');
+    if (await pmPage.getByLabel('기준 금액 (원)').inputValue() !== '1000') throw new Error('Base amount draft leaked across a failed case load retry');
+    if (await pmPage.getByLabel('성공보수 요율 (%)').inputValue() !== '100.00') throw new Error('Fee rate draft leaked across a failed case load retry');
+    await pmPage.unroute('**/api/cases/CASE-SYN-LONG/fee-compensation');
+    await pmPage.getByLabel('사건 검색').fill('CASE-2026-0001');
+    await pmPage.locator('#fee-case-select option[value="CASE-SYN-001"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-SYN-001');
+    await pmPage.getByLabel('계약 금액 (원)').waitFor();
+
+    // A UI-created PM case initially has only its creator assigned. Exercise the
+    // real assignment API through the shipped UI instead of hiding the workflow
+    // behind direct fixture insertion.
+    await pmPage.locator('select[aria-label="독립 승인자"] option[value="USR-DIRECTOR"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('독립 승인자', { exact: true }).selectOption('USR-DIRECTOR');
+    await pmPage.getByRole('button', { name: '승인자 공동 배정' }).click();
+    await pmPage.getByText(/승인자를 사건에 공동 배정했습니다/).waitFor();
+    const directorAssignment = await db.caseAssignment.findUnique({
+      where: { caseId_userId: { caseId: 'CASE-SYN-001', userId: 'USR-DIRECTOR' } }
+    });
+    if (!directorAssignment) throw new Error('P13 UI did not persist the independent approver assignment');
+
+    await pmPage.getByLabel('계약 금액 (원)').fill('100000000');
+    await pmPage.getByLabel('기준 금액 (원)').fill('15');
+    await pmPage.getByLabel('성공보수 요율 (%)').fill('100.00');
+    await pmPage.getByLabel('청구일').fill('2026-07-15');
+    await pmPage.getByText('공급가 ₩15 · 부가세 ₩2', { exact: true }).waitFor();
+    await pmPage.getByLabel('기준 금액 (원)').fill('11000');
+    await pmPage.getByLabel('부가세 포함 금액').check();
+
+    // Simulate a lost response after the server commits. Retrying the unchanged payload must reuse the key.
+    const estimateKeys: string[] = [];
+    let loseFirstResponse = true;
+    await pmPage.route('**/api/cases/*/fee-compensation/calculate', async (route) => {
+      const body = route.request().postDataJSON() as { idempotencyKey?: string };
+      estimateKeys.push(body.idempotencyKey ?? '');
+      if (loseFirstResponse) {
+        loseFirstResponse = false;
+        const response = await route.fetch();
+        if (!response.ok()) throw new Error(`Initial estimate commit failed with ${response.status()}`);
+        await route.abort('failed');
+        return;
+      }
+      await route.continue();
+    });
+    await pmPage.getByRole('button', { name: '예상 보수 새 이력 저장' }).click();
+    const firstAttemptAlert = pmPage.getByRole('alert');
+    await firstAttemptAlert.waitFor();
+    await pmPage.getByRole('button', { name: '예상 보수 새 이력 저장' }).click();
+    await firstAttemptAlert.waitFor({ state: 'hidden' });
+    const retryResult = await Promise.race([
+      pmPage.getByText(/예상 성공보수 .*새 이력으로 저장/).waitFor().then(() => 'success'),
+      pmPage.getByRole('alert').waitFor().then(async () => `error:${await pmPage.getByRole('alert').innerText()}`)
+    ]);
+    if (retryResult !== 'success') throw new Error(`Response-loss retry failed (${retryResult}); keys=${JSON.stringify(estimateKeys)}`);
+    await pmPage.unroute('**/api/cases/*/fee-compensation/calculate');
+    if (estimateKeys.length !== 2 || !estimateKeys[0] || estimateKeys[0] !== estimateKeys[1]) {
+      throw new Error(`Response-loss retry changed idempotency key: ${JSON.stringify(estimateKeys)}`);
+    }
+    const estimateRow = pmPage.locator('.fee-history details').first().locator('tbody tr').first();
+    await estimateRow.getByText('2026. 7. 15.').waitFor();
+    const financialCells = await estimateRow.locator('td').allTextContents();
+    if (financialCells[5] !== '₩10,000' || financialCells[6] !== '₩1,000' || financialCells[7] !== '₩11,000') {
+      throw new Error(`Inclusive tax columns are not supply/tax/total: ${JSON.stringify(financialCells)}`);
+    }
 
     // 2. Director Login & Final Fee Approval
     console.log('2. Director login & Final fee approval...');
@@ -130,25 +303,100 @@ async function main() {
     await login(directorPage, webOrigin, 'director@example.invalid');
 
     await directorPage.goto(`${webOrigin}/success-fee`, { waitUntil: 'domcontentloaded' });
-    await directorPage.waitForSelector('text=FEE-01 손해사정 비용 & 성공보수 정산 관리');
+    await directorPage.getByRole('heading', { name: '비용·성공보수 정산' }).waitFor();
 
-    await directorPage.getByRole('button', { name: '최종 보수 승인 확정 (CEO/Director)' }).click();
-    await directorPage.waitForSelector('text=최종 성공보수가 확정되었습니다');
-    await directorPage.waitForSelector('text=최종 확정됨');
+    await directorPage.getByRole('button', { name: '최신 예상 보수 독립 승인' }).click();
+    await directorPage.getByText(/독립 승인으로 최종 성공보수/).waitFor();
+    await directorPage.getByText('확정됨').waitFor();
+
+    // Switching cases must discard every payment draft from the prior case.
+    await pmPage.reload({ waitUntil: 'domcontentloaded' });
+    await pmPage.getByLabel('사건 검색').fill('CASE-2026-0001');
+    await pmPage.locator('#fee-case-select option[value="CASE-SYN-001"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-SYN-001');
+    await pmPage.getByText('확정됨').waitFor();
+    await pmPage.getByLabel('수납 금액 (원)').fill('777');
+    await pmPage.getByLabel('수납 기록 유형').selectOption('ADJUSTMENT');
+    await pmPage.getByLabel('세금계산서 상태').selectOption('ISSUED');
+    await pmPage.getByLabel('세금계산서 발행일').fill('2026-07-16');
+    await pmPage.getByLabel('세금계산서 승인번호').fill('SYNTHETIC-DRAFT-MUST-CLEAR');
+    await pmPage.getByLabel('수납 적요').fill('SYNTHETIC CASE A DRAFT');
+    await pmPage.getByLabel('사건 검색').fill('AAAAAAAAAAAA');
+    await pmPage.locator('#fee-case-select option[value="CASE-SYN-LONG"]').waitFor({ state: 'attached' });
+    await pmPage.getByLabel('정산 대상 사건', { exact: true }).selectOption('CASE-SYN-LONG');
+    await pmPage.waitForFunction(() => document.querySelector('[data-testid="fee-page"]')?.getAttribute('data-loaded-case-id') === 'CASE-SYN-LONG');
+    if (await pmPage.getByLabel('수납 금액 (원)').inputValue() !== '') throw new Error('Payment amount leaked across cases');
+    if (await pmPage.getByLabel('수납 기록 유형').inputValue() !== 'PARTIAL') throw new Error('Payment type leaked across cases');
+    if (await pmPage.getByLabel('세금계산서 상태').inputValue() !== 'NOT_ISSUED') throw new Error('Invoice status leaked across cases');
+    if (await pmPage.getByLabel('수납 적요').inputValue() !== '') throw new Error('Payment note leaked across cases');
+    const leakedPayments = await db.caseFeePayment.count({ where: { caseId: 'CASE-SYN-LONG' } });
+    if (leakedPayments !== 100) throw new Error(`Case switch changed the 100-row payment boundary to ${leakedPayments}`);
 
     // 3. Payment Addition & Unpaid Balance Update
     console.log('3. Payment recording & Unpaid balance update...');
-    await directorPage.fill('#payment-amount-input', '10000000');
-    await directorPage.getByRole('button', { name: '수납 내역 추가' }).click();
-    await directorPage.waitForSelector('text=수납 내역이 추가되었습니다');
+    await directorPage.getByLabel('수납 금액 (원)').fill('5000');
+    await directorPage.getByRole('button', { name: '수납 이력 기록' }).click();
+    await directorPage.getByText(/입금 .*변경 불가 이력/).waitFor();
 
     // 4. Case Closure with Unpaid Balance Confirmation
     console.log('4. Case closure with unpaid balance confirmation modal...');
-    await directorPage.getByRole('button', { name: '사건 종결 처리 시도' }).click();
-    await directorPage.waitForSelector('text=미수금 존재 사건 종결 경고');
+    await db.caseItem.update({ where: { id: 'CASE-SYN-001' }, data: { status: 'SUCCESS_FEE', version: { increment: 1 } } });
+    await directorPage.reload({ waitUntil: 'domcontentloaded' });
+    await directorPage.getByRole('button', { name: '사건 종결 확인' }).click();
+    await directorPage.getByRole('heading', { name: '미수금이 남아 있습니다' }).waitFor();
 
-    await directorPage.getByRole('button', { name: '미수 강제 종결 진행' }).click();
-    await directorPage.waitForSelector('text=미수금이 존재하는 상태로 사건이 종결 처리되었습니다');
+    await directorPage.getByRole('button', { name: '미수 상태로 강제 종결' }).click();
+    await directorPage.getByText(/권한자의 명시적 확인으로 미수 사건을 종결/).waitFor();
+
+    // 5. 1024px / 200% equivalent narrow viewport / keyboard focus boundary.
+    console.log('5. Responsive and keyboard boundary checks...');
+    const { context: boundaryContext, page: boundaryPage } = await newPage(browser, apiOrigin, { width: 1024, height: 900 });
+    await login(boundaryPage, webOrigin, 'pm@example.invalid');
+    await boundaryPage.goto(`${webOrigin}/success-fee`, { waitUntil: 'domcontentloaded' });
+    await boundaryPage.getByRole('heading', { name: '비용·성공보수 정산' }).waitFor();
+    const overflow1024 = await boundaryPage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    if (overflow1024) throw new Error('P13 page causes horizontal viewport overflow at 1024px');
+    await boundaryPage.setViewportSize({ width: 640, height: 900 });
+    await boundaryPage.reload({ waitUntil: 'domcontentloaded' });
+    const overflowZoomEquivalent = await boundaryPage.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
+    if (overflowZoomEquivalent) throw new Error('P13 page causes horizontal viewport overflow at 200% equivalent width');
+    await boundaryPage.locator('button, input, select, a[href]').first().waitFor({ state: 'visible' });
+    await boundaryPage.bringToFront();
+    await boundaryPage.locator('body').click({ position: { x: 4, y: 4 } });
+    let hasKeyboardFocus = false;
+    for (let attempt = 0; attempt < 5 && !hasKeyboardFocus; attempt += 1) {
+      await boundaryPage.keyboard.press('Tab');
+      hasKeyboardFocus = await boundaryPage.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        return Boolean(active && active !== document.body && active.matches('button, input, select, a[href], [tabindex]:not([tabindex="-1"])'));
+      });
+    }
+    if (!hasKeyboardFocus) throw new Error('Keyboard focus did not enter an interactive control');
+    await boundaryContext.close();
+
+    // 6. A real reviewer browser session must be unable to submit a fee calculation.
+    console.log('6. Browser-enforced permission denial...');
+    const { context: reviewerContext, page: reviewerPage } = await newPage(browser, apiOrigin);
+    await login(reviewerPage, webOrigin, 'reviewer@example.invalid');
+    await reviewerPage.goto(`${webOrigin}/success-fee`, { waitUntil: 'domcontentloaded' });
+    await reviewerPage.getByRole('heading', { name: '403 Forbidden' }).waitFor();
+    await reviewerPage.getByText('성공보수 화면에 접근할 권한이 없습니다.', { exact: false }).waitFor();
+    const denied = await reviewerPage.evaluate(async ({ origin }) => {
+      const csrf = document.cookie.split(';').map((value) => value.trim()).find((value) => value.startsWith('csrf_token='))?.slice('csrf_token='.length) ?? '';
+      const response = await fetch(`${origin}/api/cases/CASE-SYN-001/fee-compensation/calculate`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': decodeURIComponent(csrf) },
+        body: JSON.stringify({
+          contractAmount: '100000000', baseAmount: '11000', feeRateBps: 10000,
+          hasSuccessFee: true, isTaxInclusive: true, billingDate: '2026-07-15',
+          calcType: 'ESTIMATED', expectedVersion: 2, idempotencyKey: 'reviewer-browser-denial'
+        })
+      });
+      return { status: response.status, body: await response.text() };
+    }, { origin: apiOrigin });
+    if (denied.status !== 403) throw new Error(`Reviewer browser mutation expected 403, received ${denied.status}: ${denied.body}`);
+    await reviewerContext.close();
 
     console.log('✅ P13 Chromium Real E2E Test Passed Cleanly!');
   } finally {
@@ -159,6 +407,13 @@ async function main() {
     try { if (fs.existsSync(databasePath)) fs.unlinkSync(databasePath); } catch {}
     try { if (fs.existsSync(uploadDir)) fs.rmSync(uploadDir, { recursive: true, force: true }); } catch {}
   }
+}
+
+async function assertVisibleText(page: Page, text: string): Promise<void> {
+  const target = page.getByText(text, { exact: true });
+  await target.waitFor({ state: 'visible' });
+  const color = await target.evaluate((element) => getComputedStyle(element).color);
+  if (color === 'rgba(0, 0, 0, 0)') throw new Error(`Text is visually transparent: ${text}`);
 }
 
 main().catch((err) => {

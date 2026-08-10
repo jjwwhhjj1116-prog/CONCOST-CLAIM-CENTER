@@ -15,6 +15,7 @@ export interface P13TestContext {
   uploadDir: string;
   fixture: P09Fixture;
   foreignSession: TestSession;
+  adminSession: TestSession;
   staffSession: TestSession;
   pmSession: TestSession;
   reviewerSession: TestSession;
@@ -30,19 +31,27 @@ export async function startP13Isolated(name: string, options: { sectionCount?: n
   await resetDatabase(databaseUrl);
   await seedDatabase(databaseUrl);
   const db = createPrismaClient(databaseUrl);
+  await db.caseAssignment.createMany({ data: [
+    { caseId: 'CASE-SYN-001', userId: 'USR-DIRECTOR' },
+    { caseId: 'CASE-SYN-004', userId: 'USR-DIRECTOR' },
+    { caseId: 'CASE-SYN-SAME-1', userId: 'USR-DIRECTOR' },
+    { caseId: 'CASE-SYN-SAME-2', userId: 'USR-DIRECTOR' },
+    { caseId: 'CASE-SYN-001', userId: 'USR-CEO' }
+  ] });
   const api = createApiServer({ databaseUrl, allowedOrigins: [P09_TEST_ORIGIN], secureCookies: false, uploadDir, allowTestAiModes: true });
   await new Promise<void>((resolve, reject) => api.once('error', reject).listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${(api.address() as AddressInfo).port}`;
   const fixture = await createP09Fixture(origin, db, { sectionCount: options.sectionCount ?? 3 });
 
   const staffSession = await login(origin, 'staff@example.invalid');
+  const adminSession = await login(origin, 'admin@example.invalid');
   const pmSession = await login(origin, 'pm@example.invalid');
   const reviewerSession = await login(origin, 'reviewer@example.invalid');
   const directorSession = await login(origin, 'director@example.invalid');
   const ceoSession = await login(origin, 'ceo@example.invalid');
 
   // Foreign session from different org
-  const foreignSession = await login(origin, 'foreign@example.invalid').catch(() => staffSession);
+  const foreignSession = await login(origin, 'pm_b@example.invalid');
 
   return {
     db,
@@ -52,6 +61,7 @@ export async function startP13Isolated(name: string, options: { sectionCount?: n
     uploadDir,
     fixture,
     foreignSession,
+    adminSession,
     staffSession,
     pmSession,
     reviewerSession,

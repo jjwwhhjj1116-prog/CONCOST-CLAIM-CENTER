@@ -1103,6 +1103,7 @@ model CaseFeeConfig {
   caseId         String   @unique
   contractAmount BigInt   @default(0)
   hasSuccessFee  Boolean  @default(true)
+  billingDate    DateTime
   baseAmount     BigInt   @default(0)
   feeRateBps     Int      @default(0)
   isTaxInclusive Boolean  @default(false)
@@ -1126,6 +1127,8 @@ model CaseFeeCalculation {
   feeConfigId    String
   calcType       String   @default("ESTIMATED")
   contractAmount BigInt   @default(0)
+  hasSuccessFee  Boolean  @default(true)
+  billingDate    DateTime
   baseAmount     BigInt   @default(0)
   feeRateBps     Int      @default(0)
   isTaxInclusive Boolean  @default(false)
@@ -1133,8 +1136,11 @@ model CaseFeeCalculation {
   taxAmount      BigInt   @default(0)
   totalClaimFee  BigInt   @default(0)
   formulaVersion String   @default("HALF_UP_BPS_V1")
+  feeConfigVersion Int
+  sourceCalculationId String?
   actorId        String
-  idempotencyKey String?  @unique
+  idempotencyKey String?
+  idempotencyFingerprint String?
   createdAt      DateTime @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -1145,6 +1151,8 @@ model CaseFeeCalculation {
   @@index([organizationId, caseId])
   @@index([feeConfigId])
   @@index([actorId])
+  @@index([sourceCalculationId])
+  @@unique([organizationId, caseId, actorId, idempotencyKey])
 }
 
 model CaseFeePayment {
@@ -1160,7 +1168,8 @@ model CaseFeePayment {
   invoiceNumber   String?
   note            String?
   actorId         String
-  idempotencyKey  String?   @unique
+  idempotencyKey  String?
+  idempotencyFingerprint String?
   createdAt       DateTime  @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
@@ -1171,6 +1180,7 @@ model CaseFeePayment {
   @@index([organizationId, caseId])
   @@index([feeConfigId])
   @@index([actorId])
+  @@unique([organizationId, caseId, actorId, idempotencyKey])
 }
 
 model CaseFeeAudit {
