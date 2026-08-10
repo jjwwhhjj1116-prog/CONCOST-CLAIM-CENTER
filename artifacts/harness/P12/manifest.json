@@ -1,19 +1,54 @@
 {
   "phase": "P12",
   "name": "Review, Approval & Final Output Engine",
-  "status": "READY_FOR_REVIEW",
-  "commitA": "1741bda7d35368a42e569947aaefaa57317769cf",
-  "deliverables": [
-    "packages/database/prisma/schema.prisma",
+  "status": "PASS_WITH_NOTES",
+  "branch": "feat/P12-review-approval-final-output",
+  "antigravityImplementationCommit": "1741bda7d35368a42e569947aaefaa57317769cf",
+  "antigravitySubmissionCommit": "18093d5",
+  "reviewedImplementationCommit": "0d5e563bd26dc3b16f1e434d13bdb85daa697eb3",
+  "cleanCheckout": "work/p12-clean-verify4",
+  "reviewedAt": "2026-08-10T10:44:27+09:00",
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/index.html",
+    "apps/web/src/case-management/CaseManagement.tsx",
+    "apps/web/src/layout/AppShell.tsx",
+    "apps/web/src/reports/ApprovalInbox.tsx",
+    "apps/web/src/reports/ReportList.tsx",
+    "apps/web/src/reports/ReportStudio.css",
+    "apps/web/src/reports/ReportStudio.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "package.json",
+    "packages/database/package.json",
     "packages/database/prisma/migrations/20260810090000_p12_review_approval_final_output/migration.sql",
+    "packages/database/prisma/schema.prisma",
     "packages/document-engine/src/docx-engine.ts",
     "packages/document-engine/src/pdf-engine.ts",
-    "apps/api/src/server.ts",
-    "apps/web/src/reports/ReportStudio.tsx",
-    "scripts/harness-check.ts",
-    "scripts/p12-test-support.ts",
     "scripts/p12-contract-test.ts",
-    "scripts/p12-security-test.ts",
-    "scripts/p12-e2e.ts"
-  ]
+    "scripts/p12-e2e.ts",
+    "scripts/p12-security-test.ts"
+  ],
+  "qualityGates": {
+    "installFrozen": "PASS",
+    "dbReset": "PASS",
+    "dbMigrate": "PASS",
+    "dbSeed": "PASS",
+    "lint": "PASS_ZERO_WARNINGS",
+    "typecheck": "PASS",
+    "test": { "status": "PASS", "passed": 89, "failed": 0, "skipped": 0 },
+    "build": "PASS",
+    "testE2e": "PASS_P06_TO_P12_CHROMIUM",
+    "testSecurity": { "status": "PASS", "passed": 43, "failed": 0, "skipped": 0 },
+    "auditHigh": "PASS_NO_KNOWN_VULNERABILITIES"
+  },
+  "browserEvidence": {
+    "approvalInbox": "latest review request rendered and opened the exact report studio",
+    "docx": { "bytes": 8094, "zipEntries": 9, "valid": true },
+    "pdf": { "bytes": 7834, "pages": 5, "valid": true }
+  },
+  "securityScan": {
+    "actualApiKeysTokensPrivateKeys": 0,
+    "trackedDatabaseOrOutputFiles": 0,
+    "actualCustomerInformation": 0
+  }
 }

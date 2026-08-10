@@ -1,51 +1,46 @@
-$ cmd /c npx --package=pnpm@9.15.0 pnpm build
-[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...
-[Harness] UI, database, API, and production web build artifacts verified.
+P12 CODEX INDEPENDENT CLEAN REVIEW LOG
+reviewedAt=2026-08-10T10:44:27+09:00
+branch=feat/P12-review-approval-final-output
+antigravityImplementationCommit=1741bda7d35368a42e569947aaefaa57317769cf
+reviewedImplementationCommit=0d5e563bd26dc3b16f1e434d13bdb85daa697eb3
+cleanCheckout=work/p12-clean-verify4
+node=v24.16.0
+pnpm=9.15.0
 
-$ cmd /c npx --package=pnpm@9.15.0 pnpm lint
-[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...
-[Harness] Lint and JSON validation passed with zero warnings.
+PRE-FIX CLEAN INSTALL OBSERVATION
+[FAIL] pnpm install --frozen-lockfile
+reason=root postinstall recursively invoked a different bare pnpm, causing no-TTY/module purge failure
+resolution=direct Prisma CLI postinstall and direct tsx DB scripts in reviewed implementation commit
 
-$ cmd /c npx --package=pnpm@9.15.0 pnpm test:p12
---- Running P12 Contract & Deterministic Final Output Test ---
-Database seeded with deterministic synthetic P11 fixtures.
-1. Testing Review Request creation & changes request cycle...
-2. Testing Finalization readiness blockers & self-approval prevention...
-3. Testing Report Finalization creation & idempotency...
-4. Testing DOCX & PDF Output Generation with Independent Parsers...
-5. Testing Byte-Level Determinism on Re-rendering...
-6. Testing Download API & RFC 5987 headers...
-✅ P12 Contract Test Passed Cleanly!
+FINAL 11 REQUIRED GATES
+[01][PASS][exit=0] npx --yes pnpm@9.15.0 install --frozen-lockfile
+  lockfile fixed; 215 packages; Prisma Client generated; duration 9.3s
+[02][PASS][exit=0] pnpm db:reset
+  database reset and all migration SQL applied
+[03][PASS][exit=0] pnpm db:migrate
+  additive migrations applied successfully
+[04][PASS][exit=0] pnpm db:seed
+  deterministic synthetic P11/P12 fixtures created
+[05][PASS][exit=0] pnpm lint
+  all workspaces and JSON validated; zero warnings
+[06][PASS][exit=0] pnpm typecheck
+  scripts, UI, web, database, document-engine, API passed
+[07][PASS][exit=0] pnpm test
+  tests=89 pass=89 fail=0 skipped=0
+[08][PASS][exit=0] pnpm build
+  Vite production build=54 modules; API/DB/UI/document artifacts verified
+[09][PASS][exit=0] pnpm test:e2e
+  P06-P12 real Chromium flows passed
+  P12 approval inbox -> report studio -> finalization -> authenticated download passed
+  DOCX=8094 bytes/9 entries valid; PDF=7834 bytes/5 pages valid
+[10][PASS][exit=0] pnpm test:security
+  tests=43 pass=43 fail=0 skipped=0
+[11][PASS][exit=0] pnpm audit --audit-level high
+  No known vulnerabilities found
 
-$ cmd /c npx --package=pnpm@9.15.0 tsx scripts/p12-security-test.ts
---- Running P12 Security & Adversarial Test ---
-Database seeded with deterministic synthetic P11 fixtures.
-1. Testing Review Request & Finalization Access Control...
-2. Testing Integrity Verification & Tamper Detection...
-3. Testing SQLite DB Trigger Immutability Guards...
-✅ P12 Security & Adversarial Test Passed Cleanly!
+SUPPLEMENTAL SCANS
+[PASS] git tracked database/output file scan: 0
+[PASS] API key/token/private key signature scan: 0 actual secrets
+[PASS] customer information scan: 0 actual customer records
 
-$ cmd /c npx --package=pnpm@9.15.0 tsx scripts/p12-e2e.ts
---- Starting P12 Chromium Real E2E Test ---
-Database seeded with deterministic synthetic P11 fixtures.
-1. Staff login & Review Request submission...
-2. Reviewer login & Approve all required sections...
-3. Report Finalization fixation...
-4. Generate DOCX/PDF outputs & Verify downloaded bytes...
-✓ E2E DOCX verified cleanly (3563 bytes, entries: 8)
-✓ E2E PDF verified cleanly (6827 bytes, pages: 3)
-✅ P12 Chromium Real E2E Test Passed Cleanly!
-
-$ cmd /c npx --package=pnpm@9.15.0 pnpm test:security
-ℹ Tests 42
-ℹ Suites 9
-ℹ Pass 42
-ℹ Fail 0
-ℹ Duration_ms 401.76ms
-
-$ cmd /c npx --package=pnpm@9.15.0 pnpm test
-ℹ Tests 5
-ℹ Suites 0
-ℹ Pass 5
-ℹ Fail 0
-ℹ Duration_ms 3105.77ms
+FINAL_RESULT=11/11_PASS
