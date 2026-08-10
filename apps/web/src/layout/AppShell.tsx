@@ -6,7 +6,7 @@ const NAVIGATION_GROUPS = [
   { label: '홈', routeIds: ['DASH-01'] },
   { label: '사건 업무', routeIds: ['CASE-01', 'CASE-02', 'MEET-01'] },
   { label: '문서·보고서', routeIds: ['PROP-01', 'PROP-02', 'REPO-01', 'TPL-01', 'APPR-01'] },
-  { label: '운영 관리', routeIds: ['FEE-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'] }
+  { label: '운영 관리', routeIds: ['FEE-01', 'AI-01', 'INTEG-01', 'USER-01', 'AUD-01', 'RESP-01'] }
 ] as const;
 
 export interface AppShellProps {

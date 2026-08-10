@@ -8,6 +8,7 @@ import { ReportList } from '../reports/ReportList';
 import { ApprovalInbox } from '../reports/ApprovalInbox';
 import { AiConfigManager } from '../ai/AiConfigManager';
 import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
+import { GoogleWorkspaceIntegration } from '../integrations/GoogleWorkspaceIntegration';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -49,6 +50,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'REPO-02', path: '/reports/studio', name: '보고서 스튜디오' },
   { id: 'APPR-01', path: '/approval', name: '검토·승인함' },
   { id: 'FEE-01', path: '/success-fee', name: '성공보수', allowedRoles: FINANCE_ROLES },
+  { id: 'INTEG-01', path: '/integrations/google', name: 'Google 연동', allowedRoles: ADMIN_ONLY },
   { id: 'TPL-01', path: '/templates', name: '템플릿 관리' },
   { id: 'AI-01', path: '/ai-config', name: 'AI 공급자 설정', allowedRoles: ADMIN_ONLY },
   { id: 'USER-01', path: '/users', name: '사용자·권한', allowedRoles: ADMIN_ONLY },
@@ -222,6 +224,14 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
     return (
       <section className="route-view" aria-labelledby="route-title">
         <FeeSuccessCompensation roles={roles} onNavigate={onNavigate} />
+      </section>
+    );
+  }
+
+  if (currentRoute.id === 'INTEG-01') {
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <GoogleWorkspaceIntegration roles={roles} onNavigate={onNavigate} />
       </section>
     );
   }

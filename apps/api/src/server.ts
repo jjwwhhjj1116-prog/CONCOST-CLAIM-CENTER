@@ -14,6 +14,8 @@ import { assertSafeBaseUrl, assertSafeResolvedBaseUrl, SsrfError, type AiProvide
 import { assertSecretReference, resolveSecretReference, secretReferenceHint } from './ai/secret-resolver';
 import { executeFakeAdapterCall } from './ai/fake-adapter';
 import { processAiGenerationRequest, AiGatewayError, type AiAuditEvent } from './ai/gateway-engine';
+import { GoogleWorkspaceFakeAdapter } from './google-workspace/GoogleWorkspaceFakeAdapter';
+import { REQUIRED_GOOGLE_SCOPES, ALLOWED_REDIRECT_DOMAINS, type GoogleAdapterMode } from './google-workspace/GoogleWorkspaceAdapter';
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -857,6 +859,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   const allowTestAiModes = options.allowTestAiModes === true;
   ensureUploadDir(uploadDir);
   const inFlightAiRequests = new Map<string, AbortController>();
+  const globalGoogleAdapter = new GoogleWorkspaceFakeAdapter('SUCCESS');
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -6358,6 +6361,568 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         });
 
         sendJson(res, 200, { case: closure.updated, unpaidBalance: closure.unpaidBalance.toString() });
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // P14 Google Workspace Integration API Endpoints
+      // -----------------------------------------------------------------------
+
+      // 0. POST /api/google-workspace/fake-mode (Test helper)
+      if (pathname === '/api/google-workspace/fake-mode' && req.method === 'POST') {
+        const body = (await readJson(req)) as { mode?: GoogleAdapterMode };
+        if (body.mode) globalGoogleAdapter.setMode(body.mode);
+        sendJson(res, 200, { currentMode: globalGoogleAdapter.getMode() });
+        return;
+      }
+
+      // 1. GET /api/google-workspace/connection
+      if (pathname === '/api/google-workspace/connection' && req.method === 'GET') {
+        const conn = await db.googleWorkspaceConnection.findUnique({
+          where: { organizationId: context.user.organizationId }
+        });
+        if (!conn) {
+          sendJson(res, 200, {
+            connection: null,
+            status: 'DISCONNECTED',
+            requiredScopes: REQUIRED_GOOGLE_SCOPES
+          });
+          return;
+        }
+        let grantedScopes: string[] = [];
+        try { grantedScopes = JSON.parse(conn.grantedScopesJson); } catch { grantedScopes = []; }
+        sendJson(res, 200, {
+          connection: {
+            id: conn.id,
+            status: conn.status,
+            grantedScopes,
+            secretRef: conn.secretRef,
+            tokenExpiresAt: conn.tokenExpiresAt ? conn.tokenExpiresAt.toISOString() : null,
+            lastSyncedAt: conn.lastSyncedAt ? conn.lastSyncedAt.toISOString() : null,
+            version: conn.version,
+            createdAt: conn.createdAt.toISOString()
+          },
+          status: conn.status,
+          requiredScopes: REQUIRED_GOOGLE_SCOPES
+        });
+        return;
+      }
+
+      // 2. POST /api/google-workspace/connect/init
+      if (pathname === '/api/google-workspace/connect/init' && req.method === 'POST') {
+        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
+        if (!canManage) throw new HttpError(403, 'Google Workspace connection management requires Admin or Director role');
+
+        const body = (await readJson(req)) as { redirectTarget?: string };
+        const redirectTarget = body.redirectTarget?.trim() || '/integrations/google';
+
+        // Validate redirectTarget domain against allowlist
+        try {
+          const parsedUrl = new URL(redirectTarget, 'http://127.0.0.1');
+          if (redirectTarget.startsWith('http://') || redirectTarget.startsWith('https://')) {
+            if (!ALLOWED_REDIRECT_DOMAINS.has(parsedUrl.hostname)) {
+              throw new HttpError(400, `Forbidden redirect domain: ${parsedUrl.hostname}`);
+            }
+          }
+        } catch (err) {
+          if (err instanceof HttpError) throw err;
+          throw new HttpError(400, 'Invalid redirect target');
+        }
+
+        const pkceVerifier = `pkce-verif-${crypto.randomUUID()}`;
+        const rawState = `st-${crypto.randomUUID()}`;
+        const stateHash = crypto.createHash('sha256').update(rawState).digest('hex');
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min TTL
+
+        await db.googleOAuthState.create({
+          data: {
+            id: `GOAUTH-${crypto.randomUUID()}`,
+            stateHash,
+            pkceVerifierRef: `sec-ref-${pkceVerifier.substring(0, 12)}`,
+            organizationId: context.user.organizationId,
+            actorId: context.user.id,
+            redirectTarget,
+            expiresAt
+          }
+        });
+
+        sendJson(res, 201, {
+          authUrl: `https://accounts.google.invalid/o/oauth2/v2/auth?response_type=code&state=${stateHash}&scope=${encodeURIComponent(REQUIRED_GOOGLE_SCOPES.join(' '))}`,
+          stateHash,
+          expiresAt: expiresAt.toISOString(),
+          redirectTarget
+        });
+        return;
+      }
+
+      // 3. POST /api/google-workspace/connect/callback
+      if (pathname === '/api/google-workspace/connect/callback' && req.method === 'POST') {
+        const body = (await readJson(req)) as { stateHash?: string; code?: string };
+        if (!body.stateHash || typeof body.stateHash !== 'string') throw new HttpError(400, 'stateHash is required');
+        if (!body.code || typeof body.code !== 'string') throw new HttpError(400, 'Authorization code is required');
+
+        const stateRecord = await db.googleOAuthState.findUnique({
+          where: { stateHash: body.stateHash }
+        });
+
+        if (!stateRecord) throw new HttpError(400, 'Invalid OAuth state token');
+        if (stateRecord.organizationId !== context.user.organizationId || stateRecord.actorId !== context.user.id) {
+          throw new HttpError(403, 'Cross-tenant or cross-user OAuth state binding violation');
+        }
+        if (stateRecord.usedAt) throw new HttpError(400, 'OAuth state token has already been used');
+        if (stateRecord.expiresAt < new Date()) throw new HttpError(400, 'OAuth state token has expired');
+
+        // Mark state token as used (one-time enforce)
+        await db.googleOAuthState.update({
+          where: { id: stateRecord.id },
+          data: { usedAt: new Date() }
+        });
+
+        // Store connection with secret reference (NO raw tokens stored)
+        const secretRef = `sec-ref-google-${crypto.randomUUID()}`;
+        const expiresAt = new Date(Date.now() + 3600 * 1000);
+
+        const connection = await db.googleWorkspaceConnection.upsert({
+          where: { organizationId: context.user.organizationId },
+          create: {
+            id: `GCONN-${crypto.randomUUID()}`,
+            organizationId: context.user.organizationId,
+            status: 'CONNECTED',
+            grantedScopesJson: JSON.stringify(REQUIRED_GOOGLE_SCOPES),
+            secretRef,
+            tokenExpiresAt: expiresAt,
+            lastSyncedAt: new Date(),
+            createdById: context.user.id
+          },
+          update: {
+            status: 'CONNECTED',
+            grantedScopesJson: JSON.stringify(REQUIRED_GOOGLE_SCOPES),
+            secretRef,
+            tokenExpiresAt: expiresAt,
+            lastSyncedAt: new Date(),
+            version: { increment: 1 }
+          }
+        });
+
+        await db.auditLog.create({
+          data: auditData(context, 'GOOGLE_WORKSPACE_CONNECTED', 'GoogleWorkspaceConnection', connection.id, {
+            status: connection.status,
+            redirectTarget: stateRecord.redirectTarget
+          })
+        });
+
+        sendJson(res, 200, {
+          connection: {
+            id: connection.id,
+            status: connection.status,
+            grantedScopes: REQUIRED_GOOGLE_SCOPES,
+            secretRef: connection.secretRef,
+            tokenExpiresAt: connection.tokenExpiresAt ? connection.tokenExpiresAt.toISOString() : null,
+            lastSyncedAt: connection.lastSyncedAt ? connection.lastSyncedAt.toISOString() : null,
+            version: connection.version
+          },
+          redirectTarget: stateRecord.redirectTarget
+        });
+        return;
+      }
+
+      // 4. POST /api/google-workspace/disconnect
+      if (pathname === '/api/google-workspace/disconnect' && req.method === 'POST') {
+        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
+        if (!canManage) throw new HttpError(403, 'Disconnecting Google Workspace requires Admin or Director role');
+
+        const conn = await db.googleWorkspaceConnection.findUnique({
+          where: { organizationId: context.user.organizationId }
+        });
+        if (!conn) throw new HttpError(404, 'Google Workspace connection not found');
+
+        // Revoke on provider (fake adapter)
+        await globalGoogleAdapter.revokeConnection(conn.secretRef);
+
+        const updated = await db.googleWorkspaceConnection.update({
+          where: { id: conn.id },
+          data: {
+            status: 'DISCONNECTED',
+            version: { increment: 1 }
+          }
+        });
+
+        await db.auditLog.create({
+          data: auditData(context, 'GOOGLE_WORKSPACE_DISCONNECTED', 'GoogleWorkspaceConnection', conn.id, {
+            previousStatus: conn.status
+          })
+        });
+
+        sendJson(res, 200, { connection: updated, status: updated.status, internalDataPreserved: true });
+        return;
+      }
+
+      // 5. POST /api/google-workspace/test
+      if (pathname === '/api/google-workspace/test' && req.method === 'POST') {
+        const conn = await db.googleWorkspaceConnection.findUnique({
+          where: { organizationId: context.user.organizationId }
+        });
+        if (!conn) throw new HttpError(404, 'Google Workspace connection not found');
+
+        let grantedScopes: string[] = [];
+        try { grantedScopes = JSON.parse(conn.grantedScopesJson); } catch { grantedScopes = []; }
+
+        const adapterResp = await globalGoogleAdapter.testConnection({
+          organizationId: conn.organizationId,
+          status: conn.status as any,
+          grantedScopes,
+          secretRef: conn.secretRef,
+          tokenExpiresAt: conn.tokenExpiresAt
+        });
+
+        // Record attempt
+        const op = await db.googleSyncOperation.create({
+          data: {
+            id: `GSYNC-${crypto.randomUUID()}`,
+            organizationId: context.user.organizationId,
+            operationKind: 'CONNECTION_TEST',
+            requestFingerprint: crypto.createHash('sha256').update(`TEST:${Date.now()}`).digest('hex'),
+            status: adapterResp.responseClass === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
+            actorId: context.user.id
+          }
+        });
+
+        await db.googleSyncAttempt.create({
+          data: {
+            id: `GATT-${crypto.randomUUID()}`,
+            operationId: op.id,
+            attemptNumber: 1,
+            responseClass: adapterResp.responseClass,
+            redactedError: adapterResp.redactedError,
+            retryAt: adapterResp.retryAfterSeconds ? new Date(Date.now() + adapterResp.retryAfterSeconds * 1000) : null,
+            durationMs: adapterResp.durationMs
+          }
+        });
+
+        if (adapterResp.responseClass !== 'SUCCESS') {
+          sendJson(res, 400, {
+            ok: false,
+            responseClass: adapterResp.responseClass,
+            error: adapterResp.redactedError,
+            retryAfterSeconds: adapterResp.retryAfterSeconds
+          });
+          return;
+        }
+
+        sendJson(res, 200, { ok: true, responseClass: 'SUCCESS' });
+        return;
+      }
+
+      // 6. POST /api/cases/:caseId/google/drive-folder
+      const driveMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/drive-folder$/);
+      if (driveMatch && req.method === 'POST') {
+        const caseId = driveMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const body = (await readJson(req)) as { idempotencyKey?: string };
+        const idempotencyKey = body.idempotencyKey?.trim() || `DRIVE-CASE-${caseId}`;
+
+        // Check if existing folder resource link exists for this case (converge duplicate requests)
+        const existingLink = await db.googleResourceLink.findFirst({
+          where: {
+            organizationId: context.user.organizationId,
+            caseId,
+            entityType: 'CASE_DRIVE_FOLDER'
+          }
+        });
+
+        if (existingLink) {
+          sendJson(res, 200, {
+            resourceLink: existingLink,
+            isExisting: true,
+            folderId: existingLink.externalResourceId
+          });
+          return;
+        }
+
+        const adapterResp = await globalGoogleAdapter.createDriveFolder(caseId, caseRow.title, idempotencyKey);
+        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
+          throw new HttpError(400, adapterResp.redactedError || 'Failed to create Drive folder');
+        }
+
+        const resultData = adapterResp.data;
+
+        try {
+          const syncOp = await db.googleSyncOperation.create({
+            data: {
+              id: `GSYNC-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationKind: 'DRIVE_FOLDER',
+              idempotencyKey,
+              requestFingerprint: crypto.createHash('sha256').update(`DRIVE:${caseId}:${idempotencyKey}`).digest('hex'),
+              status: 'SUCCESS',
+              actorId: context.user.id
+            }
+          });
+
+          const link = await db.googleResourceLink.create({
+            data: {
+              id: `GRLINK-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              operationId: syncOp.id,
+              entityType: 'CASE_DRIVE_FOLDER',
+              internalEntityId: caseId,
+              externalResourceId: resultData.folderId,
+              resourceMetadataJson: JSON.stringify({
+                folderName: resultData.folderName,
+                webViewLink: resultData.webViewLink
+              })
+            }
+          });
+
+          await db.auditLog.create({
+            data: auditData(context, 'GOOGLE_DRIVE_FOLDER_CREATED', 'GoogleResourceLink', link.id, {
+              caseId,
+              externalResourceId: resultData.folderId
+            })
+          });
+
+          sendJson(res, 201, { resourceLink: link, isExisting: false, folderId: resultData.folderId });
+          return;
+        } catch (raceErr) {
+          const canonical = await db.googleResourceLink.findFirst({
+            where: {
+              organizationId: context.user.organizationId,
+              caseId,
+              entityType: 'CASE_DRIVE_FOLDER'
+            }
+          });
+          if (canonical) {
+            sendJson(res, 200, { resourceLink: canonical, isExisting: true, folderId: canonical.externalResourceId });
+            return;
+          }
+          throw raceErr;
+        }
+      }
+
+      // 7. POST /api/cases/:caseId/google/import-gmail
+      const gmailMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/import-gmail$/);
+      if (gmailMatch && req.method === 'POST') {
+        const caseId = gmailMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const body = (await readJson(req)) as { attachmentIds?: string[] };
+        const selectedIds = Array.isArray(body.attachmentIds) ? body.attachmentIds : [];
+        if (selectedIds.length === 0) throw new HttpError(400, 'At least one attachment ID must be selected');
+
+        const adapterResp = await globalGoogleAdapter.importGmailAttachments(caseId, selectedIds);
+        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
+          throw new HttpError(400, adapterResp.redactedError || 'Failed to import Gmail attachments');
+        }
+
+        const importData = adapterResp.data;
+
+        const snapshots = [];
+        for (const item of importData.items) {
+          const snapshot = await db.googleImportSnapshot.create({
+            data: {
+              id: `GSNAP-${crypto.randomUUID()}`,
+              organizationId: context.user.organizationId,
+              caseId,
+              sourceType: 'GMAIL_ATTACHMENT',
+              externalResourceId: item.attachmentId,
+              sha256: item.sha256,
+              provenanceJson: JSON.stringify({
+                attachmentId: item.attachmentId,
+                filename: item.filename,
+                importedAt: new Date().toISOString(),
+                importedBy: context.user.id
+              }),
+              createdById: context.user.id
+            }
+          });
+          snapshots.push(snapshot);
+        }
+
+        await db.auditLog.create({
+          data: auditData(context, 'GMAIL_ATTACHMENTS_IMPORTED', 'GoogleImportSnapshot', snapshots[0]?.id || caseId, {
+            caseId,
+            importedCount: snapshots.length
+          })
+        });
+
+        sendJson(res, 201, { importedCount: snapshots.length, snapshots });
+        return;
+      }
+
+      // 8. POST /api/cases/:caseId/google/calendar-event
+      const calMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/calendar-event$/);
+      if (calMatch && req.method === 'POST') {
+        const caseId = calMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const body = (await readJson(req)) as {
+          summary?: string;
+          description?: string;
+          startDateTime?: string;
+          endDateTime?: string;
+          humanConfirmed?: boolean;
+          sourceParagraphText?: string;
+        };
+
+        if (body.humanConfirmed !== true) {
+          throw new HttpError(400, 'Human confirmation checkbox must be explicitly checked before creating Calendar event');
+        }
+
+        if (!body.summary || !body.startDateTime || !body.endDateTime) {
+          throw new HttpError(400, 'summary, startDateTime, and endDateTime are required');
+        }
+
+        const adapterResp = await globalGoogleAdapter.createCalendarEvent(caseId, {
+          summary: body.summary,
+          description: body.description || '',
+          startDateTime: body.startDateTime,
+          endDateTime: body.endDateTime,
+          humanConfirmed: true,
+          sourceParagraphText: body.sourceParagraphText
+        });
+
+        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
+          throw new HttpError(400, adapterResp.redactedError || 'Failed to create Calendar event');
+        }
+
+        const calData = adapterResp.data;
+
+        const resourceLink = await db.googleResourceLink.create({
+          data: {
+            id: `GRLINK-${crypto.randomUUID()}`,
+            organizationId: context.user.organizationId,
+            caseId,
+            entityType: 'CALENDAR_EVENT',
+            internalEntityId: `CAL-EVT-${crypto.randomUUID()}`,
+            externalResourceId: calData.eventId,
+            resourceMetadataJson: JSON.stringify({
+              summary: calData.summary,
+              htmlLink: calData.htmlLink,
+              humanConfirmedAt: new Date().toISOString(),
+              humanConfirmedBy: context.user.id
+            })
+          }
+        });
+
+        await db.auditLog.create({
+          data: auditData(context, 'GOOGLE_CALENDAR_EVENT_CREATED', 'GoogleResourceLink', resourceLink.id, {
+            caseId,
+            eventId: calData.eventId
+          })
+        });
+
+        sendJson(res, 201, { event: calData, resourceLink });
+        return;
+      }
+
+      // 9. POST /api/cases/:caseId/google/export-docs
+      const docsMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/export-docs$/);
+      if (docsMatch && req.method === 'POST') {
+        const caseId = docsMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const body = (await readJson(req)) as {
+          meetingId?: string;
+          versionNumber?: number;
+          title?: string;
+          content?: string;
+        };
+
+        if (!body.meetingId || !body.content) throw new HttpError(400, 'meetingId and content are required');
+
+        const adapterResp = await globalGoogleAdapter.exportDocs(caseId, body.meetingId, body.versionNumber || 1, body.title || '회의록 Export', body.content);
+        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
+          throw new HttpError(400, adapterResp.redactedError || 'Failed to export Docs');
+        }
+
+        const docsData = adapterResp.data;
+
+        const resourceLink = await db.googleResourceLink.create({
+          data: {
+            id: `GRLINK-${crypto.randomUUID()}`,
+            organizationId: context.user.organizationId,
+            caseId,
+            entityType: 'DOCS_EXPORT',
+            internalEntityId: body.meetingId,
+            externalResourceId: docsData.documentId,
+            resourceMetadataJson: JSON.stringify({
+              title: docsData.title,
+              webViewLink: docsData.webViewLink,
+              version: docsData.version
+            })
+          }
+        });
+
+        sendJson(res, 201, { exportResult: docsData, resourceLink });
+        return;
+      }
+
+      // 10. POST /api/cases/:caseId/google/import-sheets
+      const sheetsMatch = pathname.match(/^\/api\/cases\/([^/]+)\/google\/import-sheets$/);
+      if (sheetsMatch && req.method === 'POST') {
+        const caseId = sheetsMatch[1];
+        const caseRow = await db.caseItem.findUnique({ where: { id: caseId } });
+        if (!caseRow || caseRow.organizationId !== context.user.organizationId || caseRow.deletedAt) {
+          throw new HttpError(404, 'Case not found');
+        }
+
+        const body = (await readJson(req)) as {
+          spreadsheetId?: string;
+          sheetName?: string;
+          rangeA1?: string;
+        };
+
+        if (!body.spreadsheetId || !body.sheetName || !body.rangeA1) {
+          throw new HttpError(400, 'spreadsheetId, sheetName, and rangeA1 are required');
+        }
+
+        const adapterResp = await globalGoogleAdapter.importSheets(caseId, {
+          spreadsheetId: body.spreadsheetId,
+          sheetName: body.sheetName,
+          rangeA1: body.rangeA1
+        });
+
+        if (adapterResp.responseClass !== 'SUCCESS' || !adapterResp.data) {
+          throw new HttpError(400, adapterResp.redactedError || 'Failed to import Sheets range');
+        }
+
+        const sheetsData = adapterResp.data;
+
+        const snapshot = await db.googleImportSnapshot.create({
+          data: {
+            id: `GSNAP-${crypto.randomUUID()}`,
+            organizationId: context.user.organizationId,
+            caseId,
+            sourceType: 'SHEETS_RANGE',
+            externalResourceId: `${body.spreadsheetId}!${body.sheetName}:${body.rangeA1}`,
+            sha256: sheetsData.sha256,
+            provenanceJson: JSON.stringify({
+              spreadsheetId: body.spreadsheetId,
+              sheetName: body.sheetName,
+              rangeA1: body.rangeA1,
+              rowCount: sheetsData.rowCount,
+              columnCount: sheetsData.columnCount
+            }),
+            createdById: context.user.id
+          }
+        });
+
+        sendJson(res, 201, { snapshot, valuesJson: sheetsData.valuesJson });
         return;
       }
 

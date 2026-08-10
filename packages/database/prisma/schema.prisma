@@ -30,6 +30,11 @@ model Organization {
   feeCalculations       CaseFeeCalculation[]
   feePayments           CaseFeePayment[]
   feeAudits             CaseFeeAudit[]
+  googleWorkspaceConnections GoogleWorkspaceConnection[]
+  googleOAuthStates          GoogleOAuthState[]
+  googleSyncOperations       GoogleSyncOperation[]
+  googleResourceLinks        GoogleResourceLink[]
+  googleImportSnapshots      GoogleImportSnapshot[]
 }
 
 model User {
@@ -77,6 +82,10 @@ model User {
   feeCalculations        CaseFeeCalculation[]  @relation("FeeCalculatedBy")
   feePayments            CaseFeePayment[]      @relation("FeePaymentRecordedBy")
   feeAudits              CaseFeeAudit[]        @relation("FeeAuditActor")
+  createdGoogleConnections GoogleWorkspaceConnection[] @relation("GoogleConnectionCreatedBy")
+  googleOAuthStates        GoogleOAuthState[]        @relation("GoogleOAuthActor")
+  createdGoogleSyncOps     GoogleSyncOperation[]     @relation("GoogleSyncOpActor")
+  createdGoogleSnapshots   GoogleImportSnapshot[]    @relation("GoogleSnapshotCreatedBy")
 }
 
 model Role {
@@ -144,6 +153,9 @@ model CaseItem {
   feeCalculations       CaseFeeCalculation[]
   feePayments           CaseFeePayment[]
   feeAudits             CaseFeeAudit[]
+  googleSyncOperations  GoogleSyncOperation[]
+  googleResourceLinks   GoogleResourceLink[]
+  googleImportSnapshots GoogleImportSnapshot[]
 
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
@@ -1200,4 +1212,130 @@ model CaseFeeAudit {
   @@index([organizationId, caseId])
   @@index([actorId])
 }
+
+// -----------------------------------------------------------------------------
+// P14 Google Workspace Integration Models
+// -----------------------------------------------------------------------------
+
+model GoogleWorkspaceConnection {
+  id                String    @id
+  organizationId    String    @unique
+  status            String    @default("CONNECTED") // CONNECTED, EXPIRED, RECONSENT_REQUIRED, DISCONNECTED
+  grantedScopesJson String    @default("[]")
+  secretRef         String    // Server secret reference (never raw tokens)
+  tokenExpiresAt    DateTime?
+  lastSyncedAt      DateTime?
+  createdById       String
+  version           Int       @default(1)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy    User         @relation("GoogleConnectionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([createdById])
+}
+
+model GoogleOAuthState {
+  id              String    @id
+  stateHash       String    @unique
+  pkceVerifierRef String
+  organizationId  String
+  actorId         String
+  redirectTarget  String
+  expiresAt       DateTime
+  usedAt          DateTime?
+  createdAt       DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor        User         @relation("GoogleOAuthActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, actorId])
+  @@index([expiresAt])
+}
+
+model GoogleSyncOperation {
+  id                 String               @id
+  organizationId     String
+  caseId             String?
+  operationKind      String               // DRIVE_FOLDER, GMAIL_IMPORT, CALENDAR_EVENT, DOCS_EXPORT, SHEETS_IMPORT
+  idempotencyKey     String?
+  requestFingerprint String
+  status             String               @default("PENDING") // PENDING, SUCCESS, FAILED, CANCELLED
+  actorId            String
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem?              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  actor        User                   @relation("GoogleSyncOpActor", fields: [actorId], references: [id], onDelete: Restrict)
+  attempts     GoogleSyncAttempt[]
+  resourceLinks GoogleResourceLink[]
+  importSnapshots GoogleImportSnapshot[]
+
+  @@index([organizationId, caseId])
+  @@index([operationKind, status])
+  @@index([actorId])
+  @@unique([organizationId, operationKind, idempotencyKey])
+}
+
+model GoogleSyncAttempt {
+  id            String   @id
+  operationId   String
+  attemptNumber Int
+  responseClass String   // SUCCESS, BAD_SCOPE, TOKEN_EXPIRED, RECONSENT_REQUIRED, RATE_LIMIT_RETRY_AFTER, SERVER_ERROR, TIMEOUT, USER_CANCEL, MALFORMED_PROVIDER_RESPONSE, REVOKE_FAILURE
+  redactedError String?
+  retryAt       DateTime?
+  durationMs    Int
+  createdAt     DateTime @default(now())
+
+  operation GoogleSyncOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+
+  @@index([operationId])
+}
+
+model GoogleResourceLink {
+  id                   String   @id
+  organizationId       String
+  caseId               String?
+  operationId          String?
+  entityType           String   // CASE_DRIVE_FOLDER, CALENDAR_EVENT, DOCS_EXPORT, GMAIL_ATTACHMENT, SHEETS_RANGE
+  internalEntityId     String
+  externalResourceId   String
+  resourceMetadataJson String   @default("{}")
+  createdAt            DateTime @default(now())
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem?            @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  operation    GoogleSyncOperation? @relation(fields: [operationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([entityType, internalEntityId])
+  @@unique([organizationId, entityType, internalEntityId, externalResourceId])
+}
+
+model GoogleImportSnapshot {
+  id                 String   @id
+  organizationId     String
+  caseId             String
+  operationId        String?
+  sourceType         String   // GMAIL_ATTACHMENT, SHEETS_RANGE, DOCS_TEXT
+  externalResourceId String
+  sha256             String
+  version            Int      @default(1)
+  provenanceJson     String   @default("{}")
+  createdById        String
+  createdAt          DateTime @default(now())
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  operation    GoogleSyncOperation? @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  createdBy    User                 @relation("GoogleSnapshotCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([externalResourceId, sha256])
+  @@index([createdById])
+}
+
 
