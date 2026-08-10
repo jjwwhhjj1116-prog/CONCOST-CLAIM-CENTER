@@ -22,6 +22,10 @@ model Organization {
   aiGenerationRequests AiGenerationRequest[]
   groundingSelections AiGroundingSelection[]
   draftSuggestions AiDraftSuggestion[]
+  reportReviewRequests ReportReviewRequest[]
+  reportFinalizations ReportFinalization[]
+  reportOutputArtifacts ReportOutputArtifact[]
+  reportOutputDownloads ReportOutputDownload[]
 }
 
 model User {
@@ -61,6 +65,11 @@ model User {
   groundingSelections AiGroundingSelection[]
   createdSuggestions AiDraftSuggestion[] @relation("SuggestionActor")
   appliedSuggestions AiDraftSuggestion[] @relation("SuggestionAppliedActor")
+  requestedReportReviews ReportReviewRequest[] @relation("ReportReviewRequestedBy")
+  assignedReportReviews  ReportReviewRequest[] @relation("ReportReviewAssignedReviewer")
+  finalizedReports       ReportFinalization[]  @relation("ReportFinalizedBy")
+  approvedFinalizationSections ReportFinalizationSection[] @relation("FinalizationSectionApprovedBy")
+  downloadedReportOutputs ReportOutputDownload[] @relation("ReportOutputDownloadedBy")
 }
 
 model Role {
@@ -119,6 +128,10 @@ model CaseItem {
   aiUsageLedgers AiUsageLedger[]
   aiGenerationRequests AiGenerationRequest[]
   groundingSelections AiGroundingSelection[]
+  reviewRequests        ReportReviewRequest[]
+  finalizations         ReportFinalization[]
+  outputArtifacts       ReportOutputArtifact[]
+  outputDownloads       ReportOutputDownload[]
   draftSuggestions AiDraftSuggestion[]
 
   @@index([organizationId, deletedAt])
@@ -239,6 +252,7 @@ model DocumentVersion {
   document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   uploadedBy    User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
   evidenceLinks ReportEvidenceLink[]
+  outputArtifacts ReportOutputArtifact[]
 
   @@unique([documentId, versionNumber])
   @@index([documentId])
@@ -305,6 +319,9 @@ model Report {
   mergeSnapshots ReportMergeSnapshot[]
   groundingSelections AiGroundingSelection[]
   draftSuggestions AiDraftSuggestion[]
+  reviewRequests ReportReviewRequest[]
+  finalizations ReportFinalization[]
+  outputArtifacts ReportOutputArtifact[]
 
   @@index([caseId, deletedAt])
 }
@@ -330,6 +347,7 @@ model ReportSection {
   approvals ReportSectionApproval[]
   groundingSelections AiGroundingSelection[]
   draftSuggestions AiDraftSuggestion[]
+  finalizationSections ReportFinalizationSection[]
 
   @@index([reportId, deletedAt])
 }
@@ -486,6 +504,7 @@ model ReportTemplateVersion {
   sections                   TemplateSection[]
   references                 TemplateReference[]
   reportInstances            ReportInstance[]
+  reportFinalizations        ReportFinalization[]
 
   @@unique([templateId, versionNumber])
   @@index([templateId, status])
@@ -630,6 +649,7 @@ model ReportSectionRevision {
   evidenceLinks         ReportEvidenceLink[]
   comments              ReportSectionComment[]
   approvals             ReportSectionApproval[]
+  finalizationSections  ReportFinalizationSection[]
 
   @@unique([sectionId, revisionNumber])
   @@index([sectionId])
@@ -723,7 +743,7 @@ model AiProviderConfig {
   providerKind       String                // LOCAL_FAKE, OPENAI, ANTHROPIC, GEMINI
   name               String
   baseUrl            String
-  secretRef          String                // API 키 환경변수/Secret Manager 참해보 레퍼런스 (원문 키 아님)
+  secretRef          String                // API 키 환경변수/Secret Manager 참고 레퍼런스 (원문 키 아님)
   status             String                @default("ACTIVE") // ACTIVE, DISABLED
   allowedModelsJson  String                @default("[]")
   timeoutMs          Int                   @default(30000)
@@ -928,5 +948,140 @@ model AiCitation {
   suggestion       AiDraftSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Restrict)
 
   @@index([suggestionId])
+}
+
+// ----------------------------------------------------
+// P12 Review, Approval & Final Output Models
+// ----------------------------------------------------
+
+model ReportReviewRequest {
+  id                     String   @id
+  organizationId         String
+  caseId                 String
+  reportId               String
+  requestedById          String
+  assignedReviewerId     String?
+  status                 String   @default("PENDING") // PENDING, CHANGES_REQUESTED, RESUBMITTED, APPROVED
+  comment                String?
+  idempotencyKey         String?
+  idempotencyFingerprint String?
+  eventNumber            Int      @default(1)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  organization           Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                   CaseItem      @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report                 Report        @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  requestedBy            User          @relation("ReportReviewRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  assignedReviewer       User?         @relation("ReportReviewAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([reportId])
+  @@index([requestedById])
+  @@index([assignedReviewerId])
+}
+
+model ReportFinalization {
+  id                      String                      @id
+  organizationId          String
+  caseId                  String
+  reportId                String
+  reportTemplateVersionId String
+  finalizedById           String
+  status                  String                      @default("FINALIZED") // FINALIZED
+  canonicalSnapshotHash   String
+  sectionCount            Int
+  evidenceCount           Int
+  unresolvedFlagCount     Int                         @default(0)
+  idempotencyKey          String?
+  idempotencyFingerprint  String?
+  createdAt               DateTime                    @default(now())
+
+  organization            Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                    CaseItem                    @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report                  Report                      @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  reportTemplateVersion   ReportTemplateVersion       @relation(fields: [reportTemplateVersionId], references: [id], onDelete: Restrict)
+  finalizedBy             User                        @relation("ReportFinalizedBy", fields: [finalizedById], references: [id], onDelete: Restrict)
+  sections                ReportFinalizationSection[]
+  artifacts               ReportOutputArtifact[]
+
+  @@unique([reportId, canonicalSnapshotHash])
+  @@index([organizationId, caseId])
+  @@index([reportId])
+}
+
+model ReportFinalizationSection {
+  id                   String                @id
+  finalizationId       String
+  sectionId            String
+  sectionNumber        Int
+  title                String
+  content              String
+  approvedRevisionId   String
+  approvedRevisionHash String
+  approvedByUserId     String
+  approvedAt           DateTime
+  createdAt            DateTime              @default(now())
+
+  finalization         ReportFinalization    @relation(fields: [finalizationId], references: [id], onDelete: Restrict)
+  section              ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  approvedRevision     ReportSectionRevision @relation(fields: [approvedRevisionId], references: [id], onDelete: Restrict)
+  approvedByUser       User                  @relation("FinalizationSectionApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([finalizationId, sectionNumber])
+  @@index([finalizationId])
+  @@index([sectionId])
+  @@index([approvedRevisionId])
+}
+
+model ReportOutputArtifact {
+  id                     String                 @id
+  organizationId         String
+  caseId                 String
+  reportId               String
+  finalizationId         String
+  format                 String                 // DOCX, PDF
+  outputVersion          Int                    @default(1)
+  documentVersionId      String
+  byteSize               Int
+  sha256                 String
+  storageKey             String                 @unique
+  generatorVersion       String                 @default("P12_GENERATOR_V1")
+  idempotencyKey         String?
+  idempotencyFingerprint String?
+  createdAt              DateTime               @default(now())
+
+  organization           Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                   CaseItem               @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report                 Report                 @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  finalization           ReportFinalization     @relation(fields: [finalizationId], references: [id], onDelete: Restrict)
+  documentVersion        DocumentVersion        @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  downloads              ReportOutputDownload[]
+
+  @@unique([finalizationId, format])
+  @@index([organizationId, caseId])
+  @@index([reportId])
+  @@index([finalizationId])
+  @@index([documentVersionId])
+}
+
+model ReportOutputDownload {
+  id             String               @id
+  organizationId String
+  caseId         String
+  artifactId     String
+  downloadedById String
+  clientIp       String?
+  userAgent      String?
+  downloadedAt   DateTime             @default(now())
+
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case           CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  artifact       ReportOutputArtifact @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  downloadedBy   User                 @relation("ReportOutputDownloadedBy", fields: [downloadedById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, caseId])
+  @@index([artifactId])
+  @@index([downloadedById])
 }
 

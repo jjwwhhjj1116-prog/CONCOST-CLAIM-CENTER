@@ -18,22 +18,24 @@ function runTsc(args: string[]): void {
 }
 
 function runWorkspaceTypecheck(): void {
-  console.log('[Harness] Type-checking scripts, UI, web, database, and API workspaces...');
-  runTsc(['-b', 'packages/database/tsconfig.json', 'apps/api/tsconfig.json', '--pretty', 'false']);
+  console.log('[Harness] Type-checking scripts, UI, web, database, document-engine, and API workspaces...');
+  runTsc(['-b', 'packages/database/tsconfig.json', 'packages/document-engine/tsconfig.json', 'apps/api/tsconfig.json', '--pretty', 'false']);
   runTsc(['--noEmit']);
   runTsc(['-p', 'packages/ui/tsconfig.json', '--noEmit']);
+  runTsc(['-p', 'packages/document-engine/tsconfig.json', '--noEmit']);
   runTsc(['-p', 'apps/web/tsconfig.json', '--noEmit']);
 }
 
 if (mode === 'lint') {
   runWorkspaceTypecheck();
-  runNode(eslintCli, ['scripts', 'apps/web/src', 'apps/api/src', 'packages/ui/src', 'packages/database/src', '--max-warnings', '0']);
+  runNode(eslintCli, ['scripts', 'apps/web/src', 'apps/api/src', 'packages/ui/src', 'packages/database/src', 'packages/document-engine/src', '--max-warnings', '0']);
   for (const relativePath of [
     'package.json',
     'apps/web/package.json',
     'apps/api/package.json',
     'packages/ui/package.json',
     'packages/database/package.json',
+    'packages/document-engine/package.json',
     'apps/web/tsconfig.json',
     'packages/ui/tsconfig.json',
     'docs/stitch/design-tokens.json',
@@ -50,13 +52,16 @@ if (mode === 'lint') {
 } else if (mode === 'build') {
   runWorkspaceTypecheck();
   runTsc(['-p', 'packages/ui/tsconfig.json']);
+  runTsc(['-p', 'packages/document-engine/tsconfig.json']);
   runNode(prismaCli, ['generate', '--schema', 'prisma/schema.prisma'], path.join(root, 'packages', 'database'));
-  runTsc(['-b', 'packages/database/tsconfig.json', 'apps/api/tsconfig.json', '--force', '--pretty', 'false']);
+  runTsc(['-b', 'packages/database/tsconfig.json', 'packages/document-engine/tsconfig.json', 'apps/api/tsconfig.json', '--force', '--pretty', 'false']);
   runTsc(['-p', 'apps/web/tsconfig.json', '--noEmit']);
   runNode(viteCli, ['build'], path.join(root, 'apps', 'web'));
   const requiredArtifacts = [
     'packages/ui/dist/index.js',
     'packages/ui/dist/index.d.ts',
+    'packages/document-engine/dist/index.js',
+    'packages/document-engine/dist/index.d.ts',
     'packages/database/dist/index.js',
     'apps/api/dist/server.js',
     'apps/web/dist/index.html'

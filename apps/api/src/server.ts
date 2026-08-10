@@ -7,7 +7,8 @@ import {
   type Prisma, type PrismaClient, type User
 } from '@claim-studio/database';
 import {
-  generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer
+  generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer,
+  generateReportDocxBuffer, generateReportPdfBuffer, validateReportDocxBuffer, validateReportPdfBuffer
 } from '@claim-studio/document-engine';
 import { assertSafeBaseUrl, assertSafeResolvedBaseUrl, SsrfError, type AiProviderKind } from './ai/ssrf-guard';
 import { assertSecretReference, resolveSecretReference, secretReferenceHint } from './ai/secret-resolver';
@@ -254,7 +255,7 @@ export function validateFileSecurity(filename: string, mimeType: string, buffer:
 }
 
 function safeStoragePath(uploadDir: string, storageKey: string): string {
-  if (!/^storage-[0-9a-f-]+\.[a-z0-9]+$/i.test(storageKey)) throw new HttpError(409, 'Stored file key is invalid');
+  if (!/^storage-[0-9a-zA-Z_-]+\.[a-z0-9]+$/i.test(storageKey)) throw new HttpError(409, 'Stored file key is invalid');
   const resolvedRoot = path.resolve(uploadDir);
   const resolved = path.resolve(resolvedRoot, storageKey);
   if (!resolved.startsWith(`${resolvedRoot}${path.sep}`)) throw new HttpError(409, 'Stored file path escaped the upload root');
@@ -386,8 +387,8 @@ function canonicalJson(value: unknown): string {
   return encoded;
 }
 
-function sha256Text(value: string): string {
-  return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+function sha256Text(value: string | Buffer): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
 }
 
 function splitGroundingParagraphs(value: string): string[] {
@@ -4503,6 +4504,676 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         });
 
         sendJson(res, 200, { suggestion: updated });
+        return;
+      }
+
+      // ----------------------------------------------------
+      // P12 Review, Approval & Final Output API Routes
+      // ----------------------------------------------------
+
+      // 1. POST /api/reports/:reportId/review-requests
+      const reviewRequestCreateMatch = pathname.match(/^\/api\/reports\/([^/]+)\/review-requests$/);
+      if (reviewRequestCreateMatch && req.method === 'POST') {
+        const reportId = reviewRequestCreateMatch[1];
+        const reportRow = await db.report.findUnique({
+          where: { id: reportId },
+          include: { case: true }
+        });
+        if (!reportRow || reportRow.case.deletedAt || reportRow.deletedAt) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(403, 'Cross-tenant access forbidden');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const canRequest = context.roles.some((role) => ['admin', 'pm', 'staff', 'ceo'].includes(role));
+        if (!canRequest) throw new HttpError(403, 'User does not have permission to request review');
+
+        const body = await readJson(req);
+        assertOnlyKeys(body, new Set(['assignedReviewerId', 'comment', 'idempotencyKey']), 'review request');
+        const assignedReviewerId = typeof body.assignedReviewerId === 'string' ? body.assignedReviewerId.trim() : undefined;
+        const comment = typeof body.comment === 'string' ? body.comment.trim() : undefined;
+        const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : undefined;
+
+        if (assignedReviewerId) {
+          const reviewer = await db.user.findUnique({ where: { id: assignedReviewerId } });
+          if (!reviewer || reviewer.organizationId !== context.user.organizationId) {
+            throw new HttpError(404, 'Assigned reviewer not found in organization');
+          }
+        }
+
+        const reviewRequestId = `REVREQ-${crypto.randomUUID()}`;
+        const lastReq = await db.reportReviewRequest.findFirst({
+          where: { reportId },
+          orderBy: { eventNumber: 'desc' }
+        });
+        const eventNumber = lastReq ? lastReq.eventNumber + 1 : 1;
+
+        const reviewRequest = await db.$transaction(async (tx) => {
+          const reqItem = await tx.reportReviewRequest.create({
+            data: {
+              id: reviewRequestId,
+              organizationId: context.user.organizationId,
+              caseId: reportRow.caseId,
+              reportId,
+              requestedById: context.user.id,
+              assignedReviewerId: assignedReviewerId || null,
+              status: 'PENDING',
+              comment: comment || null,
+              idempotencyKey: idempotencyKey || null,
+              idempotencyFingerprint: idempotencyKey ? sha256Text(`${reportId}:${context.user.id}:${eventNumber}`) : null,
+              eventNumber
+            },
+            include: { requestedBy: true, assignedReviewer: true }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_REVIEW_REQUESTED', 'ReportReviewRequest', reviewRequestId, {
+              caseId: reportRow.caseId,
+              reportId,
+              assignedReviewerId: assignedReviewerId || null,
+              eventNumber
+            })
+          });
+
+          return reqItem;
+        });
+
+        sendJson(res, 201, { reviewRequest });
+        return;
+      }
+
+      // 2. POST /api/reports/:reportId/review-requests/:requestId/changes-requested
+      const reviewRequestChangesMatch = pathname.match(/^\/api\/reports\/([^/]+)\/review-requests\/([^/]+)\/changes-requested$/);
+      if (reviewRequestChangesMatch && req.method === 'POST') {
+        const [, reportId, requestId] = reviewRequestChangesMatch;
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const canReview = context.roles.some((role) => ['admin', 'reviewer', 'director', 'ceo'].includes(role));
+        if (!canReview) throw new HttpError(403, 'User does not have reviewer permission to request changes');
+
+        const body = await readJson(req);
+        assertOnlyKeys(body, new Set(['comment']), 'changes requested');
+        const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
+        if (!comment) throw new HttpError(400, 'Comment is required when requesting changes');
+
+        const reqRow = await db.reportReviewRequest.findUnique({ where: { id: requestId } });
+        if (!reqRow || reqRow.reportId !== reportId || reqRow.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Review request not found');
+        }
+        if (!['PENDING', 'RESUBMITTED'].includes(reqRow.status)) {
+          throw new HttpError(409, `Cannot request changes on review request in status ${reqRow.status}`);
+        }
+
+        const updatedReq = await db.$transaction(async (tx) => {
+          const updated = await tx.reportReviewRequest.update({
+            where: { id: requestId },
+            data: {
+              status: 'CHANGES_REQUESTED',
+              comment,
+              assignedReviewerId: context.user.id,
+              updatedAt: new Date()
+            },
+            include: { requestedBy: true, assignedReviewer: true }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_CHANGES_REQUESTED', 'ReportReviewRequest', requestId, {
+              caseId: reportRow.caseId,
+              reportId,
+              reviewerId: context.user.id
+            })
+          });
+
+          return updated;
+        });
+
+        sendJson(res, 200, { reviewRequest: updatedReq });
+        return;
+      }
+
+      // 3. POST /api/reports/:reportId/review-requests/:requestId/resubmit
+      const reviewRequestResubmitMatch = pathname.match(/^\/api\/reports\/([^/]+)\/review-requests\/([^/]+)\/resubmit$/);
+      if (reviewRequestResubmitMatch && req.method === 'POST') {
+        const [, reportId, requestId] = reviewRequestResubmitMatch;
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const canResubmit = context.roles.some((role) => ['admin', 'pm', 'staff', 'ceo'].includes(role));
+        if (!canResubmit) throw new HttpError(403, 'User does not have permission to resubmit review request');
+
+        const reqRow = await db.reportReviewRequest.findUnique({ where: { id: requestId } });
+        if (!reqRow || reqRow.reportId !== reportId || reqRow.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Review request not found');
+        }
+        if (reqRow.status !== 'CHANGES_REQUESTED') {
+          throw new HttpError(409, `Cannot resubmit review request in status ${reqRow.status}`);
+        }
+
+        const body = await readJson(req);
+        assertOnlyKeys(body, new Set(['comment']), 'resubmit review request');
+        const comment = typeof body.comment === 'string' ? body.comment.trim() : undefined;
+
+        const updatedReq = await db.$transaction(async (tx) => {
+          const updated = await tx.reportReviewRequest.update({
+            where: { id: requestId },
+            data: {
+              status: 'RESUBMITTED',
+              comment: comment || reqRow.comment,
+              updatedAt: new Date()
+            },
+            include: { requestedBy: true, assignedReviewer: true }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_REVIEW_RESUBMITTED', 'ReportReviewRequest', requestId, {
+              caseId: reportRow.caseId,
+              reportId
+            })
+          });
+
+          return updated;
+        });
+
+        sendJson(res, 200, { reviewRequest: updatedReq });
+        return;
+      }
+
+      // 4. GET /api/reports/:reportId/review-requests
+      const reviewRequestListMatch = pathname.match(/^\/api\/reports\/([^/]+)\/review-requests$/);
+      if (reviewRequestListMatch && req.method === 'GET') {
+        const reportId = reviewRequestListMatch[1];
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const reviewRequests = await db.reportReviewRequest.findMany({
+          where: { reportId },
+          include: { requestedBy: true, assignedReviewer: true },
+          orderBy: { eventNumber: 'desc' }
+        });
+
+        sendJson(res, 200, { reviewRequests });
+        return;
+      }
+
+      // 5. POST /api/reports/:reportId/finalizations
+      const finalizationCreateMatch = pathname.match(/^\/api\/reports\/([^/]+)\/finalizations$/);
+      if (finalizationCreateMatch && req.method === 'POST') {
+        const reportId = finalizationCreateMatch[1];
+        const reportRow = await db.report.findUnique({
+          where: { id: reportId },
+          include: {
+            case: true,
+            reportInstance: true,
+            sections: {
+              where: { deletedAt: null },
+              include: {
+                revisions: { orderBy: { revisionNumber: 'desc' }, take: 1, include: { author: true, evidenceLinks: true } },
+                approvals: { where: { status: 'APPROVED' }, orderBy: { eventNumber: 'desc' }, take: 1, include: { approver: true } },
+                comments: { where: { isResolved: false } },
+                draftSuggestions: { where: { status: { in: ['GENERATED', 'PROCESSING'] } } }
+              },
+              orderBy: { sectionNumber: 'asc' }
+            }
+          }
+        });
+
+        if (!reportRow || reportRow.case.deletedAt || reportRow.deletedAt) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(403, 'Cross-tenant access forbidden');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const canFinalize = context.roles.some((role) => ['admin', 'director', 'reviewer', 'ceo'].includes(role));
+        if (!canFinalize) throw new HttpError(403, 'User does not have permission to finalize report');
+
+        const body = await readJson(req);
+        assertOnlyKeys(body, new Set(['idempotencyKey']), 'report finalization');
+        const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : undefined;
+
+        // Perform strict readiness validations
+        if (!reportRow.reportInstance) throw new HttpError(409, 'Report must be linked to a ReportInstance');
+
+        const requiredSections = reportRow.sections.filter((s) => s.isRequired);
+        if (requiredSections.length === 0) throw new HttpError(409, 'Report has no required sections');
+
+        const blockers: string[] = [];
+        const canonicalSectionsData: Array<{
+          sectionId: string;
+          sectionNumber: number;
+          title: string;
+          content: string;
+          approvedRevisionId: string;
+          approvedRevisionHash: string;
+          approvedByUserId: string;
+          approvedAt: string;
+        }> = [];
+
+        let evidenceCountTotal = 0;
+        let unresolvedFlagCountTotal = 0;
+
+        for (const sec of reportRow.sections) {
+          if (sec.isRequired && sec.status !== 'APPROVED') {
+            blockers.push(`Section ${sec.sectionNumber} (${sec.title}) is required but not approved (status: ${sec.status})`);
+          }
+
+          const latestApproval = sec.approvals[0];
+          const latestRevision = sec.revisions[0];
+
+          if (sec.status === 'APPROVED') {
+            if (!latestApproval) {
+              blockers.push(`Section ${sec.sectionNumber} marked APPROVED but lacks approval record`);
+              continue;
+            }
+            if (!latestRevision) {
+              blockers.push(`Section ${sec.sectionNumber} has no revisions`);
+              continue;
+            }
+            if (latestApproval.approvedRevisionId !== latestRevision.id) {
+              blockers.push(`Section ${sec.sectionNumber} latest revision (REV-${latestRevision.revisionNumber}) does not match approved revision (${latestApproval.approvedRevisionId})`);
+            }
+            if (latestRevision.validationStatus !== 'VALID') {
+              blockers.push(`Section ${sec.sectionNumber} approved revision is invalid (${latestRevision.validationStatus})`);
+            }
+            if (sec.comments.length > 0) {
+              blockers.push(`Section ${sec.sectionNumber} has ${sec.comments.length} unresolved comments/revision requests`);
+              unresolvedFlagCountTotal += sec.comments.length;
+            }
+            if (sec.draftSuggestions.length > 0) {
+              blockers.push(`Section ${sec.sectionNumber} has pending/unapplied AI suggestions`);
+              unresolvedFlagCountTotal += sec.draftSuggestions.length;
+            }
+
+            // Self-approval check: Author and Approver must be different!
+            if (latestRevision.authorId === latestApproval.approverId) {
+              blockers.push(`Section ${sec.sectionNumber} author (${latestRevision.author.name}) self-approved their own revision`);
+            }
+            if (latestRevision.authorId === context.user.id) {
+              blockers.push(`Finalizing user (${context.user.name}) cannot finalize a report containing their own authored section (${sec.sectionNumber}) without independent approval`);
+            }
+
+            evidenceCountTotal += latestRevision.evidenceLinks.length;
+
+            canonicalSectionsData.push({
+              sectionId: sec.id,
+              sectionNumber: sec.sectionNumber,
+              title: sec.title,
+              content: latestRevision.content,
+              approvedRevisionId: latestRevision.id,
+              approvedRevisionHash: latestRevision.sha256,
+              approvedByUserId: latestApproval.approverId,
+              approvedAt: latestApproval.createdAt.toISOString()
+            });
+          }
+        }
+
+        if (blockers.length > 0) {
+          throw new HttpError(409, `Finalization blocked by ${blockers.length} issues: ${blockers.join('; ')}`, { blockers });
+        }
+
+        canonicalSectionsData.sort((a, b) => a.sectionNumber - b.sectionNumber);
+
+        const canonicalSnapshotPayload = {
+          reportId,
+          caseId: reportRow.caseId,
+          organizationId: context.user.organizationId,
+          reportTemplateVersionId: reportRow.reportInstance.templateVersionId,
+          sections: canonicalSectionsData
+        };
+
+        const canonicalSnapshotHash = sha256Text(canonicalJson(canonicalSnapshotPayload));
+
+        // Check existing finalization
+        const existingFinalization = await db.reportFinalization.findUnique({
+          where: { reportId_canonicalSnapshotHash: { reportId, canonicalSnapshotHash } },
+          include: { sections: true, finalizedBy: true }
+        });
+
+        if (existingFinalization) {
+          sendJson(res, 200, { finalization: existingFinalization, idempotentReplay: true });
+          return;
+        }
+
+        const finalizationId = `FIN-${crypto.randomUUID()}`;
+
+        const finalization = await db.$transaction(async (tx) => {
+          const fin = await tx.reportFinalization.create({
+            data: {
+              id: finalizationId,
+              organizationId: context.user.organizationId,
+              caseId: reportRow.caseId,
+              reportId,
+              reportTemplateVersionId: reportRow.reportInstance!.templateVersionId,
+              finalizedById: context.user.id,
+              status: 'FINALIZED',
+              canonicalSnapshotHash,
+              sectionCount: canonicalSectionsData.length,
+              evidenceCount: evidenceCountTotal,
+              unresolvedFlagCount: unresolvedFlagCountTotal,
+              idempotencyKey: idempotencyKey || null,
+              idempotencyFingerprint: idempotencyKey ? sha256Text(`${reportId}:${canonicalSnapshotHash}`) : null,
+              sections: {
+                create: canonicalSectionsData.map((sec) => ({
+                  id: `FINSEC-${crypto.randomUUID()}`,
+                  sectionId: sec.sectionId,
+                  sectionNumber: sec.sectionNumber,
+                  title: sec.title,
+                  content: sec.content,
+                  approvedRevisionId: sec.approvedRevisionId,
+                  approvedRevisionHash: sec.approvedRevisionHash,
+                  approvedByUserId: sec.approvedByUserId,
+                  approvedAt: new Date(sec.approvedAt)
+                }))
+              }
+            },
+            include: { sections: true, finalizedBy: true }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_FINALIZED', 'ReportFinalization', finalizationId, {
+              caseId: reportRow.caseId,
+              reportId,
+              canonicalSnapshotHash,
+              sectionCount: canonicalSectionsData.length,
+              evidenceCount: evidenceCountTotal
+            })
+          });
+
+          return fin;
+        });
+
+        sendJson(res, 201, { finalization, idempotentReplay: false });
+        return;
+      }
+
+      // 6. GET /api/reports/:reportId/finalizations
+      const finalizationListMatch = pathname.match(/^\/api\/reports\/([^/]+)\/finalizations$/);
+      if (finalizationListMatch && req.method === 'GET') {
+        const reportId = finalizationListMatch[1];
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const finalizations = await db.reportFinalization.findMany({
+          where: { reportId },
+          include: { sections: true, finalizedBy: true, artifacts: true },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        sendJson(res, 200, { finalizations });
+        return;
+      }
+
+      // 7. POST /api/reports/:reportId/finalizations/:finalizationId/outputs
+      const outputCreateMatch = pathname.match(/^\/api\/reports\/([^/]+)\/finalizations\/([^/]+)\/outputs$/);
+      if (outputCreateMatch && req.method === 'POST') {
+        const [, reportId, finalizationId] = outputCreateMatch;
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const body = await readJson(req);
+        assertOnlyKeys(body, new Set(['format', 'idempotencyKey']), 'report output creation');
+        const format = String(body.format ?? '').trim().toUpperCase();
+        const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey.trim() : undefined;
+
+        if (!['DOCX', 'PDF'].includes(format)) throw new HttpError(400, 'Format must be either DOCX or PDF');
+
+        const finalization = await db.reportFinalization.findUnique({
+          where: { id: finalizationId },
+          include: { sections: { orderBy: { sectionNumber: 'asc' } }, finalizedBy: true }
+        });
+        if (!finalization || finalization.reportId !== reportId || finalization.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Finalization snapshot not found');
+        }
+
+        // Check if output artifact already exists for this finalization + format
+        const existingArtifact = await db.reportOutputArtifact.findUnique({
+          where: { finalizationId_format: { finalizationId, format } },
+          include: { documentVersion: true }
+        });
+        if (existingArtifact) {
+          sendJson(res, 200, { artifact: existingArtifact, idempotentReplay: true });
+          return;
+        }
+
+        // Render document buffer deterministically
+        let buffer: Buffer;
+        if (format === 'DOCX') {
+          buffer = generateReportDocxBuffer({
+            finalizationId,
+            canonicalSnapshotHash: finalization.canonicalSnapshotHash,
+            title: reportRow.title,
+            caseNumber: reportRow.case.caseNumber,
+            claimType: reportRow.case.claimType,
+            finalizedBy: finalization.finalizedBy.name,
+            finalizedAt: finalization.createdAt.toISOString(),
+            sections: finalization.sections.map((s: any) => ({
+              sectionId: s.sectionId,
+              sectionNumber: s.sectionNumber,
+              title: s.title,
+              content: s.content,
+              approvedRevisionId: s.approvedRevisionId,
+              approvedRevisionHash: s.approvedRevisionHash,
+              approvedByUserId: s.approvedByUserId,
+              approvedAt: s.approvedAt.toISOString()
+            }))
+          });
+
+          const val = validateReportDocxBuffer(buffer);
+          if (!val.isValid) throw new HttpError(500, 'Generated DOCX document validation failed');
+        } else {
+          buffer = generateReportPdfBuffer({
+            finalizationId,
+            canonicalSnapshotHash: finalization.canonicalSnapshotHash,
+            title: reportRow.title,
+            caseNumber: reportRow.case.caseNumber,
+            claimType: reportRow.case.claimType,
+            finalizedBy: finalization.finalizedBy.name,
+            finalizedAt: finalization.createdAt.toISOString(),
+            sections: finalization.sections.map((s: any) => ({
+              sectionId: s.sectionId,
+              sectionNumber: s.sectionNumber,
+              title: s.title,
+              content: s.content,
+              approvedRevisionId: s.approvedRevisionId,
+              approvedRevisionHash: s.approvedRevisionHash,
+              approvedByUserId: s.approvedByUserId,
+              approvedAt: s.approvedAt.toISOString()
+            }))
+          });
+
+          const val = validateReportPdfBuffer(buffer);
+          if (!val.isValid) throw new HttpError(500, 'Generated PDF document validation failed');
+        }
+
+        const sha256 = sha256Text(buffer);
+        const byteSize = buffer.length;
+        const mimeType = format === 'DOCX'
+          ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          : 'application/pdf';
+        const fileExt = format === 'DOCX' ? '.docx' : '.pdf';
+        const storageKey = `storage-report-${sha256}${fileExt}`;
+        const targetPath = safeStoragePath(uploadDir, storageKey);
+
+        // Save file to disk
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        fs.writeFileSync(targetPath, buffer);
+
+        // Atomic DB insertion & P06 Document / DocumentVersion creation
+        try {
+          const resultArtifact = await db.$transaction(async (tx) => {
+            // Find or create parent Document for report outputs
+            const docId = `DOC-${crypto.randomUUID()}`;
+            const document = await tx.document.create({
+              data: {
+                id: docId,
+                caseId: reportRow.caseId,
+                title: `${reportRow.title} Output (${format})`,
+                category: 'REPORT',
+                source: 'AUTHORED',
+                version: 1
+              }
+            });
+
+            const docVersionId = `DOCVER-${crypto.randomUUID()}`;
+            await tx.documentVersion.create({
+              data: {
+                id: docVersionId,
+                documentId: document.id,
+                versionNumber: (document.version || 1),
+                originalName: `${sanitizeDisplayName(reportRow.title)}_${format.toLowerCase()}${fileExt}`,
+                displayName: `${reportRow.title} (${format})`,
+                storageKey,
+                fileSize: byteSize,
+                mimeType,
+                sha256,
+                isFinal: true,
+                uploadedById: context.user.id
+              }
+            });
+
+            const artifactId = `ART-${crypto.randomUUID()}`;
+            const artifact = await tx.reportOutputArtifact.create({
+              data: {
+                id: artifactId,
+                organizationId: context.user.organizationId,
+                caseId: reportRow.caseId,
+                reportId,
+                finalizationId,
+                format,
+                outputVersion: 1,
+                documentVersionId: docVersionId,
+                byteSize,
+                sha256,
+                storageKey,
+                generatorVersion: 'P12_GENERATOR_V1',
+                idempotencyKey: idempotencyKey || null,
+                idempotencyFingerprint: idempotencyKey ? sha256Text(`${finalizationId}:${format}`) : null
+              },
+              include: { documentVersion: true }
+            });
+
+            await tx.auditLog.create({
+              data: requestAudit(context, 'REPORT_OUTPUT_CREATED', 'ReportOutputArtifact', artifactId, {
+                caseId: reportRow.caseId,
+                reportId,
+                finalizationId,
+                format,
+                sha256,
+                byteSize
+              })
+            });
+
+            return artifact;
+          });
+
+          sendJson(res, 201, { artifact: resultArtifact, idempotentReplay: false });
+          return;
+        } catch (error) {
+          // Clean up disk file on DB rollback
+          if (fs.existsSync(targetPath)) {
+            fs.unlinkSync(targetPath);
+          }
+          throw error;
+        }
+      }
+
+      // 8. GET /api/reports/:reportId/outputs
+      const outputListMatch = pathname.match(/^\/api\/reports\/([^/]+)\/outputs$/);
+      if (outputListMatch && req.method === 'GET') {
+        const reportId = outputListMatch[1];
+        const reportRow = await db.report.findUnique({ where: { id: reportId }, include: { case: true } });
+        if (!reportRow || reportRow.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Report not found');
+        }
+        if (!(await canAccessCase(db, context, reportRow.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const artifacts = await db.reportOutputArtifact.findMany({
+          where: { reportId },
+          include: { documentVersion: true, downloads: true },
+          orderBy: { createdAt: 'desc' }
+        });
+
+        sendJson(res, 200, { artifacts });
+        return;
+      }
+
+      // 9. GET /api/reports/outputs/:artifactId/download or /api/reports/:reportId/outputs/:artifactId/download
+      const outputDownloadMatch = pathname.match(/^\/api\/reports(?:|\/([^/]+))\/outputs\/([^/]+)\/download$/);
+      if (outputDownloadMatch && req.method === 'GET') {
+        const artifactId = outputDownloadMatch[2];
+        const artifact = await db.reportOutputArtifact.findUnique({
+          where: { id: artifactId },
+          include: { report: true, case: true, documentVersion: true }
+        });
+
+        if (!artifact || artifact.case.deletedAt || artifact.case.organizationId !== context.user.organizationId) {
+          throw new HttpError(404, 'Output artifact not found');
+        }
+        if (!(await canAccessCase(db, context, artifact.caseId))) throw new HttpError(403, 'Case assignment required');
+
+        const filePath = safeStoragePath(uploadDir, artifact.storageKey);
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+          throw new HttpError(409, 'Output artifact storage file is missing');
+        }
+
+        const fileBytes = fs.readFileSync(filePath);
+        const actualSha256 = sha256Text(fileBytes);
+        if (fileBytes.length !== artifact.byteSize || actualSha256 !== artifact.sha256) {
+          throw new HttpError(409, 'Output artifact integrity verification failed');
+        }
+
+        // Record download audit & history
+        const downloadId = `DL-${crypto.randomUUID()}`;
+        await db.$transaction(async (tx) => {
+          await tx.reportOutputDownload.create({
+            data: {
+              id: downloadId,
+              organizationId: context.user.organizationId,
+              caseId: artifact.caseId,
+              artifactId,
+              downloadedById: context.user.id,
+              clientIp: req.socket.remoteAddress || '127.0.0.1',
+              userAgent: req.headers['user-agent'] || 'unknown'
+            }
+          });
+
+          await tx.auditLog.create({
+            data: requestAudit(context, 'REPORT_OUTPUT_DOWNLOADED', 'ReportOutputArtifact', artifactId, {
+              caseId: artifact.caseId,
+              reportId: artifact.reportId,
+              format: artifact.format,
+              sha256: artifact.sha256
+            })
+          });
+        });
+
+        const safeFilename = sanitizeDisplayName(artifact.documentVersion.originalName);
+        const encodedFilename = encodeURIComponent(safeFilename);
+
+        res.statusCode = 200;
+        res.setHeader('Content-Type', artifact.documentVersion.mimeType);
+        res.setHeader('Content-Length', artifact.byteSize);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodedFilename}`);
+        res.end(fileBytes);
         return;
       }
 

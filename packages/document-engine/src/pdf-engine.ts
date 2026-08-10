@@ -126,3 +126,213 @@ export function validatePdfBuffer(buffer: Buffer): { isValid: boolean; extracted
   }
   return { isValid: true, extractedText: extractedLines.join('\n'), metadata };
 }
+
+// ----------------------------------------------------
+// P12 Report Finalization Multi-Page PDF Engine
+// ----------------------------------------------------
+
+export interface ReportPdfRenderOptions {
+  finalizationId: string;
+  canonicalSnapshotHash: string;
+  title: string;
+  caseNumber: string;
+  claimType: string;
+  companyForm?: string;
+  templateCode?: string;
+  templateName?: string;
+  templateVersion?: number;
+  finalizedBy: string;
+  finalizedAt: string;
+  sections: Array<{
+    sectionId: string;
+    sectionNumber: number;
+    title: string;
+    content: string;
+    approvedRevisionId: string;
+    approvedRevisionHash: string;
+    approvedByUserId: string;
+    approvedAt: string;
+  }>;
+}
+
+export function generateReportPdfBuffer(options: ReportPdfRenderOptions): Buffer {
+  // Build PDF Page structures dynamically
+  // Page 1: Cover Page
+  // Page 2: Table of Contents
+  // Page 3..N: Section pages (1 section per page for clean separation and 100-section support)
+
+  const totalPages = 2 + options.sections.length;
+  const pageObjectIds: number[] = [];
+  const contentObjectIds: number[] = [];
+
+  // ID allocation:
+  // 1: Catalog
+  // 2: Pages
+  // 3: Font Type0 (Korean/CID)
+  // 4: CIDFont
+  // 5: Info object
+  // For each page i (0-indexed):
+  // Page Obj ID = 6 + i*2
+  // Content Obj ID = 7 + i*2
+
+  const coverLines = [
+    `TITLE: ${options.title}`,
+    `CASE: ${options.caseNumber} | TYPE: ${options.claimType}`,
+    `FINALIZED_BY: ${options.finalizedBy} | DATE: ${options.finalizedAt}`,
+    `CANONICAL_SNAPSHOT_HASH: ${options.canonicalSnapshotHash}`,
+    `TOTAL_SECTIONS: ${options.sections.length} | PAGE 1 OF ${totalPages}`
+  ];
+
+  const tocLines = [
+    `TABLE OF CONTENTS`,
+    '----------------------------------------',
+    ...options.sections.map((s) => `Section ${s.sectionNumber}: ${s.title}`)
+  ];
+
+  const pagesContent: string[][] = [coverLines, tocLines];
+
+  for (let i = 0; i < options.sections.length; i++) {
+    const sec = options.sections[i];
+    const secLines = [
+      `Section ${sec.sectionNumber}: ${sec.title}`,
+      `APPROVED_REVISION: ${sec.approvedRevisionId} | HASH: ${sec.approvedRevisionHash.slice(0, 16)}...`,
+      `APPROVED_BY: ${sec.approvedByUserId} | DATE: ${sec.approvedAt}`,
+      '----------------------------------------',
+      ...sec.content.split('\n'),
+      `[PAGE ${3 + i} OF ${totalPages}]`
+    ];
+    pagesContent.push(secLines);
+  }
+
+  const objects: string[] = [];
+  const kidsList: string[] = [];
+
+  for (let i = 0; i < totalPages; i++) {
+    const pageObjId = 6 + i * 2;
+    const contentObjId = 7 + i * 2;
+    pageObjectIds.push(pageObjId);
+    contentObjectIds.push(contentObjId);
+    kidsList.push(`${pageObjId} 0 R`);
+  }
+
+  // 1 0 obj: Catalog
+  objects.push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+
+  // 2 0 obj: Pages
+  objects.push(`2 0 obj\n<< /Type /Pages /Kids [${kidsList.join(' ')}] /Count ${totalPages} >>\nendobj\n`);
+
+  // 3 0 obj: Font Type0
+  objects.push('3 0 obj\n<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>\nendobj\n');
+
+  // 4 0 obj: CIDFont
+  objects.push('4 0 obj\n<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYSMyeongJo-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 2 >> /DW 1000 >>\nendobj\n');
+
+  // 5 0 obj: Info
+  const formattedDate = (options.finalizedAt || '2026-01-01T00:00:00.000Z').replace(/[-:TZ.]/g, '').slice(0, 14);
+  objects.push(`5 0 obj\n<<\n  /Title <${utf16BeHex(options.title, true)}>\n  /Author <${utf16BeHex(options.finalizedBy, true)}>\n  /Subject (REPORT_FINALIZED_PDF)\n  /Producer (ClaimCenterReportStudio/P12)\n  /CreationDate (D:${formattedDate}00Z)\n  /ModDate (D:${formattedDate}00Z)\n  /FinalizationId (${escapePdfString(options.finalizationId)})\n  /SnapshotHash (${escapePdfString(options.canonicalSnapshotHash)})\n>>\nendobj\n`);
+
+  // Render Page & Content objects
+  for (let i = 0; i < totalPages; i++) {
+    const pageObjId = pageObjectIds[i];
+    const contentObjId = contentObjectIds[i];
+    const lines = pagesContent[i];
+
+    let textStreamContent = 'BT\n/F1 10 Tf\n14 TL\n50 780 Td\n';
+    for (const line of lines) {
+      textStreamContent += `<${utf16BeHex(line)}> Tj T*\n`;
+    }
+    textStreamContent += 'ET\n';
+    const streamLength = Buffer.byteLength(textStreamContent, 'ascii');
+
+    // Page object
+    objects.push(`${pageObjId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents ${contentObjId} 0 R /Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n`);
+
+    // Content object
+    objects.push(`${contentObjId} 0 obj\n<< /Length ${streamLength} >>\nstream\n${textStreamContent}endstream\nendobj\n`);
+  }
+
+  let pdfString = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  const totalObjCount = 5 + totalPages * 2;
+
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdfString, 'ascii'));
+    pdfString += object;
+  }
+
+  const xrefStart = Buffer.byteLength(pdfString, 'ascii');
+  pdfString += `xref\n0 ${totalObjCount + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    pdfString += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  }
+  pdfString += `trailer\n<< /Size ${totalObjCount + 1} /Root 1 0 R /Info 5 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+
+  return Buffer.from(pdfString, 'ascii');
+}
+
+export interface PdfValidationResult {
+  isValid: boolean;
+  error?: string;
+  pageCount?: number;
+  extractedText?: string;
+  canonicalSnapshotHash?: string;
+  finalizationId?: string;
+  metadata?: Record<string, string>;
+}
+
+export function validateReportPdfBuffer(buffer: Buffer): PdfValidationResult {
+  const value = buffer.toString('ascii');
+  if (!value.startsWith('%PDF-1.4\n') || !value.endsWith('%%EOF\n')) return { isValid: false };
+
+  const startXref = Number(value.match(/startxref\n(\d+)\n%%EOF\n$/)?.[1]);
+  if (!Number.isInteger(startXref) || startXref <= 0 || buffer.subarray(startXref, startXref + 4).toString('ascii') !== 'xref') {
+    return { isValid: false };
+  }
+
+  const xref = buffer.subarray(startXref).toString('ascii');
+  const countMatch = xref.match(/^xref\n0 (\d+)\n/);
+  if (!countMatch) return { isValid: false };
+
+  if (!xref.includes('/Root 1 0 R') || !xref.includes('/Info 5 0 R')) return { isValid: false };
+
+  const pageCountMatch = value.match(/2 0 obj\n<< \/Type \/Pages \/Kids \[([\s\S]*?)\] \/Count (\d+) >>/);
+  if (!pageCountMatch) return { isValid: false };
+  const pageCount = Number(pageCountMatch[2]);
+  if (pageCount < 2) return { isValid: false };
+
+  const extractedLines: string[] = [];
+  const streamMatches = value.matchAll(/stream\n([\s\S]*?)endstream/g);
+  for (const sm of streamMatches) {
+    for (const match of sm[1].matchAll(/<([0-9A-F]+)>\s*Tj/g)) {
+      const decoded = decodeUtf16BeHex(match[1]);
+      if (decoded) extractedLines.push(decoded);
+    }
+  }
+
+  const metadata: Record<string, string> = {};
+  const info = value.match(/5 0 obj[\s\S]*?endobj/)?.[0];
+  if (info) {
+    for (const key of ['Title', 'Author']) {
+      const encoded = info.match(new RegExp(`/${key}\\s*<([0-9A-F]+)>`))?.[1];
+      if (encoded) metadata[key] = decodeUtf16BeHex(encoded);
+    }
+    for (const key of ['FinalizationId', 'SnapshotHash']) {
+      const literal = info.match(new RegExp(`/${key}\\s*\\(((?:\\\\.|[^\\\\)])*)\\)`))?.[1];
+      if (literal) metadata[key] = literal.replace(/\\([\\()])/g, '$1');
+    }
+  }
+
+  if (!metadata.FinalizationId || !metadata.SnapshotHash || extractedLines.length < 5) {
+    return { isValid: false };
+  }
+
+  return {
+    isValid: true,
+    pageCount,
+    extractedText: extractedLines.join('\n'),
+    canonicalSnapshotHash: metadata.SnapshotHash,
+    finalizationId: metadata.FinalizationId,
+    metadata
+  };
+}
+

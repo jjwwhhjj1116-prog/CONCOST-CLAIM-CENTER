@@ -67,6 +67,57 @@ interface ReportSection {
   revisions: Revision[];
   comments: CommentRow[];
   approvals: ApprovalEvent[];
+  draftSuggestions?: any[];
+}
+
+export interface ReportReviewRequest {
+  id: string;
+  reportId: string;
+  requestedById: string;
+  assignedReviewerId?: string | null;
+  status: 'PENDING' | 'CHANGES_REQUESTED' | 'RESUBMITTED' | 'APPROVED';
+  comment?: string | null;
+  eventNumber: number;
+  createdAt: string;
+  requestedBy: { id: string; name: string };
+  assignedReviewer?: { id: string; name: string } | null;
+}
+
+export interface ReportFinalizationSection {
+  id: string;
+  sectionId: string;
+  sectionNumber: number;
+  title: string;
+  content: string;
+  approvedRevisionId: string;
+  approvedRevisionHash: string;
+  approvedByUserId: string;
+  approvedAt: string;
+}
+
+export interface ReportFinalization {
+  id: string;
+  reportId: string;
+  finalizedById: string;
+  canonicalSnapshotHash: string;
+  sectionCount: number;
+  evidenceCount: number;
+  unresolvedFlagCount: number;
+  createdAt: string;
+  finalizedBy: { id: string; name: string };
+  sections: ReportFinalizationSection[];
+}
+
+export interface ReportOutputArtifact {
+  id: string;
+  finalizationId: string;
+  format: 'DOCX' | 'PDF';
+  outputVersion: number;
+  byteSize: number;
+  sha256: string;
+  storageKey: string;
+  createdAt: string;
+  documentVersion: { displayName: string; originalName: string; mimeType: string };
 }
 
 interface ReportDetail {
@@ -166,9 +217,36 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const [activeSuggestion, setActiveSuggestion] = useState<any | null>(null);
   const [authoringInstruction, setAuthoringInstruction] = useState('선택한 근거만 사용하여 이 장의 사실관계 검토 초안을 작성하세요.');
 
+  // P12 Review & Output States
+  const [reviewRequests, setReviewRequests] = useState<ReportReviewRequest[]>([]);
+  const [finalizations, setFinalizations] = useState<ReportFinalization[]>([]);
+  const [outputArtifacts, setOutputArtifacts] = useState<ReportOutputArtifact[]>([]);
+  const [showFinalizationModal, setShowFinalizationModal] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewComment, setReviewComment] = useState('');
+  const [finalizing, setFinalizing] = useState(false);
+  const [generatingOutput, setGeneratingOutput] = useState(false);
+
   const canEdit = roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
   const canApprove = roles.some((role) => ['admin', 'director', 'reviewer'].includes(role));
   const canMerge = roles.some((role) => ['admin', 'director', 'pm'].includes(role));
+  const canFinalize = roles.some((role) => ['admin', 'director', 'reviewer', 'ceo'].includes(role));
+
+  const loadP12Data = useCallback(async () => {
+    if (!reportId) return;
+    try {
+      const [revRes, finRes, outRes] = await Promise.all([
+        apiRequest<{ reviewRequests: ReportReviewRequest[] }>(`/api/reports/${encodeURIComponent(reportId)}/review-requests`),
+        apiRequest<{ finalizations: ReportFinalization[] }>(`/api/reports/${encodeURIComponent(reportId)}/finalizations`),
+        apiRequest<{ artifacts: ReportOutputArtifact[] }>(`/api/reports/${encodeURIComponent(reportId)}/outputs`)
+      ]);
+      setReviewRequests(revRes.reviewRequests || []);
+      setFinalizations(finRes.finalizations || []);
+      setOutputArtifacts(outRes.artifacts || []);
+    } catch {
+      // Ignore initial P12 data fetch errors
+    }
+  }, [reportId]);
 
   const loadSuggestions = useCallback(async (secId: string) => {
     if (!reportId) return;
@@ -185,6 +263,119 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
       // Ignore load error
     }
   }, [reportId]);
+
+  const readiness = useMemo(() => {
+    if (!report) return { isReady: false, approvedCount: 0, totalCount: 0, percent: 0, blockers: [] };
+
+    const totalCount = report.sections.length;
+    const approvedCount = report.sections.filter((s) => s.status === 'APPROVED').length;
+    const percent = Math.round((approvedCount / Math.max(1, totalCount)) * 100);
+    const blockers: Array<{ sectionNumber?: number; message: string; sectionId?: string }> = [];
+
+    for (const sec of report.sections) {
+      if (sec.isRequired && sec.status !== 'APPROVED') {
+        blockers.push({
+          sectionNumber: sec.sectionNumber,
+          sectionId: sec.id,
+          message: `제 ${sec.sectionNumber} 장 (${sec.title}): 필수 장 미승인 (현재 상태: ${statusLabel[sec.status]})`
+        });
+      }
+
+      const latestApproval = sec.approvals[0];
+      const latestRevision = sec.revisions[0];
+
+      if (sec.status === 'APPROVED') {
+        if (!latestApproval) {
+          blockers.push({ sectionNumber: sec.sectionNumber, sectionId: sec.id, message: `제 ${sec.sectionNumber} 장: 승인 기록 누락` });
+          continue;
+        }
+        if (!latestRevision) {
+          blockers.push({ sectionNumber: sec.sectionNumber, sectionId: sec.id, message: `제 ${sec.sectionNumber} 장: 개정본 없음` });
+          continue;
+        }
+        if (latestApproval.approvedRevisionId !== latestRevision.id) {
+          blockers.push({
+            sectionNumber: sec.sectionNumber,
+            sectionId: sec.id,
+            message: `제 ${sec.sectionNumber} 장: 승인 후 신규 개정 작성됨`
+          });
+        }
+        if (latestRevision.validationStatus !== 'VALID') {
+          blockers.push({
+            sectionNumber: sec.sectionNumber,
+            sectionId: sec.id,
+            message: `제 ${sec.sectionNumber} 장: 최신 개정본 검증 불합격 (${latestRevision.validationStatus})`
+          });
+        }
+        if (sec.comments.some((c) => !c.isResolved)) {
+          const count = sec.comments.filter((c) => !c.isResolved).length;
+          blockers.push({ sectionNumber: sec.sectionNumber, sectionId: sec.id, message: `제 ${sec.sectionNumber} 장: 미해결 댓글 ${count}건 잔존` });
+        }
+      }
+    }
+
+    return {
+      isReady: blockers.length === 0 && approvedCount > 0,
+      approvedCount,
+      totalCount,
+      percent,
+      blockers
+    };
+  }, [report]);
+
+  const handleRequestReview = async () => {
+    if (!reportId) return;
+    try {
+      await apiRequest(`/api/reports/${encodeURIComponent(reportId)}/review-requests`, {
+        method: 'POST',
+        body: JSON.stringify({ comment: reviewComment, idempotencyKey: `REVREQ-${Date.now()}` })
+      });
+      setShowReviewModal(false);
+      setReviewComment('');
+      setNotice('검토 요청이 등록되었습니다.');
+      await loadP12Data();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '검토 요청 등록에 실패했습니다.');
+    }
+  };
+
+  const handleCreateFinalization = async () => {
+    if (!reportId) return;
+    setFinalizing(true);
+    try {
+      const res = await apiRequest<{ finalization: ReportFinalization }>(`/api/reports/${encodeURIComponent(reportId)}/finalizations`, {
+        method: 'POST',
+        body: JSON.stringify({ idempotencyKey: `FIN-${Date.now()}` })
+      });
+      setNotice(`최종 확정 완료 (Canonical Hash: ${res.finalization.canonicalSnapshotHash.slice(0, 12)}...)`);
+      setShowFinalizationModal(false);
+      await loadP12Data();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : '최종 확정 처리에 실패했습니다.');
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  const handleGenerateOutput = async (finalizationId: string, format: 'DOCX' | 'PDF') => {
+    if (!reportId) return;
+    setGeneratingOutput(true);
+    try {
+      const res = await apiRequest<{ artifact: ReportOutputArtifact }>(
+        `/api/reports/${encodeURIComponent(reportId)}/finalizations/${encodeURIComponent(finalizationId)}/outputs`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ format, idempotencyKey: `OUT-${finalizationId}-${format}` })
+        }
+      );
+      setNotice(`${format} 문서 출력이 완료되었습니다 (${res.artifact.documentVersion.displayName}).`);
+      await loadP12Data();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : `${format} 문서 출력에 실패했습니다.`);
+    } finally {
+      setGeneratingOutput(false);
+    }
+  };
 
   const lockGroundingSelection = async () => {
     if (!reportId || !activeSection || selectedSources.length === 0) {
@@ -407,6 +598,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
       })));
       setError(null);
       void fetchAiData(response.report.caseId);
+      void loadP12Data();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '보고서 스튜디오를 불러오지 못했습니다.');
     } finally {
@@ -643,8 +835,91 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
             {activeDraft.state === 'saving' ? '저장 중…' : activeDraft.state === 'saved' ? `저장됨 ${activeDraft.lastSavedAt ? new Date(activeDraft.lastSavedAt).toLocaleTimeString() : ''}` : activeDraft.state === 'conflict' ? '동시 편집 충돌' : activeDraft.dirty ? '저장 대기' : '변경 없음'}
           </span>
           <Button disabled={!canEdit || activeSection.status === 'APPROVED' || !activeDraft.dirty} onClick={() => void saveSection('MANUAL')}>지금 저장</Button>
+          <Button variant="secondary" onClick={() => setShowReviewModal(true)}>검토 요청</Button>
+          {canFinalize && (
+            <Button
+              variant={readiness.isReady ? 'primary' : 'secondary'}
+              disabled={!readiness.isReady}
+              onClick={() => setShowFinalizationModal(true)}
+            >
+              {readiness.isReady ? '최종 확정 진행' : `확정 차단 (${readiness.blockers.length}건)`}
+            </Button>
+          )}
         </div>
       </header>
+
+      {/* P12 Readiness & Review Summary Banner */}
+      <section className="p12-readiness-banner" style={{ background: '#f8fafc', padding: '12px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '0.875rem', fontWeight: 600, color: '#1e293b' }}>
+              검토 진행률: {readiness.approvedCount} / {readiness.totalCount} 장 승인 완료 ({readiness.percent}%)
+            </span>
+            <div style={{ width: '120px', height: '8px', background: '#cbd5e1', borderRadius: '4px', overflow: 'hidden' }}>
+              <div style={{ width: `${readiness.percent}%`, height: '100%', background: readiness.percent === 100 ? '#16a34a' : '#2563eb' }} />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', fontSize: '0.75rem' }}>
+            <span style={{ padding: '2px 8px', background: '#e0f2fe', color: '#0369a1', borderRadius: '4px' }}>
+              최근 검토 상태: {reviewRequests[0]?.status ?? '없음'}
+            </span>
+            <span style={{ padding: '2px 8px', background: finalizations.length > 0 ? '#dcfce7' : '#f1f5f9', color: finalizations.length > 0 ? '#15803d' : '#64748b', borderRadius: '4px' }}>
+              확정 스냅샷: {finalizations.length}개
+            </span>
+          </div>
+        </div>
+
+        {readiness.blockers.length > 0 && (
+          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', padding: '8px 12px', fontSize: '0.8125rem', color: '#991b1b' }}>
+            <strong style={{ display: 'block', marginBottom: '4px' }}>최종 확정 차단 항목 ({readiness.blockers.length}건):</strong>
+            <ul style={{ margin: 0, paddingLeft: '18px' }}>
+              {readiness.blockers.map((b, idx) => (
+                <li key={idx} style={{ cursor: b.sectionId ? 'pointer' : 'default', textDecoration: b.sectionId ? 'underline' : 'none' }} onClick={() => b.sectionId && selectSection(b.sectionId)}>
+                  {b.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
+      {/* P12 Review Request Modal */}
+      {showReviewModal && (
+        <div className="p09-modal-overlay" role="dialog" aria-labelledby="p12-review-title" aria-modal="true">
+          <div className="p09-modal-card">
+            <h4 id="p12-review-title">보고서 검토 요청</h4>
+            <p>담당 검토자에게 보고서 전체 검토 및 승인을 요청합니다.</p>
+            <label style={{ display: 'block', marginTop: '8px', fontSize: '0.8125rem' }}>
+              요청 의견 (선택)
+              <textarea rows={3} style={{ width: '100%', marginTop: '4px' }} value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} />
+            </label>
+            <div className="p09-modal-actions" style={{ marginTop: '12px' }}>
+              <Button onClick={() => void handleRequestReview()}>검토 요청 전송</Button>
+              <Button variant="secondary" onClick={() => setShowReviewModal(false)}>취소</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* P12 Finalization Modal */}
+      {showFinalizationModal && (
+        <div className="p09-modal-overlay" role="dialog" aria-labelledby="p12-fin-title" aria-modal="true">
+          <div className="p09-modal-card" style={{ maxWidth: '600px' }}>
+            <h4 id="p12-fin-title">최종 확정 및 불변 스냅샷 고정</h4>
+            <p>승인된 장의 최신 개정을 수집하여 불변 Finalization Snapshot을 생성합니다.</p>
+            <div style={{ background: '#f8fafc', padding: '8px 12px', borderRadius: '4px', fontSize: '0.8125rem', margin: '8px 0' }}>
+              <div><strong>승인 장 수:</strong> {readiness.approvedCount} / {readiness.totalCount}</div>
+              <div><strong>예상 Output 파일명:</strong> {report.title}_final</div>
+            </div>
+            <div className="p09-modal-actions" style={{ marginTop: '16px' }}>
+              <Button disabled={finalizing} onClick={() => void handleCreateFinalization()}>
+                {finalizing ? '확정 처리 중…' : '최종 확정 실행'}
+              </Button>
+              <Button variant="secondary" onClick={() => setShowFinalizationModal(false)}>취소</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="p09-pane-tabs" role="tablist" aria-label="1024px 보고서 패널 선택">
         {([['outline', '목차·근거'], ['editor', '본문 편집'], ['review', '검토·승인']] as const).map(([pane, label]) => (
@@ -962,6 +1237,53 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
               <div style={{ marginTop: '8px', padding: '8px', background: aiStatus === 'error' ? '#fef2f2' : '#f0fdf4', border: `1px solid ${aiStatus === 'error' ? '#fecaca' : '#bbf7d0'}`, borderRadius: '4px', fontSize: '0.75rem', color: aiStatus === 'error' ? '#991b1b' : '#166534' }}>
                 {aiResultMsg}
               </div>
+            )}
+          </section>
+
+          <section className="p12-outputs-section" style={{ marginTop: '16px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
+            <h4>P12 출력 아티팩트 및 다운로드</h4>
+            {finalizations.length > 0 ? (
+              <div>
+                <p className="p09-muted">최종 확정 스냅샷 ({finalizations[0].canonicalSnapshotHash.slice(0, 10)}...)</p>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                  <Button
+                    size="sm"
+                    disabled={generatingOutput}
+                    onClick={() => void handleGenerateOutput(finalizations[0].id, 'DOCX')}
+                  >
+                    DOCX 출력 생성
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={generatingOutput}
+                    onClick={() => void handleGenerateOutput(finalizations[0].id, 'PDF')}
+                  >
+                    PDF 출력 생성
+                  </Button>
+                </div>
+                <div className="p12-artifact-list">
+                  {outputArtifacts.map((art) => (
+                    <div key={art.id} style={{ padding: '8px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', marginBottom: '6px', fontSize: '0.8125rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600 }}>
+                        <span>[{art.format}] {art.documentVersion.displayName}</span>
+                        <a
+                          href={`/api/reports/outputs/${art.id}/download`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: '#2563eb', textDecoration: 'underline' }}
+                        >
+                          다운로드 ({(art.byteSize / 1024).toFixed(1)} KB)
+                        </a>
+                      </div>
+                      <small style={{ color: '#64748b', display: 'block' }}>SHA-256: {art.sha256.slice(0, 16)}...</small>
+                    </div>
+                  ))}
+                  {outputArtifacts.length === 0 && <p className="p09-muted">생성된 출력 파일이 없습니다.</p>}
+                </div>
+              </div>
+            ) : (
+              <p className="p09-muted">모든 필수 장이 승인된 후 최종 확정을 진행하여 DOCX/PDF 출력을 생성할 수 있습니다.</p>
             )}
           </section>
         </aside>
