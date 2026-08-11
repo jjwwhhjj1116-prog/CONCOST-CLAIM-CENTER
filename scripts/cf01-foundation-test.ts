@@ -24,6 +24,9 @@ function createD1() {
           if (query.includes('FROM preview_drafts')) return (drafts.get(String(values[0])) ?? null) as T | null;
           return null;
         },
+        async all<T>() {
+          return { results: [] as T[] };
+        },
         async run() {
           if (query.startsWith('INSERT INTO preview_drafts')) {
             const [id, title, draftContent, updatedAt] = values.map(String);
@@ -41,7 +44,20 @@ function createD1() {
 const env = (overrides: Partial<CloudflareEnv> = {}): CloudflareEnv => ({
   ASSETS: { async fetch() { return new Response('<!doctype html><title>Claim Center</title>'); } },
   DB: createD1().database,
-  FILES: { async list() { return { objects: [] }; } },
+  FILES: {
+    async put() {
+      return {};
+    },
+    async get() {
+      return null;
+    },
+    async delete() {
+      return undefined;
+    },
+    async list() {
+      return { objects: [] };
+    }
+  },
   ...overrides
 });
 
@@ -64,11 +80,11 @@ test('CF01 blocks application APIs until data migration passes', async () => {
   assert.equal((await response.json() as { code: string }).code, 'CLOUDFLARE_MIGRATION_IN_PROGRESS');
 });
 
-test('CF01 blocks auth routes instead of serving the SPA document as session JSON', async () => {
+test('CF04 returns JSON authentication-required for a missing member session', async () => {
   const response = await cloudflareWorker.fetch(new Request('https://preview.example/auth/session'), env());
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 401);
   assert.equal(response.headers.get('Content-Type'), 'application/json; charset=utf-8');
-  assert.equal((await response.json() as { code: string }).code, 'CLOUDFLARE_MIGRATION_IN_PROGRESS');
+  assert.equal((await response.json() as { code: string }).code, 'AUTH_REQUIRED');
 });
 
 test('CF01 delegates non-API routes to static assets', async () => {

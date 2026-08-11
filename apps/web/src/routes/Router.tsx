@@ -12,6 +12,7 @@ import { GoogleWorkspaceIntegration } from '../integrations/GoogleWorkspaceInteg
 import { GoogleWorkspaceCaseTools } from '../integrations/GoogleWorkspaceCaseTools';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { PreviewDashboard, PreviewFeature } from './PreviewWorkspace';
+import { PreviewEvidenceHub, PreviewGoogleDriveSetup } from './PreviewEvidenceHub';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -33,7 +34,6 @@ export interface RouteConfig {
 }
 
 const ADMIN_ONLY: readonly UserRole[] = ['admin'];
-const AUDIT_ROLES: readonly UserRole[] = ['ceo', 'director', 'admin'];
 const FINANCE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm'];
 const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'admin'];
 
@@ -53,11 +53,11 @@ export const ROUTES: RouteConfig[] = [
   { id: 'REPO-02', path: '/reports/studio', name: '보고서 스튜디오' },
   { id: 'APPR-01', path: '/approval', name: '검토·승인함' },
   { id: 'FEE-01', path: '/success-fee', name: '성공보수', allowedRoles: FINANCE_ROLES },
-  { id: 'INTEG-01', path: '/integrations/google', name: 'Google 연동', allowedRoles: ADMIN_ONLY },
+  { id: 'INTEG-01', path: '/integrations/google', name: 'Google Drive 연결', allowedRoles: ADMIN_ONLY },
   { id: 'TPL-01', path: '/templates', name: '템플릿 관리' },
   { id: 'AI-01', path: '/ai-config', name: 'AI 공급자 설정', allowedRoles: ADMIN_ONLY },
   { id: 'USER-01', path: '/users', name: '사용자·권한', allowedRoles: ADMIN_ONLY },
-  { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: AUDIT_ROLES },
+  { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: ADMIN_ONLY },
   { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }
 ];
 
@@ -94,6 +94,7 @@ export interface RouterProps {
   currentPath: string;
   roles: UserRole[];
   onNavigate: (path: string) => void;
+  userName?: string;
   previewMode?: boolean;
 }
 
@@ -135,7 +136,7 @@ const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
   );
 };
 
-export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, previewMode = false, onNavigate }) => {
+export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName = 'Preview User', previewMode = false, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
   const resolvedRoute = resolveRoute(currentPath);
   const currentRoute = resolvedRoute?.route;
@@ -154,6 +155,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, previewM
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
   if (previewMode && currentRoute.id === 'DASH-01') return <PreviewDashboard onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 
   if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {

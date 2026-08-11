@@ -10,6 +10,7 @@ interface SessionUser {
   name: string;
   organizationId: string;
   roles: UserRole[];
+  previewMode?: boolean;
 }
 
 const isSessionUser = (value: unknown): value is SessionUser => {
@@ -37,8 +38,8 @@ export const App: React.FC = () => {
   const [currentPath, setCurrentPath] = useState(currentBrowserPath);
   const [session, setSession] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
-  const [email, setEmail] = useState('pm@example.invalid');
-  const [password, setPassword] = useState('Password123!');
+  const [loginId, setLoginId] = useState('');
+  const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [previewMode, setPreviewMode] = useState(false);
 
@@ -63,7 +64,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     void apiRequest<unknown>('/auth/session')
-      .then((user) => setSession(isSessionUser(user) ? user : null))
+      .then((user) => {
+        const restored = isSessionUser(user) ? user : null;
+        setSession(restored);
+        setPreviewMode(restored?.previewMode === true);
+      })
       .catch((reason) => {
         if (reason instanceof ApiError && reason.payload.code === 'CLOUDFLARE_MIGRATION_IN_PROGRESS') {
           enterPreview();
@@ -75,24 +80,21 @@ export const App: React.FC = () => {
   }, [enterPreview]);
 
   const expireSession = async () => {
-    if (previewMode) {
-      setSession(null);
-      navigate('/login', true);
-      return;
-    }
     try { await apiRequest('/auth/logout', { method: 'POST' }); } catch { /* Session may already be invalid. */ }
     const returnTo = isSafeReturnTo(currentPath) && currentPath !== '/login' ? currentPath : '/dashboard';
     setSession(null);
+    setPreviewMode(false);
     navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`);
   };
 
   const login = async (event: React.FormEvent) => {
     event.preventDefault(); setLoginError('');
     try {
-      await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ loginId, password }) });
       const user = await apiRequest<unknown>('/auth/session');
       if (!isSessionUser(user)) throw new Error('Invalid session response');
       setSession(user);
+      setPreviewMode(user.previewMode === true);
       const requested = new URLSearchParams(window.location.search).get('returnTo') ?? '/dashboard';
       navigate(isSafeReturnTo(requested) && requested !== '/login' ? requested : '/dashboard', true);
     } catch (reason) {
@@ -116,7 +118,7 @@ export const App: React.FC = () => {
           ) : (
             <form className="form-stack" onSubmit={(event) => void login(event)}>
               <p className="muted">서버 세션과 조직·역할 권한으로 로그인합니다.</p>
-              <Input label="이메일" type="email" value={email} autoComplete="username" onChange={(event) => setEmail(event.target.value)} />
+              <Input label="아이디" type="text" value={loginId} autoComplete="username" onChange={(event) => setLoginId(event.target.value)} />
               <Input label="비밀번호" type="password" value={password} autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
               {loginError && <p role="alert" className="error-box">{loginError}</p>}
               <Button type="submit">로그인</Button>
@@ -129,7 +131,7 @@ export const App: React.FC = () => {
 
   return (
     <AppShell currentPath={currentPath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
-      <RouterView currentPath={currentPath} roles={session.roles} previewMode={previewMode} onNavigate={navigate} />
+      <RouterView currentPath={currentPath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} />
     </AppShell>
   );
 };

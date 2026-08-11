@@ -13,7 +13,7 @@ interface PreviewDraftPayload {
   code?: string;
 }
 
-function browserDraftKey(): string {
+export function previewBrowserKey(): string {
   const current = window.localStorage.getItem(DRAFT_KEY_STORAGE);
   if (current) return current;
   const created = window.crypto.randomUUID();
@@ -44,7 +44,7 @@ export const PreviewCloudDraft: React.FC = () => {
     const load = async () => {
       setStatus('loading');
       try {
-        draftKeyRef.current = browserDraftKey();
+        draftKeyRef.current = previewBrowserKey();
         const response = await fetch('/api/preview/draft', {
           headers: { 'X-Preview-Draft-Key': draftKeyRef.current },
           signal: controller.signal
