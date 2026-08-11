@@ -1,8 +1,8 @@
 {
   "project": "claim-center-report-studio",
   "updatedAt": "2026-08-11T09:57:20+09:00",
-  "currentPhase": "P15",
-  "nextPhaseAllowed": true,
+  "currentPhase": "P16",
+  "nextPhaseAllowed": false,
   "phases": {
     "P00": {
       "status": "PASS",
@@ -359,6 +359,22 @@
         "docs/reviews/P15-codex-review.json",
         "docs/harness/P16-antigravity-handoff.md"
       ]
+    },
+    "P16": {
+      "name": "Release Candidate UX & Persistent Staging Readiness",
+      "status": "IN_PROGRESS",
+      "verdict": "PENDING",
+      "gatePassed": false,
+      "startedAt": "2026-08-11T10:10:00+09:00",
+      "entryAllowed": true,
+      "nextPhaseAllowed": false,
+      "predecessor": "P15",
+      "handoff": "docs/harness/P16-antigravity-handoff.md",
+      "openDefects": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0
+      }
     }
   }
 }
