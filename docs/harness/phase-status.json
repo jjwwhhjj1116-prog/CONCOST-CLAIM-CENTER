@@ -1,15 +1,33 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-10T17:15:00+09:00",
+  "updatedAt": "2026-08-11T09:57:20+09:00",
   "currentPhase": "P15",
   "nextPhaseAllowed": true,
   "phases": {
-    "P00": { "status": "PASS", "updatedAt": "2026-08-06T01:10:00Z" },
-    "P01": { "status": "PASS", "updatedAt": "2026-08-06T02:00:00Z" },
-    "P02": { "status": "PASS", "updatedAt": "2026-08-06T03:00:00Z" },
-    "P03": { "status": "PASS", "updatedAt": "2026-08-06T04:00:00Z" },
-    "P04": { "status": "PASS", "updatedAt": "2026-08-06T06:36:00Z" },
-    "P05": { "status": "PASS", "updatedAt": "2026-08-06T08:10:00Z" },
+    "P00": {
+      "status": "PASS",
+      "updatedAt": "2026-08-06T01:10:00Z"
+    },
+    "P01": {
+      "status": "PASS",
+      "updatedAt": "2026-08-06T02:00:00Z"
+    },
+    "P02": {
+      "status": "PASS",
+      "updatedAt": "2026-08-06T03:00:00Z"
+    },
+    "P03": {
+      "status": "PASS",
+      "updatedAt": "2026-08-06T04:00:00Z"
+    },
+    "P04": {
+      "status": "PASS",
+      "updatedAt": "2026-08-06T06:36:00Z"
+    },
+    "P05": {
+      "status": "PASS",
+      "updatedAt": "2026-08-06T08:10:00Z"
+    },
     "P06": {
       "status": "PASS",
       "updatedAt": "2026-08-06T09:00:04Z",
@@ -279,46 +297,67 @@
     },
     "P15": {
       "name": "Integrated Quality, Security, Accessibility, Performance & Recovery",
-      "status": "COMPLETED",
+      "status": "PASS",
       "verdict": "PASS_WITH_NOTES",
       "gatePassed": true,
-      "completedAt": "2026-08-10T17:35:00+09:00",
       "startedAt": "2026-08-10T17:15:00+09:00",
+      "submittedAt": "2026-08-10T17:35:00+09:00",
+      "updatedAt": "2026-08-11T09:57:20+09:00",
+      "completedAt": "2026-08-11T09:57:20+09:00",
       "entryAllowed": true,
       "nextPhaseAllowed": true,
       "predecessor": "P14",
+      "nextPhase": "P16",
       "handoff": "docs/harness/P15-antigravity-handoff.md",
+      "nextHandoff": "docs/harness/P16-antigravity-handoff.md",
+      "reviewReport": "docs/reviews/P15-codex-review.md",
+      "reviewRequest": "docs/reviews/requests/P15-review-request.md",
+      "reviewedCommit": "3869f6ce3a179e232c5bf47f3c04dcaf392051d6",
+      "reviewer": "Codex",
       "openDefects": {
         "critical": 0,
         "high": 0,
         "medium": 0
       },
       "qualityGateSummary": {
-        "install": "PASS",
-        "dbReset": "PASS",
-        "dbMigrate": "PASS",
-        "dbSeed": "PASS",
-        "lint": "PASS (0 warnings)",
-        "typecheck": "PASS",
-        "test": "PASS (104/104 contract tests)",
-        "testSecurity": "PASS (99/99 security tests)",
-        "testE2E": "PASS (P06-P15 10 real Chromium E2E flows)",
-        "build": "PASS (Production web dist / monorepo build)",
-        "audit": "PASS (0 vulnerabilities)"
+        "installFrozenLockfile": "PASS (lockfile current; Prisma Client generated)",
+        "databaseReset": "PASS",
+        "databaseMigrate": "PASS",
+        "databaseSeed": "PASS (deterministic synthetic fixtures)",
+        "lint": "PASS (0 errors, 0 warnings)",
+        "typecheck": "PASS (0 errors)",
+        "test": "PASS (128 passed, 0 failed, 0 skipped)",
+        "build": "PASS (59 modules; CSS 24.18 kB; JS 337.04 kB)",
+        "testE2e": "PASS (P06-P15; P14 10 flows; P15 restart/restore/axe)",
+        "testSecurity": "PASS (95 passed, 0 failed, 0 skipped)",
+        "auditHigh": "PASS (No known vulnerabilities found)"
       },
       "deliverables": [
+        "README.md",
         "apps/api/src/backup/backup-engine.ts",
         "apps/api/src/google-workspace/GoogleCredentialVault.ts",
         "apps/api/src/server.ts",
-        "docs/adr/0015-cloudflare-migration-architecture.md",
+        "apps/web/index.html",
+        "apps/web/src/reports/ReportStudio.css",
+        "apps/web/src/reports/ReportStudio.tsx",
+        "docs/adr/0016-data-preservation-backup-restore.md",
+        "docs/runbooks/p15-backup-restore.md",
         "package.json",
-        "scripts/p15-accessibility-test.ts",
+        "pnpm-lock.yaml",
         "scripts/p15-backup-test.ts",
         "scripts/p15-e2e.ts",
         "scripts/p15-integration-test.ts",
         "scripts/p15-performance-test.ts",
         "scripts/p15-security-test.ts",
-        "scripts/p15-test-support.ts"
+        "scripts/p15-test-support.ts",
+        "artifacts/harness/P15/manifest.json",
+        "artifacts/harness/P15/notes.md",
+        "artifacts/harness/P15/commands.log",
+        "docs/reviews/requests/P15-review-request.md",
+        "docs/reviews/requests/P15-review-request.json",
+        "docs/reviews/P15-codex-review.md",
+        "docs/reviews/P15-codex-review.json",
+        "docs/harness/P16-antigravity-handoff.md"
       ]
     }
   }

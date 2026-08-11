@@ -1,0 +1,62 @@
+P15 FINAL CLEAN VERIFICATION
+reviewedAt=2026-08-11T09:57:20+09:00
+commit=3869f6ce3a179e232c5bf47f3c04dcaf392051d6
+checkout=clean review worktree at implementationCommit
+node=v20.18.0
+pnpm=9.15.0
+
+[01] pnpm install --frozen-lockfile
+RESULT: PASS (2.8s)
+Lockfile is up to date. Prisma Client v6.19.3 generated successfully.
+
+[02] pnpm db:reset
+RESULT: PASS
+Database reset and migration SQL applied successfully.
+
+[03] pnpm db:migrate
+RESULT: PASS
+Database migration SQL applied successfully.
+
+[04] pnpm db:seed
+RESULT: PASS
+Database seeded with deterministic synthetic P11 fixtures.
+
+[05] pnpm lint
+RESULT: PASS
+Lint and JSON validation passed with zero warnings.
+
+[06] pnpm typecheck
+RESULT: PASS
+Scripts, UI, web, database, document-engine and API compiled with 0 errors.
+
+[07] pnpm test
+RESULT: PASS (15.133s test runner)
+tests=128 pass=128 fail=0 skipped=0
+P14 real adapter regression=22/22.
+P15 performance: fixture load=2025ms; p50=10.80ms; p95=14.76ms; heap=56.06MB.
+P15 populated DB=9,297,920 bytes; backup=251.93ms; restore=257.40ms.
+
+[08] pnpm build
+RESULT: PASS
+Vite 6.4.3; 59 modules transformed.
+dist/index.html=18.33kB gzip=4.18kB
+CSS=24.18kB gzip=5.58kB
+JS=337.04kB gzip=98.44kB
+
+[09] pnpm test:e2e
+RESULT: PASS (76.3s)
+P06 through P15 real Chromium suites passed.
+P14 full vertical slice=10 flows.
+P15 verified committed autosave across API stop/restart, signed backup, post-backup mutation, isolated restore, upload recovery, 1440/1024/640, 200 percent zoom and focus.
+axe-core WCAG A/AA Critical=0 Serious=0.
+
+[10] pnpm test:security
+RESULT: PASS (49.545s test runner)
+tests=95 pass=95 fail=0 skipped=0
+P15 focused security=5/5.
+
+[11] pnpm audit --audit-level high
+RESULT: PASS (1.3s)
+No known vulnerabilities found.
+
+FINAL: 11/11 required gates passed; Critical=0; High=0.

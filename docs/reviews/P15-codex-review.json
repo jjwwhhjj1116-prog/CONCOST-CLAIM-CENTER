@@ -1,0 +1,96 @@
+{
+  "phase": "P15",
+  "name": "Integrated Quality, Security, Accessibility, Performance & Recovery",
+  "status": "PASS",
+  "verdict": "PASS_WITH_NOTES",
+  "reviewedAt": "2026-08-11T09:57:20+09:00",
+  "implementationCommit": "3869f6ce3a179e232c5bf47f3c04dcaf392051d6",
+  "runtime": {
+    "node": "20.18.0",
+    "pnpm": "9.15.0",
+    "verificationCheckout": "clean review worktree at implementationCommit"
+  },
+  "changedFiles": [
+    "README.md",
+    "apps/api/src/backup/backup-engine.ts",
+    "apps/api/src/google-workspace/GoogleCredentialVault.ts",
+    "apps/api/src/server.ts",
+    "apps/web/index.html",
+    "apps/web/src/reports/ReportStudio.css",
+    "apps/web/src/reports/ReportStudio.tsx",
+    "docs/adr/0016-data-preservation-backup-restore.md",
+    "docs/runbooks/p15-backup-restore.md",
+    "package.json",
+    "pnpm-lock.yaml",
+    "scripts/p15-backup-test.ts",
+    "scripts/p15-e2e.ts",
+    "scripts/p15-integration-test.ts",
+    "scripts/p15-performance-test.ts",
+    "scripts/p15-security-test.ts",
+    "scripts/p15-test-support.ts"
+  ],
+  "gates": {
+    "installFrozenLockfile": "PASS (lockfile current; Prisma Client generated)",
+    "databaseReset": "PASS",
+    "databaseMigrate": "PASS",
+    "databaseSeed": "PASS (deterministic synthetic fixtures)",
+    "lint": "PASS (0 errors, 0 warnings)",
+    "typecheck": "PASS (0 errors)",
+    "test": "PASS (128 passed, 0 failed, 0 skipped)",
+    "build": "PASS (59 modules; CSS 24.18 kB; JS 337.04 kB)",
+    "testE2e": "PASS (P06-P15; P14 10 flows; P15 restart/restore/axe)",
+    "testSecurity": "PASS (95 passed, 0 failed, 0 skipped)",
+    "auditHigh": "PASS (No known vulnerabilities found)"
+  },
+  "focusedVerification": {
+    "p15General": "15 passed, 0 failed",
+    "p15Security": "5 passed, 0 failed",
+    "p14RealAdapterRegression": "22 passed, 0 failed",
+    "p15Chromium": "autosave, API restart, signed backup, isolated restore, responsive and focus passed"
+  },
+  "accessibility": {
+    "scanner": "axe-core 4.13.0",
+    "wcagTags": [
+      "wcag2a",
+      "wcag2aa",
+      "wcag21a",
+      "wcag21aa"
+    ],
+    "critical": 0,
+    "serious": 0,
+    "responsive": [
+      "1440x900",
+      "1024x768",
+      "640x800",
+      "200% zoom"
+    ]
+  },
+  "performance": {
+    "fixture": {
+      "cases": 1000,
+      "schedules": 10000,
+      "documents": 10000,
+      "versions": 10000,
+      "reportSections": 200,
+      "googleHistory": 1000
+    },
+    "loadMs": 2025,
+    "queryP50Ms": 10.8,
+    "queryP95Ms": 14.76,
+    "heapMb": 56.06,
+    "databaseBytes": 9297920,
+    "backupMs": 251.93,
+    "restoreMs": 257.4
+  },
+  "findings": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "operationalNotes": [
+    "The approximately 1.2-second client debounce window can lose only unsent keystrokes on an immediate crash; committed autosave revisions survive API restart.",
+    "Persistent production volume and Cloudflare D1/R2 deployment remain separate deployment work; P15 verifies the current Node/SQLite persistent-volume recovery contract.",
+    "No real Google staging credential or customer data was used; real-provider boundaries remain covered by deterministic injected transport tests."
+  ]
+}
