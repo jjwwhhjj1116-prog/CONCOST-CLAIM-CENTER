@@ -1,5 +1,6 @@
 import React from 'react';
 import { Button, Card } from '@claim-studio/ui';
+import { PreviewCloudDraft } from './PreviewCloudDraft';
 
 interface PreviewNavigationProps {
   onNavigate: (path: string) => void;
@@ -57,6 +58,7 @@ export const PreviewDashboard: React.FC<PreviewNavigationProps> = ({ onNavigate 
           </div>
         </Card>
       </div>
+      <PreviewCloudDraft />
     </section>
   );
 };
