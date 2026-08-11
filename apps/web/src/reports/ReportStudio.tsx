@@ -878,7 +878,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
             <span style={{ padding: '2px 8px', background: '#e0f2fe', color: '#0369a1', borderRadius: '4px' }}>
               최근 검토 상태: {reviewRequests[0]?.status ?? '없음'}
             </span>
-            <span style={{ padding: '2px 8px', background: finalizations.length > 0 ? '#dcfce7' : '#f1f5f9', color: finalizations.length > 0 ? '#15803d' : '#64748b', borderRadius: '4px' }}>
+            <span style={{ padding: '2px 8px', background: finalizations.length > 0 ? '#dcfce7' : '#f1f5f9', color: finalizations.length > 0 ? '#15803d' : '#475569', borderRadius: '4px' }}>
               확정 스냅샷: {finalizations.length}개
             </span>
           </div>
@@ -1200,7 +1200,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
           <section>
             <h4>결정적 병합 스냅샷</h4>
             <p className="p09-muted">모든 장의 최신 VALID 개정이 승인된 경우에만 생성합니다. DOCX/PDF는 P12에서 출력합니다.</p>
-            {canMerge ? <Button onClick={() => void mergeReport()}>승인본 병합 스냅샷 생성</Button> : <p className="p09-muted">현재 역할은 병합할 수 없습니다.</p>}
+            {canMerge ? <Button variant="secondary" onClick={() => void mergeReport()}>승인본 병합 스냅샷 생성</Button> : <p className="p09-muted">현재 역할은 병합할 수 없습니다.</p>}
             <ul className="p09-snapshots">{report.mergeSnapshots.map((snapshot) => <li key={snapshot.id}>v{snapshot.snapshotVersion} · {snapshot.snapshotSha256.slice(0, 12)} · {snapshot.createdBy.name}</li>)}</ul>
           </section>
           <section className="p10-ai-gateway-section">

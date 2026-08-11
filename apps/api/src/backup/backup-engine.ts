@@ -1,319 +1,248 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
-import { type PrismaClient } from '@claim-studio/database';
+import { createPrismaClient, type PrismaClient } from '@claim-studio/database';
 
-export interface BackupFileEntry {
-  relativePath: string;
-  size: number;
-  sha256: string;
-  createdAt: string;
+const BACKUP_SCHEMA_VERSION = 2;
+const BACKUP_ID_PATTERN = /^BACKUP-[0-9TZ-]{20,40}-[0-9a-f]{8}$/;
+const SAFE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+
+export interface BackupFileEntry { storageRoot: string; relativePath: string; size: number; sha256: string; createdAt: string; }
+export interface BackupMigrationEntry { name: string; checksum: string; }
+export interface BackupTriggerEntry { name: string; sqlSha256: string; }
+export interface BackupDatabaseEntry {
+  relativePath: 'database.db'; size: number; sha256: string;
+  migrations: BackupMigrationEntry[]; triggers: BackupTriggerEntry[];
 }
-
 export interface BackupManifest {
-  backupId: string;
-  createdAt: string;
-  status: 'PREPARING' | 'READY' | 'FAILED';
-  dbSnapshotFile: string;
-  dbMigrationLedgerCount: number;
-  dbTriggerCount: number;
-  files: BackupFileEntry[];
-  totalFilesSize: number;
-  masterKeyHash?: string;
+  schemaVersion: 2; backupId: string; createdAt: string; status: 'READY';
+  database: BackupDatabaseEntry; files: BackupFileEntry[]; totalFilesSize: number;
+  signatureAlgorithm: 'HMAC-SHA256'; signature: string;
 }
-
+export interface BackupStorageRoot { name: string; sourceDir: string; }
 export interface BackupCreateOptions {
-  backupRootDir: string;
-  databasePath: string;
-  uploadDir: string;
-  masterKey?: string;
-  db: PrismaClient;
+  backupRootDir: string; uploadDir: string; additionalStorageRoots?: BackupStorageRoot[];
+  signingKey: Buffer; db: PrismaClient;
 }
-
 export interface RestoreOptions {
-  backupId: string;
-  backupRootDir: string;
-  targetRestoreDir: string;
-  masterKey?: string;
-  db?: PrismaClient;
+  backupId: string; backupRootDir: string; restoreRootDir: string; restoreName: string; signingKey: Buffer;
 }
 
+type DatabaseInspection = Pick<BackupDatabaseEntry, 'migrations' | 'triggers'>;
+
+function assertSigningKey(signingKey: Buffer): void {
+  if (!Buffer.isBuffer(signingKey) || signingKey.length < 32) throw new Error('Backup signing key must be at least 32 bytes');
+}
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+function manifestPayload(manifest: BackupManifest): Omit<BackupManifest, 'signature'> {
+  const { signature, ...payload } = manifest; void signature; return payload;
+}
+function signManifest(manifest: Omit<BackupManifest, 'signature'>, signingKey: Buffer): string {
+  return crypto.createHmac('sha256', signingKey).update(canonicalJson(manifest), 'utf8').digest('hex');
+}
+function safeEqualHex(left: string, right: string): boolean {
+  return SHA256_PATTERN.test(left) && SHA256_PATTERN.test(right)
+    && crypto.timingSafeEqual(Buffer.from(left, 'hex'), Buffer.from(right, 'hex'));
+}
+function assertContained(rootDir: string, candidatePath: string, label: string): string {
+  const root = path.resolve(rootDir); const candidate = path.resolve(candidatePath);
+  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) throw new Error(`${label} escapes its configured root`);
+  return candidate;
+}
+function assertBackupId(backupId: string): void {
+  if (!BACKUP_ID_PATTERN.test(backupId)) throw new Error('Backup ID is invalid');
+}
+function assertSafeName(value: string, label: string): void {
+  if (!SAFE_NAME_PATTERN.test(value)) throw new Error(`${label} is invalid`);
+}
+function normalizeRelativePath(value: string): string {
+  if (!value || value.includes('\\') || path.posix.isAbsolute(value)) throw new Error('Backup relative path is invalid');
+  const normalized = path.posix.normalize(value);
+  if (normalized !== value || normalized === '.' || normalized.startsWith('../') || normalized.includes('/../')) throw new Error('Backup relative path is invalid');
+  return normalized;
+}
 export function computeFileSha256(filePath: string): string {
-  const content = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(content).digest('hex');
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
-
 export function computeBufferSha256(buffer: Buffer): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
-
-/**
- * Executes a consistent SQLite online backup using `VACUUM INTO`
- */
 export async function createConsistentDbSnapshot(db: PrismaClient, destinationPath: string): Promise<void> {
-  const destDir = path.dirname(destinationPath);
-  if (!fs.existsSync(destDir)) {
-    fs.mkdirSync(destDir, { recursive: true });
-  }
-  if (fs.existsSync(destinationPath)) {
-    fs.unlinkSync(destinationPath);
-  }
-  // Sanitize path for SQLite SQL string literal
-  const safeDest = destinationPath.replace(/'/g, "''");
-  await db.$executeRawUnsafe(`VACUUM INTO '${safeDest}'`);
+  const destination = path.resolve(destinationPath); fs.mkdirSync(path.dirname(destination), { recursive: true });
+  if (fs.existsSync(destination)) throw new Error('Database snapshot destination already exists');
+  await db.$executeRawUnsafe(`VACUUM INTO '${destination.replace(/'/g, "''")}'`);
 }
-
-/**
- * Scans a directory recursively and builds BackupFileEntry metadata list
- */
-export function scanDirectoryFiles(baseDir: string, subDir = ''): BackupFileEntry[] {
-  const currentDir = subDir ? path.join(baseDir, subDir) : baseDir;
-  if (!fs.existsSync(currentDir)) return [];
-
-  const entries: BackupFileEntry[] = [];
-  const files = fs.readdirSync(currentDir, { withFileTypes: true });
-
-  for (const file of files) {
-    const relPath = subDir ? path.join(subDir, file.name) : file.name;
-    const fullPath = path.join(baseDir, relPath);
-
-    if (file.isDirectory()) {
-      entries.push(...scanDirectoryFiles(baseDir, relPath));
-    } else if (file.isFile()) {
-      const stat = fs.statSync(fullPath);
-      entries.push({
-        relativePath: relPath.replace(/\\/g, '/'),
-        size: stat.size,
-        sha256: computeFileSha256(fullPath),
-        createdAt: stat.birthtime.toISOString()
-      });
-    }
-  }
-
-  return entries;
-}
-
-/**
- * Creates a complete consistent backup package
- */
-export async function createBackupPackage(options: BackupCreateOptions): Promise<BackupManifest> {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const backupId = `BACKUP-${timestamp}-${crypto.randomUUID().substring(0, 8)}`;
-  const backupDir = path.join(options.backupRootDir, backupId);
-  const preparingDir = `${backupDir}-PREPARING`;
-
-  if (!fs.existsSync(options.backupRootDir)) {
-    fs.mkdirSync(options.backupRootDir, { recursive: true });
-  }
-
-  fs.mkdirSync(preparingDir, { recursive: true });
-
+async function inspectDatabase(databasePath: string): Promise<DatabaseInspection> {
+  const db = createPrismaClient(`file:${path.resolve(databasePath)}`);
   try {
-    // 1. Consistent SQLite Online Backup via VACUUM INTO
-    const dbSnapshotPath = path.join(preparingDir, 'database.db');
-    await createConsistentDbSnapshot(options.db, dbSnapshotPath);
-
-    // Get DB Trigger count and Migration count
-    const triggerRows: any = await options.db.$queryRawUnsafe(`SELECT count(*) as cnt FROM sqlite_master WHERE type = 'trigger'`);
-    const triggerCount = Number(triggerRows[0]?.cnt ?? 0);
-
-    let migrationCount = 0;
-    try {
-      const migrationRows: any = await options.db.$queryRawUnsafe(`SELECT count(*) as cnt FROM _prisma_migrations`);
-      migrationCount = Number(migrationRows[0]?.cnt ?? 0);
-    } catch {
-      migrationCount = 0;
-    }
-
-    // 2. Backup File Storage (Uploads/Artifacts)
-    const storageBackupDir = path.join(preparingDir, 'storage');
-    fs.mkdirSync(storageBackupDir, { recursive: true });
-
-    if (fs.existsSync(options.uploadDir)) {
-      fs.cpSync(options.uploadDir, storageBackupDir, { recursive: true });
-    }
-
-    const files = scanDirectoryFiles(storageBackupDir);
-    const totalFilesSize = files.reduce((acc, f) => acc + f.size, 0);
-
-    const masterKeyHash = options.masterKey
-      ? crypto.createHash('sha256').update(options.masterKey).digest('hex')
-      : undefined;
-
-    // 3. Create Manifest
-    const manifest: BackupManifest = {
-      backupId,
-      createdAt: new Date().toISOString(),
-      status: 'READY',
-      dbSnapshotFile: 'database.db',
-      dbMigrationLedgerCount: migrationCount,
-      dbTriggerCount: triggerCount,
-      files,
-      totalFilesSize,
-      masterKeyHash
-    };
-
-    fs.writeFileSync(path.join(preparingDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
-
-    // 4. Atomic Publish: Rename PREPARING -> READY
-    fs.renameSync(preparingDir, backupDir);
-
-    return manifest;
-  } catch (err) {
-    if (fs.existsSync(preparingDir)) {
-      fs.rmSync(preparingDir, { recursive: true, force: true });
-    }
-    throw err;
-  }
-}
-
-/**
- * Lists all existing ready backup packages
- */
-export function listBackupPackages(backupRootDir: string): BackupManifest[] {
-  if (!fs.existsSync(backupRootDir)) return [];
-  const entries = fs.readdirSync(backupRootDir, { withFileTypes: true });
-
-  const manifests: BackupManifest[] = [];
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.startsWith('BACKUP-') && !entry.name.endsWith('-PREPARING')) {
-      const manifestPath = path.join(backupRootDir, entry.name, 'manifest.json');
-      if (fs.existsSync(manifestPath)) {
-        try {
-          const content = fs.readFileSync(manifestPath, 'utf8');
-          const parsed = JSON.parse(content) as BackupManifest;
-          if (parsed.status === 'READY') {
-            manifests.push(parsed);
-          }
-        } catch {
-          // ignore corrupted unparseable manifest
-        }
-      }
-    }
-  }
-
-  return manifests.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}
-
-/**
- * Calculates prune dry-run candidates maintaining at least `keepCount` (default 3) latest backups
- */
-export function pruneBackupsDryRun(backupRootDir: string, keepCount = 3): { keep: BackupManifest[]; pruneCandidates: BackupManifest[] } {
-  const all = listBackupPackages(backupRootDir);
-  const keep = all.slice(0, keepCount);
-  const pruneCandidates = all.slice(keepCount);
-  return { keep, pruneCandidates };
-}
-
-/**
- * Verifies backup manifest integrity against stored files
- */
-export function verifyBackupPackage(backupDir: string): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-  const manifestPath = path.join(backupDir, 'manifest.json');
-
-  if (!fs.existsSync(manifestPath)) {
-    return { valid: false, errors: ['manifest.json not found in backup directory'] };
-  }
-
-  let manifest: BackupManifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-  } catch (e) {
-    return { valid: false, errors: [`Corrupted manifest.json: ${(e as Error).message}`] };
-  }
-
-  // 1. Verify DB snapshot exists & is non-empty
-  const dbPath = path.join(backupDir, manifest.dbSnapshotFile);
-  if (!fs.existsSync(dbPath)) {
-    errors.push(`Database snapshot file missing: ${manifest.dbSnapshotFile}`);
-  } else {
-    const dbStat = fs.statSync(dbPath);
-    if (dbStat.size === 0) errors.push('Database snapshot file is empty (0 bytes)');
-  }
-
-  // 2. Verify all file storage entries
-  const storageDir = path.join(backupDir, 'storage');
-  for (const file of manifest.files) {
-    const fullPath = path.join(storageDir, file.relativePath);
-    if (!fs.existsSync(fullPath)) {
-      errors.push(`Storage file missing: ${file.relativePath}`);
-    } else {
-      const currentSha = computeFileSha256(fullPath);
-      if (currentSha !== file.sha256) {
-        errors.push(`Hash mismatch for ${file.relativePath}: expected ${file.sha256}, got ${currentSha}`);
-      }
-    }
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors
-  };
-}
-
-/**
- * Restores a backup package to a NEW isolated destination directory (fail-closed, zero overwriting existing paths)
- */
-export async function restoreBackupPackage(options: RestoreOptions): Promise<{
-  restoredDir: string;
-  dbPath: string;
-  storageDir: string;
-  manifest: BackupManifest;
-}> {
-  const backupDir = path.join(options.backupRootDir, options.backupId);
-  if (!fs.existsSync(backupDir)) {
-    throw new Error(`Backup package not found: ${options.backupId}`);
-  }
-
-  // Verification before restore
-  const verification = verifyBackupPackage(backupDir);
-  if (!verification.valid) {
-    throw new Error(`Cannot restore corrupted backup package: ${verification.errors.join('; ')}`);
-  }
-
-  const manifest: BackupManifest = JSON.parse(fs.readFileSync(path.join(backupDir, 'manifest.json'), 'utf8'));
-
-  // Verify Master Key if required
-  if (manifest.masterKeyHash) {
-    if (!options.masterKey) {
-      throw new Error('Master key is required to restore this encrypted backup set');
-    }
-    const keyHash = crypto.createHash('sha256').update(options.masterKey).digest('hex');
-    if (keyHash !== manifest.masterKeyHash) {
-      throw new Error('Invalid master key provided for backup restoration');
-    }
-  }
-
-  // Target restore directory MUST NOT pre-exist or be non-empty (Prevent overwrite of active production path)
-  if (fs.existsSync(options.targetRestoreDir)) {
-    const files = fs.readdirSync(options.targetRestoreDir);
-    if (files.length > 0) {
-      throw new Error(`Target restore directory '${options.targetRestoreDir}' is not empty. Restoration requires a new clean directory.`);
-    }
-  } else {
-    fs.mkdirSync(options.targetRestoreDir, { recursive: true });
-  }
-
-  try {
-    // Copy database & files to targetRestoreDir
-    const restoredDbPath = path.join(options.targetRestoreDir, 'restored-database.db');
-    const restoredStorageDir = path.join(options.targetRestoreDir, 'restored-storage');
-
-    fs.copyFileSync(path.join(backupDir, manifest.dbSnapshotFile), restoredDbPath);
-    fs.cpSync(path.join(backupDir, 'storage'), restoredStorageDir, { recursive: true });
-
+    const integrityRows = await db.$queryRawUnsafe<Array<Record<string, unknown>>>('PRAGMA integrity_check');
+    const values = integrityRows.flatMap((row) => Object.values(row).map(String));
+    if (values.length !== 1 || values[0].toLowerCase() !== 'ok') throw new Error(`SQLite integrity_check failed: ${values.join(', ') || 'no result'}`);
+    await db.$executeRawUnsafe('PRAGMA foreign_keys = ON');
+    const fkRows = await db.$queryRawUnsafe<Array<Record<string, unknown>>>('PRAGMA foreign_key_check');
+    if (fkRows.length !== 0) throw new Error(`SQLite foreign_key_check failed with ${fkRows.length} row(s)`);
+    const migrations = await db.$queryRawUnsafe<Array<{ name: string; checksum: string }>>('SELECT "name", "checksum" FROM "_P04Migration" ORDER BY "name" ASC');
+    if (migrations.length === 0 || migrations.some((item) => !item.name || !SHA256_PATTERN.test(item.checksum))) throw new Error('Migration ledger is missing or invalid');
+    const triggerRows = await db.$queryRawUnsafe<Array<{ name: string; sql: string | null }>>("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name ASC");
+    if (triggerRows.length === 0 || triggerRows.some((item) => !item.name || !item.sql)) throw new Error('Database trigger inventory is missing or invalid');
     return {
-      restoredDir: options.targetRestoreDir,
-      dbPath: restoredDbPath,
-      storageDir: restoredStorageDir,
-      manifest
+      migrations: migrations.map((item) => ({ name: item.name, checksum: item.checksum })),
+      triggers: triggerRows.map((item) => ({ name: item.name, sqlSha256: crypto.createHash('sha256').update(item.sql!, 'utf8').digest('hex') }))
     };
-  } catch (err) {
-    // Clean up on failure
-    if (fs.existsSync(options.targetRestoreDir)) {
-      fs.rmSync(options.targetRestoreDir, { recursive: true, force: true });
+  } finally { await db.$disconnect(); }
+}
+function copyStorageTree(sourceRoot: string, destinationRoot: string, storageRoot: string): BackupFileEntry[] {
+  assertSafeName(storageRoot, 'Storage root name'); const source = path.resolve(sourceRoot);
+  if (!fs.existsSync(source)) return [];
+  if (!fs.lstatSync(source).isDirectory()) throw new Error(`Storage root is not a directory: ${storageRoot}`);
+  const entries: BackupFileEntry[] = [];
+  const walk = (current: string, relative = ''): void => {
+    for (const dirent of fs.readdirSync(current, { withFileTypes: true })) {
+      const nextRelative = normalizeRelativePath((relative ? `${relative}/${dirent.name}` : dirent.name).replace(/\\/g, '/'));
+      const sourcePath = assertContained(source, path.join(source, ...nextRelative.split('/')), 'Storage source path');
+      const stat = fs.lstatSync(sourcePath);
+      if (stat.isSymbolicLink()) throw new Error(`Symbolic links are forbidden in backup storage: ${storageRoot}/${nextRelative}`);
+      if (stat.isDirectory()) walk(sourcePath, nextRelative);
+      else if (stat.isFile()) {
+        const destinationPath = assertContained(destinationRoot, path.join(destinationRoot, storageRoot, ...nextRelative.split('/')), 'Backup storage path');
+        fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+        fs.copyFileSync(sourcePath, destinationPath, fs.constants.COPYFILE_EXCL);
+        const copiedStat = fs.statSync(destinationPath);
+        entries.push({ storageRoot, relativePath: nextRelative, size: copiedStat.size, sha256: computeFileSha256(destinationPath), createdAt: stat.birthtime.toISOString() });
+      } else throw new Error(`Unsupported filesystem entry in backup storage: ${storageRoot}/${nextRelative}`);
     }
-    throw err;
+  };
+  walk(source); return entries;
+}
+function validateManifestShape(value: unknown): BackupManifest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Backup manifest must be an object');
+  const manifest = value as BackupManifest;
+  if (manifest.schemaVersion !== BACKUP_SCHEMA_VERSION || manifest.status !== 'READY' || manifest.signatureAlgorithm !== 'HMAC-SHA256') throw new Error('Backup manifest version or status is invalid');
+  assertBackupId(manifest.backupId);
+  if (!Number.isFinite(Date.parse(manifest.createdAt))) throw new Error('Backup manifest timestamp is invalid');
+  if (!manifest.database || manifest.database.relativePath !== 'database.db' || !Number.isSafeInteger(manifest.database.size) || manifest.database.size <= 0 || !SHA256_PATTERN.test(manifest.database.sha256)) throw new Error('Backup database metadata is invalid');
+  if (!Array.isArray(manifest.database.migrations) || !Array.isArray(manifest.database.triggers) || manifest.database.migrations.length === 0 || manifest.database.triggers.length === 0) throw new Error('Backup database inventory is invalid');
+  if (!Array.isArray(manifest.files) || !Number.isSafeInteger(manifest.totalFilesSize) || manifest.totalFilesSize < 0 || !SHA256_PATTERN.test(manifest.signature)) throw new Error('Backup file manifest is invalid');
+  const seen = new Set<string>(); let total = 0;
+  for (const file of manifest.files) {
+    assertSafeName(file.storageRoot, 'Storage root name'); normalizeRelativePath(file.relativePath);
+    if (!Number.isSafeInteger(file.size) || file.size < 0 || !SHA256_PATTERN.test(file.sha256) || !Number.isFinite(Date.parse(file.createdAt))) throw new Error('Backup file entry is invalid');
+    const key = `${file.storageRoot}/${file.relativePath}`; if (seen.has(key)) throw new Error('Backup file entry is duplicated'); seen.add(key); total += file.size;
   }
+  if (total !== manifest.totalFilesSize) throw new Error('Backup total file size is inconsistent');
+  return manifest;
+}
+export async function createBackupPackage(options: BackupCreateOptions): Promise<BackupManifest> {
+  assertSigningKey(options.signingKey); const root = path.resolve(options.backupRootDir);
+  const backupId = `BACKUP-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(4).toString('hex')}`; assertBackupId(backupId);
+  const backupDir = assertContained(root, path.join(root, backupId), 'Backup package path');
+  const preparingDir = assertContained(root, `${backupDir}-PREPARING`, 'Preparing package path');
+  fs.mkdirSync(root, { recursive: true }); fs.mkdirSync(preparingDir, { recursive: false });
+  try {
+    const databasePath = path.join(preparingDir, 'database.db'); await createConsistentDbSnapshot(options.db, databasePath);
+    const inspection = await inspectDatabase(databasePath); const databaseStat = fs.statSync(databasePath);
+    const roots: BackupStorageRoot[] = [{ name: 'uploads', sourceDir: options.uploadDir }, ...(options.additionalStorageRoots ?? [])];
+    const rootNames = new Set<string>(); const storageDestination = path.join(preparingDir, 'storage'); fs.mkdirSync(storageDestination, { recursive: true });
+    const files: BackupFileEntry[] = [];
+    for (const item of roots) {
+      assertSafeName(item.name, 'Storage root name'); if (rootNames.has(item.name)) throw new Error(`Duplicate storage root name: ${item.name}`); rootNames.add(item.name);
+      files.push(...copyStorageTree(item.sourceDir, storageDestination, item.name));
+    }
+    files.sort((a, b) => `${a.storageRoot}/${a.relativePath}`.localeCompare(`${b.storageRoot}/${b.relativePath}`));
+    const unsigned: Omit<BackupManifest, 'signature'> = {
+      schemaVersion: BACKUP_SCHEMA_VERSION, backupId, createdAt: new Date().toISOString(), status: 'READY',
+      database: { relativePath: 'database.db', size: databaseStat.size, sha256: computeFileSha256(databasePath), migrations: inspection.migrations, triggers: inspection.triggers },
+      files, totalFilesSize: files.reduce((sum, file) => sum + file.size, 0), signatureAlgorithm: 'HMAC-SHA256'
+    };
+    const manifest: BackupManifest = { ...unsigned, signature: signManifest(unsigned, options.signingKey) };
+    const handle = fs.openSync(path.join(preparingDir, 'manifest.json'), 'wx', 0o600);
+    try { fs.writeFileSync(handle, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8'); fs.fsyncSync(handle); } finally { fs.closeSync(handle); }
+    fs.renameSync(preparingDir, backupDir); return manifest;
+  } catch (error) { fs.rmSync(preparingDir, { recursive: true, force: true }); throw error; }
+}
+function manifestDirectories(backupRootDir: string): string[] {
+  const root = path.resolve(backupRootDir); if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && BACKUP_ID_PATTERN.test(entry.name)).map((entry) => assertContained(root, path.join(root, entry.name), 'Backup package path'));
+}
+export async function listBackupPackages(backupRootDir: string, signingKey: Buffer): Promise<BackupManifest[]> {
+  const manifests: BackupManifest[] = [];
+  for (const directory of manifestDirectories(backupRootDir)) { const result = await verifyBackupPackage(directory, signingKey); if (result.valid && result.manifest) manifests.push(result.manifest); }
+  return manifests.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+export async function pruneBackupsDryRun(backupRootDir: string, signingKey: Buffer, keepCount = 3): Promise<{ keep: BackupManifest[]; pruneCandidates: BackupManifest[] }> {
+  if (!Number.isSafeInteger(keepCount) || keepCount < 3 || keepCount > 100) throw new Error('Backup retention count must be an integer between 3 and 100');
+  const all = await listBackupPackages(backupRootDir, signingKey); return { keep: all.slice(0, keepCount), pruneCandidates: all.slice(keepCount) };
+}
+function actualStorageFiles(storageDir: string): string[] {
+  if (!fs.existsSync(storageDir)) return []; const results: string[] = [];
+  const walk = (current: string, relative = ''): void => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const next = relative ? `${relative}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) throw new Error(`Backup contains forbidden symbolic link: ${next}`);
+      if (entry.isDirectory()) walk(path.join(current, entry.name), next); else if (entry.isFile()) results.push(next.replace(/\\/g, '/')); else throw new Error(`Backup contains unsupported filesystem entry: ${next}`);
+    }
+  }; walk(storageDir); return results.sort();
+}
+export async function verifyBackupPackage(backupDir: string, signingKey: Buffer): Promise<{ valid: boolean; errors: string[]; manifest?: BackupManifest }> {
+  const errors: string[] = [];
+  try {
+    assertSigningKey(signingKey); const directory = path.resolve(backupDir); const manifestPath = path.join(directory, 'manifest.json');
+    if (!fs.existsSync(manifestPath) || fs.lstatSync(manifestPath).isSymbolicLink()) throw new Error('manifest.json is missing or unsafe');
+    const manifest = validateManifestShape(JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as unknown);
+    if (path.basename(directory) !== manifest.backupId) throw new Error('Backup directory and manifest ID do not match');
+    if (!safeEqualHex(manifest.signature, signManifest(manifestPayload(manifest), signingKey))) throw new Error('Backup manifest signature mismatch');
+    const databasePath = assertContained(directory, path.join(directory, manifest.database.relativePath), 'Database snapshot path');
+    if (!fs.existsSync(databasePath) || fs.lstatSync(databasePath).isSymbolicLink()) throw new Error('Database snapshot is missing or unsafe');
+    const databaseStat = fs.statSync(databasePath);
+    if (databaseStat.size !== manifest.database.size || computeFileSha256(databasePath) !== manifest.database.sha256) throw new Error('Database snapshot size or hash mismatch');
+    const inspection = await inspectDatabase(databasePath);
+    if (canonicalJson(inspection.migrations) !== canonicalJson(manifest.database.migrations)) throw new Error('Migration ledger does not match the signed manifest');
+    if (canonicalJson(inspection.triggers) !== canonicalJson(manifest.database.triggers)) throw new Error('Trigger inventory does not match the signed manifest');
+    const storageDir = path.join(directory, 'storage'); const expected = manifest.files.map((file) => `${file.storageRoot}/${file.relativePath}`).sort();
+    if (canonicalJson(actualStorageFiles(storageDir)) !== canonicalJson(expected)) throw new Error('Backup storage file set does not match the signed manifest');
+    for (const file of manifest.files) {
+      const relative = normalizeRelativePath(file.relativePath); const filePath = assertContained(storageDir, path.join(storageDir, file.storageRoot, ...relative.split('/')), 'Backup storage file path'); const stat = fs.statSync(filePath);
+      if (stat.size !== file.size || computeFileSha256(filePath) !== file.sha256) throw new Error(`Storage file size or hash mismatch: ${file.storageRoot}/${relative}`);
+    }
+    return { valid: true, errors, manifest };
+  } catch (error) { errors.push(error instanceof Error ? error.message : 'Unknown backup verification failure'); return { valid: false, errors }; }
+}
+export async function restoreBackupPackage(options: RestoreOptions): Promise<{ restoredDir: string; dbPath: string; storageDir: string; manifest: BackupManifest }> {
+  assertSigningKey(options.signingKey); assertBackupId(options.backupId); assertSafeName(options.restoreName, 'Restore name');
+  const backupRoot = path.resolve(options.backupRootDir); const restoreRoot = path.resolve(options.restoreRootDir);
+  const backupDir = assertContained(backupRoot, path.join(backupRoot, options.backupId), 'Backup package path');
+  const target = assertContained(restoreRoot, path.join(restoreRoot, options.restoreName), 'Restore target path');
+  const preparing = assertContained(restoreRoot, `${target}-PREPARING-${crypto.randomBytes(4).toString('hex')}`, 'Restore preparing path');
+  if (fs.existsSync(target)) throw new Error('Restore target already exists'); fs.mkdirSync(restoreRoot, { recursive: true });
+  const verification = await verifyBackupPackage(backupDir, options.signingKey);
+  if (!verification.valid || !verification.manifest) throw new Error(`Cannot restore corrupted backup package: ${verification.errors.join('; ')}`);
+  const manifest = verification.manifest; fs.mkdirSync(preparing, { recursive: false });
+  try {
+    const restoredDbPath = path.join(preparing, 'database.db'); fs.copyFileSync(path.join(backupDir, manifest.database.relativePath), restoredDbPath, fs.constants.COPYFILE_EXCL);
+    const restoredStorageDir = path.join(preparing, 'storage'); fs.mkdirSync(restoredStorageDir, { recursive: true });
+    for (const file of manifest.files) {
+      const relative = normalizeRelativePath(file.relativePath);
+      const source = assertContained(path.join(backupDir, 'storage'), path.join(backupDir, 'storage', file.storageRoot, ...relative.split('/')), 'Restore source path');
+      const destination = assertContained(restoredStorageDir, path.join(restoredStorageDir, file.storageRoot, ...relative.split('/')), 'Restore destination path');
+      fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+    }
+    const inspection = await inspectDatabase(restoredDbPath);
+    if (computeFileSha256(restoredDbPath) !== manifest.database.sha256 || canonicalJson(inspection.migrations) !== canonicalJson(manifest.database.migrations) || canonicalJson(inspection.triggers) !== canonicalJson(manifest.database.triggers)) throw new Error('Restored database verification failed');
+    for (const file of manifest.files) { const destination = path.join(restoredStorageDir, file.storageRoot, ...file.relativePath.split('/')); if (fs.statSync(destination).size !== file.size || computeFileSha256(destination) !== file.sha256) throw new Error('Restored storage verification failed'); }
+    fs.renameSync(preparing, target); return { restoredDir: target, dbPath: path.join(target, 'database.db'), storageDir: path.join(target, 'storage'), manifest };
+  } catch (error) { fs.rmSync(preparing, { recursive: true, force: true }); throw error; }
+}
+export function removeBackupPackage(backupRootDir: string, backupId: string): void {
+  assertBackupId(backupId); const root = path.resolve(backupRootDir); fs.rmSync(assertContained(root, path.join(root, backupId), 'Backup package path'), { recursive: true, force: true });
+}
+export function removeRestoredPackage(restoreRootDir: string, restoreName: string): void {
+  assertSafeName(restoreName, 'Restore name'); const root = path.resolve(restoreRootDir); fs.rmSync(assertContained(root, path.join(root, restoreName), 'Restore target path'), { recursive: true, force: true });
 }

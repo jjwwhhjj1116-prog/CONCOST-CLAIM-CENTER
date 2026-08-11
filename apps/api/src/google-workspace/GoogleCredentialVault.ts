@@ -1,166 +1,164 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
-export interface EncryptedSecretRecord {
-  secretRef: string;
+const PKCE_REF_PATTERN = /^PKCE_[A-Z0-9_]{20,120}$/;
+const SCOPE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{1,254}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
+
+export interface PkceVerifierScope {
   organizationId: string;
-  cipherText: string;
+  actorId: string;
+  stateHash: string;
+}
+
+export interface PkceVerifierCreateInput extends PkceVerifierScope {
+  verifier: string;
+  expiresAt: Date;
+}
+
+export interface GooglePkceVerifierVault {
+  createVerifier(input: PkceVerifierCreateInput): Promise<string>;
+  resolveVerifier(secretRef: string, scope: PkceVerifierScope, now?: Date): Promise<string | null>;
+  deleteVerifier(secretRef: string): Promise<void>;
+}
+
+type EncryptedPkceEnvelope = {
+  version: 1;
+  organizationHash: string;
+  actorHash: string;
+  stateHash: string;
+  expiresAt: string;
   iv: string;
-  authTag: string;
-  keyVersion: number;
-  updatedAt: string;
+  tag: string;
+  ciphertext: string;
+};
+
+function assertScope(scope: PkceVerifierScope): void {
+  if (!SCOPE_ID_PATTERN.test(scope.organizationId)) throw new Error('PKCE organization binding is invalid');
+  if (!SCOPE_ID_PATTERN.test(scope.actorId)) throw new Error('PKCE actor binding is invalid');
+  if (!SHA256_PATTERN.test(scope.stateHash)) throw new Error('PKCE state binding is invalid');
 }
 
-export interface VaultMetadata {
-  vaultVersion: number;
-  currentKeyVersion: number;
-  keyVersionsHash: Record<number, string>;
-  records: Record<string, EncryptedSecretRecord>;
+function assertCreateInput(input: PkceVerifierCreateInput): void {
+  assertScope(input);
+  if (!VERIFIER_PATTERN.test(input.verifier)) throw new Error('PKCE verifier is invalid');
+  if (!(input.expiresAt instanceof Date) || !Number.isFinite(input.expiresAt.getTime()) || input.expiresAt.getTime() <= Date.now()) {
+    throw new Error('PKCE verifier expiry is invalid');
+  }
 }
 
-export class GoogleCredentialVault {
-  private vaultPath: string;
-  private masterKeys: Map<number, string> = new Map();
-  private currentKeyVersion = 1;
+function hash(value: string): string {
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
+}
 
-  constructor(vaultPath: string, masterKey: string, keyVersion = 1) {
-    this.vaultPath = path.resolve(vaultPath);
-    this.masterKeys.set(keyVersion, masterKey);
-    this.currentKeyVersion = keyVersion;
-    this.ensureVaultDirectory();
+function safeEqual(left: string, right: string): boolean {
+  if (!SHA256_PATTERN.test(left) || !SHA256_PATTERN.test(right)) return false;
+  return crypto.timingSafeEqual(Buffer.from(left, 'hex'), Buffer.from(right, 'hex'));
+}
+
+function copyScope(scope: PkceVerifierScope): PkceVerifierScope {
+  return { organizationId: scope.organizationId, actorId: scope.actorId, stateHash: scope.stateHash };
+}
+
+export class MemoryGooglePkceVerifierVault implements GooglePkceVerifierVault {
+  readonly #records = new Map<string, PkceVerifierCreateInput>();
+
+  public async createVerifier(input: PkceVerifierCreateInput): Promise<string> {
+    assertCreateInput(input);
+    const secretRef = `PKCE_${crypto.randomUUID().replace(/-/g, '_').toUpperCase()}`;
+    this.#records.set(secretRef, { ...copyScope(input), verifier: input.verifier, expiresAt: new Date(input.expiresAt) });
+    return secretRef;
   }
 
-  private ensureVaultDirectory(): void {
-    const dir = path.dirname(this.vaultPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    if (!fs.existsSync(this.vaultPath)) {
-      const initial: VaultMetadata = {
-        vaultVersion: 1,
-        currentKeyVersion: this.currentKeyVersion,
-        keyVersionsHash: {
-          [this.currentKeyVersion]: this.hashMasterKey(this.masterKeys.get(this.currentKeyVersion)!)
-        },
-        records: {}
+  public async resolveVerifier(secretRef: string, scope: PkceVerifierScope, now = new Date()): Promise<string | null> {
+    assertScope(scope);
+    const record = this.#records.get(secretRef);
+    if (!record || record.expiresAt <= now || record.organizationId !== scope.organizationId || record.actorId !== scope.actorId || record.stateHash !== scope.stateHash) return null;
+    return record.verifier;
+  }
+
+  public async deleteVerifier(secretRef: string): Promise<void> {
+    this.#records.delete(secretRef);
+  }
+}
+
+export class EncryptedFileGooglePkceVerifierVault implements GooglePkceVerifierVault {
+  readonly #directory: string;
+  readonly #key: Buffer;
+
+  public constructor(options: { directory: string; masterKey: Buffer }) {
+    if (!path.isAbsolute(options.directory)) throw new Error('PKCE vault directory must be absolute');
+    if (!Buffer.isBuffer(options.masterKey) || options.masterKey.length !== 32) throw new Error('PKCE vault master key must be 32 bytes');
+    this.#directory = path.resolve(options.directory);
+    this.#key = Buffer.from(crypto.hkdfSync('sha256', options.masterKey, Buffer.from('claim-center-pkce-v1'), Buffer.from('pkce-verifier-vault'), 32));
+  }
+
+  #path(secretRef: string): string {
+    if (!PKCE_REF_PATTERN.test(secretRef)) throw new Error('PKCE verifier reference is invalid');
+    return path.join(this.#directory, `${secretRef}.pkce`);
+  }
+
+  #aad(secretRef: string, scope: PkceVerifierScope): Buffer {
+    return Buffer.from(`${scope.organizationId}\u0000${scope.actorId}\u0000${scope.stateHash}\u0000${secretRef}`, 'utf8');
+  }
+
+  async #ensureDirectory(): Promise<void> {
+    await fs.mkdir(this.#directory, { recursive: true, mode: 0o700 });
+  }
+
+  public async createVerifier(input: PkceVerifierCreateInput): Promise<string> {
+    assertCreateInput(input);
+    await this.#ensureDirectory();
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const secretRef = `PKCE_${crypto.randomUUID().replace(/-/g, '_').toUpperCase()}`;
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', this.#key, iv);
+      cipher.setAAD(this.#aad(secretRef, input));
+      const ciphertext = Buffer.concat([cipher.update(input.verifier, 'utf8'), cipher.final()]);
+      const envelope: EncryptedPkceEnvelope = {
+        version: 1,
+        organizationHash: hash(input.organizationId),
+        actorHash: hash(input.actorId),
+        stateHash: input.stateHash,
+        expiresAt: input.expiresAt.toISOString(),
+        iv: iv.toString('base64url'),
+        tag: cipher.getAuthTag().toString('base64url'),
+        ciphertext: ciphertext.toString('base64url')
       };
-      fs.writeFileSync(this.vaultPath, JSON.stringify(initial, null, 2), 'utf8');
+      try {
+        await fs.writeFile(this.#path(secretRef), JSON.stringify(envelope), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+        return secretRef;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
     }
+    throw new Error('PKCE verifier reference allocation failed');
   }
 
-  private hashMasterKey(key: string): string {
-    return crypto.createHash('sha256').update(key).digest('hex');
-  }
-
-  private deriveKey(masterKey: string): Buffer {
-    const derived = crypto.hkdfSync('sha256', Buffer.from(masterKey), Buffer.from('vault-salt'), Buffer.from('google-workspace-vault'), 32);
-    return Buffer.from(derived);
-  }
-
-  public registerKeyVersion(version: number, key: string): void {
-    this.masterKeys.set(version, key);
-  }
-
-  public readVault(): VaultMetadata {
+  public async resolveVerifier(secretRef: string, scope: PkceVerifierScope, now = new Date()): Promise<string | null> {
+    assertScope(scope);
     try {
-      const content = fs.readFileSync(this.vaultPath, 'utf8');
-      return JSON.parse(content) as VaultMetadata;
-    } catch {
-      return {
-        vaultVersion: 1,
-        currentKeyVersion: this.currentKeyVersion,
-        keyVersionsHash: {},
-        records: {}
-      };
+      const raw = await fs.readFile(this.#path(secretRef), 'utf8');
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid');
+      const envelope = parsed as EncryptedPkceEnvelope;
+      if (envelope.version !== 1 || !safeEqual(envelope.organizationHash, hash(scope.organizationId)) || !safeEqual(envelope.actorHash, hash(scope.actorId)) || !safeEqual(envelope.stateHash, scope.stateHash)) return null;
+      const expiresAt = new Date(envelope.expiresAt);
+      if (!Number.isFinite(expiresAt.getTime()) || expiresAt <= now) return null;
+      const decipher = crypto.createDecipheriv('aes-256-gcm', this.#key, Buffer.from(envelope.iv, 'base64url'));
+      decipher.setAAD(this.#aad(secretRef, scope));
+      decipher.setAuthTag(Buffer.from(envelope.tag, 'base64url'));
+      const verifier = Buffer.concat([decipher.update(Buffer.from(envelope.ciphertext, 'base64url')), decipher.final()]).toString('utf8');
+      return VERIFIER_PATTERN.test(verifier) ? verifier : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw new Error('PKCE verifier entry is corrupt or cannot be decrypted');
     }
   }
 
-  public writeVault(data: VaultMetadata): void {
-    fs.writeFileSync(this.vaultPath, JSON.stringify(data, null, 2), 'utf8');
-  }
-
-  /**
-   * Encrypts and stores a credential token into the vault using AES-256-GCM
-   */
-  public encryptSecret(secretRef: string, organizationId: string, plainText: string): EncryptedSecretRecord {
-    const masterKey = this.masterKeys.get(this.currentKeyVersion);
-    if (!masterKey) throw new Error(`Master key version ${this.currentKeyVersion} not available`);
-
-    const derivedKey = this.deriveKey(masterKey);
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, iv);
-
-    let cipherText = cipher.update(plainText, 'utf8', 'hex');
-    cipherText += cipher.final('hex');
-    const authTag = cipher.getAuthTag().toString('hex');
-
-    const record: EncryptedSecretRecord = {
-      secretRef,
-      organizationId,
-      cipherText,
-      iv: iv.toString('hex'),
-      authTag,
-      keyVersion: this.currentKeyVersion,
-      updatedAt: new Date().toISOString()
-    };
-
-    const vault = this.readVault();
-    vault.records[secretRef] = record;
-    vault.currentKeyVersion = this.currentKeyVersion;
-    vault.keyVersionsHash[this.currentKeyVersion] = this.hashMasterKey(masterKey);
-    this.writeVault(vault);
-
-    return record;
-  }
-
-  /**
-   * Decrypts a stored secret using the corresponding key version
-   */
-  public decryptSecret(secretRef: string): string {
-    const vault = this.readVault();
-    const record = vault.records[secretRef];
-    if (!record) throw new Error(`Secret reference not found in vault: ${secretRef}`);
-
-    const masterKey = this.masterKeys.get(record.keyVersion);
-    if (!masterKey) throw new Error(`Master key version ${record.keyVersion} missing for secret decryption`);
-
-    const derivedKey = this.deriveKey(masterKey);
-    const decipher = crypto.createDecipheriv('aes-256-gcm', derivedKey, Buffer.from(record.iv, 'hex'));
-    decipher.setAuthTag(Buffer.from(record.authTag, 'hex'));
-
-    const decrypted = Buffer.concat([decipher.update(Buffer.from(record.cipherText, 'hex')), decipher.final()]);
-    return decrypted.toString('utf8');
-  }
-
-  /**
-   * Rotates master key version and re-encrypts all stored vault secrets
-   */
-  public rotateMasterKey(newVersion: number, newMasterKey: string): { reEncryptedCount: number } {
-    if (this.masterKeys.has(newVersion)) throw new Error(`Key version ${newVersion} already exists`);
-    this.masterKeys.set(newVersion, newMasterKey);
-
-    const vault = this.readVault();
-    let reEncryptedCount = 0;
-
-    for (const secretRef of Object.keys(vault.records)) {
-      const plainText = this.decryptSecret(secretRef);
-      const orgId = vault.records[secretRef].organizationId;
-
-      // Re-encrypt under new key version
-      const oldCurrent = this.currentKeyVersion;
-      this.currentKeyVersion = newVersion;
-      this.encryptSecret(secretRef, orgId, plainText);
-      this.currentKeyVersion = oldCurrent;
-
-      reEncryptedCount++;
-    }
-
-    this.currentKeyVersion = newVersion;
-    vault.currentKeyVersion = newVersion;
-    vault.keyVersionsHash[newVersion] = this.hashMasterKey(newMasterKey);
-    this.writeVault(vault);
-
-    return { reEncryptedCount };
+  public async deleteVerifier(secretRef: string): Promise<void> {
+    await fs.rm(this.#path(secretRef), { force: true });
   }
 }

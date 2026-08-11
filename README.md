@@ -53,3 +53,11 @@ npx --yes pnpm@9.15.0 --filter claim-center-report-studio-web dev
 
 ## 단계 진행 상태
 현재 상태는 `docs/harness/phase-status.json`에서 확인 및 관리됩니다.
+
+## P15 데이터 보존 및 복구
+
+- 보고서 본문은 약 1.2초 디바운스 후 DB에 자동 저장되며, 저장 완료된 개정본은 API 재시작 후 복구됩니다.
+- Admin 전용 서명 백업은 SQLite DB, 업로드, Google credential vault, PKCE vault를 함께 보존합니다.
+- 운영 서버에서는 DB·업로드·vault·백업 경로를 영속 볼륨에 두고 `CLAIM_BACKUP_SIGNING_KEY_REF`와 `GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF`를 반드시 구성해야 합니다.
+- 상세 절차: [P15 백업·복구 운영 절차](docs/runbooks/p15-backup-restore.md)
+- Cloudflare 이전은 별도 ADR-0015 단계에서 D1/R2 원자성 재설계 후 진행하며, 현재 백업 구현을 그대로 D1에 복사하지 않습니다.

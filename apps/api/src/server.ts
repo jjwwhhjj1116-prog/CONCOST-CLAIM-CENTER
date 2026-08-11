@@ -18,12 +18,17 @@ import { GoogleWorkspaceFakeAdapter } from './google-workspace/GoogleWorkspaceFa
 import { GoogleWorkspaceRealAdapter } from './google-workspace/GoogleWorkspaceRealAdapter';
 import {
   createBackupPackage, listBackupPackages, pruneBackupsDryRun,
-  verifyBackupPackage, restoreBackupPackage
+  verifyBackupPackage, restoreBackupPackage, removeBackupPackage, removeRestoredPackage,
+  type BackupStorageRoot
 } from './backup/backup-engine';
 import {
   decodeGoogleCredentialMasterKey,
   EncryptedFileGoogleCredentialProvider
 } from './google-workspace/GoogleCredentialProvider';
+import {
+  EncryptedFileGooglePkceVerifierVault, MemoryGooglePkceVerifierVault,
+  type GooglePkceVerifierVault
+} from './google-workspace/GoogleCredentialVault';
 import {
   REQUIRED_GOOGLE_SCOPES,
   type GoogleAdapterMode,
@@ -153,6 +158,12 @@ export interface ApiServerOptions {
   allowTestAiModes?: boolean;
   allowTestGoogleModes?: boolean;
   googleWorkspaceProviderTimeoutMs?: number;
+  googlePkceVerifierVault?: GooglePkceVerifierVault;
+  backupRootDir?: string;
+  restoreRootDir?: string;
+  backupSigningKey?: Buffer;
+  backupStorageRoots?: BackupStorageRoot[];
+  databasePath?: string;
   /**
    * Production Google Workspace access is explicit and injected. When omitted,
    * Google endpoints fail closed unless allowTestGoogleModes enables the
@@ -988,6 +999,20 @@ export function calculateDDay(targetDate: Date, nowDate = new Date()): { dDayStr
   }
 }
 
+function resolveReferencedEnvironmentValue(referenceVariable: string): string | undefined {
+  const reference = process.env[referenceVariable];
+  if (!reference || !reference.startsWith('ENV_')) return undefined;
+  return process.env[reference.slice(4)];
+}
+
+function resolveOptional32ByteKey(referenceVariable: string): Buffer | undefined {
+  const encoded = resolveReferencedEnvironmentValue(referenceVariable);
+  if (!encoded) return undefined;
+  const key = /^[0-9a-fA-F]{64}$/.test(encoded.trim()) ? Buffer.from(encoded.trim(), 'hex') : Buffer.from(encoded.trim(), 'base64url');
+  if (key.length !== 32) throw new Error(referenceVariable + ' must resolve to exactly 32 bytes');
+  return key;
+}
+
 export function createApiServer(options: ApiServerOptions = {}): ManagedApiServer {
   const db = options.db ?? createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
@@ -1005,10 +1030,29 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   }
   const googleProviderTimeoutMs = configuredGoogleTimeout;
   ensureUploadDir(uploadDir);
+  const backupRootDir = path.resolve(options.backupRootDir ?? path.join(process.cwd(), 'packages/database/.data/backups'));
+  const restoreRootDir = path.resolve(options.restoreRootDir ?? path.join(process.cwd(), 'packages/database/.data/restores'));
+  const backupSigningKey = options.backupSigningKey ?? resolveOptional32ByteKey('CLAIM_BACKUP_SIGNING_KEY_REF');
+  const credentialVaultDir = path.resolve(process.env.GOOGLE_WORKSPACE_CREDENTIAL_VAULT_DIR ?? path.join(process.cwd(), 'packages/database/.data/google-credentials'));
+  const pkceVaultDir = path.resolve(process.env.GOOGLE_WORKSPACE_PKCE_VAULT_DIR ?? path.join(process.cwd(), 'packages/database/.data/google-pkce'));
+  const backupStorageRoots = options.backupStorageRoots ?? [
+    { name: 'google-credentials', sourceDir: credentialVaultDir },
+    { name: 'google-pkce', sourceDir: pkceVaultDir }
+  ];
+  const configuredPkceKey = resolveOptional32ByteKey('GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF');
+  if (process.env.NODE_ENV === 'production' && googleWorkspaceAdapterFactory && !options.googlePkceVerifierVault && !configuredPkceKey) {
+    throw new Error('Production Google Workspace requires a durable PKCE credential master key reference');
+  }
+  const googlePkceVerifierVault = options.googlePkceVerifierVault ?? (configuredPkceKey
+    ? new EncryptedFileGooglePkceVerifierVault({ directory: pkceVaultDir, masterKey: configuredPkceKey })
+    : new MemoryGooglePkceVerifierVault());
+  const requireBackupSigningKey = (): Buffer => {
+    if (!backupSigningKey) throw new HttpError(503, 'Backup signing key is not configured');
+    return backupSigningKey;
+  };
   const inFlightAiRequests = new Map<string, AbortController>();
   type GoogleFakeModeController = Pick<GoogleWorkspaceFakeAdapter, 'setMode' | 'getMode'>;
   const googleFakeAdapters = new Map<string, GoogleWorkspaceFakeAdapter>();
-  const googlePkceVault = new Map<string, string>();
   const googleAdapterFor = (organizationId: string): GoogleWorkspaceAdapter => {
     // Real adapters are request-scoped so an active credential reference cannot
     // bleed across concurrent requests or a concurrent OAuth reconnect.
@@ -6531,118 +6575,50 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       // -----------------------------------------------------------------------
       // P15 Backup, Data Preservation & Restore API Endpoints
       // -----------------------------------------------------------------------
-      const defaultBackupRootDir = (options as any).backupRootDir
-        ? path.resolve((options as any).backupRootDir)
-        : path.resolve(path.join(process.cwd(), 'packages/database/.data/backups'));
-
-      // 1. POST /api/admin/backup/create
       if (pathname === '/api/admin/backup/create' && req.method === 'POST') {
-        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
-        if (!canManage) throw new HttpError(403, 'Backup management requires Admin or Director role');
-
-        const body = (await readJson(req)) as { masterKey?: string };
-        const databasePath = (options as any).databasePath ?? path.resolve(path.join(process.cwd(), 'packages/database/.data/dev.db'));
-
-        const manifest = await createBackupPackage({
-          backupRootDir: defaultBackupRootDir,
-          databasePath,
-          uploadDir,
-          masterKey: body.masterKey,
-          db
-        });
-
-        await db.auditLog.create({
-          data: auditData(context, 'BACKUP_CREATED', 'BackupPackage', manifest.backupId, {
-            backupId: manifest.backupId,
-            fileCount: manifest.files.length,
-            totalFilesSize: manifest.totalFilesSize
-          })
-        });
-
-        sendJson(res, 201, { manifest });
-        return;
+        requireAnyRole(context, new Set(['admin']), 'Backup management requires Admin role');
+        const body = await readJson(req); assertExactJsonFields(body, []);
+        const manifest = await createBackupPackage({ backupRootDir, uploadDir, additionalStorageRoots: backupStorageRoots, signingKey: requireBackupSigningKey(), db });
+        try {
+          await db.auditLog.create({ data: auditData(context, 'BACKUP_CREATED', 'BackupPackage', manifest.backupId, {
+            backupId: manifest.backupId, fileCount: manifest.files.length, totalFilesSize: manifest.totalFilesSize, databaseSha256: manifest.database.sha256
+          }) });
+        } catch (error) { removeBackupPackage(backupRootDir, manifest.backupId); throw error; }
+        sendJson(res, 201, { manifest }); return;
       }
-
-      // 2. GET /api/admin/backup/list
       if (pathname === '/api/admin/backup/list' && req.method === 'GET') {
-        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
-        if (!canManage) throw new HttpError(403, 'Backup listing requires Admin or Director role');
-
-        const manifests = listBackupPackages(defaultBackupRootDir);
-        sendJson(res, 200, { backups: manifests, count: manifests.length, retentionPolicy: 'Minimum 3 ready backup sets preserved' });
-        return;
+        requireAnyRole(context, new Set(['admin']), 'Backup listing requires Admin role');
+        const manifests = await listBackupPackages(backupRootDir, requireBackupSigningKey());
+        sendJson(res, 200, { backups: manifests, count: manifests.length, retentionPolicy: 'Minimum 3 ready backup sets preserved' }); return;
       }
-
-      // 3. POST /api/admin/backup/prune-dry-run
       if (pathname === '/api/admin/backup/prune-dry-run' && req.method === 'POST') {
-        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
-        if (!canManage) throw new HttpError(403, 'Backup prune dry-run requires Admin or Director role');
-
-        const body = (await readJson(req)) as { keepCount?: number };
-        const keepCount = Math.max(3, body.keepCount ?? 3);
-        const result = pruneBackupsDryRun(defaultBackupRootDir, keepCount);
-
-        sendJson(res, 200, {
-          keepCount,
-          retainedCount: result.keep.length,
-          pruneCandidatesCount: result.pruneCandidates.length,
-          retained: result.keep,
-          pruneCandidates: result.pruneCandidates,
-          dryRunNote: 'No backups were deleted during this dry-run assertion'
-        });
-        return;
+        requireAnyRole(context, new Set(['admin']), 'Backup prune dry-run requires Admin role');
+        const body = await readJson(req); assertExactJsonFields(body, ['keepCount']);
+        const keepCount = boundedInteger(body.keepCount, 3, 3, 100, 'keepCount');
+        const result = await pruneBackupsDryRun(backupRootDir, requireBackupSigningKey(), keepCount);
+        sendJson(res, 200, { keepCount, retainedCount: result.keep.length, pruneCandidatesCount: result.pruneCandidates.length, retained: result.keep, pruneCandidates: result.pruneCandidates, dryRunNote: 'No backups were deleted during this dry-run assertion' }); return;
       }
-
-      // 4. POST /api/admin/backup/verify
       if (pathname === '/api/admin/backup/verify' && req.method === 'POST') {
-        const canManage = context.roles.some((r) => ['admin', 'ceo', 'director'].includes(r.toLowerCase()));
-        if (!canManage) throw new HttpError(403, 'Backup verification requires Admin or Director role');
-
-        const body = (await readJson(req)) as { backupId?: string };
-        if (!body.backupId || typeof body.backupId !== 'string') throw new HttpError(400, 'backupId is required');
-
-        const backupDir = path.join(defaultBackupRootDir, body.backupId);
-        const verification = verifyBackupPackage(backupDir);
-
-        sendJson(res, 200, {
-          backupId: body.backupId,
-          valid: verification.valid,
-          errors: verification.errors
-        });
-        return;
+        requireAnyRole(context, new Set(['admin']), 'Backup verification requires Admin role');
+        const body = await readJson(req); assertExactJsonFields(body, ['backupId'], ['backupId']);
+        const backupId = strictString(body.backupId, 'backupId', 20, 100);
+        if (!/^BACKUP-[0-9TZ-]{20,40}-[0-9a-f]{8}$/.test(backupId)) throw new HttpError(400, 'Backup ID is invalid');
+        const verification = await verifyBackupPackage(path.join(backupRootDir, backupId), requireBackupSigningKey());
+        sendJson(res, 200, { backupId, valid: verification.valid, errors: verification.errors }); return;
       }
-
-      // 5. POST /api/admin/backup/restore
       if (pathname === '/api/admin/backup/restore' && req.method === 'POST') {
-        const isAdmin = context.roles.some((r) => r.toLowerCase() === 'admin');
-        if (!isAdmin) throw new HttpError(403, 'Restoration requires Admin role');
-
-        const body = (await readJson(req)) as { backupId?: string; targetRestoreDir?: string; masterKey?: string };
-        if (!body.backupId || typeof body.backupId !== 'string') throw new HttpError(400, 'backupId is required');
-        if (!body.targetRestoreDir || typeof body.targetRestoreDir !== 'string') throw new HttpError(400, 'targetRestoreDir is required');
-
-        const restoreResult = await restoreBackupPackage({
-          backupId: body.backupId,
-          backupRootDir: defaultBackupRootDir,
-          targetRestoreDir: path.resolve(body.targetRestoreDir),
-          masterKey: body.masterKey
-        });
-
-        await db.auditLog.create({
-          data: auditData(context, 'BACKUP_RESTORED', 'BackupPackage', body.backupId, {
-            backupId: body.backupId,
-            targetRestoreDir: restoreResult.restoredDir
-          })
-        });
-
-        sendJson(res, 200, {
-          message: 'Backup restored to isolated target directory successfully',
-          restoredDir: restoreResult.restoredDir,
-          dbPath: restoreResult.dbPath,
-          storageDir: restoreResult.storageDir,
-          manifest: restoreResult.manifest
-        });
-        return;
+        requireAnyRole(context, new Set(['admin']), 'Restoration requires Admin role');
+        const body = await readJson(req); assertExactJsonFields(body, ['backupId', 'restoreName', 'confirmation'], ['backupId', 'restoreName', 'confirmation']);
+        const backupId = strictString(body.backupId, 'backupId', 20, 100);
+        const restoreName = strictString(body.restoreName, 'restoreName', 1, 80);
+        const confirmation = strictString(body.confirmation, 'confirmation', 7, 7);
+        if (!/^BACKUP-[0-9TZ-]{20,40}-[0-9a-f]{8}$/.test(backupId) || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(restoreName)) throw new HttpError(400, 'Backup or restore identifier is invalid');
+        if (confirmation !== 'RESTORE') throw new HttpError(400, 'Explicit RESTORE confirmation is required');
+        const result = await restoreBackupPackage({ backupId, backupRootDir, restoreRootDir, restoreName, signingKey: requireBackupSigningKey() });
+        try {
+          await db.auditLog.create({ data: auditData(context, 'BACKUP_RESTORED', 'BackupPackage', backupId, { backupId, restoreName, databaseSha256: result.manifest.database.sha256 }) });
+        } catch (error) { removeRestoredPackage(restoreRootDir, restoreName); throw error; }
+        sendJson(res, 200, { message: 'Backup restored to isolated target directory successfully', restoreName, manifest: result.manifest }); return;
       }
 
       // -----------------------------------------------------------------------
@@ -7377,7 +7353,6 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const connectionSnapshot = await db.googleWorkspaceConnection.findUnique({ where: { organizationId: context.user.organizationId } });
         if ((connectionSnapshot?.version ?? null) !== requestedConnectionVersion) throw new HttpError(409, 'Google connection version conflict');
         const verifier = crypto.randomBytes(48).toString('base64url');
-        const verifierRef = `PKCE_${crypto.randomUUID().replace(/-/g, '_').toUpperCase()}`;
         const challenge = base64UrlSha256(verifier);
         const state = crypto.randomBytes(32).toString('base64url');
         const stateHash = sha256Hex(state);
@@ -7393,7 +7368,9 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         } catch {
           throw new HttpError(503, 'Google Workspace authorization provider is unavailable');
         }
-        googlePkceVault.set(verifierRef, verifier);
+        const verifierRef = await googlePkceVerifierVault.createVerifier({
+          organizationId: context.user.organizationId, actorId: context.user.id, stateHash, verifier, expiresAt
+        });
         try {
           await db.$transaction(async (tx) => {
             await tx.googleOAuthState.create({ data: {
@@ -7412,7 +7389,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
             }) });
           });
         } catch (error) {
-          googlePkceVault.delete(verifierRef);
+          await googlePkceVerifierVault.deleteVerifier(verifierRef);
           throw error;
         }
         sendJson(res, 201, { state, authorizationUrl, expiresAt: expiresAt.toISOString(), redirectTarget, providerMode: googleProviderMode });
@@ -7432,7 +7409,9 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         if (stateRecord.usedAt) throw new HttpError(409, 'OAuth state has already been used');
         if (stateRecord.expiresAt <= new Date()) throw new HttpError(400, 'OAuth state has expired');
         if (!GOOGLE_REDIRECT_TARGETS.has(stateRecord.redirectTarget)) throw new HttpError(400, 'Stored OAuth redirect target is invalid');
-        const verifier = googlePkceVault.get(stateRecord.pkceVerifierRef);
+        const verifier = await googlePkceVerifierVault.resolveVerifier(stateRecord.pkceVerifierRef, {
+          organizationId: context.user.organizationId, actorId: context.user.id, stateHash
+        });
         if (!verifier || base64UrlSha256(verifier) !== stateRecord.pkceChallenge) throw new HttpError(400, 'PKCE verifier is unavailable or invalid');
         const exchange = await invokeGoogleProvider((signal) => googleAdapter.exchangeAuthorizationCode(code, verifier, signal));
         if (!GOOGLE_SUCCESS_CLASSES.has(exchange.responseClass) || !exchange.data) {
@@ -7460,7 +7439,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           if (typeof rawSecretRef === 'string') {
             try { await googleAdapter.discardCredentialReference?.(rawSecretRef); } catch { /* fail closed */ }
           }
-          googlePkceVault.delete(stateRecord.pkceVerifierRef);
+          await googlePkceVerifierVault.deleteVerifier(stateRecord.pkceVerifierRef);
           throw new HttpError(502, 'Google OAuth provider returned an invalid response');
         }
         const exchangeData = {
@@ -7525,10 +7504,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           try {
             await googleAdapter.discardCredentialReference?.(exchangedSecretRef);
           } catch { /* local persistence still fails closed; never expose credential material */ }
-          googlePkceVault.delete(stateRecord.pkceVerifierRef);
+          await googlePkceVerifierVault.deleteVerifier(stateRecord.pkceVerifierRef);
           throw error;
         }
-        googlePkceVault.delete(stateRecord.pkceVerifierRef);
+        await googlePkceVerifierVault.deleteVerifier(stateRecord.pkceVerifierRef);
         let previousCredentialRetired = true;
         if (previousSecretRef && previousSecretRef !== exchangeData.secretRef) {
           const retired = await invokeGoogleProvider((signal) => googleAdapter.revokeConnection(previousSecretRef!, signal));
