@@ -12,6 +12,17 @@ interface SessionUser {
   roles: UserRole[];
 }
 
+const isSessionUser = (value: unknown): value is SessionUser => {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<SessionUser>;
+  return typeof candidate.id === 'string'
+    && typeof candidate.email === 'string'
+    && typeof candidate.name === 'string'
+    && typeof candidate.organizationId === 'string'
+    && Array.isArray(candidate.roles);
+};
+
+
 const currentBrowserPath = () => window.location.pathname;
 
 export const App: React.FC = () => {
@@ -36,8 +47,8 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void apiRequest<SessionUser>('/auth/session')
-      .then((user) => setSession(user))
+    void apiRequest<unknown>('/auth/session')
+      .then((user) => setSession(isSessionUser(user) ? user : null))
       .catch(() => setSession(null))
       .finally(() => setCheckingSession(false));
   }, []);
@@ -53,7 +64,8 @@ export const App: React.FC = () => {
     event.preventDefault(); setLoginError('');
     try {
       await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
-      const user = await apiRequest<SessionUser>('/auth/session');
+      const user = await apiRequest<unknown>('/auth/session');
+      if (!isSessionUser(user)) throw new Error('Invalid session response');
       setSession(user);
       const requested = new URLSearchParams(window.location.search).get('returnTo') ?? '/dashboard';
       navigate(isSafeReturnTo(requested) && requested !== '/login' ? requested : '/dashboard', true);

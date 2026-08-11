@@ -26,6 +26,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   onExpireSession,
   children
 }) => {
+  const safeUserName = typeof userName === 'string' && userName.trim() ? userName.trim() : 'User';
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
@@ -81,7 +82,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           <div className="brand-copy"><h1>클레임센터</h1><small>REPORT STUDIO</small></div>
         </div>
         <div className="session-tools">
-          <span className="session-avatar" aria-hidden="true">{userName.slice(0, 1)}</span>
+          <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
           <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
         </div>

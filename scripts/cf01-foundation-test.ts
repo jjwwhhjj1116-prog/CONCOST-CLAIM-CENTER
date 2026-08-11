@@ -28,6 +28,13 @@ test('CF01 blocks application APIs until data migration passes', async () => {
   assert.equal((await response.json() as { code: string }).code, 'CLOUDFLARE_MIGRATION_IN_PROGRESS');
 });
 
+test('CF01 blocks auth routes instead of serving the SPA document as session JSON', async () => {
+  const response = await cloudflareWorker.fetch(new Request('https://preview.example/auth/session'), env());
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('Content-Type'), 'application/json; charset=utf-8');
+  assert.equal((await response.json() as { code: string }).code, 'CLOUDFLARE_MIGRATION_IN_PROGRESS');
+});
+
 test('CF01 delegates non-API routes to static assets', async () => {
   const response = await cloudflareWorker.fetch(new Request('https://preview.example/reports/studio'), env());
   assert.equal(response.status, 200);

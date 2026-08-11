@@ -61,7 +61,7 @@ export const cloudflareWorker = {
       return json({ status: 'ok', runtime: 'cloudflare-workers', phase: 'CF01_FOUNDATION' });
     }
     if (url.pathname === '/readiness' || url.pathname === '/api/readiness') return readiness(env);
-    if (url.pathname.startsWith('/api/')) {
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
       return json({ error: 'Cloudflare application data migration is not complete', code: 'CLOUDFLARE_MIGRATION_IN_PROGRESS', phase: 'CF01_FOUNDATION' }, 503);
     }
     return env.ASSETS.fetch(request);
