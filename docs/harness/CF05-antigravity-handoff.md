@@ -1,5 +1,9 @@
 # CF05 Antigravity Handoff ? Google Drive Evidence Sync
 
+> **중요: R2 관련 지시는 폐기되었습니다.**
+> 2026-08-11 사용자 결정에 따라 R2 결제·구독·버킷·바인딩 작업은 수행하지 않습니다.
+> 이후 실행 기준은 `docs/harness/CF05-antigravity-followup-01.md`입니다.
+
 ## 1. ?? ??
 
 - ?? ???: `feat/CF01-cloudflare-foundation`

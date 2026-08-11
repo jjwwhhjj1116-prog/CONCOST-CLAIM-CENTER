@@ -67,11 +67,18 @@ test('CF01 health identifies the Cloudflare foundation runtime', async () => {
   assert.deepEqual(await response.json(), { status: 'ok', runtime: 'cloudflare-workers', phase: 'CF01_FOUNDATION' });
 });
 
-test('CF01 readiness requires D1, R2, and static assets', async () => {
-  const ready = await cloudflareWorker.fetch(new Request('https://preview.example/api/readiness'), env());
+test('CF05 readiness requires D1 and static assets while R2 remains skipped', async () => {
+  const ready = await cloudflareWorker.fetch(new Request('https://preview.example/api/readiness'), env({ FILES: undefined }));
   assert.equal(ready.status, 200);
+  const readyBody = await ready.json() as { checks: { r2: string; fileStorage: string } };
+  assert.equal(readyBody.checks.r2, 'skipped_by_user');
+  assert.equal(readyBody.checks.fileStorage, 'google_drive_pending');
+
   const missingD1 = await cloudflareWorker.fetch(new Request('https://preview.example/api/readiness'), env({ DB: undefined }));
   assert.equal(missingD1.status, 503);
+
+  const missingAssets = await cloudflareWorker.fetch(new Request('https://preview.example/api/readiness'), env({ ASSETS: undefined }));
+  assert.equal(missingAssets.status, 503);
 });
 
 test('CF01 blocks application APIs until data migration passes', async () => {

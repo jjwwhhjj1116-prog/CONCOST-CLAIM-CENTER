@@ -380,6 +380,17 @@ body {
   transform: translateY(-2px);
 }
 
+.preview-drop-zone.is-disabled {
+  cursor: not-allowed;
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.preview-drop-zone.is-disabled .preview-upload-icon,
+.preview-drop-zone.is-disabled h3 {
+  color: #94a3b8;
+}
+
 .preview-drop-zone input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .preview-upload-icon { font-size: 2rem; }
 .preview-drop-zone h3 { margin: 0; color: #f8fafc; font-size: 1.25rem; }

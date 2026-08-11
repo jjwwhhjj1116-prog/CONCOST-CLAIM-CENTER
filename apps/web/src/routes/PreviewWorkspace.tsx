@@ -80,7 +80,7 @@ export const PreviewFeature: React.FC<PreviewFeatureProps> = ({ route, onNavigat
     <div className="preview-feature-grid">
       <Card title="WORKFLOW"><p>클레임센터의 역할·승인·감사 계약에 맞춘 단계형 업무 화면입니다.</p></Card>
       <Card title="INTERFACE"><p>반응형 레이아웃, 명확한 상태 표시, 키보드 접근성을 적용했습니다.</p></Card>
-      <Card title="DATA CONNECTION"><p>D1/R2 이전이 완료되면 실제 사건과 보고서 데이터가 이 화면에 연결됩니다.</p></Card>
+      <Card title="DATA CONNECTION"><p>D1 로그인·초안 저장은 연결되었습니다. 사건 실데이터와 파일 원본은 Google Drive 연동 단계에서 활성화됩니다.</p></Card>
     </div>
   </section>
 );

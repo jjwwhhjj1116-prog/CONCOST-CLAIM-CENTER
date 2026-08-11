@@ -115,8 +115,9 @@ interface PreviewEvidenceRow {
 }
 
 async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
-  if (!env.DB || !env.FILES) {
-    return json({ error: 'D1 and R2 bindings are required', code: 'EVIDENCE_STORAGE_NOT_CONFIGURED', phase: 'CF03_EVIDENCE_HUB' }, 503);
+  if (!env.DB) return json({ error: 'D1 binding is required', code: 'D1_NOT_CONFIGURED', phase: 'CF03_EVIDENCE_HUB' }, 503);
+  if (!env.FILES) {
+    return json({ error: 'File storage is not configured. Connect Google Drive first.', code: 'EVIDENCE_STORAGE_NOT_CONFIGURED', phase: 'CF05_GOOGLE_DRIVE_PENDING' }, 503);
   }
 
   const sessionUser = await previewSessionUser(request, env);
@@ -377,7 +378,12 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
 }
 
 async function readiness(env: CloudflareEnv): Promise<Response> {
-  const checks = { d1: false, r2: false, assets: Boolean(env.ASSETS) };
+  const checks = {
+    d1: false,
+    assets: Boolean(env.ASSETS),
+    r2: 'skipped_by_user',
+    fileStorage: 'google_drive_pending'
+  };
 
   try {
     if (env.DB) {
@@ -388,17 +394,8 @@ async function readiness(env: CloudflareEnv): Promise<Response> {
     checks.d1 = false;
   }
 
-  try {
-    if (env.FILES) {
-      await env.FILES.list({ limit: 1 });
-      checks.r2 = true;
-    }
-  } catch {
-    checks.r2 = false;
-  }
-
-  const ready = checks.d1 && checks.r2 && checks.assets;
-  return json({ status: ready ? 'ready' : 'not_ready', runtime: 'cloudflare-workers', phase: 'CF01_FOUNDATION', checks }, ready ? 200 : 503);
+  const ready = checks.d1 && checks.assets;
+  return json({ status: ready ? 'ready' : 'not_ready', runtime: 'cloudflare-workers', phase: 'CF05_DRIVE_PENDING', checks }, ready ? 200 : 503);
 }
 
 export const cloudflareWorker = {
