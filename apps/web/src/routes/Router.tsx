@@ -11,6 +11,7 @@ import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
 import { GoogleWorkspaceIntegration } from '../integrations/GoogleWorkspaceIntegration';
 import { GoogleWorkspaceCaseTools } from '../integrations/GoogleWorkspaceCaseTools';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
+import { PreviewDashboard, PreviewFeature } from './PreviewWorkspace';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -93,6 +94,7 @@ export interface RouterProps {
   currentPath: string;
   roles: UserRole[];
   onNavigate: (path: string) => void;
+  previewMode?: boolean;
 }
 
 const ForbiddenRoute: React.FC<{ route: RouteConfig; onNavigate: (path: string) => void }> = ({ route, onNavigate }) => (
@@ -133,7 +135,7 @@ const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
   );
 };
 
-export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNavigate }) => {
+export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, previewMode = false, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
   const resolvedRoute = resolveRoute(currentPath);
   const currentRoute = resolvedRoute?.route;
@@ -151,6 +153,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
   }
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
+  if (previewMode && currentRoute.id === 'DASH-01') return <PreviewDashboard onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 
   if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {
     const googleRoute = ['CASE-04', 'CASE-06', 'MEET-01'].includes(currentRoute.id)

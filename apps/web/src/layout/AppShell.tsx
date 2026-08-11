@@ -14,6 +14,7 @@ export interface AppShellProps {
   roles: UserRole[];
   userName: string;
   onNavigate: (path: string) => void;
+  previewMode?: boolean;
   onExpireSession: () => void;
   children: React.ReactNode;
 }
@@ -23,6 +24,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   roles,
   userName,
   onNavigate,
+  previewMode = false,
   onExpireSession,
   children
 }) => {
@@ -78,13 +80,14 @@ export const AppShell: React.FC<AppShellProps> = ({
       <header className="topbar">
         <div className="brand-group">
           {isTablet && <Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button>}
-          <span className="brand-mark" aria-hidden="true">CC</span>
-          <div className="brand-copy"><h1>클레임센터</h1><small>REPORT STUDIO</small></div>
+          <span className="brand-mark" aria-hidden="true">CS</span>
+          <div className="brand-copy"><h1>클레임센터 스튜디오</h1><small>CLAIM CENTER STUDIO</small></div>
         </div>
         <div className="session-tools">
+          {previewMode && <span className="preview-chip">UI PREVIEW · 저장 비활성</span>}
           <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
           <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
-          <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
+          <Button size="sm" variant="ghost" onClick={onExpireSession}>{previewMode ? '미리보기 종료' : '로그아웃'}</Button>
         </div>
       </header>
 
