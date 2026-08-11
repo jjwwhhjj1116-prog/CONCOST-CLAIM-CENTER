@@ -1,0 +1,61 @@
+.status-feedback-container {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 2rem 1.5rem;
+  margin: 1rem 0;
+  color: #172033;
+  text-align: left;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+}
+
+.status-feedback-container.compact { padding: 1rem; margin: 0.5rem 0; }
+.status-feedback-content { min-width: 0; max-width: 42rem; }
+.status-feedback-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: #1d4ed8;
+  font-weight: 800;
+  border: 2px solid currentColor;
+  border-radius: 999px;
+}
+.status-feedback-spinner {
+  border-color: #bfdbfe;
+  border-top-color: #1d4ed8;
+  animation: status-feedback-spin 0.8s linear infinite;
+}
+.status-feedback-title { margin: 0 0 0.35rem; font-size: 1.05rem; line-height: 1.35; }
+.status-feedback-message { margin: 0; color: #475569; line-height: 1.55; overflow-wrap: anywhere; }
+.status-feedback-action-btn {
+  min-height: 2.75rem;
+  margin-top: 0.9rem;
+  padding: 0.6rem 1rem;
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  background: #1d4ed8;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.status-feedback-action-btn:hover { background: #1e40af; }
+.status-feedback-action-btn:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+.status-feedback-container.error { color: #991b1b; background: #fef2f2; border-color: #fca5a5; }
+.status-feedback-container.forbidden { color: #9a3412; background: #fff7ed; border-color: #fdba74; }
+.status-feedback-container.conflict { color: #854d0e; background: #fefce8; border-color: #fde047; }
+.status-feedback-container.offline { color: #334155; background: #f8fafc; border-color: #94a3b8; }
+
+@keyframes status-feedback-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status-feedback-spinner { animation: none; } }
+@media (max-width: 640px) {
+  .status-feedback-container { align-items: flex-start; padding: 1.25rem 1rem; }
+  .status-feedback-icon { width: 2.25rem; height: 2.25rem; font-size: 0.8rem; }
+}

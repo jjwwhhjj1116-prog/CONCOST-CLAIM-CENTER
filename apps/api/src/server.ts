@@ -3,7 +3,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import {
-  createPrismaClient, getDatabaseUrl, hashToken, verifyPassword,
+  createPrismaClient, databaseUrlFor, getDatabaseUrl, hashToken, verifyPassword,
   type Prisma, type PrismaClient, type User
 } from '@claim-studio/database';
 import {
@@ -152,6 +152,7 @@ interface SessionContext {
 export interface ApiServerOptions {
   databaseUrl?: string;
   db?: PrismaClient;
+  environment?: NodeJS.ProcessEnv;
   allowedOrigins?: string[];
   secureCookies?: boolean;
   uploadDir?: string;
@@ -164,6 +165,10 @@ export interface ApiServerOptions {
   backupSigningKey?: Buffer;
   backupStorageRoots?: BackupStorageRoot[];
   databasePath?: string;
+  volumeRootDir?: string;
+  credentialVaultDir?: string;
+  pkceVaultDir?: string;
+  migrationsDir?: string;
   /**
    * Production Google Workspace access is explicit and injected. When omitted,
    * Google endpoints fail closed unless allowTestGoogleModes enables the
@@ -176,9 +181,6 @@ export interface ManagedApiServer extends http.Server {
   waitForDatabaseClose(): Promise<void>;
 }
 
-function ensureUploadDir(uploadDir: string): void {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
 
 function sanitizeDisplayName(rawName: string): string {
   if (!rawName) return 'unnamed_file';
@@ -999,50 +1001,190 @@ export function calculateDDay(targetDate: Date, nowDate = new Date()): { dDayStr
   }
 }
 
-function resolveReferencedEnvironmentValue(referenceVariable: string): string | undefined {
-  const reference = process.env[referenceVariable];
+function resolveReferencedEnvironmentValue(
+  referenceVariable: string,
+  environment: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  const reference = environment[referenceVariable];
   if (!reference || !reference.startsWith('ENV_')) return undefined;
-  return process.env[reference.slice(4)];
+  return environment[reference.slice(4)];
 }
 
-function resolveOptional32ByteKey(referenceVariable: string): Buffer | undefined {
-  const encoded = resolveReferencedEnvironmentValue(referenceVariable);
+function resolveOptional32ByteKey(
+  referenceVariable: string,
+  environment: NodeJS.ProcessEnv = process.env
+): Buffer | undefined {
+  const encoded = resolveReferencedEnvironmentValue(referenceVariable, environment);
   if (!encoded) return undefined;
-  const key = /^[0-9a-fA-F]{64}$/.test(encoded.trim()) ? Buffer.from(encoded.trim(), 'hex') : Buffer.from(encoded.trim(), 'base64url');
+  const key = /^[0-9a-fA-F]{64}$/.test(encoded.trim())
+    ? Buffer.from(encoded.trim(), 'hex')
+    : Buffer.from(encoded.trim(), 'base64url');
   if (key.length !== 32) throw new Error(referenceVariable + ' must resolve to exactly 32 bytes');
   return key;
 }
 
+function productionAllowedOrigins(environment: NodeJS.ProcessEnv): string[] {
+  const raw = environment.CLAIM_ALLOWED_ORIGINS;
+  if (!raw) throw new Error('CLAIM_ALLOWED_ORIGINS is required in production');
+  const origins = raw.split(',').map((value) => value.trim()).filter(Boolean);
+  if (origins.length === 0) throw new Error('CLAIM_ALLOWED_ORIGINS must contain at least one exact origin');
+  return origins.map((origin) => {
+    const parsed = new URL(origin);
+    if (parsed.origin !== origin || !['https:', 'http:'].includes(parsed.protocol) || origin.includes('*')) {
+      throw new Error('CLAIM_ALLOWED_ORIGINS entries must be exact HTTP(S) origins without wildcards');
+    }
+    return origin;
+  });
+}
+
+function assertPathInsideVolume(volumeRootDir: string, candidate: string, label: string): void {
+  const root = path.resolve(volumeRootDir);
+  const resolved = path.resolve(candidate);
+  if (resolved === root || !resolved.startsWith(root + path.sep)) {
+    throw new Error(label + ' must be located beneath CLAIM_VOLUME_ROOT');
+  }
+}
+
+function writableDirectoryProbe(directory: string): boolean {
+  let probePath = '';
+  try {
+    if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) return false;
+    probePath = path.join(directory, '.readiness-' + process.pid + '-' + crypto.randomBytes(8).toString('hex'));
+    fs.writeFileSync(probePath, 'ok', { encoding: 'utf8', flag: 'wx' });
+    return fs.readFileSync(probePath, 'utf8') === 'ok';
+  } catch {
+    return false;
+  } finally {
+    if (probePath) {
+      try { fs.unlinkSync(probePath); } catch { /* best-effort cleanup */ }
+    }
+  }
+}
+
+async function migrationLedgerMatches(db: PrismaClient, migrationsDir: string): Promise<boolean> {
+  try {
+    const expected = fs.readdirSync(migrationsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(migrationsDir, entry.name, 'migration.sql')))
+      .map((entry) => ({
+        name: entry.name,
+        checksum: crypto.createHash('sha256')
+          .update(fs.readFileSync(path.join(migrationsDir, entry.name, 'migration.sql'), 'utf8'))
+          .digest('hex')
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    const applied = await db.$queryRawUnsafe<Array<{ name: string; checksum: string }>>(
+      'SELECT "name", "checksum" FROM "_P04Migration" ORDER BY "name" ASC'
+    );
+    if (applied.length !== expected.length) return false;
+    return expected.every((migration, index) => (
+      applied[index]?.name === migration.name && applied[index]?.checksum === migration.checksum
+    ));
+  } catch {
+    return false;
+  }
+}
+
+export function createApiServerFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env
+): ManagedApiServer {
+  if (environment.NODE_ENV !== 'production') return createApiServer({ environment });
+
+  const configuredRoot = environment.CLAIM_VOLUME_ROOT;
+  if (!configuredRoot || !path.isAbsolute(configuredRoot)) {
+    throw new Error('Production requires an absolute CLAIM_VOLUME_ROOT');
+  }
+  const volumeRootDir = path.resolve(configuredRoot);
+  const databasePath = path.join(volumeRootDir, 'database', 'claim-center.db');
+  const uploadDir = path.join(volumeRootDir, 'storage');
+  const credentialVaultDir = path.join(volumeRootDir, 'google-credentials');
+  const pkceVaultDir = path.join(volumeRootDir, 'google-pkce');
+  const backupRootDir = path.join(volumeRootDir, 'backups');
+  const restoreRootDir = path.join(volumeRootDir, 'restores');
+  for (const directory of [
+    path.dirname(databasePath), uploadDir, credentialVaultDir, pkceVaultDir, backupRootDir, restoreRootDir
+  ]) fs.mkdirSync(directory, { recursive: true });
+
+  const backupSigningKey = resolveOptional32ByteKey('CLAIM_BACKUP_SIGNING_KEY_REF', environment);
+  const credentialMasterKey = resolveOptional32ByteKey('GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF', environment);
+  if (!backupSigningKey) throw new Error('Production requires CLAIM_BACKUP_SIGNING_KEY_REF');
+  if (!credentialMasterKey) throw new Error('Production requires GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF');
+
+  const scopedEnvironment: NodeJS.ProcessEnv = {
+    ...environment,
+    GOOGLE_WORKSPACE_CREDENTIAL_VAULT_DIR: credentialVaultDir,
+    GOOGLE_WORKSPACE_PKCE_VAULT_DIR: pkceVaultDir
+  };
+  return createApiServer({
+    environment: scopedEnvironment,
+    databaseUrl: databaseUrlFor(databasePath),
+    databasePath,
+    volumeRootDir,
+    uploadDir,
+    credentialVaultDir,
+    pkceVaultDir,
+    backupRootDir,
+    restoreRootDir,
+    backupSigningKey,
+    allowedOrigins: productionAllowedOrigins(scopedEnvironment),
+    secureCookies: true,
+    allowTestAiModes: false,
+    allowTestGoogleModes: false
+  });
+}
+
 export function createApiServer(options: ApiServerOptions = {}): ManagedApiServer {
-  const db = options.db ?? createPrismaClient(options.databaseUrl ?? getDatabaseUrl());
+  const environment = options.environment ?? process.env;
+  const isProduction = environment.NODE_ENV === 'production';
+  const databaseUrl = options.databaseUrl ?? getDatabaseUrl();
+  const db = options.db ?? createPrismaClient(databaseUrl);
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
-  const secureCookie = options.secureCookies ?? process.env.NODE_ENV === 'production';
+  const secureCookie = options.secureCookies ?? isProduction;
   const uploadDir = path.resolve(options.uploadDir ?? DEFAULT_UPLOAD_DIR);
   const allowTestAiModes = options.allowTestAiModes === true;
   const allowTestGoogleModes = options.allowTestGoogleModes === true;
+  if (isProduction && (allowTestAiModes || allowTestGoogleModes)) {
+    throw new Error('Test and fake provider modes are forbidden in production');
+  }
   const googleWorkspaceAdapterFactory = options.googleWorkspaceAdapterFactory
-    ?? createGoogleWorkspaceAdapterFactoryFromEnvironment();
+    ?? createGoogleWorkspaceAdapterFactoryFromEnvironment(environment);
   const configuredGoogleTimeout = options.googleWorkspaceProviderTimeoutMs
-    ?? (process.env.GOOGLE_WORKSPACE_PROVIDER_TIMEOUT_MS ? Number(process.env.GOOGLE_WORKSPACE_PROVIDER_TIMEOUT_MS) : undefined)
+    ?? (environment.GOOGLE_WORKSPACE_PROVIDER_TIMEOUT_MS ? Number(environment.GOOGLE_WORKSPACE_PROVIDER_TIMEOUT_MS) : undefined)
     ?? (googleWorkspaceAdapterFactory ? 30_000 : GOOGLE_TEST_PROVIDER_TIMEOUT_MS);
   if (!Number.isSafeInteger(configuredGoogleTimeout) || configuredGoogleTimeout < 1_000 || configuredGoogleTimeout > 60_000) {
     throw new Error('Google Workspace provider timeout must be an integer between 1000 and 60000 milliseconds');
   }
   const googleProviderTimeoutMs = configuredGoogleTimeout;
-  ensureUploadDir(uploadDir);
   const backupRootDir = path.resolve(options.backupRootDir ?? path.join(process.cwd(), 'packages/database/.data/backups'));
   const restoreRootDir = path.resolve(options.restoreRootDir ?? path.join(process.cwd(), 'packages/database/.data/restores'));
-  const backupSigningKey = options.backupSigningKey ?? resolveOptional32ByteKey('CLAIM_BACKUP_SIGNING_KEY_REF');
-  const credentialVaultDir = path.resolve(process.env.GOOGLE_WORKSPACE_CREDENTIAL_VAULT_DIR ?? path.join(process.cwd(), 'packages/database/.data/google-credentials'));
-  const pkceVaultDir = path.resolve(process.env.GOOGLE_WORKSPACE_PKCE_VAULT_DIR ?? path.join(process.cwd(), 'packages/database/.data/google-pkce'));
+  const backupSigningKey = options.backupSigningKey ?? resolveOptional32ByteKey('CLAIM_BACKUP_SIGNING_KEY_REF', environment);
+  const credentialVaultDir = path.resolve(options.credentialVaultDir
+    ?? environment.GOOGLE_WORKSPACE_CREDENTIAL_VAULT_DIR
+    ?? path.join(process.cwd(), 'packages/database/.data/google-credentials'));
+  const pkceVaultDir = path.resolve(options.pkceVaultDir
+    ?? environment.GOOGLE_WORKSPACE_PKCE_VAULT_DIR
+    ?? path.join(process.cwd(), 'packages/database/.data/google-pkce'));
+  const migrationsDir = path.resolve(options.migrationsDir ?? path.join(process.cwd(), 'packages/database/prisma/migrations'));
+  const configuredPkceKey = resolveOptional32ByteKey('GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF', environment);
+  if (isProduction) {
+    if (!options.volumeRootDir || !options.databasePath || !backupSigningKey || !configuredPkceKey) {
+      throw new Error('Production requires a persistent volume root, database path, backup key, and credential key');
+    }
+    for (const [label, candidate] of [
+      ['databasePath', options.databasePath],
+      ['uploadDir', uploadDir],
+      ['backupRootDir', backupRootDir],
+      ['restoreRootDir', restoreRootDir],
+      ['credentialVaultDir', credentialVaultDir],
+      ['pkceVaultDir', pkceVaultDir]
+    ] as const) assertPathInsideVolume(options.volumeRootDir, candidate, label);
+  }
+  for (const directory of [uploadDir, backupRootDir, restoreRootDir, credentialVaultDir, pkceVaultDir]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
   const backupStorageRoots = options.backupStorageRoots ?? [
     { name: 'google-credentials', sourceDir: credentialVaultDir },
     { name: 'google-pkce', sourceDir: pkceVaultDir }
   ];
-  const configuredPkceKey = resolveOptional32ByteKey('GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF');
-  if (process.env.NODE_ENV === 'production' && googleWorkspaceAdapterFactory && !options.googlePkceVerifierVault && !configuredPkceKey) {
-    throw new Error('Production Google Workspace requires a durable PKCE credential master key reference');
-  }
   const googlePkceVerifierVault = options.googlePkceVerifierVault ?? (configuredPkceKey
     ? new EncryptedFileGooglePkceVerifierVault({ directory: pkceVaultDir, masterKey: configuredPkceKey })
     : new MemoryGooglePkceVerifierVault());
@@ -1097,8 +1239,44 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         userAgent: req.headers['user-agent'] ?? null
       });
 
-      if (pathname === '/health' && req.method === 'GET') {
-        sendJson(res, 200, { status: 'ok' });
+      if ((pathname === '/health' || pathname === '/api/health') && req.method === 'GET') {
+        sendJson(res, 200, {
+          status: 'ok',
+          service: 'claim-center-report-studio',
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
+      if ((pathname === '/readiness' || pathname === '/api/readiness') && req.method === 'GET') {
+        let databaseWritable = false;
+        try {
+          if (!options.databasePath || !fs.existsSync(options.databasePath)) throw new Error('database file is missing');
+          const descriptor = fs.openSync(options.databasePath, 'r+');
+          fs.closeSync(descriptor);
+          await db.$queryRawUnsafe('SELECT 1');
+          databaseWritable = true;
+        } catch {
+          databaseWritable = false;
+        }
+        const migrationsUpToDate = await migrationLedgerMatches(db, migrationsDir);
+        const storageWritable = writableDirectoryProbe(uploadDir);
+        const backupRootWritable = writableDirectoryProbe(backupRootDir);
+        const restoreRootWritable = writableDirectoryProbe(restoreRootDir);
+        const isReady = databaseWritable && migrationsUpToDate && storageWritable
+          && backupRootWritable && restoreRootWritable;
+
+        sendJson(res, isReady ? 200 : 503, {
+          status: isReady ? 'ready' : 'not_ready',
+          checks: {
+            databaseWritable,
+            migrationsUpToDate,
+            storageWritable,
+            backupRootWritable,
+            restoreRootWritable
+          },
+          timestamp: new Date().toISOString()
+        });
         return;
       }
 
@@ -8335,7 +8513,9 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         sendJson(res, error.status, { error: error.message, ...error.details });
         return;
       }
-      console.error('API request failed', error);
+      console.error('API request failed', {
+        kind: error instanceof Error ? error.name : typeof error
+      });
       sendJson(res, 500, { error: 'Internal server error' });
     });
   }) as ManagedApiServer;
@@ -8352,7 +8532,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
 if (require.main === module) {
   const port = Number(process.env.PORT || 3001);
-  createApiServer().listen(port, '127.0.0.1', () => {
-    console.log(`API server listening at http://127.0.0.1:${port}`);
+  const host = process.env.HOST ?? (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+  createApiServerFromEnvironment().listen(port, host, () => {
+    console.log('API server listening on ' + host + ':' + port);
   });
 }

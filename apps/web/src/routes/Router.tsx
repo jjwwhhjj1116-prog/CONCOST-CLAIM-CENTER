@@ -10,6 +10,7 @@ import { AiConfigManager } from '../ai/AiConfigManager';
 import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
 import { GoogleWorkspaceIntegration } from '../integrations/GoogleWorkspaceIntegration';
 import { GoogleWorkspaceCaseTools } from '../integrations/GoogleWorkspaceCaseTools';
+import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -95,11 +96,13 @@ export interface RouterProps {
 }
 
 const ForbiddenRoute: React.FC<{ route: RouteConfig; onNavigate: (path: string) => void }> = ({ route, onNavigate }) => (
-  <section className="route-message" aria-labelledby="forbidden-title">
-    <h2 id="forbidden-title">403 Forbidden</h2>
-    <p>{route.name} 화면에 접근할 권한이 없습니다. 서버/API 권한은 P04에서 별도로 강제됩니다.</p>
-    <Button onClick={() => onNavigate('/dashboard')}>대시보드로 이동</Button>
-  </section>
+  <StatusFeedbackState
+    type="forbidden"
+    title="403 Forbidden"
+    message={`${route.name} 화면에 접근할 권한이 없습니다. 담당 배정과 역할을 확인해 주세요.`}
+    actionLabel="대시보드로 이동"
+    onAction={() => onNavigate('/dashboard')}
+  />
 );
 
 const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
@@ -137,11 +140,13 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, onNaviga
 
   if (!currentRoute) {
     return (
-      <section className="route-message" aria-labelledby="not-found-title">
-        <h2 id="not-found-title">404 Not Found</h2>
-        <p>요청한 경로({currentPath})를 찾을 수 없습니다.</p>
-        <Button onClick={() => onNavigate('/dashboard')}>대시보드로 이동</Button>
-      </section>
+      <StatusFeedbackState
+        type="error"
+        title="페이지를 찾을 수 없습니다 (404)"
+        message={`요청한 경로(${currentPath})가 존재하지 않습니다.`}
+        actionLabel="대시보드로 이동"
+        onAction={() => onNavigate('/dashboard')}
+      />
     );
   }
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input, Select, Table, Timeline } from '@claim-studio/ui';
 import { ApiError, apiDownload, apiRequest } from '../api';
+import { StatusFeedbackState, type StatusFeedbackType } from '../layout/StatusFeedbackState';
 import { CLAIM_TYPES } from '../routes/Router';
 
 interface CaseCategory { major: string; middle: string; minor: string }
@@ -58,6 +59,25 @@ function ErrorBox({ error }: { error: string }): React.ReactElement {
   return <div className="error-box" role="alert">{error}</div>;
 }
 
+function feedbackType(error: unknown): StatusFeedbackType {
+  if (error instanceof ApiError && error.status === 403) return 'forbidden';
+  if (error instanceof ApiError && error.status === 409) return 'conflict';
+  if ((typeof navigator !== 'undefined' && !navigator.onLine) || error instanceof TypeError) return 'offline';
+  return 'error';
+}
+
+function RequestFailure({ error, onRetry }: { error: unknown; onRetry: () => void }): React.ReactElement {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    <StatusFeedbackState
+      type={feedbackType(error)}
+      message={message}
+      actionLabel="최신 데이터 다시 불러오기"
+      onAction={onRetry}
+    />
+  );
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -91,10 +111,17 @@ function fileMimeType(file: File): string {
 
 function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }): React.ReactElement {
   const [kpi, setKpi] = useState<Kpi | null>(null);
-  const [error, setError] = useState('');
-  useEffect(() => { void apiRequest<Kpi>('/api/dashboard/kpi').then(setKpi).catch((reason: unknown) => setError(String(reason))); }, []);
-  if (error) return <ErrorBox error={error} />;
-  if (!kpi) return <p role="status">대시보드 데이터를 불러오는 중입니다.</p>;
+  const [error, setError] = useState<unknown>(null);
+  const loadDashboard = useCallback(async () => {
+    setError(null);
+    try { setKpi(await apiRequest<Kpi>('/api/dashboard/kpi')); }
+    catch (reason) { setError(reason); }
+  }, []);
+  useEffect(() => { void loadDashboard(); }, [loadDashboard]);
+  if (error) return <RequestFailure error={error} onRetry={() => void loadDashboard()} />;
+  if (!kpi) return <StatusFeedbackState type="loading" message="대시보드 업무 현황을 동기화하고 있습니다." />;
+  /* original loading label retained below for source traceability */
+  if (false) return <p role="status">대시보드 데이터를 불러오는 중입니다.</p>;
   const cards = [
     { label: '오늘 일정', value: kpi.todayTasksCount, tone: 'blue', hint: '오늘 처리할 기일과 회의' },
     { label: '기한 경과', value: kpi.delayedCount, tone: 'red', hint: '확인이 필요한 지난 일정' },
@@ -152,13 +179,13 @@ function CaseListPage({ onNavigate }: { onNavigate: (path: string) => void }): R
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<unknown>(null);
   const load = useCallback(async (q = query) => {
-    setLoading(true); setError('');
+    setLoading(true); setError(null);
     try {
       const result = await apiRequest<{ cases: CaseRecord[]; total: number }>(`/api/cases?limit=100&q=${encodeURIComponent(q)}`);
       setCases(result.cases); setTotal(result.total);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    } catch (reason) { setError(reason); }
     finally { setLoading(false); }
   }, [query]);
   useEffect(() => { void load(''); }, []);
@@ -179,8 +206,21 @@ function CaseListPage({ onNavigate }: { onNavigate: (path: string) => void }): R
         <Button type="button" variant="secondary" onClick={() => onNavigate('/cases/new')}>새 사건 등록</Button>
       </form>
     </Card>
-    {error && <ErrorBox error={error} />}
-    {loading ? <p role="status">사건 목록을 불러오는 중입니다.</p> : cases.length ? <Table columns={columns} data={cases} keyField="id" /> : <p className="empty-box">조건에 맞는 사건이 없습니다.</p>}
+    {error ? (
+      <RequestFailure error={error} onRetry={() => void load()} />
+    ) : loading ? (
+      <StatusFeedbackState type="loading" message="접근 가능한 사건 목록을 불러오고 있습니다." />
+    ) : cases.length ? (
+      <Table columns={columns} data={cases} keyField="id" />
+    ) : (
+      <StatusFeedbackState
+        type="empty"
+        title="검색 결과가 없습니다"
+        message="검색어를 바꾸거나 새 사건을 등록해 주세요."
+        actionLabel="검색 조건 초기화"
+        onAction={() => { setQuery(''); void load(''); }}
+      />
+    )}
   </div>;
 }
 
