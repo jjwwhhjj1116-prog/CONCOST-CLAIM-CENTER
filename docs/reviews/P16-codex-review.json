@@ -1,0 +1,77 @@
+{
+  "phase": "P16",
+  "name": "Release Candidate UX & Persistent Staging Readiness",
+  "status": "PASS",
+  "verdict": "PASS_WITH_NOTES",
+  "reviewedAt": "2026-08-11T11:09:02+09:00",
+  "implementationCommit": "4bb68f7e9bd1e57954905df93e588dd9187432f4",
+  "runtime": {
+    "node": "24.16.0",
+    "pnpm": "9.15.0",
+    "verificationCheckout": "review/P16-codex worktree at implementationCommit plus evidence-only files"
+  },
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/src/case-management/CaseManagement.tsx",
+    "apps/web/src/layout/StatusFeedbackState.css",
+    "apps/web/src/layout/StatusFeedbackState.tsx",
+    "apps/web/src/main.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "docs/runbooks/staging-operations.md",
+    "package.json",
+    "scripts/p16-e2e.ts",
+    "scripts/p16-production-config-test.ts",
+    "scripts/p16-restart-recovery-test.ts",
+    "scripts/p16-test-support.ts"
+  ],
+  "gates": {
+    "installFrozenLockfile": "PASS (lockfile current; Prisma Client generated)",
+    "databaseReset": "PASS",
+    "databaseMigrate": "PASS",
+    "databaseSeed": "PASS (deterministic synthetic fixtures)",
+    "lint": "PASS (0 errors, 0 warnings)",
+    "typecheck": "PASS (0 errors)",
+    "test": "PASS (136 passed, 0 failed, 0 skipped)",
+    "build": "PASS (61 modules; CSS 26.00 kB; JS 339.16 kB)",
+    "testE2e": "PASS (P06-P16 full sequential Chromium gate; P16 6 release-candidate flows)",
+    "testSecurity": "PASS (98 passed, 0 failed, 0 skipped)",
+    "auditHigh": "PASS (No known vulnerabilities found)"
+  },
+  "focusedVerification": {
+    "p16General": "8 passed, 0 failed",
+    "p16Chromium": "6 flows: login/loading, 409/offline/empty, Reviewer 403, full workflow, API restart, responsive/focus/screenshots",
+    "readiness": "DB writable, exact migration ledger hashes, storage, backup root, restore root",
+    "restartRecovery": "API-created case survived full server close/restart; signed backup verify and isolated restore passed"
+  },
+  "screenshots": [
+    {
+      "viewport": "1440x900",
+      "file": "artifacts/harness/P16/screenshots/report-studio-1440.png",
+      "bytes": 107792
+    },
+    {
+      "viewport": "1024x768",
+      "file": "artifacts/harness/P16/screenshots/report-studio-1024.png",
+      "bytes": 51295
+    },
+    {
+      "viewport": "640x900",
+      "file": "artifacts/harness/P16/screenshots/report-studio-640.png",
+      "bytes": 47790
+    }
+  ],
+  "findings": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "nextPhaseAllowed": false,
+  "deploymentAuthorized": false,
+  "operationalNotes": [
+    "P16 verifies a persistent Node/SQLite volume contract and staging readiness; it does not deploy a remote staging server.",
+    "Cloudflare D1/R2 migration, DNS changes, and real Google credentials remain deferred until explicit user authorization.",
+    "Only deterministic synthetic fixtures and fake/injected providers were used; no customer data or production credential was processed.",
+    "Committed autosave revisions survive restart. As documented in P15, keystrokes not yet sent during the debounce window can still be lost on an immediate client crash."
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-11T09:57:20+09:00",
+  "updatedAt": "2026-08-11T11:09:02+09:00",
   "currentPhase": "P16",
   "nextPhaseAllowed": false,
   "phases": {
@@ -362,9 +362,9 @@
     },
     "P16": {
       "name": "Release Candidate UX & Persistent Staging Readiness",
-      "status": "IN_PROGRESS",
-      "verdict": "PENDING",
-      "gatePassed": false,
+      "status": "PASS",
+      "verdict": "PASS_WITH_NOTES",
+      "gatePassed": true,
       "startedAt": "2026-08-11T10:10:00+09:00",
       "entryAllowed": true,
       "nextPhaseAllowed": false,
@@ -374,7 +374,53 @@
         "critical": 0,
         "high": 0,
         "medium": 0
-      }
+      },
+      "submittedAt": "2026-08-11T11:09:02+09:00",
+      "updatedAt": "2026-08-11T11:09:02+09:00",
+      "completedAt": "2026-08-11T11:09:02+09:00",
+      "followup": "docs/harness/P16-antigravity-followup-01.md",
+      "reviewReport": "docs/reviews/P16-codex-review.md",
+      "reviewRequest": "docs/reviews/requests/P16-review-request.md",
+      "reviewedCommit": "4bb68f7e9bd1e57954905df93e588dd9187432f4",
+      "reviewer": "Codex",
+      "qualityGateSummary": {
+        "installFrozenLockfile": "PASS (lockfile current; Prisma Client generated)",
+        "databaseReset": "PASS",
+        "databaseMigrate": "PASS",
+        "databaseSeed": "PASS (deterministic synthetic fixtures)",
+        "lint": "PASS (0 errors, 0 warnings)",
+        "typecheck": "PASS (0 errors)",
+        "test": "PASS (136 passed, 0 failed, 0 skipped)",
+        "build": "PASS (61 modules; CSS 26.00 kB; JS 339.16 kB)",
+        "testE2e": "PASS (P06-P16 full sequential Chromium gate; P16 6 release-candidate flows)",
+        "testSecurity": "PASS (98 passed, 0 failed, 0 skipped)",
+        "auditHigh": "PASS (No known vulnerabilities found)"
+      },
+      "deliverables": [
+        "apps/api/src/server.ts",
+        "apps/web/src/case-management/CaseManagement.tsx",
+        "apps/web/src/layout/StatusFeedbackState.css",
+        "apps/web/src/layout/StatusFeedbackState.tsx",
+        "apps/web/src/main.tsx",
+        "apps/web/src/routes/Router.tsx",
+        "docs/runbooks/staging-operations.md",
+        "package.json",
+        "scripts/p16-e2e.ts",
+        "scripts/p16-production-config-test.ts",
+        "scripts/p16-restart-recovery-test.ts",
+        "scripts/p16-test-support.ts",
+        "artifacts/harness/P16/commands.log",
+        "artifacts/harness/P16/manifest.json",
+        "artifacts/harness/P16/notes.md",
+        "artifacts/harness/P16/screenshots/report-studio-1440.png",
+        "artifacts/harness/P16/screenshots/report-studio-1024.png",
+        "artifacts/harness/P16/screenshots/report-studio-640.png",
+        "docs/harness/P16-antigravity-followup-01.md",
+        "docs/reviews/requests/P16-review-request.md",
+        "docs/reviews/requests/P16-review-request.json",
+        "docs/reviews/P16-codex-review.md",
+        "docs/reviews/P16-codex-review.json"
+      ]
     }
   }
 }

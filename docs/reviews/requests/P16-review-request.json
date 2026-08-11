@@ -1,0 +1,57 @@
+{
+  "phase": "P16",
+  "branch": "review/P16-codex",
+  "remoteBranch": "feat/P16-staging-readiness",
+  "status": "PASS_WITH_NOTES",
+  "implementationCommit": "4bb68f7e9bd1e57954905df93e588dd9187432f4",
+  "reviewedAt": "2026-08-11T11:09:02+09:00",
+  "runtime": {
+    "node": "24.16.0",
+    "pnpm": "9.15.0"
+  },
+  "gatesPassed": 11,
+  "gatesRequired": 11,
+  "tests": {
+    "general": {
+      "passed": 136,
+      "failed": 0,
+      "skipped": 0
+    },
+    "security": {
+      "passed": 98,
+      "failed": 0,
+      "skipped": 0
+    },
+    "p16Focused": {
+      "passed": 8,
+      "failed": 0
+    },
+    "chromium": {
+      "historicalPhases": "P06-P16",
+      "p16Flows": 6,
+      "failed": 0
+    }
+  },
+  "changedFiles": [
+    "apps/api/src/server.ts",
+    "apps/web/src/case-management/CaseManagement.tsx",
+    "apps/web/src/layout/StatusFeedbackState.css",
+    "apps/web/src/layout/StatusFeedbackState.tsx",
+    "apps/web/src/main.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "docs/runbooks/staging-operations.md",
+    "package.json",
+    "scripts/p16-e2e.ts",
+    "scripts/p16-production-config-test.ts",
+    "scripts/p16-restart-recovery-test.ts",
+    "scripts/p16-test-support.ts"
+  ],
+  "findings": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "nextPhaseAllowed": false,
+  "deploymentAuthorized": false
+}

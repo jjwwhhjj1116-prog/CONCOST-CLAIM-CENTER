@@ -1,0 +1,33 @@
+P16 verification transcript
+Completed: 2026-08-11T11:09:02+09:00
+Implementation commit: 4bb68f7e9bd1e57954905df93e588dd9187432f4
+Runtime: Node 24.16.0 / pnpm 9.15.0
+
+[PASS] corepack pnpm install --frozen-lockfile
+       Lockfile current; 216 packages reused; Prisma Client generated.
+[PASS] corepack pnpm db:reset
+       Database reset and migration SQL applied successfully.
+[PASS] corepack pnpm db:migrate
+       Database migration SQL applied successfully.
+[PASS] corepack pnpm db:seed
+       Deterministic synthetic P11 fixtures seeded.
+[PASS] corepack pnpm lint
+       0 errors, 0 warnings; JSON validation passed.
+[PASS] corepack pnpm typecheck
+       Scripts, UI, web, database, document-engine, and API typecheck passed.
+[PASS] corepack pnpm test
+       136 passed, 0 failed, 0 skipped.
+[PASS] corepack pnpm test:security
+       98 passed, 0 failed, 0 skipped.
+[PASS] corepack pnpm test:e2e
+       P06-P16 full sequential Chromium gate passed.
+       P16: 6 release-candidate flows passed.
+[PASS] corepack pnpm build
+       Vite 61 modules; CSS 26.00 kB (gzip 6.01 kB); JS 339.16 kB (gzip 99.26 kB).
+[PASS] corepack pnpm audit --audit-level high
+       No known vulnerabilities found.
+
+Focused correction history:
+- Initial full E2E found the historical P13 heading expectation "403 Forbidden".
+- The accessible heading was restored without removing the P16 status component.
+- P13, P14, P15, P16 focused E2E and the final full P06-P16 command all passed afterward.
