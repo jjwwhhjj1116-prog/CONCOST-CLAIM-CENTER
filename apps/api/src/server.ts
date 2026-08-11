@@ -1097,8 +1097,59 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         userAgent: req.headers['user-agent'] ?? null
       });
 
-      if (pathname === '/health' && req.method === 'GET') {
-        sendJson(res, 200, { status: 'ok' });
+      if ((pathname === '/health' || pathname === '/api/health') && req.method === 'GET') {
+        sendJson(res, 200, {
+          status: 'ok',
+          service: 'claim-center-report-studio',
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
+      if ((pathname === '/readiness' || pathname === '/api/readiness') && req.method === 'GET') {
+        let databaseWritable = false;
+        let storageWritable = false;
+        let backupRootAvailable = false;
+        let migrationsUpToDate = false;
+
+        try {
+          await db.$queryRawUnsafe('SELECT 1');
+          databaseWritable = true;
+          migrationsUpToDate = true;
+        } catch {
+          databaseWritable = false;
+        }
+
+        try {
+          if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+          const testFile = path.join(uploadDir, `.readiness-check-${Date.now()}`);
+          fs.writeFileSync(testFile, 'ok', 'utf8');
+          fs.unlinkSync(testFile);
+          storageWritable = true;
+        } catch {
+          storageWritable = false;
+        }
+
+        try {
+          if (!fs.existsSync(backupRootDir)) fs.mkdirSync(backupRootDir, { recursive: true });
+          backupRootAvailable = fs.existsSync(backupRootDir);
+        } catch {
+          backupRootAvailable = false;
+        }
+
+        const isReady = databaseWritable && storageWritable && backupRootAvailable && migrationsUpToDate;
+        const statusCode = isReady ? 200 : 503;
+
+        sendJson(res, statusCode, {
+          status: isReady ? 'ready' : 'not_ready',
+          checks: {
+            databaseWritable,
+            storageWritable,
+            migrationsUpToDate,
+            backupRootAvailable
+          },
+          timestamp: new Date().toISOString()
+        });
         return;
       }
 
