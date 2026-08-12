@@ -1,12 +1,32 @@
+import {
+  GOOGLE_DRIVE_SCOPE,
+  GoogleDriveError,
+  bytesToHex,
+  buildAuthorizationUrl,
+  createPkce,
+  decryptSecret,
+  downloadEvidenceFromDrive,
+  encryptSecret,
+  exchangeAuthorizationCode,
+  refreshAccessToken,
+  revokeGoogleCredential,
+  sha256Hex,
+  uploadEvidenceToDrive,
+  validateEvidenceFile,
+  verifyDriveFolder,
+  type GoogleFetch
+} from './google-drive';
+
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
   all<T>(): Promise<{ results: T[] }>;
   bind(...values: unknown[]): D1StatementLike;
-  run(): Promise<{ success?: boolean }>;
+  run(): Promise<{ success?: boolean; meta?: { changes?: number } }>;
 }
 
 interface D1DatabaseLike {
   prepare(sql: string): D1StatementLike;
+  batch?(statements: D1StatementLike[]): Promise<unknown[]>;
 }
 
 interface AssetsLike {
@@ -14,13 +34,15 @@ interface AssetsLike {
 }
 
 export interface CloudflareEnv {
-  ASSETS: AssetsLike;
+  ASSETS?: AssetsLike;
   DB?: D1DatabaseLike;
   FILES?: unknown;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY?: string;
+  GOOGLE_OAUTH_REDIRECT_ORIGIN?: string;
   ALLOW_TEST_GOOGLE_MODES?: string;
+  GOOGLE_TEST_FETCH?: GoogleFetch;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -88,54 +110,15 @@ async function handlePreviewDraft(request: Request, env: CloudflareEnv): Promise
   }
 }
 
-// Cryptographic utilities using Web Crypto AES-GCM
-function bytesToHex(bytes: Uint8Array): string {
-  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
-}
-
 function hexToBytes(value: string): Uint8Array | null {
   if (!/^[0-9a-f]+$/i.test(value) || value.length % 2 !== 0) return null;
   return new Uint8Array(value.match(/.{2}/g)?.map((entry) => Number.parseInt(entry, 16)) ?? []);
 }
 
-async function sha256Hex(value: string | Uint8Array): Promise<string> {
-  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer)));
-}
-
-async function importMasterKey(masterKeyHex: string): Promise<CryptoKey> {
-  let bytes = hexToBytes(masterKeyHex);
-  if (!bytes || bytes.length !== 32) {
-    // Hash to 32 bytes if not hex 64 chars
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(masterKeyHex));
-    bytes = new Uint8Array(digest);
-  }
-  return crypto.subtle.importKey('raw', bytes.buffer as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
-
-async function encryptSecret(plaintext: string, masterKeyHex: string): Promise<{ ciphertextHex: string; ivHex: string }> {
-  const key = await importMasterKey(masterKeyHex);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
-  return { ciphertextHex: bytesToHex(new Uint8Array(encrypted)), ivHex: bytesToHex(iv) };
-}
-
-async function decryptSecret(ciphertextHex: string, ivHex: string, masterKeyHex: string): Promise<string | null> {
-  try {
-    const key = await importMasterKey(masterKeyHex);
-    const ciphertext = hexToBytes(ciphertextHex);
-    const iv = hexToBytes(ivHex);
-    if (!ciphertext || !iv) return null;
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv.buffer as ArrayBuffer }, key, ciphertext.buffer as ArrayBuffer);
-    return new TextDecoder().decode(decrypted);
-  } catch {
-    return null;
-  }
-}
-
 // Authentication & Session
 const PREVIEW_SESSION_COOKIE = 'claim_center_session';
 const PREVIEW_SESSION_SECONDS = 12 * 60 * 60;
+const PREVIEW_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
 
 interface PreviewUserRow {
   id: string;
@@ -154,6 +137,22 @@ interface SessionUser {
   displayName: string;
   email: string;
   roles: string[];
+}
+
+function constantTimeHexEqual(left: string | null, right: string): boolean {
+  if (!left || left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
+
+function parsePreviewRoles(value: string): string[] {
+  try {
+    const roles = JSON.parse(value);
+    return Array.isArray(roles) ? roles.filter((role): role is string => typeof role === 'string' && PREVIEW_ROLES.has(role)) : [];
+  } catch {
+    return [];
+  }
 }
 
 async function derivePreviewPassword(password: string, saltHex: string, iterations: number): Promise<string | null> {
@@ -184,8 +183,8 @@ async function previewSessionUser(request: Request, env: CloudflareEnv): Promise
   const tokenHash = await sha256Hex(token);
   const row = await env.DB.prepare(
     'SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson ' +
-    'FROM preview_sessions s JOIN preview_users u ON s.user_id = u.id ' +
-    'WHERE s.token_hash = ? AND s.expires_at > ?'
+    'FROM preview_sessions s JOIN preview_users u ON u.id = s.user_id ' +
+    'WHERE s.id_hash = ? AND s.expires_at > ? AND u.is_active = 1'
   ).bind(tokenHash, new Date().toISOString()).first<{
     id: string;
     loginId: string;
@@ -200,7 +199,7 @@ async function previewSessionUser(request: Request, env: CloudflareEnv): Promise
     loginId: row.loginId,
     displayName: row.displayName,
     email: row.email,
-    roles: JSON.parse(row.rolesJson || '[]')
+    roles: parsePreviewRoles(row.rolesJson)
   };
 }
 
@@ -210,7 +209,14 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
   if ((url.pathname.endsWith('/me') || url.pathname.endsWith('/session')) && request.method === 'GET') {
     const user = await previewSessionUser(request, env);
     if (!user) return json({ error: 'Authentication required', code: 'AUTH_REQUIRED', user: null, phase: 'CF04_AUTH' }, 401);
-    return json({ user, phase: 'CF04_AUTH' });
+    return json({
+      id: user.id,
+      email: user.email,
+      name: user.displayName,
+      organizationId: 'concost',
+      roles: user.roles,
+      previewMode: true
+    });
   }
 
   if (url.pathname.endsWith('/login') && request.method === 'POST') {
@@ -222,35 +228,38 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
     const user = await env.DB.prepare(
       'SELECT id, login_id AS loginId, password_salt AS passwordSalt, password_hash AS passwordHash, ' +
       'password_iterations AS passwordIterations, display_name AS displayName, email, roles_json AS rolesJson ' +
-      'FROM preview_users WHERE login_id = ?'
-    ).bind(body.loginId.trim().toLowerCase()).first<PreviewUserRow>();
+      'FROM preview_users WHERE login_id = ? COLLATE NOCASE AND is_active = 1'
+    ).bind(body.loginId.trim()).first<PreviewUserRow>();
 
     if (!user) return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
 
     const derivedHash = await derivePreviewPassword(body.password, user.passwordSalt, user.passwordIterations);
-    if (!derivedHash || derivedHash !== user.passwordHash) {
+    if (!constantTimeHexEqual(derivedHash, user.passwordHash)) {
       return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
     }
 
-    const sessionToken = crypto.randomUUID();
+    const sessionToken = [...crypto.getRandomValues(new Uint8Array(32))].map((value) => value.toString(16).padStart(2, '0')).join('');
     const tokenHash = await sha256Hex(sessionToken);
     const expiresAt = new Date(Date.now() + PREVIEW_SESSION_SECONDS * 1000).toISOString();
 
+    const createdAt = new Date().toISOString();
+    await env.DB.prepare('DELETE FROM preview_sessions WHERE expires_at <= ?').bind(createdAt).run();
     await env.DB.prepare(
-      'INSERT INTO preview_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).bind(crypto.randomUUID(), user.id, tokenHash, expiresAt, new Date().toISOString()).run();
+      'INSERT INTO preview_sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
+    ).bind(tokenHash, user.id, createdAt, expiresAt).run();
 
-    const roles: string[] = JSON.parse(user.rolesJson || '[]');
+    const roles = parsePreviewRoles(user.rolesJson);
     const isSecure = url.protocol === 'https:';
     const cookieHeader = `${PREVIEW_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; ${isSecure ? 'Secure; ' : ''}SameSite=Lax; Max-Age=${PREVIEW_SESSION_SECONDS}`;
 
     return new Response(JSON.stringify({
       user: {
         id: user.id,
-        loginId: user.loginId,
-        displayName: user.displayName,
         email: user.email,
-        roles
+        name: user.displayName,
+        organizationId: 'concost',
+        roles,
+        previewMode: true
       },
       phase: 'CF04_AUTH'
     }), {
@@ -268,11 +277,11 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
     const cookieToken = parseCookies(request.headers.get('Cookie'))[PREVIEW_SESSION_COOKIE];
     if (cookieToken) {
       const tokenHash = await sha256Hex(cookieToken);
-      await env.DB.prepare('DELETE FROM preview_sessions WHERE token_hash = ?').bind(tokenHash).run();
+      await env.DB.prepare('DELETE FROM preview_sessions WHERE id_hash = ?').bind(tokenHash).run();
     }
     const isSecure = url.protocol === 'https:';
     const clearCookie = `${PREVIEW_SESSION_COOKIE}=; Path=/; HttpOnly; ${isSecure ? 'Secure; ' : ''}SameSite=Lax; Max-Age=0`;
-    return new Response(JSON.stringify({ success: true, phase: 'CF04_AUTH' }), {
+    return new Response(JSON.stringify({ ok: true, phase: 'CF04_AUTH' }), {
       status: 200,
       headers: {
         'Cache-Control': 'no-store',
@@ -286,105 +295,16 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
   return json({ error: 'Auth route was not found', code: 'AUTH_ROUTE_NOT_FOUND' }, 404);
 }
 
-// Google Workspace & Drive OAuth / Evidence Handlers
+// Google Drive OAuth and evidence storage. The organization is intentionally
+// fixed for this single-tenant preview; raw credentials never cross this file.
+const PREVIEW_ORGANIZATION_ID = 'concost';
+const GOOGLE_IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
+
 interface GoogleCredentialRow {
-  id: string;
-  organizationId: string;
   encryptedRefreshToken: string;
   iv: string;
   scope: string;
-  updatedAt: string;
 }
-
-async function getGoogleDriveCredential(env: CloudflareEnv): Promise<{ refreshToken: string; scope: string } | null> {
-  if (!env.DB) return null;
-  const masterKey = env.GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY;
-  if (!masterKey) return null;
-
-  try {
-    const row = await env.DB.prepare(
-      'SELECT id, organization_id AS organizationId, encrypted_refresh_token AS encryptedRefreshToken, iv, scope, updated_at AS updatedAt ' +
-      'FROM preview_google_credentials LIMIT 1'
-    ).first<GoogleCredentialRow>();
-
-    if (!row) return null;
-    const refreshToken = await decryptSecret(row.encryptedRefreshToken, row.iv, masterKey);
-    if (!refreshToken) return null;
-    return { refreshToken, scope: row.scope };
-  } catch {
-    return null;
-  }
-}
-
-async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
-  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
-
-  const sessionUser = await previewSessionUser(request, env);
-  if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
-
-  // Admin-only check for Google Workspace configuration
-  const isAdmin = sessionUser.roles.includes('ceo') || sessionUser.roles.includes('admin');
-  if (!isAdmin && (url.pathname.endsWith('/start') || url.pathname.endsWith('/disconnect'))) {
-    return json({ error: 'Admin role is required to manage Google Workspace integration', code: 'FORBIDDEN' }, 403);
-  }
-
-  if (url.pathname === '/api/google/status' && request.method === 'GET') {
-    const credential = await getGoogleDriveCredential(env);
-    return json({
-      connected: !!credential,
-      status: credential ? 'CONNECTED' : 'DISCONNECTED',
-      storageProvider: 'GOOGLE_DRIVE',
-      r2SkippedByUser: true,
-      phase: 'CF05_GOOGLE_DRIVE_SYNC'
-    });
-  }
-
-  if (url.pathname === '/api/google/oauth/start' && request.method === 'POST') {
-    const clientId = env.GOOGLE_CLIENT_ID;
-    if (!clientId) {
-      return json({ error: 'Google Client ID is not configured on Cloudflare Workers Secrets', code: 'GOOGLE_CLIENT_ID_MISSING' }, 503);
-    }
-
-    const state = crypto.randomUUID();
-    const verifierArray = crypto.getRandomValues(new Uint8Array(32));
-    const codeVerifier = bytesToHex(verifierArray);
-    const verifierHash = await crypto.subtle.digest('SHA-256', verifierArray);
-    const codeChallenge = bytesToHex(new Uint8Array(verifierHash));
-
-    const redirectUri = `${url.origin}/api/google/oauth/callback`;
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-
-    await env.DB.prepare(
-      'INSERT INTO preview_google_pkce (state, code_verifier, redirect_uri, created_at, expires_at) VALUES (?, ?, ?, ?, ?)'
-    ).bind(state, codeVerifier, redirectUri, new Date().toISOString(), expiresAt).run();
-
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-      `client_id=${encodeURIComponent(clientId)}&` +
-      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-      `response_type=code&` +
-      `scope=${encodeURIComponent('https://www.googleapis.com/auth/drive.file')}&` +
-      `state=${state}&` +
-      `code_challenge=${codeChallenge}&` +
-      `code_challenge_method=S256&` +
-      `access_type=offline&` +
-      `prompt=consent`;
-
-    return json({ authUrl, state, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
-  }
-
-  if (url.pathname === '/api/google/oauth/disconnect' && request.method === 'POST') {
-    await env.DB.prepare('DELETE FROM preview_google_credentials').run();
-    await env.DB.prepare(
-      "UPDATE preview_evidence SET drive_status = 'PENDING_GOOGLE_CONNECTION', sync_status = 'PENDING_GOOGLE_CONNECTION'"
-    ).run();
-    return json({ disconnected: true, status: 'DISCONNECTED', phase: 'CF05_GOOGLE_DRIVE_SYNC' });
-  }
-
-  return json({ error: 'Google OAuth route not found', code: 'NOT_FOUND' }, 404);
-}
-
-const PREVIEW_EVIDENCE_MAX_BYTES = 10_000_000;
-const PREVIEW_EVIDENCE_EXTENSION = /\.(pdf|docx?|xlsx?|pptx?|hwp|hwpx|txt|csv|png|jpe?g|webp)$/i;
 
 interface PreviewEvidenceRow {
   id: string;
@@ -401,111 +321,233 @@ interface PreviewEvidenceRow {
   reconciliationStatus: string;
 }
 
-async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
-  if (!env.DB) return json({ error: 'D1 binding is required', code: 'D1_NOT_CONFIGURED', phase: 'CF05_GOOGLE_DRIVE_SYNC' }, 503);
+function googleFetch(env: CloudflareEnv): GoogleFetch {
+  if (env.ALLOW_TEST_GOOGLE_MODES === 'true' && env.GOOGLE_TEST_FETCH) return env.GOOGLE_TEST_FETCH;
+  return fetch;
+}
 
+function googleConfig(env: CloudflareEnv): { clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string } | null {
+  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin } = env;
+  if (!clientId || !clientSecret || !masterKey || !redirectOrigin) return null;
+  try {
+    const origin = new URL(redirectOrigin);
+    if (origin.protocol !== 'https:' || origin.origin !== redirectOrigin || origin.pathname !== '/') return null;
+  } catch {
+    return null;
+  }
+  return { clientId, clientSecret, masterKey, redirectOrigin };
+}
+
+function googleFailure(reason: unknown): Response {
+  if (reason instanceof GoogleDriveError) {
+    return json({ error: reason.message, code: reason.code, retryAfterSeconds: reason.retryAfterSeconds, reconciliationRequired: reason.uncertain }, reason.status);
+  }
+  return json({ error: 'Google Drive operation failed safely', code: 'GOOGLE_OPERATION_FAILED' }, 502);
+}
+
+async function getGoogleDriveCredential(env: CloudflareEnv): Promise<{ refreshToken: string; scope: string } | null> {
+  if (!env.DB) return null;
+  const config = googleConfig(env);
+  if (!config) return null;
+  try {
+    const row = await env.DB.prepare(
+      'SELECT encrypted_refresh_token AS encryptedRefreshToken, iv, scope FROM preview_google_credentials WHERE organization_id = ?'
+    ).bind(PREVIEW_ORGANIZATION_ID).first<GoogleCredentialRow>();
+    if (!row || row.scope !== GOOGLE_DRIVE_SCOPE) return null;
+    const refreshToken = await decryptSecret(row.encryptedRefreshToken, row.iv, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:google-refresh`);
+    return refreshToken ? { refreshToken, scope: row.scope } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function accessToken(env: CloudflareEnv): Promise<string> {
+  const config = googleConfig(env);
+  const credential = await getGoogleDriveCredential(env);
+  if (!config || !credential) throw new GoogleDriveError('GOOGLE_DRIVE_NOT_CONNECTED', 503, 'Connect Google Drive before using file storage');
+  return refreshAccessToken(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, refreshToken: credential.refreshToken });
+}
+
+async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const sessionUser = await previewSessionUser(request, env);
   if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const isAdmin = sessionUser.roles.includes('admin');
 
+  if (url.pathname === '/api/google/status' && request.method === 'GET') {
+    const connected = Boolean(await getGoogleDriveCredential(env));
+    return json({ connected, status: connected ? 'CONNECTED' : 'DISCONNECTED', configured: Boolean(googleConfig(env)), storageProvider: 'GOOGLE_DRIVE', r2SkippedByUser: true, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+  }
+
+  if (!isAdmin) return json({ error: 'Admin role is required to manage Google Drive', code: 'FORBIDDEN' }, 403);
+  const config = googleConfig(env);
+  if (!config) return json({ error: 'Google OAuth secrets and exact redirect origin are not configured', code: 'GOOGLE_OAUTH_NOT_CONFIGURED' }, 503);
+  if (url.origin !== config.redirectOrigin) return json({ error: 'OAuth request origin is not allowed', code: 'GOOGLE_REDIRECT_ORIGIN_MISMATCH' }, 400);
+  const redirectUri = `${config.redirectOrigin}/api/google/oauth/callback`;
+
+  if (url.pathname === '/api/google/oauth/start' && request.method === 'POST') {
+    const pkce = await createPkce();
+    const encrypted = await encryptSecret(pkce.verifier, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:pkce:${pkce.stateHash}`);
+    const now = new Date();
+    await env.DB.prepare('DELETE FROM preview_google_pkce WHERE expires_at <= ? OR consumed_at IS NOT NULL').bind(now.toISOString()).run();
+    await env.DB.prepare(
+      'INSERT INTO preview_google_pkce (state_hash, encrypted_code_verifier, iv, redirect_uri, actor_id, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)'
+    ).bind(pkce.stateHash, encrypted.ciphertextHex, encrypted.ivHex, redirectUri, sessionUser.id, now.toISOString(), new Date(now.getTime() + 10 * 60_000).toISOString()).run();
+    return json({ authorizationUrl: buildAuthorizationUrl(config.clientId, redirectUri, pkce.state, pkce.challenge), phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+  }
+
+  if (url.pathname === '/api/google/oauth/callback' && request.method === 'GET') {
+    const code = url.searchParams.get('code');
+    const state = url.searchParams.get('state');
+    if (!code || code.length > 2048 || !state || state.length > 256) return json({ error: 'OAuth callback is invalid', code: 'INVALID_OAUTH_CALLBACK' }, 400);
+    const stateHash = await sha256Hex(state);
+    const now = new Date().toISOString();
+    const pkce = await env.DB.prepare(
+      'UPDATE preview_google_pkce SET consumed_at = ? WHERE state_hash = ? AND actor_id = ? AND redirect_uri = ? AND consumed_at IS NULL AND expires_at > ? ' +
+      'RETURNING encrypted_code_verifier AS encryptedCodeVerifier, iv'
+    ).bind(now, stateHash, sessionUser.id, redirectUri, now).first<{ encryptedCodeVerifier: string; iv: string }>();
+    if (!pkce) return json({ error: 'OAuth state is invalid, expired, or already used', code: 'INVALID_OAUTH_STATE' }, 409);
+    const verifier = await decryptSecret(pkce.encryptedCodeVerifier, pkce.iv, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:pkce:${stateHash}`);
+    if (!verifier) return json({ error: 'OAuth verifier could not be decrypted', code: 'INVALID_OAUTH_VERIFIER' }, 409);
+    try {
+      const exchanged = await exchangeAuthorizationCode(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, code, verifier, redirectUri });
+      const encrypted = await encryptSecret(exchanged.refreshToken, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:google-refresh`);
+      await env.DB.prepare(
+        'INSERT INTO preview_google_credentials (organization_id, encrypted_refresh_token, iv, scope, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(organization_id) DO UPDATE SET encrypted_refresh_token = excluded.encrypted_refresh_token, iv = excluded.iv, scope = excluded.scope, created_by = excluded.created_by, updated_at = excluded.updated_at'
+      ).bind(PREVIEW_ORGANIZATION_ID, encrypted.ciphertextHex, encrypted.ivHex, exchanged.scope, sessionUser.id, now, now).run();
+      return Response.redirect(`${config.redirectOrigin}/integrations/google?google=connected`, 303);
+    } catch (reason) {
+      return googleFailure(reason);
+    }
+  }
+
+  if (url.pathname === '/api/google/oauth/disconnect' && request.method === 'POST') {
+    const credential = await getGoogleDriveCredential(env);
+    if (!credential) return json({ disconnected: true, status: 'DISCONNECTED', phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+    try {
+      await revokeGoogleCredential(googleFetch(env), credential.refreshToken);
+      await env.DB.prepare('DELETE FROM preview_google_credentials WHERE organization_id = ?').bind(PREVIEW_ORGANIZATION_ID).run();
+      return json({ disconnected: true, status: 'DISCONNECTED', phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+    } catch (reason) {
+      return googleFailure(reason);
+    }
+  }
+
+  if (url.pathname === '/api/google/folders/bind' && request.method === 'POST') {
+    const draftId = await previewDraftId(request);
+    if (!draftId) return json({ error: 'A valid preview draft key is required', code: 'INVALID_PREVIEW_DRAFT_KEY' }, 401);
+    const body = await request.json().catch(() => null) as { folderId?: unknown } | null;
+    if (!body || typeof body.folderId !== 'string') return json({ error: 'folderId is required', code: 'INVALID_FOLDER_PAYLOAD' }, 400);
+    try {
+      const folder = await verifyDriveFolder(googleFetch(env), await accessToken(env), body.folderId);
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        'INSERT INTO preview_google_case_folders (draft_id, organization_id, google_folder_id, bound_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ' +
+        'ON CONFLICT(draft_id) DO UPDATE SET google_folder_id = excluded.google_folder_id, bound_by = excluded.bound_by, updated_at = excluded.updated_at'
+      ).bind(draftId, PREVIEW_ORGANIZATION_ID, folder.id, sessionUser.id, now, now).run();
+      return json({ folder: { id: folder.id, name: folder.name }, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+    } catch (reason) {
+      return googleFailure(reason);
+    }
+  }
+
+  return json({ error: 'Google OAuth route not found', code: 'NOT_FOUND' }, 404);
+}
+
+async function replayEvidence(env: CloudflareEnv, draftId: string, idempotencyKey: string, fingerprint: string): Promise<Response | null> {
+  if (!env.DB) return null;
+  const operation = await env.DB.prepare(
+    'SELECT status, request_fingerprint AS requestFingerprint, google_file_id AS googleFileId FROM preview_google_operations WHERE draft_id = ? AND idempotency_key = ?'
+  ).bind(draftId, idempotencyKey).first<{ status: string; requestFingerprint: string; googleFileId: string | null }>();
+  if (!operation) return null;
+  if (operation.requestFingerprint !== fingerprint) return json({ error: 'Idempotency key was used for a different file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+  if (operation.status !== 'SUCCEEDED') return json({ error: 'Previous upload requires reconciliation before retry', code: operation.status === 'RECONCILIATION_REQUIRED' ? 'RECONCILIATION_REQUIRED' : 'UPLOAD_IN_PROGRESS_OR_FAILED' }, 409);
+  const file = await env.DB.prepare(
+    'SELECT id, original_name AS originalName, mime_type AS mimeType, byte_size AS byteSize, uploaded_at AS uploadedAt, uploaded_by AS uploadedBy, storage_provider AS storageProvider, drive_status AS driveStatus, google_file_id AS googleFileId, google_folder_id AS googleFolderId, sync_status AS syncStatus, reconciliation_status AS reconciliationStatus FROM preview_evidence WHERE draft_id = ? AND idempotency_key = ?'
+  ).bind(draftId, idempotencyKey).first<PreviewEvidenceRow>();
+  return file ? json({ file: { ...file, downloadUrl: `/api/preview/evidence/${file.id}/download` }, replay: true, phase: 'CF05_GOOGLE_DRIVE_SYNC' }) : json({ error: 'Upload metadata requires reconciliation', code: 'RECONCILIATION_REQUIRED' }, 409);
+}
+
+async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 binding is required', code: 'D1_NOT_CONFIGURED', phase: 'CF05_GOOGLE_DRIVE_SYNC' }, 503);
+  const sessionUser = await previewSessionUser(request, env);
+  if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   const draftId = await previewDraftId(request);
   if (!draftId) return json({ error: 'A valid preview draft key is required', code: 'INVALID_PREVIEW_DRAFT_KEY' }, 401);
+  const connected = Boolean(await getGoogleDriveCredential(env));
 
-  // Check Google Drive Connection status
-  const credential = await getGoogleDriveCredential(env);
-  const isConnected = !!credential || env.ALLOW_TEST_GOOGLE_MODES === 'true';
-
-  if (url.pathname === '/api/preview/evidence' && request.method === 'GET') {
-    const result = await env.DB.prepare(
-      'SELECT id, original_name AS originalName, mime_type AS mimeType, byte_size AS byteSize, uploaded_at AS uploadedAt, ' +
-      'uploaded_by AS uploadedBy, storage_provider AS storageProvider, drive_status AS driveStatus, ' +
-      'google_file_id AS googleFileId, google_folder_id AS googleFolderId, sync_status AS syncStatus, reconciliation_status AS reconciliationStatus ' +
-      'FROM preview_evidence WHERE draft_id = ? ORDER BY uploaded_at DESC LIMIT 100'
-    ).bind(draftId).all<PreviewEvidenceRow>();
-
-    return json({
-      googleDriveConnected: isConnected,
-      r2SkippedByUser: true,
-      files: result.results.map((file) => ({
-        ...file,
-        downloadUrl: file.googleFileId ? `/api/preview/evidence/${file.id}/download` : null
-      })),
-      phase: 'CF05_GOOGLE_DRIVE_SYNC'
-    });
-  }
-
-  if (url.pathname === '/api/preview/evidence' && request.method === 'POST') {
-    if (!isConnected) {
-      return json({
-        error: 'File storage is not configured. Connect Google Drive first.',
-        code: 'GOOGLE_DRIVE_NOT_CONNECTED',
-        r2SkippedByUser: true,
-        phase: 'CF05_GOOGLE_DRIVE_PENDING'
-      }, 503);
-    }
-
-    const contentLength = Number(request.headers.get('Content-Length') ?? '0');
-    if (Number.isFinite(contentLength) && contentLength > PREVIEW_EVIDENCE_MAX_BYTES + 100_000) {
-      return json({ error: 'Evidence file exceeds 10 MB', code: 'EVIDENCE_TOO_LARGE' }, 413);
-    }
-
-    const form = await request.formData().catch(() => null);
-    const file = form?.get('file');
-    const idempotencyKey = request.headers.get('Idempotency-Key') || crypto.randomUUID();
-    const uploadedBy = sessionUser.displayName; // Derived strictly from server session User
-
-    if (!(file instanceof File)) {
-      return json({ error: 'file is required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
-    }
-    if (file.size <= 0 || file.size > PREVIEW_EVIDENCE_MAX_BYTES) {
-      return json({ error: 'Evidence file must be between 1 byte and 10 MB', code: 'EVIDENCE_TOO_LARGE' }, 413);
-    }
-    if (!PREVIEW_EVIDENCE_EXTENSION.test(file.name) || file.name.length > 240) {
-      return json({ error: 'Evidence file type is not allowed', code: 'EVIDENCE_TYPE_NOT_ALLOWED' }, 415);
-    }
-
-    const fileBuffer = await file.arrayBuffer();
-    const sha256 = await sha256Hex(new Uint8Array(fileBuffer));
-    const id = crypto.randomUUID();
-    const uploadedAt = new Date().toISOString();
-    const mimeType = file.type || 'application/octet-stream';
-    const googleFileId = `drive-file-${id.slice(0, 8)}`;
-    const googleFolderId = `case-folder-${draftId.slice(0, 8)}`;
-
+  const downloadMatch = url.pathname.match(/^\/api\/preview\/evidence\/([0-9a-f-]{36})\/download$/iu);
+  if (downloadMatch && request.method === 'GET') {
+    const file = await env.DB.prepare(
+      'SELECT google_file_id AS googleFileId, original_name AS originalName, mime_type AS mimeType FROM preview_evidence WHERE id = ? AND draft_id = ? AND storage_provider = ?'
+    ).bind(downloadMatch[1], draftId, 'GOOGLE_DRIVE').first<{ googleFileId: string; originalName: string; mimeType: string }>();
+    if (!file?.googleFileId) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
     try {
-      await env.DB.prepare(
-        'INSERT INTO preview_evidence (id, draft_id, object_key, original_name, mime_type, byte_size, uploaded_at, uploaded_by, ' +
-        'storage_provider, drive_status, sha256, google_file_id, google_folder_id, sync_status, reconciliation_status, idempotency_key) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(
-        id, draftId, `google-drive/${googleFileId}`, file.name, mimeType, file.size, uploadedAt, uploadedBy,
-        'GOOGLE_DRIVE', 'SYNCED_TO_GOOGLE_DRIVE', sha256, googleFileId, googleFolderId, 'SYNCED', 'CLEAN', idempotencyKey
-      ).run();
-
-      return json({
-        file: {
-          id,
-          originalName: file.name,
-          mimeType,
-          byteSize: file.size,
-          uploadedAt,
-          uploadedBy,
-          storageProvider: 'GOOGLE_DRIVE',
-          driveStatus: 'SYNCED_TO_GOOGLE_DRIVE',
-          googleFileId,
-          googleFolderId,
-          sha256,
-          syncStatus: 'SYNCED',
-          reconciliationStatus: 'CLEAN',
-          downloadUrl: `/api/preview/evidence/${id}/download`
-        },
-        phase: 'CF05_GOOGLE_DRIVE_SYNC'
-      }, 201);
-    } catch {
-      return json({ error: 'Evidence metadata transaction failed', code: 'EVIDENCE_METADATA_FAILED' }, 503);
+      const providerResponse = await downloadEvidenceFromDrive(googleFetch(env), await accessToken(env), file.googleFileId);
+      return new Response(providerResponse.body, { headers: { 'Cache-Control': 'private, no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.originalName)}`, 'Content-Type': file.mimeType, 'X-Content-Type-Options': 'nosniff' } });
+    } catch (reason) {
+      return googleFailure(reason);
     }
   }
 
-  return json({ error: 'Evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
+  if (url.pathname !== '/api/preview/evidence') return json({ error: 'Evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
+  if (request.method === 'GET') {
+    const result = await env.DB.prepare(
+      'SELECT id, original_name AS originalName, mime_type AS mimeType, byte_size AS byteSize, uploaded_at AS uploadedAt, uploaded_by AS uploadedBy, storage_provider AS storageProvider, drive_status AS driveStatus, google_file_id AS googleFileId, google_folder_id AS googleFolderId, sync_status AS syncStatus, reconciliation_status AS reconciliationStatus FROM preview_evidence WHERE draft_id = ? ORDER BY uploaded_at DESC LIMIT 100'
+    ).bind(draftId).all<PreviewEvidenceRow>();
+    return json({ googleDriveConnected: connected, r2SkippedByUser: true, files: result.results.map((file) => ({ ...file, downloadUrl: file.googleFileId ? `/api/preview/evidence/${file.id}/download` : null })), phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+  }
+  if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  if (!connected) return json({ error: 'Connect Google Drive before uploading evidence', code: 'GOOGLE_DRIVE_NOT_CONNECTED', r2SkippedByUser: true }, 503);
+
+  const idempotencyKey = request.headers.get('Idempotency-Key');
+  if (!idempotencyKey || !GOOGLE_IDEMPOTENCY_KEY.test(idempotencyKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+  const form = await request.formData().catch(() => null);
+  const file = form?.get('file');
+  if (!(file instanceof File)) return json({ error: 'file is required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
+
+  try {
+    const validated = await validateEvidenceFile(file);
+    const fingerprint = await sha256Hex(`${draftId}:${file.name}:${validated.mimeType}:${file.size}:${validated.sha256}`);
+    const replay = await replayEvidence(env, draftId, idempotencyKey, fingerprint);
+    if (replay) return replay;
+    const operationId = crypto.randomUUID();
+    const evidenceId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const reserved = await env.DB.prepare(
+      'INSERT OR IGNORE INTO preview_google_operations (id, draft_id, idempotency_key, request_fingerprint, status, google_file_id, error_code, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)'
+    ).bind(operationId, draftId, idempotencyKey, fingerprint, 'PENDING', sessionUser.id, now, now).run();
+    if (reserved.meta?.changes === 0) return (await replayEvidence(env, draftId, idempotencyKey, fingerprint)) ?? json({ error: 'Concurrent upload reservation failed', code: 'UPLOAD_CONFLICT' }, 409);
+    const folder = await env.DB.prepare('SELECT google_folder_id AS googleFolderId FROM preview_google_case_folders WHERE draft_id = ? AND organization_id = ?').bind(draftId, PREVIEW_ORGANIZATION_ID).first<{ googleFolderId: string }>();
+    if (!folder) {
+      await env.DB.prepare("UPDATE preview_google_operations SET status = 'FAILED', error_code = 'GOOGLE_FOLDER_NOT_BOUND', updated_at = ? WHERE id = ? AND status = 'PENDING'").bind(new Date().toISOString(), operationId).run();
+      return json({ error: 'Bind a Google Drive folder before uploading', code: 'GOOGLE_FOLDER_NOT_BOUND' }, 409);
+    }
+    let uploaded: { fileId: string };
+    try {
+      uploaded = await uploadEvidenceToDrive(googleFetch(env), { accessToken: await accessToken(env), folderId: folder.googleFolderId, evidenceId, fileName: file.name, mimeType: validated.mimeType, sha256: validated.sha256, bytes: validated.bytes });
+    } catch (reason) {
+      const uncertain = reason instanceof GoogleDriveError && reason.uncertain;
+      await env.DB.prepare('UPDATE preview_google_operations SET status = ?, error_code = ?, updated_at = ? WHERE id = ? AND status = ?').bind(uncertain ? 'RECONCILIATION_REQUIRED' : 'FAILED', reason instanceof GoogleDriveError ? reason.code : 'GOOGLE_OPERATION_FAILED', new Date().toISOString(), operationId, 'PENDING').run();
+      return googleFailure(reason);
+    }
+    const uploadedAt = new Date().toISOString();
+    const insertEvidence = env.DB.prepare(
+      'INSERT INTO preview_evidence (id, draft_id, object_key, original_name, mime_type, byte_size, uploaded_at, uploaded_by, storage_provider, drive_status, sha256, google_file_id, google_folder_id, sync_status, reconciliation_status, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(evidenceId, draftId, `google-drive/${uploaded.fileId}`, file.name, validated.mimeType, file.size, uploadedAt, sessionUser.displayName, 'GOOGLE_DRIVE', 'SYNCED_TO_GOOGLE_DRIVE', validated.sha256, uploaded.fileId, folder.googleFolderId, 'SYNCED', 'CLEAN', idempotencyKey);
+    const completeOperation = env.DB.prepare("UPDATE preview_google_operations SET status = 'SUCCEEDED', google_file_id = ?, updated_at = ? WHERE id = ? AND status = 'PENDING'").bind(uploaded.fileId, uploadedAt, operationId);
+    try {
+      if (!env.DB.batch) throw new Error('D1 batch unavailable');
+      await env.DB.batch([insertEvidence, completeOperation]);
+    } catch {
+      await env.DB.prepare("UPDATE preview_google_operations SET status = 'RECONCILIATION_REQUIRED', google_file_id = ?, error_code = 'D1_COMMIT_FAILED', updated_at = ? WHERE id = ? AND status = 'PENDING'").bind(uploaded.fileId, new Date().toISOString(), operationId).run().catch(() => undefined);
+      return json({ error: 'Google upload succeeded but metadata needs reconciliation', code: 'RECONCILIATION_REQUIRED' }, 503);
+    }
+    return json({ file: { id: evidenceId, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, uploadedAt, uploadedBy: sessionUser.displayName, storageProvider: 'GOOGLE_DRIVE', driveStatus: 'SYNCED_TO_GOOGLE_DRIVE', googleFileId: uploaded.fileId, googleFolderId: folder.googleFolderId, sha256: validated.sha256, syncStatus: 'SYNCED', reconciliationStatus: 'CLEAN', downloadUrl: `/api/preview/evidence/${evidenceId}/download` }, replay: false, phase: 'CF05_GOOGLE_DRIVE_SYNC' }, 201);
+  } catch (reason) {
+    return googleFailure(reason);
+  }
 }
 
 // Router dispatch

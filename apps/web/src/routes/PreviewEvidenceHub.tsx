@@ -44,6 +44,7 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const draftKeyRef = useRef('');
+  const uploadKeysRef = useRef(new Map<string, string>());
 
   const loadFiles = useCallback(async () => {
     try {
@@ -85,18 +86,28 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
 
     let completed = 0;
     for (const file of selected) {
+      const fingerprint = `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+      const idempotencyKey = uploadKeysRef.current.get(fingerprint) ?? crypto.randomUUID();
+      uploadKeysRef.current.set(fingerprint, idempotencyKey);
       try {
         if (file.size <= 0 || file.size > MAX_FILE_BYTES) throw new Error(`${file.name}: 파일 크기는 10MB 이하여야 합니다.`);
         const form = new FormData();
         form.set('file', file);
         const response = await fetch('/api/preview/evidence', {
           method: 'POST',
-          headers: { 'X-Preview-Draft-Key': draftKeyRef.current || previewBrowserKey() },
+          headers: {
+            'X-Preview-Draft-Key': draftKeyRef.current || previewBrowserKey(),
+            'Idempotency-Key': idempotencyKey
+          },
           body: form
         });
-        const payload = await response.json() as { file?: PreviewEvidenceFile; error?: string };
-        if (!response.ok || !payload.file) throw new Error(payload.error ?? `${file.name}: 업로드에 실패했습니다.`);
-        setFiles((current) => [payload.file as PreviewEvidenceFile, ...current]);
+        const payload = await response.json() as { file?: PreviewEvidenceFile; error?: string; code?: string };
+        if (!response.ok || !payload.file) {
+          uploadKeysRef.current.delete(fingerprint);
+          throw new Error(payload.error ?? `${file.name}: 업로드에 실패했습니다.`);
+        }
+        uploadKeysRef.current.delete(fingerprint);
+        setFiles((current) => [payload.file as PreviewEvidenceFile, ...current.filter((item) => item.id !== payload.file?.id)]);
         completed += 1;
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : `${file.name}: 업로드에 실패했습니다.`);
@@ -237,21 +248,138 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
   );
 };
 
-export const PreviewGoogleDriveSetup: React.FC<{ onNavigate: (path: string) => void }> = ({ onNavigate }) => (
+interface GoogleDriveStatus {
+  connected: boolean;
+  configured: boolean;
+  status: 'CONNECTED' | 'DISCONNECTED';
+  storageProvider: 'GOOGLE_DRIVE';
+}
+
+export const PreviewGoogleDriveSetup: React.FC<{ onNavigate: (path: string) => void }> = ({ onNavigate }) => {
+  const [status, setStatus] = useState<GoogleDriveStatus | null>(null);
+  const [folderId, setFolderId] = useState('');
+  const [boundFolder, setBoundFolder] = useState<{ id: string; name: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('Google OAuth 연결 상태를 확인하고 있습니다.');
+  const [error, setError] = useState('');
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/google/status', { headers: { Accept: 'application/json' } });
+      const payload = await response.json() as GoogleDriveStatus & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Google Drive 상태를 확인하지 못했습니다.');
+      setStatus(payload);
+      setNotice(payload.connected
+        ? 'Google Drive가 연결되었습니다. 사건별 폴더를 지정하면 자료 업로드를 시작할 수 있습니다.'
+        : payload.configured
+          ? 'Google OAuth 설정이 준비되었습니다. 관리자 동의를 진행하세요.'
+          : 'Cloudflare Secret에 Google OAuth 설정을 등록해야 합니다.');
+      setError('');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Google Drive 상태를 확인하지 못했습니다.');
+    }
+  }, []);
+
+  useEffect(() => { void loadStatus(); }, [loadStatus]);
+
+  const connect = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/google/oauth/start', { method: 'POST', headers: { Accept: 'application/json' } });
+      const payload = await response.json() as { authorizationUrl?: string; error?: string };
+      if (!response.ok || !payload.authorizationUrl) throw new Error(payload.error ?? 'Google OAuth를 시작하지 못했습니다.');
+      const authorizationUrl = new URL(payload.authorizationUrl);
+      if (authorizationUrl.origin !== 'https://accounts.google.com') throw new Error('허용되지 않은 Google 승인 주소입니다.');
+      window.location.assign(authorizationUrl.toString());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Google OAuth를 시작하지 못했습니다.');
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/google/oauth/disconnect', { method: 'POST', headers: { Accept: 'application/json' } });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'Google Drive 연결을 해제하지 못했습니다.');
+      setBoundFolder(null);
+      await loadStatus();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Google Drive 연결을 해제하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const bindFolder = async () => {
+    if (!folderId.trim()) {
+      setError('Google Drive 폴더 ID를 입력하세요.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/google/folders/bind', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Preview-Draft-Key': previewBrowserKey() },
+        body: JSON.stringify({ folderId: folderId.trim() })
+      });
+      const payload = await response.json() as { folder?: { id: string; name: string }; error?: string };
+      if (!response.ok || !payload.folder) throw new Error(payload.error ?? '사건 폴더를 확인하지 못했습니다.');
+      setBoundFolder(payload.folder);
+      setNotice(`“${payload.folder.name}” 폴더가 현재 초안 자료실에 연결되었습니다.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '사건 폴더를 확인하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
   <section className="route-view preview-drive-setup" aria-labelledby="preview-drive-title">
     <div>
       <span className="workspace-eyebrow">GOOGLE WORKSPACE · SECURE CONNECTION</span>
       <h2 id="preview-drive-title">Google Drive 연결</h2>
-      <p>D1 로그인과 보고서 초안 저장은 활성화되어 있습니다. 파일 원본 저장은 Google Cloud OAuth Client 등록 후 Google Drive로 직접 연결합니다.</p>
+      <p>D1에는 로그인·보고서 초안·파일 메타데이터만 저장합니다. 파일 원본은 관리자가 승인한 Google Drive 폴더에 직접 저장되며 R2는 사용하지 않습니다.</p>
+    </div>
+    <div className="preview-drive-status" role="status" aria-live="polite">
+      <span className={status?.connected ? 'is-connected' : ''}>{status?.connected ? 'CONNECTED' : 'DISCONNECTED'}</span>
+      <strong>{notice}</strong>
     </div>
     <div className="preview-drive-steps">
-      <article><span>01</span><strong>D1 업무 저장 활성</strong><p>로그인 세션과 보고서 초안이 Cloudflare D1에 저장됩니다.</p></article>
-      <article><span>02</span><strong>Google OAuth 등록</strong><p>승인된 Redirect URI와 Client ID/Secret을 서버 비밀값으로 등록합니다.</p></article>
-      <article><span>03</span><strong>Drive 직접 저장</strong><p>사용자가 올린 자료를 날짜·시간·사용자 정보와 함께 사건별 Drive 폴더에 저장합니다.</p></article>
+      <article><span>01</span><strong>D1 업무 저장 활성</strong><p>로그인 세션과 보고서 초안은 Cloudflare D1에 저장됩니다.</p></article>
+      <article><span>02</span><strong>관리자 OAuth 동의</strong><p>PKCE와 일회용 state를 사용하며 Refresh Token 원문은 브라우저와 D1에 노출하지 않습니다.</p></article>
+      <article><span>03</span><strong>사건 폴더 지정</strong><p>Google Drive 폴더 ID를 검증한 뒤 현재 초안의 자료 저장 위치로 연결합니다.</p></article>
     </div>
+    {status?.connected ? (
+      <div className="preview-drive-folder-form">
+        <label htmlFor="preview-google-folder-id">Google Drive 폴더 ID</label>
+        <div>
+          <input
+            id="preview-google-folder-id"
+            value={folderId}
+            onChange={(event) => setFolderId(event.target.value)}
+            placeholder="Drive 폴더 URL의 /folders/ 다음 ID"
+            autoComplete="off"
+          />
+          <button type="button" disabled={busy} onClick={() => void bindFolder()}>폴더 확인·연결</button>
+        </div>
+        {boundFolder ? <small>연결됨 · {boundFolder.name} ({boundFolder.id})</small> : null}
+      </div>
+    ) : null}
+    {error ? <div className="preview-upload-error" role="alert">{error}<button type="button" onClick={() => void loadStatus()}>상태 다시 확인</button></div> : null}
     <div className="preview-drive-actions">
-      <button type="button" onClick={() => onNavigate('/cases/files')}>자료실로 이동</button>
-      <span>현재 상태 · GOOGLE OAUTH CREDENTIALS REQUIRED</span>
+      <div>
+        <button type="button" disabled={busy || !status?.configured} onClick={() => void (status?.connected ? disconnect() : connect())}>
+          {busy ? '처리 중…' : status?.connected ? 'Google Drive 연결 해제' : 'Google 계정 연결'}
+        </button>
+        <button type="button" disabled={!status?.connected} onClick={() => onNavigate('/cases/files')}>자료실로 이동</button>
+      </div>
+      <span>저장 방식 · GOOGLE DRIVE DIRECT · R2 미사용</span>
     </div>
   </section>
-);
+  );
+};

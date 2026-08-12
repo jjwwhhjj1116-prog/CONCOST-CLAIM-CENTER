@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Input } from '@claim-studio/ui';
-import { ApiError, apiRequest } from './api';
+import { apiRequest } from './api';
 import { AppShell } from './layout/AppShell';
 import { isSafeReturnTo, RouterView, type UserRole } from './routes/Router';
 
@@ -24,14 +24,6 @@ const isSessionUser = (value: unknown): value is SessionUser => {
 };
 
 
-const PREVIEW_SESSION: SessionUser = {
-  id: 'cloudflare-preview',
-  email: 'preview@claimcenter.studio',
-  name: 'Preview Director',
-  organizationId: 'preview',
-  roles: ['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer']
-};
-
 const currentBrowserPath = () => window.location.pathname;
 
 export const App: React.FC = () => {
@@ -49,13 +41,6 @@ export const App: React.FC = () => {
     else window.history.pushState(null, '', `${url.pathname}${url.search}`);
     setCurrentPath(url.pathname);
   }, []);
-  const enterPreview = useCallback(() => {
-    setPreviewMode(true);
-    setSession(PREVIEW_SESSION);
-    navigate('/dashboard', true);
-  }, [navigate]);
-
-
   useEffect(() => {
     const restoreFromHistory = () => setCurrentPath(currentBrowserPath());
     window.addEventListener('popstate', restoreFromHistory);
@@ -63,21 +48,15 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    void apiRequest<unknown>('/auth/session')
+    void apiRequest<SessionUser>('/auth/session')
       .then((user) => {
         const restored = isSessionUser(user) ? user : null;
         setSession(restored);
         setPreviewMode(restored?.previewMode === true);
       })
-      .catch((reason) => {
-        if (reason instanceof ApiError && reason.payload.code === 'CLOUDFLARE_MIGRATION_IN_PROGRESS') {
-          enterPreview();
-          return;
-        }
-        setSession(null);
-      })
+      .catch(() => setSession(null))
       .finally(() => setCheckingSession(false));
-  }, [enterPreview]);
+  }, []);
 
   const expireSession = async () => {
     try { await apiRequest('/auth/logout', { method: 'POST' }); } catch { /* Session may already be invalid. */ }
@@ -91,7 +70,7 @@ export const App: React.FC = () => {
     event.preventDefault(); setLoginError('');
     try {
       await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ loginId, password }) });
-      const user = await apiRequest<unknown>('/auth/session');
+      const user = await apiRequest<SessionUser>('/auth/session');
       if (!isSessionUser(user)) throw new Error('Invalid session response');
       setSession(user);
       setPreviewMode(user.previewMode === true);
@@ -108,22 +87,15 @@ export const App: React.FC = () => {
     return (
       <main className="login-page" id="main-content">
         <Card title="클레임센터 스튜디오">
-          {previewMode ? (
-            <div className="preview-entry">
-              <span className="workspace-eyebrow">CLOUDFLARE INTERACTIVE PREVIEW</span>
-              <h1>CLAIM CENTER<br />STUDIO</h1>
-              <p>클레임 업무와 보고서 제작 흐름을 한눈에 확인하는 디지털 워크스페이스입니다.</p>
-              <Button type="button" onClick={enterPreview}>UI 미리보기 시작</Button>
-            </div>
-          ) : (
-            <form className="form-stack" onSubmit={(event) => void login(event)}>
-              <p className="muted">서버 세션과 조직·역할 권한으로 로그인합니다.</p>
-              <Input label="아이디" type="text" value={loginId} autoComplete="username" onChange={(event) => setLoginId(event.target.value)} />
-              <Input label="비밀번호" type="password" value={password} autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
-              {loginError && <p role="alert" className="error-box">{loginError}</p>}
-              <Button type="submit">로그인</Button>
-            </form>
-          )}
+          <form className="form-stack" onSubmit={(event) => void login(event)}>
+            <span className="workspace-eyebrow">SECURE MEMBER ACCESS</span>
+            <h1>CLAIM CENTER<br />STUDIO</h1>
+            <p className="muted">서버 세션과 조직·역할 권한으로 로그인합니다.</p>
+            <Input label="아이디" type="text" value={loginId} autoComplete="username" onChange={(event) => setLoginId(event.target.value)} />
+            <Input label="비밀번호" type="password" value={password} autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} />
+            {loginError && <p role="alert" className="error-box">{loginError}</p>}
+            <Button type="submit">로그인</Button>
+          </form>
         </Card>
       </main>
     );
