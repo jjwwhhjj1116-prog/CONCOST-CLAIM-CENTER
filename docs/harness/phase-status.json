@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-12T13:48:00+09:00",
+  "updatedAt": "2026-08-12T13:58:00+09:00",
   "currentPhase": "CF07",
   "nextPhaseAllowed": false,
   "phases": {
@@ -468,14 +468,22 @@
     },
     "CF07": {
       "name": "D1 Report Studio Autosave & Revision History",
-      "status": "IN_PROGRESS",
+      "status": "READY_FOR_REVIEW",
       "verdict": "PENDING",
       "gatePassed": false,
       "startedAt": "2026-08-12T13:48:00+09:00",
+      "submittedAt": "2026-08-12T13:58:00+09:00",
+      "updatedAt": "2026-08-12T13:58:00+09:00",
       "entryAllowed": true,
       "nextPhaseAllowed": false,
       "predecessor": "CF06",
       "handoff": "docs/harness/CF07-codex-handoff.md",
+      "implementationCommit": "547e782eda0d21f2e174a1e96df9de26df72c3d9",
+      "reviewRequest": "docs/reviews/requests/CF07-review-request.md",
+      "evidence": "artifacts/harness/CF07/",
+      "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/reports/studio",
+      "deployedAt": "2026-08-12T13:57:22+09:00",
+      "nextPhase": "CF08",
       "openDefects": {
         "critical": 0,
         "high": 0,

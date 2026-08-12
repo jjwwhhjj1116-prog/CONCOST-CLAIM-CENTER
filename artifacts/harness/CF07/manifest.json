@@ -1,0 +1,32 @@
+{
+  "phase": "CF07",
+  "implementationCommit": "547e782eda0d21f2e174a1e96df9de26df72c3d9",
+  "status": "READY_FOR_REVIEW",
+  "changedFiles": [
+    "apps/cloudflare/migrations/0006_cf07_report_studio_drafts.sql",
+    "apps/cloudflare/src/index.ts",
+    "apps/web/src/routes/PreviewReportStudio.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "docs/harness/CF07-codex-handoff.md",
+    "docs/harness/phase-status.json",
+    "package.json",
+    "scripts/cf06-case-operations-test.ts",
+    "scripts/cf07-report-autosave-test.ts"
+  ],
+  "gates": {
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS (66 modules; CSS 37.90 kB; JS 360.21 kB)",
+    "cf07": "3/3 PASS",
+    "cloudflareRegression": "31/31 PASS",
+    "fullRegression": "136/136 PASS",
+    "d1LocalMigration": "PASS (9 commands)",
+    "d1RemoteVerification": "2 report tables, 5 triggers, 1 migration ledger row",
+    "cloudflareDeployment": "PASS"
+  },
+  "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/reports/studio",
+  "deferred": {
+    "googleDrive": true,
+    "r2": "SKIPPED_BY_USER"
+  }
+}

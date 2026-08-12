@@ -1,0 +1,9 @@
+2026-08-12T13:48:00+09:00 corepack pnpm typecheck => PASS
+2026-08-12T13:49:00+09:00 corepack pnpm lint => PASS
+2026-08-12T13:50:00+09:00 corepack pnpm build => PASS (66 modules; CSS 37.90 kB; JS 360.21 kB)
+2026-08-12T13:51:00+09:00 corepack pnpm test:cf07 => PASS (3/3)
+2026-08-12T13:52:00+09:00 corepack pnpm test:cf => PASS (31/31)
+2026-08-12T13:53:00+09:00 corepack pnpm test => PASS (136/136)
+2026-08-12T13:54:00+09:00 Cloudflare D1 migration 0006_cf07_report_studio_drafts.sql => PASS (2 tables, 5 triggers, ledger row)
+2026-08-12T13:57:22+09:00 Cloudflare Worker build 7cd934ca => PASS (upload 72.91 KiB, gzip 16.26 KiB, startup 4 ms)
+2026-08-12T13:58:00+09:00 live /reports/studio verification => PASS (D1 marker, honest no-case empty state, new-case action)
