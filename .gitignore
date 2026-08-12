@@ -54,3 +54,6 @@ Thumbs.db
 # Test Coverage
 coverage/
 .nyc_output/
+
+# Cloudflare Wrangler local emulator state
+.wrangler/

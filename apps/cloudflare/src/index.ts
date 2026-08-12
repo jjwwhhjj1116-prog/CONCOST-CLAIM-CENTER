@@ -23,7 +23,7 @@ interface D1StatementLike {
   first<T>(): Promise<T | null>;
   all<T>(): Promise<{ results: T[] }>;
   bind(...values: unknown[]): D1StatementLike;
-  run(): Promise<{ success?: boolean; meta?: { changes?: number } }>;
+  run(): Promise<{ success?: boolean; meta?: { changes?: number; last_row_id?: number } }>;
 }
 
 interface D1DatabaseLike {
@@ -296,6 +296,266 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
   }
 
   return json({ error: 'Auth route was not found', code: 'AUTH_ROUTE_NOT_FOUND' }, 404);
+}
+
+// CF06 D1-backed case operations. This intentionally implements the core
+// operational slice before report, approval, and binary-document migration.
+const PREVIEW_CLAIM_TYPES = new Set(['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']);
+const PREVIEW_CASE_STATUSES = [
+  'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
+  'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'SUCCESS_FEE', 'CLOSED'
+] as const;
+const PREVIEW_CASE_MUTATION_ROLES = new Set(['admin', 'ceo', 'director', 'pm']);
+const PREVIEW_CASE_CREATE_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
+
+interface PreviewCaseRow {
+  id: string;
+  caseNumber: string;
+  title: string;
+  description: string | null;
+  claimType: string;
+  status: string;
+  version: number;
+  categoryMajor: string;
+  categoryMiddle: string;
+  categoryMinor: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function canMutatePreviewCases(user: SessionUser): boolean {
+  return user.roles.some((role) => PREVIEW_CASE_MUTATION_ROLES.has(role));
+}
+
+function previewCaseProjection(row: PreviewCaseRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    caseNumber: row.caseNumber,
+    title: row.title,
+    description: row.description,
+    claimType: row.claimType,
+    status: row.status,
+    version: row.version,
+    category: { major: row.categoryMajor, middle: row.categoryMiddle, minor: row.categoryMinor },
+    parties: [],
+    schedules: [],
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+function kstDateKey(value: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
+}
+
+function previewDDay(value: string): { dDayStr: string; isOverdue: boolean; isToday: boolean; diffDays: number } {
+  const target = new Date(value);
+  const todayKey = kstDateKey(new Date());
+  const targetKey = kstDateKey(target);
+  const diffDays = Math.round((Date.parse(`${targetKey}T00:00:00Z`) - Date.parse(`${todayKey}T00:00:00Z`)) / 86_400_000);
+  return { dDayStr: diffDays === 0 ? 'D-DAY' : diffDays > 0 ? `D-${diffDays}` : `D+${Math.abs(diffDays)}`, isOverdue: diffDays < 0, isToday: diffDays === 0, diffDays };
+}
+
+function exactObjectKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+async function accessiblePreviewCase(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<PreviewCaseRow | null> {
+  if (!env.DB) return null;
+  return env.DB.prepare(
+    'SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, ' +
+    'c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, c.created_at AS createdAt, c.updated_at AS updatedAt ' +
+    'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL ' +
+    'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
+}
+
+async function previewCaseDetail(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const row = await accessiblePreviewCase(env, user, caseId);
+  if (!row) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  const [parties, schedules, activities] = await Promise.all([
+    env.DB.prepare('SELECT id, name, role, contact FROM preview_case_parties WHERE case_id = ? ORDER BY created_at ASC LIMIT 100').bind(caseId).all<{ id: string; name: string; role: string; contact: string | null }>(),
+    env.DB.prepare('SELECT id, title, type, scheduled_at AS date, location FROM preview_case_schedules WHERE case_id = ? ORDER BY scheduled_at ASC LIMIT 100').bind(caseId).all<{ id: string; title: string; type: string; date: string; location: string | null }>(),
+    env.DB.prepare(
+      'SELECT a.id, a.title, a.description, a.created_at AS createdAt, u.id AS actorId, u.display_name AS actorName ' +
+      'FROM preview_case_activities a JOIN preview_users u ON u.id = a.actor_id WHERE a.case_id = ? ORDER BY a.created_at DESC LIMIT 100'
+    ).bind(caseId).all<{ id: string; title: string; description: string | null; createdAt: string; actorId: string; actorName: string }>()
+  ]);
+  return json({
+    case: {
+      ...previewCaseProjection(row),
+      parties: parties.results,
+      schedules: schedules.results.map((schedule) => ({ ...schedule, dDayInfo: previewDDay(schedule.date) })),
+      activityTimeline: activities.results.map((activity) => ({
+        id: activity.id, title: activity.title, description: activity.description, createdAt: activity.createdAt,
+        actor: { id: activity.actorId, name: activity.actorName }
+      }))
+    },
+    phase: 'CF06_D1_CASE_OPERATIONS'
+  });
+}
+
+async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  if (request.method !== 'GET') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const admin = user.roles.includes('admin') ? 1 : 0;
+  const visibility = '(? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))';
+  const summary = await env.DB.prepare(
+    `SELECT COUNT(*) AS totalCases, SUM(CASE WHEN c.status <> 'CLOSED' THEN 1 ELSE 0 END) AS inProgressCount ` +
+    `FROM preview_cases c WHERE c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility}`
+  ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).first<{ totalCases: number; inProgressCount: number }>();
+  const recent = await env.DB.prepare(
+    `SELECT c.id, c.case_number AS caseNumber, c.title, c.claim_type AS claimType, c.status, c.updated_at AS updatedAt ` +
+    `FROM preview_cases c WHERE c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} ORDER BY c.updated_at DESC LIMIT 8`
+  ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<{ id: string; caseNumber: string; title: string; claimType: string; status: string; updatedAt: string }>();
+  const schedules = await env.DB.prepare(
+    `SELECT s.id, s.title, s.type, s.scheduled_at AS date, s.location, c.id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle ` +
+    `FROM preview_case_schedules s JOIN preview_cases c ON c.id = s.case_id ` +
+    `WHERE c.organization_id = ? AND c.deleted_at IS NULL AND s.scheduled_at >= ? AND ${visibility} ORDER BY s.scheduled_at ASC LIMIT 8`
+  ).bind(PREVIEW_ORGANIZATION_ID, new Date().toISOString(), admin, user.id).all<{ id: string; title: string; type: string; date: string; location: string | null; caseId: string; caseNumber: string; caseTitle: string }>();
+  const today = kstDateKey(new Date());
+  const allVisibleSchedules = await env.DB.prepare(
+    `SELECT s.scheduled_at AS date FROM preview_case_schedules s JOIN preview_cases c ON c.id = s.case_id ` +
+    `WHERE c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} LIMIT 1000`
+  ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<{ date: string }>();
+  return json({
+    totalCases: Number(summary?.totalCases ?? 0),
+    inProgressCount: Number(summary?.inProgressCount ?? 0),
+    reviewingDocsCount: 0,
+    todayTasksCount: allVisibleSchedules.results.filter((entry) => kstDateKey(new Date(entry.date)) === today).length,
+    delayedCount: allVisibleSchedules.results.filter((entry) => new Date(entry.date).getTime() < Date.now() && kstDateKey(new Date(entry.date)) !== today).length,
+    recentCases: recent.results,
+    upcomingSchedules: schedules.results.map((schedule) => ({
+      id: schedule.id, title: schedule.title, type: schedule.type, date: schedule.date, location: schedule.location,
+      dDayInfo: previewDDay(schedule.date), case: { id: schedule.caseId, caseNumber: schedule.caseNumber, title: schedule.caseTitle }
+    })),
+    phase: 'CF06_D1_CASE_OPERATIONS'
+  });
+}
+
+async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const casePath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})(?:\/(status|parties|schedules))?$/iu);
+
+  if (url.pathname === '/api/cases' && request.method === 'GET') {
+    const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
+    const limitRaw = Number(url.searchParams.get('limit') ?? 50);
+    if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 100) return json({ error: 'limit must be between 1 and 100', code: 'INVALID_PAGINATION' }, 400);
+    const admin = user.roles.includes('admin') ? 1 : 0;
+    const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    const where = "c.organization_id = ? AND c.deleted_at IS NULL AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')";
+    const rows = await env.DB.prepare(
+      `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC LIMIT ?`
+    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, query, like, like, limitRaw).all<PreviewCaseRow>();
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, query, like, like).first<{ total: number }>();
+    return json({ cases: rows.results.map(previewCaseProjection), total: Number(count?.total ?? 0), phase: 'CF06_D1_CASE_OPERATIONS' });
+  }
+
+  if (url.pathname === '/api/cases' && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot create cases', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['title', 'claimType', 'description', 'category'])) return json({ error: 'Case payload is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
+    const category = body.category as Record<string, unknown> | null;
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    const description = typeof body.description === 'string' ? body.description.trim() : '';
+    const claimType = typeof body.claimType === 'string' ? body.claimType : '';
+    if (!title || title.length > 500 || description.length > 5000 || !PREVIEW_CLAIM_TYPES.has(claimType) || !category || !exactObjectKeys(category, ['major', 'middle', 'minor'])) return json({ error: 'Case title, type, description, or category is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
+    const major = typeof category.major === 'string' ? category.major.trim() : '';
+    const middle = typeof category.middle === 'string' ? category.middle.trim() : '';
+    const minor = typeof category.minor === 'string' ? category.minor.trim() : '';
+    if (![major, middle, minor].every((entry) => entry.length >= 1 && entry.length <= 100)) return json({ error: 'All three category levels are required', code: 'INVALID_CASE_CATEGORY' }, 400);
+    const idempotencyKey = request.headers.get('Idempotency-Key');
+    if (idempotencyKey && !PREVIEW_CASE_CREATE_KEY.test(idempotencyKey)) return json({ error: 'Idempotency-Key is invalid', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+    const fingerprint = idempotencyKey ? await sha256Hex(JSON.stringify({ title, description, claimType, major, middle, minor })) : null;
+    if (idempotencyKey) {
+      const existing = await env.DB.prepare(
+        'SELECT id, request_fingerprint AS requestFingerprint FROM preview_cases WHERE organization_id = ? AND idempotency_key = ?'
+      ).bind(PREVIEW_ORGANIZATION_ID, idempotencyKey).first<{ id: string; requestFingerprint: string }>();
+      if (existing) return existing.requestFingerprint === fingerprint ? previewCaseDetail(env, user, existing.id) : json({ error: 'Idempotency key was used for different case data', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    }
+    const caseId = crypto.randomUUID();
+    const sequence = await env.DB.prepare('INSERT INTO preview_case_sequences (case_id) VALUES (?)').bind(caseId).run();
+    const ordinal = Number(sequence.meta?.last_row_id ?? 0);
+    if (!ordinal) return json({ error: 'Case number allocation failed', code: 'CASE_SEQUENCE_FAILED' }, 503);
+    const now = new Date().toISOString();
+    const caseNumber = `CC-${new Date().getUTCFullYear()}-${String(ordinal).padStart(5, '0')}`;
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now),
+        env.DB.prepare('INSERT INTO preview_case_assignments (case_id, user_id, assigned_by, assigned_at) VALUES (?, ?, ?, ?)').bind(caseId, user.id, user.id, now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'CASE_CREATED', '사건 등록', `${claimType} · ${caseNumber}`, now)
+      ]);
+      const response = await previewCaseDetail(env, user, caseId);
+      return new Response(response.body, { status: 201, headers: response.headers });
+    } catch {
+      if (idempotencyKey) {
+        const existing = await env.DB.prepare('SELECT id, request_fingerprint AS requestFingerprint FROM preview_cases WHERE organization_id = ? AND idempotency_key = ?').bind(PREVIEW_ORGANIZATION_ID, idempotencyKey).first<{ id: string; requestFingerprint: string }>();
+        if (existing?.requestFingerprint === fingerprint) return previewCaseDetail(env, user, existing.id);
+      }
+      return json({ error: 'Case could not be created', code: 'CASE_CREATE_FAILED' }, 409);
+    }
+  }
+
+  if (!casePath) return json({ error: 'Case route was not found', code: 'CASE_ROUTE_NOT_FOUND' }, 404);
+  const [, caseId, action] = casePath;
+  if (!action && request.method === 'GET') return previewCaseDetail(env, user, caseId);
+  if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot mutate cases', code: 'FORBIDDEN' }, 403);
+  const row = await accessiblePreviewCase(env, user, caseId);
+  if (!row) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body) return json({ error: 'JSON body is required', code: 'INVALID_CASE_PAYLOAD' }, 400);
+  const now = new Date().toISOString();
+
+  if (action === 'status' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['toStatus', 'reason', 'version']) || typeof body.toStatus !== 'string' || typeof body.reason !== 'string' || !Number.isInteger(body.version)) return json({ error: 'Status payload is invalid', code: 'INVALID_STATUS_PAYLOAD' }, 400);
+    const currentIndex = PREVIEW_CASE_STATUSES.indexOf(row.status as typeof PREVIEW_CASE_STATUSES[number]);
+    const expectedNext = PREVIEW_CASE_STATUSES[currentIndex + 1];
+    if (body.toStatus !== expectedNext) return json({ error: `Status must advance from ${row.status} to ${expectedNext ?? 'no further state'}`, code: 'INVALID_STATUS_TRANSITION' }, 409);
+    if (body.version !== row.version) return json({ error: 'Case was updated in another session', code: 'VERSION_CONFLICT', currentVersion: row.version }, 409);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE preview_cases SET status = ?, version = version + 1, updated_at = ? WHERE id = ? AND organization_id = ? AND version = ? AND status = ?').bind(body.toStatus, now, caseId, PREVIEW_ORGANIZATION_ID, body.version, row.status),
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id = ? AND version = ? AND status = ?)').bind(crypto.randomUUID(), caseId, user.id, 'STATUS_CHANGED', `상태 변경 · ${body.toStatus}`, body.reason.trim().slice(0, 2000) || null, now, caseId, row.version + 1, body.toStatus)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1) return json({ error: 'Case was updated in another session', code: 'VERSION_CONFLICT' }, 409);
+    return previewCaseDetail(env, user, caseId);
+  }
+
+  if (action === 'parties' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['name', 'role', 'contact']) || typeof body.name !== 'string') return json({ error: 'Party payload is invalid', code: 'INVALID_PARTY_PAYLOAD' }, 400);
+    const name = body.name.trim();
+    const role = typeof body.role === 'string' ? body.role.trim() : 'OTHER';
+    const contact = typeof body.contact === 'string' ? body.contact.trim() : '';
+    if (!name || name.length > 200 || !role || role.length > 80 || contact.length > 300) return json({ error: 'Party fields exceed limits', code: 'INVALID_PARTY_PAYLOAD' }, 400);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_case_parties (id, case_id, name, role, contact, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, name, role, contact || null, user.id, now),
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'PARTY_ADDED', '관계자 추가', name, now)
+    ]);
+    return previewCaseDetail(env, user, caseId);
+  }
+
+  if (action === 'schedules' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['title', 'type', 'date', 'location']) || typeof body.title !== 'string' || typeof body.type !== 'string' || typeof body.date !== 'string') return json({ error: 'Schedule payload is invalid', code: 'INVALID_SCHEDULE_PAYLOAD' }, 400);
+    const title = body.title.trim();
+    const scheduledAt = new Date(body.date);
+    const location = typeof body.location === 'string' ? body.location.trim() : '';
+    if (!title || title.length > 300 || !['COURT', 'CLIENT', 'INTERNAL'].includes(body.type) || Number.isNaN(scheduledAt.getTime()) || location.length > 300) return json({ error: 'Schedule fields are invalid', code: 'INVALID_SCHEDULE_PAYLOAD' }, 400);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_case_schedules (id, case_id, title, type, scheduled_at, location, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, body.type, scheduledAt.toISOString(), location || null, user.id, now),
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'SCHEDULE_ADDED', '일정 추가', title, now)
+    ]);
+    return previewCaseDetail(env, user, caseId);
+  }
+
+  return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
 }
 
 // Google Drive OAuth and evidence storage. The organization is intentionally
@@ -595,7 +855,7 @@ const worker = {
       return json({
         status: 'ok',
         runtime: 'cloudflare-workers',
-        phase: 'CF01_FOUNDATION'
+        phase: 'CF06_D1_CASE_OPERATIONS'
       });
     }
 
@@ -609,18 +869,27 @@ const worker = {
         dbBound,
         assetsBound,
         checks: {
+          caseStorage: dbBound ? 'd1_active' : 'd1_missing',
           r2: 'skipped_by_user',
           fileStorage: credential ? 'google_drive_connected' : 'google_drive_pending'
         },
         googleDriveConnected: !!credential,
         r2SkippedByUser: true,
         r2: 'SKIPPED_BY_USER',
-        phase: 'CF05_GOOGLE_DRIVE_SYNC'
+        phase: 'CF06_D1_CASE_OPERATIONS'
       }, isReady ? 200 : 503);
     }
 
     if (url.pathname.startsWith('/auth/') || url.pathname.startsWith('/api/auth/')) {
       return handlePreviewAuth(request, env, url);
+    }
+
+    if (url.pathname === '/api/dashboard/kpi') {
+      return handlePreviewDashboard(request, env);
+    }
+
+    if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {
+      return handlePreviewCases(request, env, url);
     }
 
     if (url.pathname.startsWith('/api/google/')) {

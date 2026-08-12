@@ -89,7 +89,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           <div className="brand-copy"><h1>클레임센터 스튜디오</h1><small>CLAIM CENTER STUDIO</small></div>
         </div>
         <div className="session-tools">
-          {previewMode && <span className="preview-chip">D1 로그인·초안 저장 활성</span>}
+          {previewMode && <span className="preview-chip">D1 로그인·사건·초안 저장 활성</span>}
           <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
           <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>

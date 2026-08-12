@@ -233,12 +233,14 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   const [minor, setMinor] = useState('기타');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError('');
     try {
       const result = await apiRequest<{ case: CaseRecord }>('/api/cases', {
-        method: 'POST', body: JSON.stringify({ title, claimType, description, category: { major, middle, minor } })
+        method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, category: { major, middle, minor } })
       });
+      setIdempotencyKey(crypto.randomUUID());
       onNavigate(`/cases/detail?caseId=${encodeURIComponent(result.case.id)}`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
@@ -505,7 +507,7 @@ function MeetingsPage(): React.ReactElement {
 }
 
 function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'parties' | 'schedules'; onNavigate: (path: string) => void }): React.ReactElement {
-  const caseId = new URLSearchParams(window.location.search).get('caseId') ?? 'CASE-SYN-001';
+  const caseId = new URLSearchParams(window.location.search).get('caseId');
   const [record, setRecord] = useState<CaseRecord | null>(null);
   const [error, setError] = useState('');
   const [partyName, setPartyName] = useState('');
@@ -514,10 +516,12 @@ function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'partie
   const [scheduleDate, setScheduleDate] = useState('');
   const load = useCallback(async () => {
     setError('');
+    if (!caseId) { setRecord(null); return; }
     try { setRecord((await apiRequest<{ case: CaseRecord }>(`/api/cases/${encodeURIComponent(caseId)}`)).case); }
     catch (reason) { setError(reason instanceof ApiError && reason.status === 403 ? '403 사건 접근 권한이 없습니다.' : reason instanceof Error ? reason.message : String(reason)); }
   }, [caseId]);
   useEffect(() => { void load(); }, [load]);
+  if (!caseId) return <StatusFeedbackState type="empty" title="사건을 먼저 선택해 주세요" message="사건 목록에서 업무를 진행할 사건을 선택하면 개요·일정·관계자 화면이 열립니다." actionLabel="사건 목록으로 이동" onAction={() => onNavigate('/cases')} />;
   if (error) return <ErrorBox error={error} />;
   if (!record) return <p role="status">사건 상세를 불러오는 중입니다.</p>;
 

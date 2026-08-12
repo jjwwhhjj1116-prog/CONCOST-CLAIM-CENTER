@@ -11,7 +11,7 @@ import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
 import { GoogleWorkspaceIntegration } from '../integrations/GoogleWorkspaceIntegration';
 import { GoogleWorkspaceCaseTools } from '../integrations/GoogleWorkspaceCaseTools';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
-import { PreviewDashboard, PreviewFeature } from './PreviewWorkspace';
+import { PreviewFeature } from './PreviewWorkspace';
 import { PreviewEvidenceHub, PreviewGoogleDriveSetup } from './PreviewEvidenceHub';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
@@ -154,7 +154,17 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   }
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
-  if (previewMode && currentRoute.id === 'DASH-01') return <PreviewDashboard onNavigate={onNavigate} />;
+  if (previewMode && ['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05'].includes(currentRoute.id)) {
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <div className="route-heading">
+          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <span className="preview-pill">D1 LIVE DATA</span>
+        </div>
+        <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} />
+      </section>
+    );
+  }
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;

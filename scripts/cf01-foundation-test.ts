@@ -61,10 +61,10 @@ const env = (overrides: Partial<CloudflareEnv> = {}): CloudflareEnv => ({
   ...overrides
 });
 
-test('CF01 health identifies the Cloudflare foundation runtime', async () => {
+test('CF06 health identifies the active Cloudflare case-operations runtime', async () => {
   const response = await cloudflareWorker.fetch(new Request('https://preview.example/api/health'), env());
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok', runtime: 'cloudflare-workers', phase: 'CF01_FOUNDATION' });
+  assert.deepEqual(await response.json(), { status: 'ok', runtime: 'cloudflare-workers', phase: 'CF06_D1_CASE_OPERATIONS' });
 });
 
 test('CF05 readiness requires D1 and static assets while R2 remains skipped', async () => {
@@ -81,10 +81,10 @@ test('CF05 readiness requires D1 and static assets while R2 remains skipped', as
   assert.equal(missingAssets.status, 503);
 });
 
-test('CF01 blocks application APIs until data migration passes', async () => {
+test('CF06 case APIs require an authenticated member session', async () => {
   const response = await cloudflareWorker.fetch(new Request('https://preview.example/api/cases'), env());
-  assert.equal(response.status, 503);
-  assert.equal((await response.json() as { code: string }).code, 'CLOUDFLARE_MIGRATION_IN_PROGRESS');
+  assert.equal(response.status, 401);
+  assert.equal((await response.json() as { code: string }).code, 'AUTH_REQUIRED');
 });
 
 test('CF04 returns JSON authentication-required for a missing member session', async () => {
