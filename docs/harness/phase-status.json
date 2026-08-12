@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-12T13:20:00+09:00",
+  "updatedAt": "2026-08-12T13:42:00+09:00",
   "currentPhase": "CF06",
   "nextPhaseAllowed": false,
   "phases": {
@@ -444,7 +444,7 @@
     },
     "CF06": {
       "name": "D1 Case Operations & Live Dashboard",
-      "status": "IN_PROGRESS",
+      "status": "READY_FOR_REVIEW",
       "verdict": "PENDING",
       "gatePassed": false,
       "startedAt": "2026-08-12T13:20:00+09:00",
@@ -452,6 +452,12 @@
       "nextPhaseAllowed": false,
       "predecessor": "CF05",
       "handoff": "docs/harness/CF06-codex-handoff.md",
+      "implementationCommit": "3aa4396fcc526771209735393f7c021be947ab0d",
+      "reviewRequest": "docs/reviews/requests/CF06-review-request.md",
+      "evidence": "artifacts/harness/CF06/",
+      "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/dashboard",
+      "deployedAt": "2026-08-12T13:40:27+09:00",
+      "nextPhase": "CF07",
       "openDefects": {
         "critical": 0,
         "high": 0,

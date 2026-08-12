@@ -1,0 +1,35 @@
+{
+  "phase": "CF06",
+  "implementationCommit": "3aa4396fcc526771209735393f7c021be947ab0d",
+  "status": "READY_FOR_REVIEW",
+  "changedFiles": [
+    ".gitignore",
+    "apps/cloudflare/migrations/0005_cf06_case_operations.sql",
+    "apps/cloudflare/src/index.ts",
+    "apps/web/src/case-management/CaseManagement.tsx",
+    "apps/web/src/layout/AppShell.tsx",
+    "apps/web/src/routes/PreviewWorkspace.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "docs/harness/CF06-codex-handoff.md",
+    "docs/harness/phase-status.json",
+    "package.json",
+    "scripts/cf01-foundation-test.ts",
+    "scripts/cf06-case-operations-test.ts"
+  ],
+  "gates": {
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS",
+    "cf06": "3/3 PASS",
+    "cloudflareRegression": "28/28 PASS",
+    "fullRegression": "136/136 PASS",
+    "d1LocalMigration": "PASS",
+    "d1RemoteVerification": "6 case tables, 5 triggers, 1 migration ledger row",
+    "cloudflareDeployment": "PASS"
+  },
+  "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/dashboard",
+  "deferred": {
+    "googleDrive": true,
+    "r2": "SKIPPED_BY_USER"
+  }
+}

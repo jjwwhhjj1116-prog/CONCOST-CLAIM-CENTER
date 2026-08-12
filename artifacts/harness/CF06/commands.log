@@ -1,0 +1,12 @@
+corepack pnpm typecheck
+corepack pnpm lint
+corepack pnpm build
+corepack pnpm test:cf06
+corepack pnpm test:cf
+corepack pnpm test
+corepack pnpm cf:d1:migrate:local
+git push github HEAD:feat/CF05-google-drive-sync
+Cloudflare D1 Studio: applied 0005_cf06_case_operations.sql
+Cloudflare D1 Studio: verified 6 case tables, 5 triggers, 1 migration row
+Cloudflare Workers Builds: build 22b71a98 deployed commit 3aa4396
+Live browser: verified D1-backed dashboard at production URL
