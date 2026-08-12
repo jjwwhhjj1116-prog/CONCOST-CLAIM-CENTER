@@ -1,7 +1,7 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-12T13:42:00+09:00",
-  "currentPhase": "CF06",
+  "updatedAt": "2026-08-12T13:48:00+09:00",
+  "currentPhase": "CF07",
   "nextPhaseAllowed": false,
   "phases": {
     "P00": {
@@ -444,12 +444,12 @@
     },
     "CF06": {
       "name": "D1 Case Operations & Live Dashboard",
-      "status": "READY_FOR_REVIEW",
-      "verdict": "PENDING",
-      "gatePassed": false,
+      "status": "PASS_WITH_NOTES",
+      "verdict": "PASS_WITH_NOTES",
+      "gatePassed": true,
       "startedAt": "2026-08-12T13:20:00+09:00",
       "entryAllowed": true,
-      "nextPhaseAllowed": false,
+      "nextPhaseAllowed": true,
       "predecessor": "CF05",
       "handoff": "docs/harness/CF06-codex-handoff.md",
       "implementationCommit": "3aa4396fcc526771209735393f7c021be947ab0d",
@@ -458,6 +458,24 @@
       "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/dashboard",
       "deployedAt": "2026-08-12T13:40:27+09:00",
       "nextPhase": "CF07",
+      "reviewedAt": "2026-08-12T13:48:00+09:00",
+      "reviewer": "Codex",
+      "openDefects": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0
+      }
+    },
+    "CF07": {
+      "name": "D1 Report Studio Autosave & Revision History",
+      "status": "IN_PROGRESS",
+      "verdict": "PENDING",
+      "gatePassed": false,
+      "startedAt": "2026-08-12T13:48:00+09:00",
+      "entryAllowed": true,
+      "nextPhaseAllowed": false,
+      "predecessor": "CF06",
+      "handoff": "docs/harness/CF07-codex-handoff.md",
       "openDefects": {
         "critical": 0,
         "high": 0,

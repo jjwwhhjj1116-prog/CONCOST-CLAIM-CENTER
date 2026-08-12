@@ -558,6 +558,107 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
 }
 
+// CF07 report authoring persistence. Binary exports and approvals remain later
+// phases; this slice protects the user's active text and every saved revision.
+const PREVIEW_REPORT_EDIT_ROLES = new Set(['admin', 'ceo', 'director', 'pm', 'staff']);
+
+interface PreviewReportDraftRow {
+  caseId: string;
+  title: string;
+  content: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  updatedById: string;
+  updatedByName: string;
+}
+
+async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const draft = await env.DB.prepare(
+    'SELECT d.case_id AS caseId, d.title, d.content, d.version, d.created_at AS createdAt, d.updated_at AS updatedAt, ' +
+    'u.id AS updatedById, u.display_name AS updatedByName FROM preview_report_drafts d ' +
+    'JOIN preview_users u ON u.id = d.updated_by WHERE d.case_id = ? AND d.organization_id = ?'
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewReportDraftRow>();
+  const revisions = await env.DB.prepare(
+    'SELECT r.id, r.version, r.title, r.content_sha256 AS contentSha256, r.saved_at AS savedAt, u.id AS savedById, u.display_name AS savedByName ' +
+    'FROM preview_report_revisions r JOIN preview_users u ON u.id = r.saved_by WHERE r.case_id = ? ORDER BY r.version DESC LIMIT 20'
+  ).bind(caseId).all<{ id: string; version: number; title: string; contentSha256: string; savedAt: string; savedById: string; savedByName: string }>();
+  return json({
+    draft: draft ? {
+      caseId: draft.caseId,
+      title: draft.title,
+      content: draft.content,
+      version: Number(draft.version),
+      createdAt: draft.createdAt,
+      updatedAt: draft.updatedAt,
+      updatedBy: { id: draft.updatedById, name: draft.updatedByName }
+    } : null,
+    revisions: revisions.results.map((revision) => ({
+      id: revision.id,
+      version: Number(revision.version),
+      title: revision.title,
+      contentSha256: revision.contentSha256,
+      savedAt: revision.savedAt,
+      savedBy: { id: revision.savedById, name: revision.savedByName }
+    })),
+    phase: 'CF07_D1_REPORT_AUTOSAVE'
+  });
+}
+
+async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (url.pathname !== '/api/report-drafts') return json({ error: 'Report draft route was not found', code: 'REPORT_ROUTE_NOT_FOUND' }, 404);
+  const caseId = url.searchParams.get('caseId') ?? '';
+  if (!PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
+  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+
+  if (request.method === 'GET') return previewReportPayload(env, caseId);
+  if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot edit report drafts', code: 'FORBIDDEN' }, 403);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !exactObjectKeys(body, ['title', 'content', 'expectedVersion']) || typeof body.title !== 'string' || typeof body.content !== 'string' || !Number.isInteger(body.expectedVersion)) {
+    return json({ error: 'Report draft payload is invalid', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  }
+  const title = body.title.trim();
+  const content = body.content;
+  const expectedVersion = Number(body.expectedVersion);
+  if (!title || title.length > 300 || content.length > 500_000 || expectedVersion < 0) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+  const existing = await env.DB.prepare('SELECT version, updated_at AS updatedAt FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; updatedAt: string }>();
+  const contentSha256 = await sha256Hex(content);
+  if (!existing) {
+    if (expectedVersion !== 0) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: 0 }, 409);
+    const now = new Date().toISOString();
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, user.id, user.id, now, now),
+        env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, contentSha256, user.id, now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', '보고서 초안 저장 · v1', title, now)
+      ]);
+    } catch {
+      const canonical = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ?').bind(caseId).first<{ version: number }>();
+      return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(canonical?.version ?? 0) }, 409);
+    }
+    return previewReportPayload(env, caseId);
+  }
+
+  if (expectedVersion !== Number(existing.version)) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(existing.version) }, 409);
+  const nextVersion = Number(existing.version) + 1;
+  const now = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString();
+  const results = await env.DB.batch([
+    env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion),
+    env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, contentSha256, user.id, now, caseId, nextVersion),
+    env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', `보고서 초안 저장 · v${nextVersion}`, title, now, caseId, nextVersion)
+  ]) as Array<{ meta?: { changes?: number } }>;
+  if (results[0]?.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
+  return previewReportPayload(env, caseId);
+}
+
 // Google Drive OAuth and evidence storage. The organization is intentionally
 // fixed for this single-tenant preview; raw credentials never cross this file.
 const PREVIEW_ORGANIZATION_ID = 'concost';
@@ -890,6 +991,10 @@ const worker = {
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {
       return handlePreviewCases(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-drafts') {
+      return handlePreviewReportDraft(request, env, url);
     }
 
     if (url.pathname.startsWith('/api/google/')) {
