@@ -421,6 +421,23 @@
         "docs/reviews/P16-codex-review.md",
         "docs/reviews/P16-codex-review.json"
       ]
+    },
+    "CF05": {
+      "name": "Google Drive Evidence Sync & Cloudflare Integration",
+      "status": "IN_PROGRESS",
+      "verdict": "PENDING",
+      "gatePassed": false,
+      "startedAt": "2026-08-12T10:00:00+09:00",
+      "entryAllowed": true,
+      "nextPhaseAllowed": false,
+      "predecessor": "P16",
+      "handoff": "docs/harness/CF05-antigravity-handoff.md",
+      "followup": "docs/harness/CF05-antigravity-followup-01.md",
+      "openDefects": {
+        "critical": 0,
+        "high": 0,
+        "medium": 0
+      }
     }
   }
 }
