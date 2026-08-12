@@ -1,0 +1,46 @@
+# CF05 Antigravity Follow-up 02 — Live Google OAuth completion
+
+## Current verified baseline
+
+- GitHub branch: `feat/CF05-google-drive-sync`
+- Codex implementation commit: `3de931e2ad21ae2361075bf73857ae783b3784bc`
+- Cloudflare production URL: `https://concost-claim-center-preview.jjwwhhjj1116.workers.dev`
+- Production build source and command were corrected to `feat/CF05-google-drive-sync` + `pnpm run build`.
+- Cloudflare D1 migrations `0000` through `0004` are applied; existing users/sessions remain available.
+- R2 remains `SKIPPED_BY_USER`. Do not create an R2 bucket or request payment.
+- Login without a session returns HTTP 401 and one workbook member credential was verified through the real login screen.
+- Google Cloud project `claim-center-studio` exists and Google Drive API is enabled.
+- Cloudflare runtime already contains the exact OAuth redirect origin and an encrypted credential master key.
+
+## Required next actions
+
+1. In the already-open Google Cloud consent wizard, the user must personally accept the Google API Services User Data Policy. Do not accept legal terms on the user's behalf.
+2. Finish the External testing consent configuration and add the intended administrator Google account as a test user.
+3. Create a Web application OAuth client named `Claim Center Studio Cloudflare`.
+4. Configure the exact redirect URI:
+   `https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/api/google/oauth/callback`
+5. Store the generated client ID and client secret only as Cloudflare production secrets named `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Never paste either value into Git, logs, screenshots, D1, review documents, or chat output.
+6. Verify live production behavior using the deployed site:
+   - member login is required;
+   - Admin can complete Google consent;
+   - Drive folder binding succeeds;
+   - one synthetic file can be dragged/dropped, uploaded, listed, downloaded, and hash-checked;
+   - D1 stores metadata only and the Drive file remains after browser restart;
+   - non-Admin users cannot see Admin-only configuration;
+   - assigned Staff/Reviewer access follows the product RBAC contract;
+   - duplicate retry creates no duplicate Drive file;
+   - disconnect/reconnect and reconciliation paths remain fail-closed.
+7. Redact account identifiers, folder IDs, OAuth codes, tokens, secrets, and employee credentials from all submitted evidence.
+8. Run the full CF05 and regression gates. Update evidence with actual counts and the exact Git commit; do not claim PASS until live Google OAuth, upload, and download have been exercised.
+
+## Explicit prohibitions
+
+- Do not reintroduce fake Google file IDs or `ALLOW_TEST_GOOGLE_MODES` in production.
+- Do not use R2, Render, local filesystem persistence, or D1 blobs for file contents.
+- Do not bypass the login screen.
+- Do not commit or log raw client secrets, access tokens, refresh tokens, authorization codes, workbook passwords, personal phone numbers, or email lists.
+- Do not advance CF05 to PASS merely because mocked tests pass.
+
+## Completion handback
+
+Return a fresh review request containing the implementation/evidence commit IDs, live deployment URL, redacted OAuth/upload/download proof, D1 metadata proof, Drive object proof, full gate counts, and any remaining external Google verification limitation.
