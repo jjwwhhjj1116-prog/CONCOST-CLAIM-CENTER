@@ -24,6 +24,8 @@
     "test:security": "tsx --test scripts/p04-security-test.ts scripts/p05-security-test.ts scripts/p06-security-test.ts scripts/p07-security-test.ts scripts/p08-security-test.ts scripts/p09-security-test.ts scripts/p10-security-test.ts scripts/p11-security-test.ts scripts/p12-security-test.ts scripts/p13-security-test.ts scripts/p14-security-test.ts scripts/p15-security-test.ts scripts/p16-production-config-test.ts",
     "build": "tsx scripts/harness-check.ts build",
     "test:cf01": "tsx --test scripts/cf01-foundation-test.ts",
+    "test:cf05": "tsx --test scripts/cf05-google-drive-test.ts",
+    "test:cf": "tsx --test scripts/cf01-foundation-test.ts scripts/cf05-google-drive-test.ts",
     "cf:build": "corepack pnpm --filter claim-center-report-studio-web build",
     "cf:dev": "corepack pnpm cf:build && wrangler dev",
     "cf:upload": "corepack pnpm cf:build && wrangler versions upload",

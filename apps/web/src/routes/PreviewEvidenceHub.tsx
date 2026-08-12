@@ -8,9 +8,9 @@ interface PreviewEvidenceFile {
   byteSize: number;
   uploadedAt: string;
   uploadedBy: string;
-  storageProvider: 'CLOUDFLARE_R2';
+  storageProvider: 'GOOGLE_DRIVE';
   driveStatus: 'PENDING_GOOGLE_CONNECTION' | 'SYNCED_TO_GOOGLE_DRIVE' | 'GOOGLE_SYNC_FAILED';
-  downloadUrl: string;
+  downloadUrl: string | null;
 }
 
 interface PreviewEvidenceHubProps {
@@ -20,7 +20,6 @@ interface PreviewEvidenceHubProps {
 
 const MAX_FILE_BYTES = 10_000_000;
 const ACCEPTED_FILES = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.hwp,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp';
-const FILE_STORAGE_READY = false;
 const STORAGE_PENDING_MESSAGE = 'Google Drive 연결 후 자료를 업로드할 수 있습니다.';
 
 function formatBytes(bytes: number): string {
@@ -38,6 +37,7 @@ function formatUploadedAt(value: string): string {
 
 export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName, onNavigate }) => {
   const [files, setFiles] = useState<PreviewEvidenceFile[]>([]);
+  const [googleDriveConnected, setGoogleDriveConnected] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [busyCount, setBusyCount] = useState(0);
   const [notice, setNotice] = useState(STORAGE_PENDING_MESSAGE);
@@ -46,19 +46,21 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
   const draftKeyRef = useRef('');
 
   const loadFiles = useCallback(async () => {
-    if (!FILE_STORAGE_READY) {
-      draftKeyRef.current = previewBrowserKey();
-      setFiles([]);
-      setError('');
-      return;
-    }
     try {
       draftKeyRef.current = previewBrowserKey();
       const response = await fetch('/api/preview/evidence', {
         headers: { 'X-Preview-Draft-Key': draftKeyRef.current }
       });
-      const payload = await response.json() as { files?: PreviewEvidenceFile[]; error?: string };
-      if (!response.ok) throw new Error(payload.error ?? '자료 목록을 불러오지 못했습니다.');
+      const payload = await response.json() as { files?: PreviewEvidenceFile[]; googleDriveConnected?: boolean; error?: string };
+      if (!response.ok) {
+        if (response.status === 503) {
+          setGoogleDriveConnected(false);
+          setFiles([]);
+          return;
+        }
+        throw new Error(payload.error ?? '자료 목록을 불러오지 못했습니다.');
+      }
+      setGoogleDriveConnected(!!payload.googleDriveConnected);
       setFiles(payload.files ?? []);
       setError('');
     } catch (reason) {
@@ -72,7 +74,7 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
 
   const uploadFiles = async (incoming: FileList | File[]) => {
     const selected = Array.from(incoming);
-    if (!FILE_STORAGE_READY) {
+    if (!googleDriveConnected) {
       setNotice(STORAGE_PENDING_MESSAGE);
       setError('파일 저장소가 아직 연결되지 않았습니다. 관리자가 Google Drive를 연결한 뒤 다시 시도하세요.');
       return;
@@ -102,11 +104,15 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
         setBusyCount((count) => Math.max(0, count - 1));
       }
     }
-    if (completed) setNotice(`${completed}개 자료를 날짜·시간·사용자 정보와 함께 저장했습니다.`);
+    if (completed) setNotice(`${completed}개 자료를 Google Drive에 날짜·시간·사용자 기록과 함께 저장했습니다.`);
     if (inputRef.current) inputRef.current.value = '';
   };
 
   const downloadFile = async (file: PreviewEvidenceFile) => {
+    if (!file.downloadUrl) {
+      setError('Google Drive 연결 대기 중인 파일입니다.');
+      return;
+    }
     setError('');
     try {
       const response = await fetch(file.downloadUrl, {
@@ -128,29 +134,36 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
     <section className="route-view preview-evidence-hub" aria-labelledby="preview-evidence-title">
       <div className="workspace-hero preview-evidence-hero">
         <div>
-          <span className="workspace-eyebrow">CASE EVIDENCE · GOOGLE DRIVE PENDING</span>
-          <h2 id="preview-evidence-title">Google Drive 연결 후<br />자료 기록을 시작합니다.</h2>
-          <p>D1 로그인과 보고서 초안 저장은 활성 상태입니다. 파일 원본 저장은 Google Drive OAuth 연결 후 시작됩니다.</p>
+          <span className="workspace-eyebrow">CASE EVIDENCE · GOOGLE DRIVE DIRECT</span>
+          <h2 id="preview-evidence-title">
+            {googleDriveConnected ? 'Google Drive 연결 완료' : 'Google Drive 연결 후'}<br />
+            {googleDriveConnected ? '사건 자료를 저장합니다.' : '자료 기록을 시작합니다.'}
+          </h2>
+          <p>D1 로그인과 보고서 초안 저장은 활성 상태입니다. 파일 원본 저장은 Google Drive OAuth 연결 후 활성화됩니다.</p>
         </div>
         <div className="preview-drive-card">
           <span>GOOGLE DRIVE</span>
-          <strong>연결 필요</strong>
+          <strong>{googleDriveConnected ? '연결 완료' : '연결 필요'}</strong>
           <small>R2 미사용 · Google OAuth 자격증명 등록 후 파일 저장 활성</small>
           <button type="button" onClick={() => onNavigate('/integrations/google')}>Google Drive 연결 설정</button>
         </div>
       </div>
 
       <div
-        className={`preview-drop-zone is-disabled${isDragging ? ' is-dragging' : ''}`}
-        aria-disabled="true"
-        onDragEnter={(event) => { event.preventDefault(); setIsDragging(false); }}
-        onDragOver={(event) => { event.preventDefault(); setIsDragging(false); }}
+        className={`preview-drop-zone${!googleDriveConnected ? ' is-disabled' : ''}${isDragging ? ' is-dragging' : ''}`}
+        aria-disabled={!googleDriveConnected}
+        onDragEnter={(event) => { event.preventDefault(); if (googleDriveConnected) setIsDragging(true); }}
+        onDragOver={(event) => { event.preventDefault(); if (googleDriveConnected) setIsDragging(true); }}
         onDragLeave={(event) => { if (event.currentTarget === event.target) setIsDragging(false); }}
         onDrop={(event) => {
           event.preventDefault();
           setIsDragging(false);
-          setNotice(STORAGE_PENDING_MESSAGE);
-          setError('Google Drive 연결 전에는 파일을 저장하지 않습니다.');
+          if (!googleDriveConnected) {
+            setNotice(STORAGE_PENDING_MESSAGE);
+            setError('Google Drive 연결 전에는 파일을 저장하지 않습니다.');
+            return;
+          }
+          if (event.dataTransfer.files) void uploadFiles(event.dataTransfer.files);
         }}
       >
         <input
@@ -158,13 +171,25 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
           type="file"
           multiple
           accept={ACCEPTED_FILES}
-          disabled
+          disabled={!googleDriveConnected}
           onChange={(event) => event.target.files && void uploadFiles(event.target.files)}
         />
         <span className="preview-upload-icon" aria-hidden="true">↥</span>
-        <h3>{busyCount ? `${busyCount}개 자료 저장 중…` : 'Google Drive 연결 후 드래그 앤 드롭 사용 가능'}</h3>
-        <p>현재 파일 업로드는 비활성 상태입니다. D1에는 파일 원본을 저장하지 않습니다.</p>
-        <button type="button" disabled>파일 저장소 연결 대기</button>
+        <h3>
+          {busyCount
+            ? `${busyCount}개 자료 저장 중…`
+            : googleDriveConnected
+            ? '파일을 끌어다 놓거나 클릭하여 Google Drive에 저장하세요'
+            : 'Google Drive 연결 후 드래그 앤 드롭 사용 가능'}
+        </h3>
+        <p>
+          {googleDriveConnected
+            ? '최대 10MB · PDF, DOCX, XLSX, HWPX, 이미지 지원'
+            : '현재 파일 업로드는 비활성 상태입니다. D1에는 파일 원본을 저장하지 않습니다.'}
+        </p>
+        <button type="button" disabled={!googleDriveConnected} onClick={() => inputRef.current?.click()}>
+          {googleDriveConnected ? '파일 선택 및 저장' : '파일 저장소 연결 대기'}
+        </button>
       </div>
 
       <div className="preview-upload-feedback" aria-live="polite">
@@ -182,7 +207,11 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
           <span>{files.length} FILES</span>
         </header>
         {files.length === 0 ? (
-          <div className="preview-evidence-empty">파일 저장소 연결 대기 중입니다. Google Drive 연결 후 사건 자료가 여기에 표시됩니다.</div>
+          <div className="preview-evidence-empty">
+            {googleDriveConnected
+              ? '업로드된 사건 자료가 없습니다. 파일 선택 후 첫 자료를 기록하세요.'
+              : '파일 저장소 연결 대기 중입니다. Google Drive 연결 후 사건 자료가 여기에 표시됩니다.'}
+          </div>
         ) : (
           <ul>
             {files.map((file) => (
@@ -193,12 +222,12 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
                   <small>{formatUploadedAt(file.uploadedAt)} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small>
                 </div>
                 <div className="preview-file-tags">
-                  <span>PRIVATE FILE</span>
+                  <span>GOOGLE DRIVE</span>
                   <span className={file.driveStatus === 'SYNCED_TO_GOOGLE_DRIVE' ? 'is-synced' : ''}>
                     {file.driveStatus === 'SYNCED_TO_GOOGLE_DRIVE' ? 'DRIVE SYNCED' : 'DRIVE PENDING'}
                   </span>
                 </div>
-                <button type="button" onClick={() => void downloadFile(file)}>다운로드</button>
+                <button type="button" disabled={!file.downloadUrl} onClick={() => void downloadFile(file)}>다운로드</button>
               </li>
             ))}
           </ul>

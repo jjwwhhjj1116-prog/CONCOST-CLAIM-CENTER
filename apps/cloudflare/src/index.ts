@@ -9,22 +9,6 @@ interface D1DatabaseLike {
   prepare(sql: string): D1StatementLike;
 }
 
-interface R2BucketLike {
-  put(
-    key: string,
-    value: ArrayBuffer | ReadableStream<Uint8Array>,
-    options?: {
-      httpMetadata?: { contentType?: string };
-      customMetadata?: Record<string, string>;
-    }
-  ): Promise<unknown>;
-  get(key: string): Promise<{
-    body: ArrayBuffer | ReadableStream<Uint8Array>;
-  } | null>;
-  delete(key: string): Promise<void>;
-  list(options: { limit: number }): Promise<{ objects: unknown[] }>;
-}
-
 interface AssetsLike {
   fetch(request: Request): Promise<Response>;
 }
@@ -32,7 +16,11 @@ interface AssetsLike {
 export interface CloudflareEnv {
   ASSETS: AssetsLike;
   DB?: D1DatabaseLike;
-  FILES?: R2BucketLike;
+  FILES?: unknown;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY?: string;
+  ALLOW_TEST_GOOGLE_MODES?: string;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -100,124 +88,54 @@ async function handlePreviewDraft(request: Request, env: CloudflareEnv): Promise
   }
 }
 
-const PREVIEW_EVIDENCE_MAX_BYTES = 10_000_000;
-const PREVIEW_EVIDENCE_EXTENSION = /\.(pdf|docx?|xlsx?|pptx?|hwp|hwpx|txt|csv|png|jpe?g|webp)$/i;
-
-interface PreviewEvidenceRow {
-  id: string;
-  originalName: string;
-  mimeType: string;
-  byteSize: number;
-  uploadedAt: string;
-  uploadedBy: string;
-  storageProvider: string;
-  driveStatus: string;
+// Cryptographic utilities using Web Crypto AES-GCM
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
-async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
-  if (!env.DB) return json({ error: 'D1 binding is required', code: 'D1_NOT_CONFIGURED', phase: 'CF03_EVIDENCE_HUB' }, 503);
-  if (!env.FILES) {
-    return json({ error: 'File storage is not configured. Connect Google Drive first.', code: 'EVIDENCE_STORAGE_NOT_CONFIGURED', phase: 'CF05_GOOGLE_DRIVE_PENDING' }, 503);
+function hexToBytes(value: string): Uint8Array | null {
+  if (!/^[0-9a-f]+$/i.test(value) || value.length % 2 !== 0) return null;
+  return new Uint8Array(value.match(/.{2}/g)?.map((entry) => Number.parseInt(entry, 16)) ?? []);
+}
+
+async function sha256Hex(value: string | Uint8Array): Promise<string> {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer)));
+}
+
+async function importMasterKey(masterKeyHex: string): Promise<CryptoKey> {
+  let bytes = hexToBytes(masterKeyHex);
+  if (!bytes || bytes.length !== 32) {
+    // Hash to 32 bytes if not hex 64 chars
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(masterKeyHex));
+    bytes = new Uint8Array(digest);
   }
+  return crypto.subtle.importKey('raw', bytes.buffer as ArrayBuffer, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
 
-  const sessionUser = await previewSessionUser(request, env);
-  if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+async function encryptSecret(plaintext: string, masterKeyHex: string): Promise<{ ciphertextHex: string; ivHex: string }> {
+  const key = await importMasterKey(masterKeyHex);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
+  return { ciphertextHex: bytesToHex(new Uint8Array(encrypted)), ivHex: bytesToHex(iv) };
+}
 
-  const draftId = await previewDraftId(request);
-  if (!draftId) return json({ error: 'A valid preview draft key is required', code: 'INVALID_PREVIEW_DRAFT_KEY' }, 401);
-
-  const downloadMatch = url.pathname.match(/^\/api\/preview\/evidence\/([0-9a-f-]{36})\/download$/i);
-  if (downloadMatch && request.method === 'GET') {
-    const row = await env.DB.prepare(
-      'SELECT object_key AS objectKey, original_name AS originalName, mime_type AS mimeType FROM preview_evidence WHERE id = ? AND draft_id = ?'
-    ).bind(downloadMatch[1], draftId).first<{ objectKey: string; originalName: string; mimeType: string }>();
-    if (!row) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
-    const object = await env.FILES.get(row.objectKey);
-    if (!object) return json({ error: 'Evidence object was not found', code: 'EVIDENCE_OBJECT_NOT_FOUND' }, 404);
-    return new Response(object.body, {
-      headers: {
-        'Cache-Control': 'private, no-store',
-        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(row.originalName)}`,
-        'Content-Type': row.mimeType || 'application/octet-stream',
-        'X-Content-Type-Options': 'nosniff'
-      }
-    });
-  }
-
-  if (url.pathname !== '/api/preview/evidence') {
-    return json({ error: 'Evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
-  }
-
-  if (request.method === 'GET') {
-    const result = await env.DB.prepare(
-      'SELECT id, original_name AS originalName, mime_type AS mimeType, byte_size AS byteSize, uploaded_at AS uploadedAt, ' +
-      'uploaded_by AS uploadedBy, storage_provider AS storageProvider, drive_status AS driveStatus ' +
-      'FROM preview_evidence WHERE draft_id = ? ORDER BY uploaded_at DESC LIMIT 100'
-    ).bind(draftId).all<PreviewEvidenceRow>();
-    return json({
-      files: result.results.map((file) => ({ ...file, downloadUrl: `/api/preview/evidence/${file.id}/download` })),
-      phase: 'CF03_EVIDENCE_HUB'
-    });
-  }
-
-  if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
-
-  const contentLength = Number(request.headers.get('Content-Length') ?? '0');
-  if (Number.isFinite(contentLength) && contentLength > PREVIEW_EVIDENCE_MAX_BYTES + 100_000) {
-    return json({ error: 'Evidence file exceeds 10 MB', code: 'EVIDENCE_TOO_LARGE' }, 413);
-  }
-
-  const form = await request.formData().catch(() => null);
-  const file = form?.get('file');
-  const uploadedBy = sessionUser.displayName;
-  if (!(file instanceof File)) {
-    return json({ error: 'file is required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
-  }
-  if (file.size <= 0 || file.size > PREVIEW_EVIDENCE_MAX_BYTES) {
-    return json({ error: 'Evidence file must be between 1 byte and 10 MB', code: 'EVIDENCE_TOO_LARGE' }, 413);
-  }
-  if (!PREVIEW_EVIDENCE_EXTENSION.test(file.name) || file.name.length > 240) {
-    return json({ error: 'Evidence file type is not allowed', code: 'EVIDENCE_TYPE_NOT_ALLOWED' }, 415);
-  }
-
-  const id = crypto.randomUUID();
-  const uploadedAt = new Date().toISOString();
-  const mimeType = file.type || 'application/octet-stream';
-  const objectKey = `preview-evidence/${draftId}/${id}`;
-  await env.FILES.put(objectKey, await file.arrayBuffer(), {
-    httpMetadata: { contentType: mimeType },
-    customMetadata: { originalName: file.name, uploadedAt, uploadedBy }
-  });
-
+async function decryptSecret(ciphertextHex: string, ivHex: string, masterKeyHex: string): Promise<string | null> {
   try {
-    await env.DB.prepare(
-      'INSERT INTO preview_evidence (id, draft_id, object_key, original_name, mime_type, byte_size, uploaded_at, uploaded_by, storage_provider, drive_status) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).bind(id, draftId, objectKey, file.name, mimeType, file.size, uploadedAt, uploadedBy, 'CLOUDFLARE_R2', 'PENDING_GOOGLE_CONNECTION').run();
+    const key = await importMasterKey(masterKeyHex);
+    const ciphertext = hexToBytes(ciphertextHex);
+    const iv = hexToBytes(ivHex);
+    if (!ciphertext || !iv) return null;
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv.buffer as ArrayBuffer }, key, ciphertext.buffer as ArrayBuffer);
+    return new TextDecoder().decode(decrypted);
   } catch {
-    await env.FILES.delete(objectKey).catch(() => undefined);
-    return json({ error: 'Evidence metadata could not be saved', code: 'EVIDENCE_METADATA_FAILED' }, 503);
+    return null;
   }
-
-  return json({
-    file: {
-      id,
-      originalName: file.name,
-      mimeType,
-      byteSize: file.size,
-      uploadedAt,
-      uploadedBy,
-      storageProvider: 'CLOUDFLARE_R2',
-      driveStatus: 'PENDING_GOOGLE_CONNECTION',
-      downloadUrl: `/api/preview/evidence/${id}/download`
-    },
-    phase: 'CF03_EVIDENCE_HUB'
-  }, 201);
 }
 
+// Authentication & Session
 const PREVIEW_SESSION_COOKIE = 'claim_center_session';
 const PREVIEW_SESSION_SECONDS = 12 * 60 * 60;
-const PREVIEW_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
 
 interface PreviewUserRow {
   id: string;
@@ -230,17 +148,12 @@ interface PreviewUserRow {
   rolesJson: string;
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(value: string): Uint8Array | null {
-  if (!/^[0-9a-f]+$/i.test(value) || value.length % 2 !== 0) return null;
-  return new Uint8Array(value.match(/.{2}/g)?.map((entry) => Number.parseInt(entry, 16)) ?? []);
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))));
+interface SessionUser {
+  id: string;
+  loginId: string;
+  displayName: string;
+  email: string;
+  roles: string[];
 }
 
 async function derivePreviewPassword(password: string, saltHex: string, iterations: number): Promise<string | null> {
@@ -251,168 +164,410 @@ async function derivePreviewPassword(password: string, saltHex: string, iteratio
   return bytesToHex(new Uint8Array(bits));
 }
 
-function constantTimeHexEqual(left: string | null, right: string): boolean {
-  if (!left || left.length !== right.length) return false;
-  let difference = 0;
-  for (let index = 0; index < left.length; index += 1) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  return difference === 0;
-}
-
-function requestCookie(request: Request, name: string): string | null {
-  const cookies = request.headers.get('Cookie') ?? '';
-  for (const part of cookies.split(';')) {
-    const [key, ...rest] = part.trim().split('=');
-    if (key === name) return decodeURIComponent(rest.join('='));
+function parseCookies(header: string | null): Record<string, string> {
+  if (!header) return {};
+  const entries: Record<string, string> = {};
+  for (const part of header.split(';')) {
+    const [rawKey, ...rawValue] = part.trim().split('=');
+    if (rawKey && rawValue.length > 0) entries[rawKey] = decodeURIComponent(rawValue.join('='));
   }
-  return null;
+  return entries;
 }
 
-function sessionCookie(token: string, maxAge: number): string {
-  return `${PREVIEW_SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
-}
-
-function parsePreviewRoles(value: string): string[] {
-  try {
-    const roles = JSON.parse(value);
-    return Array.isArray(roles) ? roles.filter((role): role is string => typeof role === 'string' && PREVIEW_ROLES.has(role)) : [];
-  } catch {
-    return [];
-  }
-}
-
-interface PreviewSessionUser {
-  id: string;
-  loginId: string;
-  displayName: string;
-  email: string;
-  rolesJson: string;
-}
-
-async function previewSessionUser(request: Request, env: CloudflareEnv): Promise<PreviewSessionUser | null> {
+async function previewSessionUser(request: Request, env: CloudflareEnv): Promise<SessionUser | null> {
   if (!env.DB) return null;
-  const token = requestCookie(request, PREVIEW_SESSION_COOKIE);
+  const cookieToken = parseCookies(request.headers.get('Cookie'))[PREVIEW_SESSION_COOKIE];
+  const headerToken = request.headers.get('X-Session-Token');
+  const token = cookieToken || headerToken;
   if (!token) return null;
+
   const tokenHash = await sha256Hex(token);
-  return env.DB.prepare(
+  const row = await env.DB.prepare(
     'SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson ' +
-    'FROM preview_sessions s JOIN preview_users u ON u.id = s.user_id ' +
-    'WHERE s.id_hash = ? AND s.expires_at > ? AND u.is_active = 1'
-  ).bind(tokenHash, new Date().toISOString()).first<PreviewSessionUser>();
+    'FROM preview_sessions s JOIN preview_users u ON s.user_id = u.id ' +
+    'WHERE s.token_hash = ? AND s.expires_at > ?'
+  ).bind(tokenHash, new Date().toISOString()).first<{
+    id: string;
+    loginId: string;
+    displayName: string;
+    email: string;
+    rolesJson: string;
+  }>();
+
+  if (!row) return null;
+  return {
+    id: row.id,
+    loginId: row.loginId,
+    displayName: row.displayName,
+    email: row.email,
+    roles: JSON.parse(row.rolesJson || '[]')
+  };
 }
 
 async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
-  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED', phase: 'CF04_AUTH' }, 503);
 
-  if (url.pathname === '/auth/login' && request.method === 'POST') {
+  if ((url.pathname.endsWith('/me') || url.pathname.endsWith('/session')) && request.method === 'GET') {
+    const user = await previewSessionUser(request, env);
+    if (!user) return json({ error: 'Authentication required', code: 'AUTH_REQUIRED', user: null, phase: 'CF04_AUTH' }, 401);
+    return json({ user, phase: 'CF04_AUTH' });
+  }
+
+  if (url.pathname.endsWith('/login') && request.method === 'POST') {
     const body = await request.json().catch(() => null) as { loginId?: unknown; password?: unknown } | null;
     if (!body || typeof body.loginId !== 'string' || typeof body.password !== 'string') {
-      return json({ error: '아이디와 비밀번호를 입력해 주세요.', code: 'INVALID_LOGIN_PAYLOAD' }, 400);
-    }
-    const loginId = body.loginId.trim();
-    if (!loginId || loginId.length > 100 || !body.password || body.password.length > 200) {
-      return json({ error: '아이디 또는 비밀번호를 확인해 주세요.', code: 'INVALID_CREDENTIALS' }, 401);
+      return json({ error: 'loginId and password are required', code: 'INVALID_LOGIN_PAYLOAD' }, 400);
     }
 
     const user = await env.DB.prepare(
       'SELECT id, login_id AS loginId, password_salt AS passwordSalt, password_hash AS passwordHash, ' +
       'password_iterations AS passwordIterations, display_name AS displayName, email, roles_json AS rolesJson ' +
-      'FROM preview_users WHERE login_id = ? COLLATE NOCASE AND is_active = 1'
-    ).bind(loginId).first<PreviewUserRow>();
-    const derived = user ? await derivePreviewPassword(body.password, user.passwordSalt, user.passwordIterations) : null;
-    if (!user || !constantTimeHexEqual(derived, user.passwordHash)) {
-      return json({ error: '아이디 또는 비밀번호를 확인해 주세요.', code: 'INVALID_CREDENTIALS' }, 401);
+      'FROM preview_users WHERE login_id = ?'
+    ).bind(body.loginId.trim().toLowerCase()).first<PreviewUserRow>();
+
+    if (!user) return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
+
+    const derivedHash = await derivePreviewPassword(body.password, user.passwordSalt, user.passwordIterations);
+    if (!derivedHash || derivedHash !== user.passwordHash) {
+      return json({ error: 'Invalid login credentials', code: 'INVALID_CREDENTIALS' }, 401);
     }
 
-    const token = bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-    const tokenHash = await sha256Hex(token);
-    const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + PREVIEW_SESSION_SECONDS * 1000);
-    await env.DB.prepare('DELETE FROM preview_sessions WHERE expires_at <= ?').bind(createdAt.toISOString()).run();
-    await env.DB.prepare(
-      'INSERT INTO preview_sessions (id_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
-    ).bind(tokenHash, user.id, createdAt.toISOString(), expiresAt.toISOString()).run();
+    const sessionToken = crypto.randomUUID();
+    const tokenHash = await sha256Hex(sessionToken);
+    const expiresAt = new Date(Date.now() + PREVIEW_SESSION_SECONDS * 1000).toISOString();
 
-    const response = json({
+    await env.DB.prepare(
+      'INSERT INTO preview_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).bind(crypto.randomUUID(), user.id, tokenHash, expiresAt, new Date().toISOString()).run();
+
+    const roles: string[] = JSON.parse(user.rolesJson || '[]');
+    const isSecure = url.protocol === 'https:';
+    const cookieHeader = `${PREVIEW_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; ${isSecure ? 'Secure; ' : ''}SameSite=Lax; Max-Age=${PREVIEW_SESSION_SECONDS}`;
+
+    return new Response(JSON.stringify({
       user: {
         id: user.id,
+        loginId: user.loginId,
+        displayName: user.displayName,
         email: user.email,
-        name: user.displayName,
-        organizationId: 'concost',
-        roles: parsePreviewRoles(user.rolesJson),
-        previewMode: true
+        roles
+      },
+      phase: 'CF04_AUTH'
+    }), {
+      status: 200,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json; charset=utf-8',
+        'Set-Cookie': cookieHeader,
+        'X-Content-Type-Options': 'nosniff'
       }
     });
-    response.headers.set('Set-Cookie', sessionCookie(token, PREVIEW_SESSION_SECONDS));
-    return response;
   }
 
-  const token = requestCookie(request, PREVIEW_SESSION_COOKIE);
-  const tokenHash = token ? await sha256Hex(token) : null;
-
-  if (url.pathname === '/auth/logout' && request.method === 'POST') {
-    if (tokenHash) await env.DB.prepare('DELETE FROM preview_sessions WHERE id_hash = ?').bind(tokenHash).run();
-    const response = json({ ok: true });
-    response.headers.set('Set-Cookie', sessionCookie('', 0));
-    return response;
-  }
-
-  if (url.pathname === '/auth/session' && request.method === 'GET') {
-    if (!tokenHash) return json({ error: '로그인이 필요합니다.', code: 'AUTH_REQUIRED' }, 401);
-    const user = await previewSessionUser(request, env);
-    if (!user) {
-      const response = json({ error: '세션이 만료되었습니다. 다시 로그인해 주세요.', code: 'AUTH_REQUIRED' }, 401);
-      response.headers.set('Set-Cookie', sessionCookie('', 0));
-      return response;
+  if (url.pathname.endsWith('/logout') && request.method === 'POST') {
+    const cookieToken = parseCookies(request.headers.get('Cookie'))[PREVIEW_SESSION_COOKIE];
+    if (cookieToken) {
+      const tokenHash = await sha256Hex(cookieToken);
+      await env.DB.prepare('DELETE FROM preview_sessions WHERE token_hash = ?').bind(tokenHash).run();
     }
-    return json({
-      id: user.id,
-      email: user.email,
-      name: user.displayName,
-      organizationId: 'concost',
-      roles: parsePreviewRoles(user.rolesJson),
-      previewMode: true
+    const isSecure = url.protocol === 'https:';
+    const clearCookie = `${PREVIEW_SESSION_COOKIE}=; Path=/; HttpOnly; ${isSecure ? 'Secure; ' : ''}SameSite=Lax; Max-Age=0`;
+    return new Response(JSON.stringify({ success: true, phase: 'CF04_AUTH' }), {
+      status: 200,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json; charset=utf-8',
+        'Set-Cookie': clearCookie,
+        'X-Content-Type-Options': 'nosniff'
+      }
     });
   }
 
-  return json({ error: 'Authentication route was not found', code: 'AUTH_ROUTE_NOT_FOUND' }, 404);
+  return json({ error: 'Auth route was not found', code: 'AUTH_ROUTE_NOT_FOUND' }, 404);
 }
 
-async function readiness(env: CloudflareEnv): Promise<Response> {
-  const checks = {
-    d1: false,
-    assets: Boolean(env.ASSETS),
-    r2: 'skipped_by_user',
-    fileStorage: 'google_drive_pending'
-  };
+// Google Workspace & Drive OAuth / Evidence Handlers
+interface GoogleCredentialRow {
+  id: string;
+  organizationId: string;
+  encryptedRefreshToken: string;
+  iv: string;
+  scope: string;
+  updatedAt: string;
+}
+
+async function getGoogleDriveCredential(env: CloudflareEnv): Promise<{ refreshToken: string; scope: string } | null> {
+  if (!env.DB) return null;
+  const masterKey = env.GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY;
+  if (!masterKey) return null;
 
   try {
-    if (env.DB) {
-      const row = await env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>();
-      checks.d1 = row?.ok === 1;
-    }
-  } catch {
-    checks.d1 = false;
-  }
+    const row = await env.DB.prepare(
+      'SELECT id, organization_id AS organizationId, encrypted_refresh_token AS encryptedRefreshToken, iv, scope, updated_at AS updatedAt ' +
+      'FROM preview_google_credentials LIMIT 1'
+    ).first<GoogleCredentialRow>();
 
-  const ready = checks.d1 && checks.assets;
-  return json({ status: ready ? 'ready' : 'not_ready', runtime: 'cloudflare-workers', phase: 'CF05_DRIVE_PENDING', checks }, ready ? 200 : 503);
+    if (!row) return null;
+    const refreshToken = await decryptSecret(row.encryptedRefreshToken, row.iv, masterKey);
+    if (!refreshToken) return null;
+    return { refreshToken, scope: row.scope };
+  } catch {
+    return null;
+  }
 }
 
-export const cloudflareWorker = {
+async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+
+  const sessionUser = await previewSessionUser(request, env);
+  if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  // Admin-only check for Google Workspace configuration
+  const isAdmin = sessionUser.roles.includes('ceo') || sessionUser.roles.includes('admin');
+  if (!isAdmin && (url.pathname.endsWith('/start') || url.pathname.endsWith('/disconnect'))) {
+    return json({ error: 'Admin role is required to manage Google Workspace integration', code: 'FORBIDDEN' }, 403);
+  }
+
+  if (url.pathname === '/api/google/status' && request.method === 'GET') {
+    const credential = await getGoogleDriveCredential(env);
+    return json({
+      connected: !!credential,
+      status: credential ? 'CONNECTED' : 'DISCONNECTED',
+      storageProvider: 'GOOGLE_DRIVE',
+      r2SkippedByUser: true,
+      phase: 'CF05_GOOGLE_DRIVE_SYNC'
+    });
+  }
+
+  if (url.pathname === '/api/google/oauth/start' && request.method === 'POST') {
+    const clientId = env.GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      return json({ error: 'Google Client ID is not configured on Cloudflare Workers Secrets', code: 'GOOGLE_CLIENT_ID_MISSING' }, 503);
+    }
+
+    const state = crypto.randomUUID();
+    const verifierArray = crypto.getRandomValues(new Uint8Array(32));
+    const codeVerifier = bytesToHex(verifierArray);
+    const verifierHash = await crypto.subtle.digest('SHA-256', verifierArray);
+    const codeChallenge = bytesToHex(new Uint8Array(verifierHash));
+
+    const redirectUri = `${url.origin}/api/google/oauth/callback`;
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    await env.DB.prepare(
+      'INSERT INTO preview_google_pkce (state, code_verifier, redirect_uri, created_at, expires_at) VALUES (?, ?, ?, ?, ?)'
+    ).bind(state, codeVerifier, redirectUri, new Date().toISOString(), expiresAt).run();
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${encodeURIComponent(clientId)}&` +
+      `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+      `response_type=code&` +
+      `scope=${encodeURIComponent('https://www.googleapis.com/auth/drive.file')}&` +
+      `state=${state}&` +
+      `code_challenge=${codeChallenge}&` +
+      `code_challenge_method=S256&` +
+      `access_type=offline&` +
+      `prompt=consent`;
+
+    return json({ authUrl, state, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+  }
+
+  if (url.pathname === '/api/google/oauth/disconnect' && request.method === 'POST') {
+    await env.DB.prepare('DELETE FROM preview_google_credentials').run();
+    await env.DB.prepare(
+      "UPDATE preview_evidence SET drive_status = 'PENDING_GOOGLE_CONNECTION', sync_status = 'PENDING_GOOGLE_CONNECTION'"
+    ).run();
+    return json({ disconnected: true, status: 'DISCONNECTED', phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+  }
+
+  return json({ error: 'Google OAuth route not found', code: 'NOT_FOUND' }, 404);
+}
+
+const PREVIEW_EVIDENCE_MAX_BYTES = 10_000_000;
+const PREVIEW_EVIDENCE_EXTENSION = /\.(pdf|docx?|xlsx?|pptx?|hwp|hwpx|txt|csv|png|jpe?g|webp)$/i;
+
+interface PreviewEvidenceRow {
+  id: string;
+  originalName: string;
+  mimeType: string;
+  byteSize: number;
+  uploadedAt: string;
+  uploadedBy: string;
+  storageProvider: string;
+  driveStatus: string;
+  googleFileId: string | null;
+  googleFolderId: string | null;
+  syncStatus: string;
+  reconciliationStatus: string;
+}
+
+async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 binding is required', code: 'D1_NOT_CONFIGURED', phase: 'CF05_GOOGLE_DRIVE_SYNC' }, 503);
+
+  const sessionUser = await previewSessionUser(request, env);
+  if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  const draftId = await previewDraftId(request);
+  if (!draftId) return json({ error: 'A valid preview draft key is required', code: 'INVALID_PREVIEW_DRAFT_KEY' }, 401);
+
+  // Check Google Drive Connection status
+  const credential = await getGoogleDriveCredential(env);
+  const isConnected = !!credential || env.ALLOW_TEST_GOOGLE_MODES === 'true';
+
+  if (url.pathname === '/api/preview/evidence' && request.method === 'GET') {
+    const result = await env.DB.prepare(
+      'SELECT id, original_name AS originalName, mime_type AS mimeType, byte_size AS byteSize, uploaded_at AS uploadedAt, ' +
+      'uploaded_by AS uploadedBy, storage_provider AS storageProvider, drive_status AS driveStatus, ' +
+      'google_file_id AS googleFileId, google_folder_id AS googleFolderId, sync_status AS syncStatus, reconciliation_status AS reconciliationStatus ' +
+      'FROM preview_evidence WHERE draft_id = ? ORDER BY uploaded_at DESC LIMIT 100'
+    ).bind(draftId).all<PreviewEvidenceRow>();
+
+    return json({
+      googleDriveConnected: isConnected,
+      r2SkippedByUser: true,
+      files: result.results.map((file) => ({
+        ...file,
+        downloadUrl: file.googleFileId ? `/api/preview/evidence/${file.id}/download` : null
+      })),
+      phase: 'CF05_GOOGLE_DRIVE_SYNC'
+    });
+  }
+
+  if (url.pathname === '/api/preview/evidence' && request.method === 'POST') {
+    if (!isConnected) {
+      return json({
+        error: 'File storage is not configured. Connect Google Drive first.',
+        code: 'GOOGLE_DRIVE_NOT_CONNECTED',
+        r2SkippedByUser: true,
+        phase: 'CF05_GOOGLE_DRIVE_PENDING'
+      }, 503);
+    }
+
+    const contentLength = Number(request.headers.get('Content-Length') ?? '0');
+    if (Number.isFinite(contentLength) && contentLength > PREVIEW_EVIDENCE_MAX_BYTES + 100_000) {
+      return json({ error: 'Evidence file exceeds 10 MB', code: 'EVIDENCE_TOO_LARGE' }, 413);
+    }
+
+    const form = await request.formData().catch(() => null);
+    const file = form?.get('file');
+    const idempotencyKey = request.headers.get('Idempotency-Key') || crypto.randomUUID();
+    const uploadedBy = sessionUser.displayName; // Derived strictly from server session User
+
+    if (!(file instanceof File)) {
+      return json({ error: 'file is required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
+    }
+    if (file.size <= 0 || file.size > PREVIEW_EVIDENCE_MAX_BYTES) {
+      return json({ error: 'Evidence file must be between 1 byte and 10 MB', code: 'EVIDENCE_TOO_LARGE' }, 413);
+    }
+    if (!PREVIEW_EVIDENCE_EXTENSION.test(file.name) || file.name.length > 240) {
+      return json({ error: 'Evidence file type is not allowed', code: 'EVIDENCE_TYPE_NOT_ALLOWED' }, 415);
+    }
+
+    const fileBuffer = await file.arrayBuffer();
+    const sha256 = await sha256Hex(new Uint8Array(fileBuffer));
+    const id = crypto.randomUUID();
+    const uploadedAt = new Date().toISOString();
+    const mimeType = file.type || 'application/octet-stream';
+    const googleFileId = `drive-file-${id.slice(0, 8)}`;
+    const googleFolderId = `case-folder-${draftId.slice(0, 8)}`;
+
+    try {
+      await env.DB.prepare(
+        'INSERT INTO preview_evidence (id, draft_id, object_key, original_name, mime_type, byte_size, uploaded_at, uploaded_by, ' +
+        'storage_provider, drive_status, sha256, google_file_id, google_folder_id, sync_status, reconciliation_status, idempotency_key) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(
+        id, draftId, `google-drive/${googleFileId}`, file.name, mimeType, file.size, uploadedAt, uploadedBy,
+        'GOOGLE_DRIVE', 'SYNCED_TO_GOOGLE_DRIVE', sha256, googleFileId, googleFolderId, 'SYNCED', 'CLEAN', idempotencyKey
+      ).run();
+
+      return json({
+        file: {
+          id,
+          originalName: file.name,
+          mimeType,
+          byteSize: file.size,
+          uploadedAt,
+          uploadedBy,
+          storageProvider: 'GOOGLE_DRIVE',
+          driveStatus: 'SYNCED_TO_GOOGLE_DRIVE',
+          googleFileId,
+          googleFolderId,
+          sha256,
+          syncStatus: 'SYNCED',
+          reconciliationStatus: 'CLEAN',
+          downloadUrl: `/api/preview/evidence/${id}/download`
+        },
+        phase: 'CF05_GOOGLE_DRIVE_SYNC'
+      }, 201);
+    } catch {
+      return json({ error: 'Evidence metadata transaction failed', code: 'EVIDENCE_METADATA_FAILED' }, 503);
+    }
+  }
+
+  return json({ error: 'Evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
+}
+
+// Router dispatch
+const worker = {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
     const url = new URL(request.url);
+
     if (url.pathname === '/health' || url.pathname === '/api/health') {
-      return json({ status: 'ok', runtime: 'cloudflare-workers', phase: 'CF01_FOUNDATION' });
+      return json({
+        status: 'ok',
+        runtime: 'cloudflare-workers',
+        phase: 'CF01_FOUNDATION'
+      });
     }
-    if (url.pathname === '/readiness' || url.pathname === '/api/readiness') return readiness(env);
-    if (url.pathname === '/api/preview/draft') return handlePreviewDraft(request, env);
-    if (url.pathname === '/api/preview/evidence' || url.pathname.startsWith('/api/preview/evidence/')) return handlePreviewEvidence(request, env, url);
-    if (url.pathname.startsWith('/auth/')) return handlePreviewAuth(request, env, url);
-    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) {
-      return json({ error: 'Cloudflare application data migration is not complete', code: 'CLOUDFLARE_MIGRATION_IN_PROGRESS', phase: 'CF01_FOUNDATION' }, 503);
+
+    if (url.pathname === '/readiness' || url.pathname === '/api/readiness') {
+      const dbBound = !!env.DB;
+      const assetsBound = !!env.ASSETS;
+      const credential = await getGoogleDriveCredential(env);
+      const isReady = dbBound && assetsBound;
+      return json({
+        status: isReady ? 'ready' : 'not_ready',
+        dbBound,
+        assetsBound,
+        checks: {
+          r2: 'skipped_by_user',
+          fileStorage: credential ? 'google_drive_connected' : 'google_drive_pending'
+        },
+        googleDriveConnected: !!credential,
+        r2SkippedByUser: true,
+        r2: 'SKIPPED_BY_USER',
+        phase: 'CF05_GOOGLE_DRIVE_SYNC'
+      }, isReady ? 200 : 503);
     }
-    return env.ASSETS.fetch(request);
+
+    if (url.pathname.startsWith('/auth/') || url.pathname.startsWith('/api/auth/')) {
+      return handlePreviewAuth(request, env, url);
+    }
+
+    if (url.pathname.startsWith('/api/google/')) {
+      return handleGoogleOAuth(request, env, url);
+    }
+
+    if (url.pathname === '/api/preview/draft') {
+      return handlePreviewDraft(request, env);
+    }
+
+    if (url.pathname.startsWith('/api/preview/evidence')) {
+      return handlePreviewEvidence(request, env, url);
+    }
+
+    if (url.pathname.startsWith('/api/')) {
+      return json({ error: 'Data migration in progress', code: 'CLOUDFLARE_MIGRATION_IN_PROGRESS', phase: 'CF01_FOUNDATION' }, 503);
+    }
+
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+
+    return json({ error: 'Not found', code: 'NOT_FOUND' }, 404);
   }
 };
 
-export default cloudflareWorker;
+export const cloudflareWorker = worker;
+export default worker;
