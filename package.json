@@ -22,7 +22,14 @@
     "test:p14-real": "tsx --test scripts/p14-real-adapter-test.ts",
     "test:e2e": "tsx scripts/p06-e2e.ts && tsx scripts/p07-e2e.ts && tsx scripts/p08-e2e.ts && tsx scripts/p09-e2e.ts && tsx scripts/p10-e2e.ts && tsx scripts/p11-e2e.ts && tsx scripts/p12-e2e.ts && tsx scripts/p13-e2e.ts && tsx scripts/p14-e2e.ts && tsx scripts/p15-e2e.ts && tsx scripts/p16-e2e.ts",
     "test:security": "tsx --test scripts/p04-security-test.ts scripts/p05-security-test.ts scripts/p06-security-test.ts scripts/p07-security-test.ts scripts/p08-security-test.ts scripts/p09-security-test.ts scripts/p10-security-test.ts scripts/p11-security-test.ts scripts/p12-security-test.ts scripts/p13-security-test.ts scripts/p14-security-test.ts scripts/p15-security-test.ts scripts/p16-production-config-test.ts",
-    "build": "tsx scripts/harness-check.ts build"
+    "build": "tsx scripts/harness-check.ts build",
+    "test:cf01": "tsx --test scripts/cf01-foundation-test.ts",
+    "cf:build": "corepack pnpm --filter claim-center-report-studio-web build",
+    "cf:dev": "corepack pnpm cf:build && wrangler dev",
+    "cf:upload": "corepack pnpm cf:build && wrangler versions upload",
+    "cf:deploy": "corepack pnpm cf:build && wrangler deploy",
+    "cf:d1:migrate:local": "wrangler d1 migrations apply DB --local",
+    "cf:d1:migrate:remote": "wrangler d1 migrations apply DB --remote"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
@@ -34,6 +41,7 @@
     "playwright-core": "^1.55.0",
     "sql.js": "1.13.0",
     "tsx": "^4.23.6",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "wrangler": "^4.28.1"
   }
 }
