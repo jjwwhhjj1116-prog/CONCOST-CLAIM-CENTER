@@ -17,6 +17,8 @@ import {
   downloadEvidenceFromDrive,
   encryptSecret,
   exchangeAuthorizationCode,
+  getDriveAccount,
+  isAllowedGoogleAccountEmail,
   refreshAccessToken,
   sha256Hex,
   uploadEvidenceToDrive,
@@ -83,6 +85,8 @@ describe('CF05 Google Drive direct storage contract', () => {
     assert.equal(target.searchParams.get('code_challenge_method'), 'S256');
     assert.equal(target.searchParams.get('scope'), GOOGLE_DRIVE_SCOPE);
     assert.equal(target.searchParams.get('access_type'), 'offline');
+    assert.match(target.searchParams.get('prompt') ?? '', /select_account/u);
+    assert.match(target.searchParams.get('prompt') ?? '', /consent/u);
   });
 
   test('03 AES-GCM secret encryption requires the correct key and AAD', async () => {
@@ -112,7 +116,7 @@ describe('CF05 Google Drive direct storage contract', () => {
     const fetcher: GoogleFetch = async (input, init) => {
       capturedUrl = String(input);
       capturedBody = String(init?.body);
-      return Response.json({ refresh_token: 'refresh-token-12345', scope: GOOGLE_DRIVE_SCOPE });
+      return Response.json({ refresh_token: 'refresh-token-12345', access_token: 'access-token-12345', token_type: 'Bearer', scope: GOOGLE_DRIVE_SCOPE });
     };
     const result = await exchangeAuthorizationCode(fetcher, {
       clientId: 'client-id', clientSecret: 'client-secret', code: 'auth-code', verifier: 'pkce-verifier', redirectUri: 'https://preview.example/api/google/oauth/callback'
@@ -120,9 +124,23 @@ describe('CF05 Google Drive direct storage contract', () => {
     assert.equal(capturedUrl, GOOGLE_OAUTH_TOKEN_URL);
     assert.match(capturedBody, /code_verifier=pkce-verifier/u);
     assert.equal(result.scope, GOOGLE_DRIVE_SCOPE);
-    await expectGoogleError(exchangeAuthorizationCode(async () => Response.json({ refresh_token: 'refresh-token-12345', scope: 'openid' }), {
+    assert.equal(result.accessToken, 'access-token-12345');
+    await expectGoogleError(exchangeAuthorizationCode(async () => Response.json({ refresh_token: 'refresh-token-12345', access_token: 'access-token-12345', token_type: 'Bearer', scope: 'openid' }), {
       clientId: 'x', clientSecret: 'y', code: 'z', verifier: 'v', redirectUri: 'https://preview.example/api/google/oauth/callback'
     }), 'GOOGLE_SCOPE_MISSING');
+  });
+
+  test('06A Drive account verification returns only a canonical account projection', async () => {
+    const account = await getDriveAccount(async (input, init) => {
+      assert.equal(String(input), `${GOOGLE_DRIVE_API}/about?fields=user(displayName,emailAddress,permissionId)`);
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer access-token-12345');
+      return Response.json({ user: { displayName: 'Claim Admin', emailAddress: 'ADMIN@CON-COST.COM', permissionId: 'permission-1', debugToken: 'must-not-pass-through' } });
+    }, 'access-token-12345');
+    assert.deepEqual(account, { displayName: 'Claim Admin', email: 'admin@con-cost.com' });
+    assert.equal(isAllowedGoogleAccountEmail(account.email, 'con-cost.com'), true);
+    assert.equal(isAllowedGoogleAccountEmail('admin@personal.example', 'con-cost.com'), false);
+    assert.equal(isAllowedGoogleAccountEmail('admin@sub.con-cost.com', 'con-cost.com'), false);
+    await expectGoogleError(getDriveAccount(async () => Response.json({ user: { emailAddress: 'invalid' } }), 'token'), 'GOOGLE_MALFORMED_RESPONSE');
   });
 
   test('07 access-token refresh accepts only a canonical Bearer token and redacts provider bodies', async () => {

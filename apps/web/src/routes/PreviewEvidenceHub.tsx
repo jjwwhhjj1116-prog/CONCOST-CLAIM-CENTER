@@ -253,6 +253,8 @@ interface GoogleDriveStatus {
   configured: boolean;
   status: 'CONNECTED' | 'DISCONNECTED';
   storageProvider: 'GOOGLE_DRIVE';
+  accountEmail: string | null;
+  allowedDomain: string | null;
 }
 
 export const PreviewGoogleDriveSetup: React.FC<{ onNavigate: (path: string) => void }> = ({ onNavigate }) => {
@@ -270,7 +272,7 @@ export const PreviewGoogleDriveSetup: React.FC<{ onNavigate: (path: string) => v
       if (!response.ok) throw new Error(payload.error ?? 'Google Drive 상태를 확인하지 못했습니다.');
       setStatus(payload);
       setNotice(payload.connected
-        ? 'Google Drive가 연결되었습니다. 사건별 폴더를 지정하면 자료 업로드를 시작할 수 있습니다.'
+        ? `회사 Google Drive가 연결되었습니다${payload.accountEmail ? ` · ${payload.accountEmail}` : ''}. 계정을 바꾸면 사건 폴더를 다시 지정해야 합니다. 기존 파일은 삭제되지 않으며 새 계정에 공유·이관되어 있어야 계속 열 수 있습니다.`
         : payload.configured
           ? 'Google OAuth 설정이 준비되었습니다. 관리자 동의를 진행하세요.'
           : 'Cloudflare Secret에 Google OAuth 설정을 등록해야 합니다.');
@@ -373,11 +375,13 @@ export const PreviewGoogleDriveSetup: React.FC<{ onNavigate: (path: string) => v
     {error ? <div className="preview-upload-error" role="alert">{error}<button type="button" onClick={() => void loadStatus()}>상태 다시 확인</button></div> : null}
     <div className="preview-drive-actions">
       <div>
-        <button type="button" disabled={busy || !status?.configured} onClick={() => void (status?.connected ? disconnect() : connect())}>
-          {busy ? '처리 중…' : status?.connected ? 'Google Drive 연결 해제' : 'Google 계정 연결'}
+        <button type="button" disabled={busy || !status?.configured} onClick={() => void connect()}>
+          {busy ? '처리 중…' : status?.connected ? '다른 회사 Google 계정으로 변경' : '회사 Google 계정 연결'}
         </button>
+        {status?.connected ? <button type="button" disabled={busy} onClick={() => void disconnect()}>연결 해제</button> : null}
         <button type="button" disabled={!status?.connected} onClick={() => onNavigate('/cases/files')}>자료실로 이동</button>
       </div>
+      {status?.allowedDomain ? <small>허용 회사 도메인 · @{status.allowedDomain}</small> : null}
       <span>저장 방식 · GOOGLE DRIVE DIRECT · R2 미사용</span>
     </div>
   </section>

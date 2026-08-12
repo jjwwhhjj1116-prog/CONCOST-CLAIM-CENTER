@@ -99,7 +99,9 @@ export function buildAuthorizationUrl(clientId: string, redirectUri: string, sta
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('access_type', 'offline');
-  url.searchParams.set('prompt', 'consent');
+  // Always show the chooser so an administrator can move the storage
+  // connection to another company-managed Google account at any time.
+  url.searchParams.set('prompt', 'select_account consent');
   return url.toString();
 }
 
@@ -134,7 +136,7 @@ function providerFailure(response: Response, operation: string, uncertain = fals
 export async function exchangeAuthorizationCode(
   fetcher: GoogleFetch,
   input: { clientId: string; clientSecret: string; code: string; verifier: string; redirectUri: string }
-): Promise<{ refreshToken: string; scope: string }> {
+): Promise<{ refreshToken: string; accessToken: string; scope: string }> {
   const body = new URLSearchParams({
     client_id: input.clientId,
     client_secret: input.clientSecret,
@@ -153,9 +155,33 @@ export async function exchangeAuthorizationCode(
   if (typeof payload.refresh_token !== 'string' || payload.refresh_token.length < 10) {
     throw new GoogleDriveError('GOOGLE_REFRESH_TOKEN_MISSING', 502, 'Google did not return a refresh token');
   }
+  if (typeof payload.access_token !== 'string' || payload.access_token.length < 10 || payload.token_type !== 'Bearer') {
+    throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid access token');
+  }
   const grantedScopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/u) : [];
   if (!grantedScopes.includes(GOOGLE_DRIVE_SCOPE)) throw new GoogleDriveError('GOOGLE_SCOPE_MISSING', 403, 'Required Google Drive scope was not granted');
-  return { refreshToken: payload.refresh_token, scope: GOOGLE_DRIVE_SCOPE };
+  return { refreshToken: payload.refresh_token, accessToken: payload.access_token, scope: GOOGLE_DRIVE_SCOPE };
+}
+
+export async function getDriveAccount(fetcher: GoogleFetch, accessToken: string): Promise<{ email: string; displayName: string }> {
+  const response = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/about?fields=user(displayName,emailAddress,permissionId)`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  if (!response.ok) throw providerFailure(response, 'Google Drive account verification');
+  const payload = await safeJson(response);
+  const user = payload.user;
+  if (!user || typeof user !== 'object' || Array.isArray(user)) {
+    throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid account profile');
+  }
+  const account = user as Record<string, unknown>;
+  if (typeof account.emailAddress !== 'string' || !/^[^@\s]+@[^@\s]+$/u.test(account.emailAddress) || typeof account.displayName !== 'string') {
+    throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid account profile');
+  }
+  return { email: account.emailAddress.toLowerCase(), displayName: account.displayName.slice(0, 120) };
+}
+
+export function isAllowedGoogleAccountEmail(email: string, allowedDomain: string): boolean {
+  return email.trim().toLowerCase().endsWith(`@${allowedDomain.trim().toLowerCase()}`);
 }
 
 export async function refreshAccessToken(

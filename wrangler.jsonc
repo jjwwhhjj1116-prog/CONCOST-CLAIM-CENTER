@@ -11,6 +11,10 @@
     }
   ],
   "compatibility_date": "2026-08-11",
+  "vars": {
+    "GOOGLE_ALLOWED_DOMAIN": "con-cost.com",
+    "GOOGLE_OAUTH_REDIRECT_ORIGIN": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev"
+  },
   "assets": {
     "directory": "apps/web/dist",
     "binding": "ASSETS",

@@ -8,6 +8,8 @@ import {
   downloadEvidenceFromDrive,
   encryptSecret,
   exchangeAuthorizationCode,
+  getDriveAccount,
+  isAllowedGoogleAccountEmail,
   refreshAccessToken,
   revokeGoogleCredential,
   sha256Hex,
@@ -41,6 +43,7 @@ export interface CloudflareEnv {
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY?: string;
   GOOGLE_OAUTH_REDIRECT_ORIGIN?: string;
+  GOOGLE_ALLOWED_DOMAIN?: string;
   ALLOW_TEST_GOOGLE_MODES?: string;
   GOOGLE_TEST_FETCH?: GoogleFetch;
 }
@@ -326,16 +329,17 @@ function googleFetch(env: CloudflareEnv): GoogleFetch {
   return fetch;
 }
 
-function googleConfig(env: CloudflareEnv): { clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string } | null {
-  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin } = env;
-  if (!clientId || !clientSecret || !masterKey || !redirectOrigin) return null;
+function googleConfig(env: CloudflareEnv): { clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string; allowedDomain: string } | null {
+  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin, GOOGLE_ALLOWED_DOMAIN: allowedDomainRaw } = env;
+  const allowedDomain = allowedDomainRaw?.trim().toLowerCase();
+  if (!clientId || !clientSecret || !masterKey || !redirectOrigin || !allowedDomain || !/^[a-z0-9.-]+\.[a-z]{2,}$/u.test(allowedDomain)) return null;
   try {
     const origin = new URL(redirectOrigin);
     if (origin.protocol !== 'https:' || origin.origin !== redirectOrigin || origin.pathname !== '/') return null;
   } catch {
     return null;
   }
-  return { clientId, clientSecret, masterKey, redirectOrigin };
+  return { clientId, clientSecret, masterKey, redirectOrigin, allowedDomain };
 }
 
 function googleFailure(reason: unknown): Response {
@@ -375,8 +379,19 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
   const isAdmin = sessionUser.roles.includes('admin');
 
   if (url.pathname === '/api/google/status' && request.method === 'GET') {
-    const connected = Boolean(await getGoogleDriveCredential(env));
-    return json({ connected, status: connected ? 'CONNECTED' : 'DISCONNECTED', configured: Boolean(googleConfig(env)), storageProvider: 'GOOGLE_DRIVE', r2SkippedByUser: true, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
+    const config = googleConfig(env);
+    const credential = await getGoogleDriveCredential(env);
+    let accountEmail: string | null = null;
+    if (config && credential && isAdmin) {
+      try {
+        const token = await refreshAccessToken(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, refreshToken: credential.refreshToken });
+        accountEmail = (await getDriveAccount(googleFetch(env), token)).email;
+      } catch {
+        accountEmail = null;
+      }
+    }
+    const connected = Boolean(credential);
+    return json({ connected, status: connected ? 'CONNECTED' : 'DISCONNECTED', configured: Boolean(config), accountEmail, allowedDomain: isAdmin ? config?.allowedDomain ?? null : null, storageProvider: 'GOOGLE_DRIVE', r2SkippedByUser: true, phase: 'CF05_GOOGLE_DRIVE_SYNC' });
   }
 
   if (!isAdmin) return json({ error: 'Admin role is required to manage Google Drive', code: 'FORBIDDEN' }, 403);
@@ -409,15 +424,32 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
     if (!pkce) return json({ error: 'OAuth state is invalid, expired, or already used', code: 'INVALID_OAUTH_STATE' }, 409);
     const verifier = await decryptSecret(pkce.encryptedCodeVerifier, pkce.iv, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:pkce:${stateHash}`);
     if (!verifier) return json({ error: 'OAuth verifier could not be decrypted', code: 'INVALID_OAUTH_VERIFIER' }, 409);
+    let newlyIssuedRefreshToken: string | null = null;
     try {
+      const previousCredential = await getGoogleDriveCredential(env);
       const exchanged = await exchangeAuthorizationCode(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, code, verifier, redirectUri });
+      newlyIssuedRefreshToken = exchanged.refreshToken;
+      const account = await getDriveAccount(googleFetch(env), exchanged.accessToken);
+      if (!isAllowedGoogleAccountEmail(account.email, config.allowedDomain)) {
+        await revokeGoogleCredential(googleFetch(env), exchanged.refreshToken).catch(() => undefined);
+        return json({ error: `Only ${config.allowedDomain} company accounts may be connected`, code: 'GOOGLE_COMPANY_ACCOUNT_REQUIRED' }, 403);
+      }
       const encrypted = await encryptSecret(exchanged.refreshToken, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:google-refresh`);
-      await env.DB.prepare(
+      if (!env.DB.batch) throw new Error('D1 batch unavailable');
+      await env.DB.batch([env.DB.prepare(
         'INSERT INTO preview_google_credentials (organization_id, encrypted_refresh_token, iv, scope, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ' +
         'ON CONFLICT(organization_id) DO UPDATE SET encrypted_refresh_token = excluded.encrypted_refresh_token, iv = excluded.iv, scope = excluded.scope, created_by = excluded.created_by, updated_at = excluded.updated_at'
-      ).bind(PREVIEW_ORGANIZATION_ID, encrypted.ciphertextHex, encrypted.ivHex, exchanged.scope, sessionUser.id, now, now).run();
-      return Response.redirect(`${config.redirectOrigin}/integrations/google?google=connected`, 303);
+      ).bind(PREVIEW_ORGANIZATION_ID, encrypted.ciphertextHex, encrypted.ivHex, exchanged.scope, sessionUser.id, now, now), env.DB.prepare(
+        'DELETE FROM preview_google_case_folders WHERE organization_id = ?'
+      ).bind(PREVIEW_ORGANIZATION_ID)]);
+      if (previousCredential && previousCredential.refreshToken !== exchanged.refreshToken) {
+        await revokeGoogleCredential(googleFetch(env), previousCredential.refreshToken).catch(() => undefined);
+      }
+      return Response.redirect(`${config.redirectOrigin}/integrations/google?google=connected&folder=rebind-required`, 303);
     } catch (reason) {
+      if (newlyIssuedRefreshToken) {
+        await revokeGoogleCredential(googleFetch(env), newlyIssuedRefreshToken).catch(() => undefined);
+      }
       return googleFailure(reason);
     }
   }
@@ -427,7 +459,11 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
     if (!credential) return json({ disconnected: true, status: 'DISCONNECTED', phase: 'CF05_GOOGLE_DRIVE_SYNC' });
     try {
       await revokeGoogleCredential(googleFetch(env), credential.refreshToken);
-      await env.DB.prepare('DELETE FROM preview_google_credentials WHERE organization_id = ?').bind(PREVIEW_ORGANIZATION_ID).run();
+      if (!env.DB.batch) throw new Error('D1 batch unavailable');
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM preview_google_credentials WHERE organization_id = ?').bind(PREVIEW_ORGANIZATION_ID),
+        env.DB.prepare('DELETE FROM preview_google_case_folders WHERE organization_id = ?').bind(PREVIEW_ORGANIZATION_ID)
+      ]);
       return json({ disconnected: true, status: 'DISCONNECTED', phase: 'CF05_GOOGLE_DRIVE_SYNC' });
     } catch (reason) {
       return googleFailure(reason);
