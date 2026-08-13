@@ -156,7 +156,7 @@ test('CF06 UI routes use live CaseManagement while Google Drive remains explicit
   assert.match(router, /previewMode && \['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05'\]\.includes/u);
   assert.match(shell, /D1 로그인·사건·초안 저장 활성/u);
   assert.doesNotMatch(shell, /FEE-01/u);
-  assert.ok(['CF06', 'CF07', 'CF08'].includes(phase.currentPhase));
+  assert.ok(['CF06', 'CF07', 'CF08', 'CF09'].includes(phase.currentPhase));
   assert.equal(phase.phases.CF05.status, 'DEFERRED_BY_USER');
   assert.equal(phase.phases.CF06.status, 'PASS_WITH_NOTES');
 });

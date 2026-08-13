@@ -15,6 +15,7 @@ import { PreviewFeature } from './PreviewWorkspace';
 import { PreviewEvidenceHub, PreviewGoogleDriveSetup } from './PreviewEvidenceHub';
 import { PreviewReportStudio } from './PreviewReportStudio';
 import { PreviewApprovalInbox } from './PreviewApprovalInbox';
+import { PreviewAdminUsers } from './PreviewAdminUsers';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -41,24 +42,24 @@ const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'admin'
 
 export const ROUTES: RouteConfig[] = [
   { id: 'AUTH-01', path: '/login', name: '로그인' },
-  { id: 'DASH-01', path: '/dashboard', name: '메인 대시보드' },
-  { id: 'CASE-01', path: '/cases', name: '사건 목록' },
+  { id: 'DASH-01', path: '/dashboard', name: '업무 홈' },
+  { id: 'CASE-01', path: '/cases', name: '사건 관리' },
   { id: 'CASE-02', path: '/cases/new', name: '새 사건 등록', allowedRoles: CASE_CREATE_ROLES },
   { id: 'CASE-03', path: '/cases/detail', name: '사건 상세-개요' },
   { id: 'CASE-04', path: '/cases/schedule', name: '사건 상세-일정' },
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
-  { id: 'CASE-06', path: '/cases/files', name: '사건 상세-자료실' },
+  { id: 'CASE-06', path: '/cases/files', name: '자료실' },
   { id: 'MEET-01', path: '/meetings', name: '회의록' },
   { id: 'PROP-01', path: '/proposals/templates', name: '제안서 템플릿 선택' },
   { id: 'PROP-02', path: '/proposals/editor', name: '제안서 단계형 작성기' },
   { id: 'REPO-01', path: '/reports', name: '보고서 목록' },
-  { id: 'REPO-02', path: '/reports/studio', name: '보고서 스튜디오' },
-  { id: 'APPR-01', path: '/approval', name: '검토·승인함' },
+  { id: 'REPO-02', path: '/reports/studio', name: '보고서 작성' },
+  { id: 'APPR-01', path: '/approval', name: '결재·승인' },
   { id: 'FEE-01', path: '/success-fee', name: '성공보수', allowedRoles: FINANCE_ROLES },
   { id: 'INTEG-01', path: '/integrations/google', name: 'Google Drive 연결', allowedRoles: ADMIN_ONLY },
   { id: 'TPL-01', path: '/templates', name: '템플릿 관리' },
   { id: 'AI-01', path: '/ai-config', name: 'AI 공급자 설정', allowedRoles: ADMIN_ONLY },
-  { id: 'USER-01', path: '/users', name: '사용자·권한', allowedRoles: ADMIN_ONLY },
+  { id: 'USER-01', path: '/users', name: '사용자와 권한', allowedRoles: ADMIN_ONLY },
   { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: ADMIN_ONLY },
   { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }
 ];
@@ -163,14 +164,16 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
           <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
           <span className="preview-pill">D1 LIVE DATA</span>
         </div>
-        <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} />
+        <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} previewMode />
       </section>
     );
   }
-  if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;
+  if (previewMode && currentRoute.id === 'FEE-01') return <StatusFeedbackState type="empty" title="운영 메뉴에서 제외된 기능입니다" message="성공보수 기능은 현재 클레임센터 스튜디오 업무 범위에서 사용하지 않습니다." actionLabel="업무 홈으로 이동" onAction={() => onNavigate('/dashboard')} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 
   if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {

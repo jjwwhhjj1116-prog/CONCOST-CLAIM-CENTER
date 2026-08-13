@@ -4,14 +4,14 @@ import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 
 const NAVIGATION_GROUPS: readonly {
   label: string;
+  eyebrow: string;
   routeIds: readonly string[];
   allowedRoles?: readonly UserRole[];
 }[] = [
-  { label: '홈', routeIds: ['DASH-01'] },
-  { label: '사건 관리', routeIds: ['CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05'] },
-  { label: '자료·협업', routeIds: ['CASE-06', 'MEET-01', 'INTEG-01'] },
-  { label: '보고서 제작', routeIds: ['PROP-01', 'PROP-02', 'REPO-01', 'REPO-02', 'TPL-01', 'APPR-01'] },
-  { label: '관리자 설정', routeIds: ['AI-01', 'USER-01', 'AUD-01', 'RESP-01'], allowedRoles: ['admin'] }
+  { label: '업무 홈', eyebrow: 'WORKSPACE', routeIds: ['DASH-01'] },
+  { label: '사건 관리', eyebrow: 'CLAIMS', routeIds: ['CASE-01', 'CASE-02'] },
+  { label: '자료와 보고서', eyebrow: 'DOCUMENTS', routeIds: ['CASE-06', 'REPO-02', 'APPR-01'] },
+  { label: '관리자 설정', eyebrow: 'ADMIN ONLY', routeIds: ['USER-01', 'INTEG-01'], allowedRoles: ['admin'] }
 ];
 
 export interface AppShellProps {
@@ -62,7 +62,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;
         return <section className="navigation-group" key={group.label} aria-label={group.label}>
-          <h2>{group.label}</h2>
+          <header><span>{group.eyebrow}</span><h2>{group.label}</h2></header>
           {routes.map((route) => route && (
             <a
               key={route.id}
@@ -71,7 +71,8 @@ export const AppShell: React.FC<AppShellProps> = ({
               aria-current={currentPath === route.path ? 'page' : undefined}
               className="navigation-link"
             >
-              <span className="text-ellipsis">{route.name}</span><small>{route.id}</small>
+              <span className="navigation-dot" aria-hidden="true" />
+              <span className="text-ellipsis">{route.name}</span>
             </a>
           ))}
         </section>;
@@ -89,7 +90,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           <div className="brand-copy"><h1>클레임센터 스튜디오</h1><small>CLAIM CENTER STUDIO</small></div>
         </div>
         <div className="session-tools">
-          {previewMode && <span className="preview-chip">D1 로그인·사건·초안 저장 활성</span>}
+          {previewMode && <span className="preview-chip" aria-label="D1 로그인·사건·초안 저장 활성">CLOUD WORKSPACE · 자동저장</span>}
           <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
           <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>

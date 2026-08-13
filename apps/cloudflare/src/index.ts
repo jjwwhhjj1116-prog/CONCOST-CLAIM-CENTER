@@ -304,7 +304,7 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
 const PREVIEW_CLAIM_TYPES = new Set(['TYPE-01', 'TYPE-02', 'TYPE-03', 'TYPE-04', 'TYPE-05', 'TYPE-06']);
 const PREVIEW_CASE_STATUSES = [
   'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
-  'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'SUCCESS_FEE', 'CLOSED'
+  'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'CLOSED'
 ] as const;
 const PREVIEW_CASE_MUTATION_ROLES = new Set(['admin', 'ceo', 'director', 'pm']);
 const PREVIEW_CASE_CREATE_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
@@ -422,10 +422,21 @@ async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Pro
     `SELECT s.scheduled_at AS date FROM preview_case_schedules s JOIN preview_cases c ON c.id = s.case_id ` +
     `WHERE c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} LIMIT 1000`
   ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<{ date: string }>();
+  let reviewingDocsCount = 0;
+  try {
+    const pendingReviews = await env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM preview_report_reviews r JOIN preview_cases c ON c.id = r.case_id ` +
+      `WHERE c.organization_id = ? AND c.deleted_at IS NULL AND r.status = 'PENDING' AND ${visibility}`
+    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).first<{ total: number }>();
+    reviewingDocsCount = Number(pendingReviews?.total ?? 0);
+  } catch {
+    // A CF06-only database has not applied the later review migration yet.
+    reviewingDocsCount = 0;
+  }
   return json({
     totalCases: Number(summary?.totalCases ?? 0),
     inProgressCount: Number(summary?.inProgressCount ?? 0),
-    reviewingDocsCount: 0,
+    reviewingDocsCount,
     todayTasksCount: allVisibleSchedules.results.filter((entry) => kstDateKey(new Date(entry.date)) === today).length,
     delayedCount: allVisibleSchedules.results.filter((entry) => new Date(entry.date).getTime() < Date.now() && kstDateKey(new Date(entry.date)) !== today).length,
     recentCases: recent.results,
@@ -435,6 +446,20 @@ async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Pro
     })),
     phase: 'CF06_D1_CASE_OPERATIONS'
   });
+}
+
+async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  if (request.method !== 'GET') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
+  const rows = await env.DB.prepare(
+    `SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson, u.is_active AS active, ` +
+    `(SELECT COUNT(*) FROM preview_case_assignments a WHERE a.user_id = u.id) AS assignedCaseCount ` +
+    `FROM preview_users u ORDER BY u.is_active DESC, u.display_name COLLATE NOCASE`
+  ).all<{ id: string; loginId: string; displayName: string; email: string; rolesJson: string; active: number; assignedCaseCount: number }>();
+  return json({ users: rows.results.map((entry) => ({ id: entry.id, loginId: entry.loginId, displayName: entry.displayName, email: entry.email, roles: parsePreviewRoles(entry.rolesJson), active: entry.active === 1, assignedCaseCount: Number(entry.assignedCaseCount ?? 0) })), phase: 'CF10_PRODUCT_EXPERIENCE' });
 }
 
 async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -1265,6 +1290,10 @@ const worker = {
 
     if (url.pathname === '/api/dashboard/kpi') {
       return handlePreviewDashboard(request, env);
+    }
+
+    if (url.pathname === '/api/admin/users') {
+      return handlePreviewAdminUsers(request, env);
     }
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {

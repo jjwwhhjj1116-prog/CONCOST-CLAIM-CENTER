@@ -53,7 +53,7 @@ const STATUS_LABELS: Record<string, string> = {
   ANALYSIS: '분석', REPORT_DRAFTING: '보고서 작성', SUBMITTED: '제출', LITIGATION: '소송 진행',
   JUDGEMENT: '판결', SUCCESS_FEE: '성공보수 정산', CLOSED: '종결'
 };
-const STATUS_SEQUENCE = Object.keys(STATUS_LABELS);
+const STATUS_SEQUENCE = Object.keys(STATUS_LABELS).filter((status) => status !== 'SUCCESS_FEE');
 
 function ErrorBox({ error }: { error: string }): React.ReactElement {
   return <div className="error-box" role="alert">{error}</div>;
@@ -137,7 +137,21 @@ function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }): 
       </div>
       <div className="dashboard-quick-actions" aria-label="빠른 실행">
         <Button onClick={() => onNavigate('/cases/new')}>+ 새 사건 등록</Button>
-        <Button variant="secondary" onClick={() => onNavigate('/reports')}>보고서 작업공간</Button>
+        <Button variant="secondary" onClick={() => onNavigate('/cases')}>사건 목록</Button>
+        <Button variant="secondary" onClick={() => onNavigate('/reports/studio')}>보고서 작성</Button>
+      </div>
+    </section>
+
+    <section className="workspace-flow" aria-labelledby="workspace-flow-title">
+      <div className="workspace-flow-heading"><div><span className="workspace-eyebrow">CORE WORKFLOW</span><h4 id="workspace-flow-title">하나의 사건이 최종 보고서가 되는 5단계</h4></div><span>Cloudflare D1 자동저장</span></div>
+      <div className="workspace-flow-grid">
+        {[
+          ['01', '사건 등록', '기본정보와 클레임 유형을 등록합니다.', '/cases/new'],
+          ['02', '자료 정리', '사건별 자료와 근거를 한곳에서 관리합니다.', '/cases/files'],
+          ['03', '보고서 작성', '작성 내용이 D1에 자동 저장됩니다.', '/reports/studio'],
+          ['04', '결재·승인', '제출된 버전을 독립 검토자가 승인합니다.', '/approval'],
+          ['05', '최종 출력', '승인본에서 DOCX·PDF를 생성합니다.', '/reports/studio']
+        ].map(([step, title, description, path]) => <button key={step} onClick={() => onNavigate(path)}><span>{step}</span><strong>{title}</strong><small>{description}</small></button>)}
       </div>
     </section>
 
@@ -228,9 +242,6 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   const [title, setTitle] = useState('');
   const [claimType, setClaimType] = useState('TYPE-01');
   const [description, setDescription] = useState('');
-  const [major, setMajor] = useState('건설');
-  const [middle, setMiddle] = useState('일반');
-  const [minor, setMinor] = useState('기타');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
@@ -238,23 +249,26 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
     event.preventDefault(); setSaving(true); setError('');
     try {
       const result = await apiRequest<{ case: CaseRecord }>('/api/cases', {
-        method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, category: { major, middle, minor } })
+        method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, category: { major: '건설 클레임', middle: claimType, minor: '사건 업무' } })
       });
       setIdempotencyKey(crypto.randomUUID());
       onNavigate(`/cases/detail?caseId=${encodeURIComponent(result.case.id)}`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
   };
-  return <Card title="6대 유형 사건 등록"><form className="form-stack" onSubmit={(event) => void submit(event)}>
-    <Input label="사건명" value={title} maxLength={500} required onChange={(event) => setTitle(event.target.value)} />
-    <Select label="6대 고정 클레임 유형" value={claimType} options={[...CLAIM_TYPES]} onChange={(event) => setClaimType(event.target.value)} />
-    <Input label="대분류" value={major} required onChange={(event) => setMajor(event.target.value)} />
-    <Input label="중분류" value={middle} required onChange={(event) => setMiddle(event.target.value)} />
-    <Input label="소분류" value={minor} required onChange={(event) => setMinor(event.target.value)} />
-    <Input label="사건 설명" value={description} onChange={(event) => setDescription(event.target.value)} />
-    {error && <ErrorBox error={error} />}
-    <Button type="submit" isLoading={saving}>사건 저장</Button>
-  </form></Card>;
+  return <div className="case-create-page">
+    <section className="workspace-hero case-create-hero"><div><span className="workspace-eyebrow">NEW CLAIM WORKSPACE</span><h3>새 사건을 시작합니다.</h3><p>사건을 등록하면 일정·관계자·자료실·보고서 자동저장 공간이 함께 준비됩니다.</p></div><div className="case-create-number"><strong>01</strong><span>CASE SETUP</span></div></section>
+    <Card title="사건 기본정보">
+      <form className="case-create-form" onSubmit={(event) => void submit(event)}>
+        <Input label="사건명" value={title} maxLength={500} required placeholder="예: 공동주택 공사비 적정성 검토" onChange={(event) => setTitle(event.target.value)} />
+        <Select label="클레임 업무 유형" value={claimType} options={[...CLAIM_TYPES]} onChange={(event) => setClaimType(event.target.value)} />
+        <label className="case-description-field" htmlFor="case-description"><span>사건 설명</span><textarea id="case-description" value={description} maxLength={5000} placeholder="사건의 배경, 주요 쟁점, 현재 확보한 자료를 간단히 입력하세요." onChange={(event) => setDescription(event.target.value)} /></label>
+        <div className="case-create-summary"><span>자동 설정</span><p>대분류·중분류·소분류는 선택한 유형에 맞춰 자동 지정됩니다. 등록자는 담당자로 자동 배정되며 보고서 작성 공간이 즉시 열립니다.</p></div>
+        {error && <ErrorBox error={error} />}
+        <div className="case-create-actions"><Button type="button" variant="secondary" onClick={() => onNavigate('/cases')}>취소</Button><Button type="submit" isLoading={saving}>사건 등록하고 시작</Button></div>
+      </form>
+    </Card>
+  </div>;
 }
 
 function MaterialsPage(): React.ReactElement {
@@ -506,7 +520,7 @@ function MeetingsPage(): React.ReactElement {
   </div>;
 }
 
-function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'parties' | 'schedules'; onNavigate: (path: string) => void }): React.ReactElement {
+function CaseDetailPage({ section, onNavigate, previewMode = false }: { section: 'overview' | 'parties' | 'schedules'; onNavigate: (path: string) => void; previewMode?: boolean }): React.ReactElement {
   const caseId = new URLSearchParams(window.location.search).get('caseId');
   const [record, setRecord] = useState<CaseRecord | null>(null);
   const [error, setError] = useState('');
@@ -562,7 +576,8 @@ function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'partie
         <Button size="sm" variant={section === 'schedules' ? 'primary' : 'secondary'} onClick={() => onNavigate(`/cases/schedule?caseId=${caseId}`)}>일정</Button>
         <Button size="sm" variant={section === 'parties' ? 'primary' : 'secondary'} onClick={() => onNavigate(`/cases/parties?caseId=${caseId}`)}>관계자</Button>
         <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${caseId}`)}>자료실</Button>
-        <Button size="sm" variant="secondary" onClick={() => onNavigate(`/meetings?caseId=${caseId}`)}>회의록</Button>
+        <Button size="sm" variant="secondary" onClick={() => onNavigate(`/reports/studio?caseId=${caseId}`)}>보고서 작성</Button>
+        {!previewMode && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/meetings?caseId=${caseId}`)}>회의록</Button>}
       </div>
     </Card>
     {error && <ErrorBox error={error} />}
@@ -587,13 +602,13 @@ function CaseDetailPage({ section, onNavigate }: { section: 'overview' | 'partie
   </div>;
 }
 
-export function CaseManagement({ routeId, onNavigate }: { routeId: string; onNavigate: (path: string) => void }): React.ReactElement {
+export function CaseManagement({ routeId, onNavigate, previewMode = false }: { routeId: string; onNavigate: (path: string) => void; previewMode?: boolean }): React.ReactElement {
   if (routeId === 'DASH-01') return <DashboardPage onNavigate={onNavigate} />;
   if (routeId === 'CASE-01') return <CaseListPage onNavigate={onNavigate} />;
   if (routeId === 'CASE-02') return <CaseCreatePage onNavigate={onNavigate} />;
-  if (routeId === 'CASE-03') return <CaseDetailPage section="overview" onNavigate={onNavigate} />;
-  if (routeId === 'CASE-04') return <CaseDetailPage section="schedules" onNavigate={onNavigate} />;
-  if (routeId === 'CASE-05') return <CaseDetailPage section="parties" onNavigate={onNavigate} />;
+  if (routeId === 'CASE-03') return <CaseDetailPage section="overview" onNavigate={onNavigate} previewMode={previewMode} />;
+  if (routeId === 'CASE-04') return <CaseDetailPage section="schedules" onNavigate={onNavigate} previewMode={previewMode} />;
+  if (routeId === 'CASE-05') return <CaseDetailPage section="parties" onNavigate={onNavigate} previewMode={previewMode} />;
   if (routeId === 'CASE-06') return <MaterialsPage />;
   if (routeId === 'MEET-01') return <MeetingsPage />;
   return <CaseDetailPage section="parties" onNavigate={onNavigate} />;

@@ -82,7 +82,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       try {
         const result = await apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100&q=');
         setCases(result.cases);
-        const first = result.cases[0]?.id ?? '';
+        const requestedCaseId = new URLSearchParams(window.location.search).get('caseId') ?? '';
+        const first = result.cases.some((record) => record.id === requestedCaseId) ? requestedCaseId : result.cases[0]?.id ?? '';
         selectedCaseRef.current = first;
         setSelectedCaseId(first);
       } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); }

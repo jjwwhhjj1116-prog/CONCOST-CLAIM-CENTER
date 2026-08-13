@@ -15,6 +15,7 @@ interface PreviewEvidenceFile {
 
 interface PreviewEvidenceHubProps {
   userName: string;
+  roles: string[];
   onNavigate: (path: string) => void;
 }
 
@@ -35,7 +36,7 @@ function formatUploadedAt(value: string): string {
   }).format(new Date(value));
 }
 
-export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName, onNavigate }) => {
+export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName, roles, onNavigate }) => {
   const [files, setFiles] = useState<PreviewEvidenceFile[]>([]);
   const [googleDriveConnected, setGoogleDriveConnected] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -147,16 +148,16 @@ export const PreviewEvidenceHub: React.FC<PreviewEvidenceHubProps> = ({ userName
         <div>
           <span className="workspace-eyebrow">CASE EVIDENCE · GOOGLE DRIVE DIRECT</span>
           <h2 id="preview-evidence-title">
-            {googleDriveConnected ? 'Google Drive 연결 완료' : 'Google Drive 연결 후'}<br />
-            {googleDriveConnected ? '사건 자료를 저장합니다.' : '자료 기록을 시작합니다.'}
+            사건 자료를 한곳에서<br />
+            {googleDriveConnected ? '안전하게 저장합니다.' : '정리할 준비를 합니다.'}
           </h2>
-          <p>D1 로그인과 보고서 초안 저장은 활성 상태입니다. 파일 원본 저장은 Google Drive OAuth 연결 후 활성화됩니다.</p>
+          <p>사건, 일정, 보고서 초안은 D1에 저장되고 있습니다. 파일 원본 저장은 요청하신 대로 Google Drive 연결 전까지 보류합니다.</p>
         </div>
         <div className="preview-drive-card">
           <span>GOOGLE DRIVE</span>
-          <strong>{googleDriveConnected ? '연결 완료' : '연결 필요'}</strong>
-          <small>R2 미사용 · Google OAuth 자격증명 등록 후 파일 저장 활성</small>
-          <button type="button" onClick={() => onNavigate('/integrations/google')}>Google Drive 연결 설정</button>
+          <strong>{googleDriveConnected ? '연결 완료' : '연동 보류'}</strong>
+          <small>R2 미사용 · 현재 보고서와 사건 데이터만 D1에 저장</small>
+          {roles.includes('admin') && <button type="button" onClick={() => onNavigate('/integrations/google')}>관리자 연결 설정</button>}
         </div>
       </div>
 
