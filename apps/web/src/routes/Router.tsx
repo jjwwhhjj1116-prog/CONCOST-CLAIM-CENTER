@@ -14,6 +14,7 @@ import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { PreviewFeature } from './PreviewWorkspace';
 import { PreviewEvidenceHub, PreviewGoogleDriveSetup } from './PreviewEvidenceHub';
 import { PreviewReportStudio } from './PreviewReportStudio';
+import { PreviewApprovalInbox } from './PreviewApprovalInbox';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -169,6 +170,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 
   if (['DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01'].includes(currentRoute.id)) {

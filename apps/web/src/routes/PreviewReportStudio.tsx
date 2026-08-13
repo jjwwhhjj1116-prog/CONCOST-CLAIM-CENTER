@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import type { UserRole } from './Router';
+import type { PreviewReportReview } from './PreviewApprovalInbox';
 
 interface CaseSummary { id: string; caseNumber: string; title: string; claimType: string; status: string }
 interface ReportDraft {
@@ -25,6 +26,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [content, setContent] = useState('');
   const [version, setVersion] = useState(0);
   const [revisions, setRevisions] = useState<ReportRevision[]>([]);
+  const [reviews, setReviews] = useState<PreviewReportReview[]>([]);
+  const [reviewNote, setReviewNote] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -41,7 +45,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const sequence = ++loadSequence.current;
     setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false);
     try {
-      const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`);
+      const [result, reviewResult] = await Promise.all([
+        apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
+        apiRequest<{ reviews: PreviewReportReview[] }>(`/api/report-reviews?caseId=${encodeURIComponent(caseId)}`)
+      ]);
       if (sequence !== loadSequence.current || selectedCaseRef.current !== caseId) return;
       const caseRecord = cases.find((record) => record.id === caseId);
       const loadedTitle = result.draft?.title ?? `${caseRecord?.title ?? '사건'} 보고서`;
@@ -53,6 +60,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setVersion(result.draft?.version ?? 0);
       setSavedAt(result.draft?.updatedAt ?? null);
       setRevisions(result.revisions);
+      setReviews(reviewResult.reviews);
       setLoadedCaseId(caseId);
     } catch (reason) {
       if (sequence === loadSequence.current && selectedCaseRef.current === caseId) setError(reason instanceof Error ? reason.message : String(reason));
@@ -115,7 +123,24 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     loadSequence.current += 1;
     selectedCaseRef.current = caseId;
     titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setSavedAt(null); setDirty(false); setError('');
+    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+  };
+
+  const currentReview = reviews.find((review) => review.reportVersion === version) ?? null;
+  const pendingReview = reviews.find((review) => review.status === 'PENDING') ?? null;
+  const requestReview = async () => {
+    if (!editable || !selectedCaseId || !version || dirty || saving || currentReview || pendingReview) return;
+    const requestCaseId = selectedCaseId;
+    setSubmittingReview(true); setError('');
+    try {
+      const result = await apiRequest<{ reviews: PreviewReportReview[] }>('/api/report-reviews', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `report-review:${requestCaseId}:v${version}` },
+        body: JSON.stringify({ caseId: requestCaseId, expectedVersion: version, note: reviewNote.trim() })
+      });
+      if (selectedCaseRef.current === requestCaseId) { setReviews(result.reviews); setReviewNote(''); }
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setSubmittingReview(false); }
   };
 
   if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 사건이 없습니다" message="먼저 사건을 등록하면 사건별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="새 사건 등록" onAction={() => onNavigate('/cases/new')} />;
@@ -146,6 +171,17 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </Card>
         <Card title={`저장 이력 ${revisions.length}건`}>
           {revisions.length ? <ul className="dashboard-work-list">{revisions.map((revision) => <li key={revision.id}><span><strong>버전 {revision.version} · {revision.title}</strong><small>{new Date(revision.savedAt).toLocaleString('ko-KR')} · {revision.savedBy.name} · SHA {revision.contentSha256.slice(0, 12)}…</small></span></li>)}</ul> : <p className="empty-box">아직 저장된 버전이 없습니다. 첫 내용을 입력하면 자동 저장됩니다.</p>}
+        </Card>
+        <Card title="검토·승인 제출">
+          <div className="form-stack">
+            <div className="action-row"><span className="preview-pill">{currentReview ? currentReview.status === 'PENDING' ? `v${version} 검토 대기` : currentReview.status === 'APPROVED' ? `v${version} 승인 완료` : `v${version} 수정 요청` : pendingReview ? `v${pendingReview.reportVersion} 검토 중 · 현재 v${version}` : version ? `v${version} 제출 가능` : '저장 후 제출 가능'}</span><Button variant="secondary" onClick={() => onNavigate('/approval')}>검토·승인함 보기</Button></div>
+            {currentReview?.decisionNote && <p className="notice-box"><strong>검토 의견</strong><br />{currentReview.decisionNote}</p>}
+            {!currentReview && editable && <>
+              <label htmlFor="preview-review-note">검토 요청 메모</label>
+              <textarea id="preview-review-note" className="report-editor report-editor--decision" value={reviewNote} maxLength={2000} onChange={(event) => setReviewNote(event.target.value)} placeholder="검토자가 확인할 쟁점이나 근거를 남기세요." />
+              <div className="action-row"><Button onClick={() => void requestReview()} disabled={!version || dirty || saving || submittingReview || !!pendingReview || loadedCaseId !== selectedCaseId}>{submittingReview ? '제출 중…' : '저장된 최신본 검토 요청'}</Button>{dirty && <span className="muted">변경사항을 먼저 저장해야 합니다.</span>}{pendingReview && <span className="muted">기존 검토가 끝난 뒤 새 버전을 제출할 수 있습니다.</span>}</div>
+            </>}
+          </div>
         </Card>
       </>}
     </div>

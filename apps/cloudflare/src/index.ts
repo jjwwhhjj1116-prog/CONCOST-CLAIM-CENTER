@@ -659,6 +659,152 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   return previewReportPayload(env, caseId);
 }
 
+// CF08 report review and approval. Each request points to one immutable CF07
+// revision; a different active user must make the terminal decision.
+const PREVIEW_REVIEW_DECISION_ROLES = new Set(['admin', 'ceo', 'director', 'reviewer']);
+const PREVIEW_REVIEW_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
+
+interface PreviewReportReviewRow {
+  id: string;
+  caseId: string;
+  caseNumber: string;
+  caseTitle: string;
+  reportRevisionId: string;
+  reportVersion: number;
+  reportTitle: string;
+  status: 'PENDING' | 'APPROVED' | 'CHANGES_REQUESTED';
+  requestedById: string;
+  requestedByName: string;
+  requestNote: string | null;
+  requestedAt: string;
+  reviewedById: string | null;
+  reviewedByName: string | null;
+  decisionNote: string | null;
+  reviewedAt: string | null;
+}
+
+function previewReviewProjection(row: PreviewReportReviewRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    caseNumber: row.caseNumber,
+    caseTitle: row.caseTitle,
+    reportRevisionId: row.reportRevisionId,
+    reportVersion: Number(row.reportVersion),
+    reportTitle: row.reportTitle,
+    status: row.status,
+    requestedBy: { id: row.requestedById, name: row.requestedByName },
+    requestNote: row.requestNote,
+    requestedAt: row.requestedAt,
+    reviewedBy: row.reviewedById ? { id: row.reviewedById, name: row.reviewedByName } : null,
+    decisionNote: row.decisionNote,
+    reviewedAt: row.reviewedAt
+  };
+}
+
+async function previewReportReviewList(env: CloudflareEnv, user: SessionUser, caseId = ''): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const rows = await env.DB.prepare(
+    'SELECT v.id, v.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, v.report_revision_id AS reportRevisionId, ' +
+    'v.report_version AS reportVersion, r.title AS reportTitle, v.status, v.requested_by AS requestedById, requester.display_name AS requestedByName, ' +
+    'v.request_note AS requestNote, v.requested_at AS requestedAt, v.reviewed_by AS reviewedById, reviewer.display_name AS reviewedByName, ' +
+    'v.decision_note AS decisionNote, v.reviewed_at AS reviewedAt FROM preview_report_reviews v ' +
+    'JOIN preview_cases c ON c.id = v.case_id JOIN preview_report_revisions r ON r.id = v.report_revision_id ' +
+    'JOIN preview_users requester ON requester.id = v.requested_by LEFT JOIN preview_users reviewer ON reviewer.id = v.reviewed_by ' +
+    'WHERE v.organization_id = ? AND (? = \'\' OR v.case_id = ?) ' +
+    'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = v.case_id AND a.user_id = ?)) ' +
+    'ORDER BY CASE v.status WHEN \'PENDING\' THEN 0 ELSE 1 END, v.requested_at DESC LIMIT 100'
+  ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewReportReviewRow>();
+  return json({ reviews: rows.results.map(previewReviewProjection), phase: 'CF08_D1_REPORT_APPROVAL' });
+}
+
+async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  if (url.pathname === '/api/report-reviews' && request.method === 'GET') {
+    const caseId = url.searchParams.get('caseId') ?? '';
+    if (caseId && !PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
+    return previewReportReviewList(env, user, caseId);
+  }
+
+  if (url.pathname === '/api/report-reviews' && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot request report review', code: 'FORBIDDEN' }, 403);
+    const idempotencyKey = request.headers.get('Idempotency-Key') ?? '';
+    if (!PREVIEW_REVIEW_KEY.test(idempotencyKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId', 'expectedVersion', 'note']) || typeof body.caseId !== 'string' || !Number.isInteger(body.expectedVersion) || typeof body.note !== 'string') {
+      return json({ error: 'Review request payload is invalid', code: 'INVALID_REVIEW_PAYLOAD' }, 400);
+    }
+    const caseId = body.caseId;
+    const expectedVersion = Number(body.expectedVersion);
+    const note = body.note.trim();
+    if (!PREVIEW_DRAFT_KEY.test(caseId) || expectedVersion < 1 || note.length > 2000) return json({ error: 'Review request exceeds field limits', code: 'INVALID_REVIEW_PAYLOAD' }, 400);
+    if (!await accessiblePreviewCase(env, user, caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+
+    const fingerprint = await sha256Hex(JSON.stringify({ caseId, expectedVersion, note }));
+    const replay = await env.DB.prepare('SELECT id, request_fingerprint AS requestFingerprint FROM preview_report_reviews WHERE organization_id = ? AND request_key = ?').bind(PREVIEW_ORGANIZATION_ID, idempotencyKey).first<{ id: string; requestFingerprint: string }>();
+    if (replay) return replay.requestFingerprint === fingerprint ? previewReportReviewList(env, user, caseId) : json({ error: 'Idempotency key was used for a different review request', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+
+    const source = await env.DB.prepare(
+      'SELECT d.version, d.content, r.id AS revisionId FROM preview_report_drafts d JOIN preview_report_revisions r ON r.case_id = d.case_id AND r.version = d.version ' +
+      'WHERE d.case_id = ? AND d.organization_id = ?'
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; content: string; revisionId: string }>();
+    if (!source) return json({ error: 'Save the report before requesting review', code: 'REPORT_NOT_SAVED' }, 409);
+    if (Number(source.version) !== expectedVersion) return json({ error: 'The report version changed before review submission', code: 'VERSION_CONFLICT', currentVersion: Number(source.version) }, 409);
+    if (!source.content.trim()) return json({ error: 'An empty report cannot be submitted for review', code: 'EMPTY_REPORT' }, 409);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+    const reviewId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_reviews (id, organization_id, case_id, report_revision_id, report_version, status, requested_by, request_note, request_key, request_fingerprint, requested_at, reviewed_by, decision_note, reviewed_at) VALUES (?, ?, ?, ?, ?, \'PENDING\', ?, ?, ?, ?, ?, NULL, NULL, NULL)').bind(reviewId, PREVIEW_ORGANIZATION_ID, caseId, source.revisionId, expectedVersion, user.id, note || null, idempotencyKey, fingerprint, now),
+        env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) VALUES (?, ?, \'REVIEW_REQUESTED\', ?, ?, ?)').bind(crypto.randomUUID(), reviewId, user.id, note || null, now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, \'REPORT_REVIEW_REQUESTED\', ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, `보고서 검토 요청 · v${expectedVersion}`, note || null, now)
+      ]);
+    } catch {
+      const canonical = await env.DB.prepare('SELECT request_fingerprint AS requestFingerprint FROM preview_report_reviews WHERE organization_id = ? AND request_key = ?').bind(PREVIEW_ORGANIZATION_ID, idempotencyKey).first<{ requestFingerprint: string }>();
+      if (canonical?.requestFingerprint === fingerprint) return previewReportReviewList(env, user, caseId);
+      return json({ error: 'This report version already has a review request', code: 'REVIEW_ALREADY_EXISTS' }, 409);
+    }
+    const payload = await previewReportReviewList(env, user, caseId);
+    return new Response(payload.body, { status: 201, headers: payload.headers });
+  }
+
+  const decisionMatch = url.pathname.match(/^\/api\/report-reviews\/([0-9a-f-]{36})\/decision$/iu);
+  if (decisionMatch && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_REVIEW_DECISION_ROLES.has(role))) return json({ error: 'Role cannot decide report reviews', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['decision', 'note', 'expectedStatus']) || !['APPROVED', 'CHANGES_REQUESTED'].includes(String(body.decision)) || typeof body.note !== 'string' || body.expectedStatus !== 'PENDING') {
+      return json({ error: 'Review decision payload is invalid', code: 'INVALID_DECISION_PAYLOAD' }, 400);
+    }
+    const status = String(body.decision) as 'APPROVED' | 'CHANGES_REQUESTED';
+    const note = body.note.trim();
+    if (note.length > 4000 || (status === 'CHANGES_REQUESTED' && !note)) return json({ error: 'A changes-requested decision requires a note', code: 'DECISION_NOTE_REQUIRED' }, 400);
+    const review = await env.DB.prepare('SELECT id, case_id AS caseId, report_version AS reportVersion, status, requested_by AS requestedBy FROM preview_report_reviews WHERE id = ? AND organization_id = ?').bind(decisionMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; reportVersion: number; status: string; requestedBy: string }>();
+    if (!review) return json({ error: 'Review request was not found', code: 'REVIEW_NOT_FOUND' }, 404);
+    if (!await accessiblePreviewCase(env, user, review.caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (review.requestedBy === user.id) return json({ error: 'The requester cannot decide their own report review', code: 'SELF_APPROVAL_FORBIDDEN' }, 403);
+    if (review.status !== 'PENDING') return previewReportReviewList(env, user, review.caseId);
+    const current = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(review.caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
+    if (status === 'APPROVED' && Number(current?.version ?? 0) !== Number(review.reportVersion)) return json({ error: 'The report changed after this review was requested', code: 'REVIEW_OUTDATED', currentVersion: Number(current?.version ?? 0) }, 409);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const now = new Date(Math.max(Date.now(), Date.now() + 1)).toISOString();
+    const eventType = status === 'APPROVED' ? 'REPORT_APPROVED' : 'CHANGES_REQUESTED';
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE preview_report_reviews SET status = ?, reviewed_by = ?, decision_note = ?, reviewed_at = ? WHERE id = ? AND organization_id = ? AND status = \'PENDING\' AND requested_by <> ?').bind(status, user.id, note || null, now, review.id, PREVIEW_ORGANIZATION_ID, user.id),
+      env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.id, eventType, user.id, note || null, now, review.id, status, user.id),
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.caseId, user.id, eventType, status === 'APPROVED' ? `보고서 승인 · v${review.reportVersion}` : `보고서 수정 요청 · v${review.reportVersion}`, note || null, now, review.id, status, user.id)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1) return json({ error: 'Review was already decided in another session', code: 'REVIEW_STATUS_CONFLICT' }, 409);
+    return previewReportReviewList(env, user, review.caseId);
+  }
+
+  return json({ error: 'Report review route was not found', code: 'REVIEW_ROUTE_NOT_FOUND' }, 404);
+}
+
 // Google Drive OAuth and evidence storage. The organization is intentionally
 // fixed for this single-tenant preview; raw credentials never cross this file.
 const PREVIEW_ORGANIZATION_ID = 'concost';
@@ -995,6 +1141,10 @@ const worker = {
 
     if (url.pathname === '/api/report-drafts') {
       return handlePreviewReportDraft(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-reviews' || url.pathname.startsWith('/api/report-reviews/')) {
+      return handlePreviewReportReviews(request, env, url);
     }
 
     if (url.pathname.startsWith('/api/google/')) {
