@@ -1,0 +1,150 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import test from 'node:test';
+import initSqlJs, { type Database } from 'sql.js';
+import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index.js';
+
+const ADMIN_ID = '00000000-0000-4000-8000-000000000001';
+const OUTSIDER_ID = '00000000-0000-4000-8000-000000000002';
+const ADMIN_TOKEN = 'cf11-admin-session-token';
+const OUTSIDER_TOKEN = 'cf11-outsider-session-token';
+const CASE_ID = '40000000-0000-4000-8000-000000000010';
+
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+class SqlStatement {
+  private values: unknown[] = [];
+  constructor(private readonly database: Database, private readonly sql: string) {}
+  bind(...values: unknown[]): SqlStatement { this.values = values; return this; }
+  async first<T>(): Promise<T | null> {
+    const statement = this.database.prepare(this.sql);
+    try { statement.bind(this.values as any[]); return statement.step() ? statement.getAsObject() as T : null; }
+    finally { statement.free(); }
+  }
+  async all<T>(): Promise<{ results: T[] }> {
+    const statement = this.database.prepare(this.sql);
+    const results: T[] = [];
+    try { statement.bind(this.values as any[]); while (statement.step()) results.push(statement.getAsObject() as T); return { results }; }
+    finally { statement.free(); }
+  }
+  async run(): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }> {
+    this.database.run(this.sql, this.values as any[]);
+    const row = this.database.exec('SELECT last_insert_rowid() AS id')[0]?.values[0]?.[0];
+    return { success: true, meta: { changes: this.database.getRowsModified(), last_row_id: Number(row ?? 0) } };
+  }
+}
+
+class SqlD1 {
+  constructor(readonly database: Database) {}
+  prepare(sql: string): SqlStatement { return new SqlStatement(this.database, sql); }
+  async batch(statements: SqlStatement[]): Promise<unknown[]> {
+    this.database.run('BEGIN IMMEDIATE');
+    try { const results = []; for (const statement of statements) results.push(await statement.run()); this.database.run('COMMIT'); return results; }
+    catch (error) { this.database.run('ROLLBACK'); throw error; }
+  }
+}
+
+function migration(name: string): string {
+  return readFileSync(join(process.cwd(), 'apps', 'cloudflare', 'migrations', name), 'utf8');
+}
+
+async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
+  const SQL = await initSqlJs();
+  const sql = new SQL.Database();
+  sql.run('PRAGMA foreign_keys = ON');
+  for (const name of ['0001_cf_foundation.sql', '0001_cf02_preview_drafts.sql', '0002_cf03_preview_evidence.sql', '0003_cf04_preview_auth.sql', '0004_cf05_google_drive.sql', '0005_cf06_case_operations.sql']) sql.exec(migration(name));
+  const now = new Date().toISOString();
+  const insertUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
+  insertUser(ADMIN_ID, 'admin', '["admin"]');
+  sql.exec(migration('0010_cf10_product_experience.sql'));
+  insertUser(OUTSIDER_ID, 'outsider', '["staff"]');
+  sql.exec(migration('0011_cf11_project_workflow.sql'));
+  sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(ADMIN_TOKEN), ADMIN_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);
+  sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(OUTSIDER_TOKEN), OUTSIDER_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);
+  return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']> } };
+}
+
+function request(path: string, token = ADMIN_TOKEN, init: RequestInit = {}): Request {
+  const headers = new Headers(init.headers);
+  headers.set('X-Session-Token', token);
+  if (init.body) headers.set('Content-Type', 'application/json');
+  return new Request(`https://preview.example${path}`, { ...init, headers });
+}
+
+test('CF11 persists kickoff, local structured minutes, site-survey folder plans, and team allocations', async () => {
+  const { sql, env } = await setup();
+  const initial = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow`), env);
+  assert.equal(initial.status, 200);
+  const initialBody = await initial.json() as { kickoff: { version: number }; googleDrive: { deferredByUser: boolean } };
+  assert.equal(initialBody.kickoff.version, 1);
+  assert.equal(initialBody.googleDrive.deferredByUser, true);
+
+  const kickoffPayload = {
+    meetingAt: '2030-08-13T01:00:00.000Z', location: '본사 회의실', agenda: '현장조사 범위와 산출 기준 확정',
+    participantUnits: ['프로젝트 책임자', 'Finish Internal 1'], rawNotes: '외벽 균열 조사를 8월 14일 진행한다. 마감팀은 20일까지 물량을 산출한다. 보고서 목차는 TYPE-01 기준으로 검토한다.',
+    status: 'COMPLETED', expectedVersion: 1
+  };
+  const saved = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify(kickoffPayload) }), env);
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json() as { kickoff: { version: number } }).kickoff.version, 2);
+
+  const generated = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff-summary`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ expectedVersion: 2 }) }), env);
+  assert.equal(generated.status, 200);
+  const generatedBody = await generated.json() as { kickoff: { version: number; status: string; summaryText: string; timeline: unknown[] } };
+  assert.equal(generatedBody.kickoff.version, 3);
+  assert.equal(generatedBody.kickoff.status, 'DRAFTED');
+  assert.match(generatedBody.kickoff.summaryText, /외부 AI 연결 전/u);
+  assert.equal(generatedBody.kickoff.timeline.length, 3);
+
+  const siteSurvey = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ surveyDate: '2030-08-14', location: '101동 외벽', scopeText: '외벽 균열 및 누수 전수 확인', leadUnit: '현장조사팀', status: 'PLANNED', expectedVersion: 0 }) }), env);
+  assert.equal(siteSurvey.status, 200);
+  const surveyBody = await siteSurvey.json() as { siteSurveys: Array<{ version: number; folderPath: string }> };
+  assert.equal(surveyBody.siteSurveys[0].version, 1);
+  assert.match(surveyBody.siteSurveys[0].folderPath, /04_현장조사\/30\.08\.14/u);
+
+  const allocationPayload = { unitKey: 'vietqs-02', unitLabel: 'Finish Internal 1', office: 'VIETQS', schedulingMode: 'TEAM', discipline: 'FINISH', scopeText: '외벽 마감 물량 산출', basisText: '설계도서·현장실측', startDate: '2030-08-15', endDate: '2030-08-20' };
+  const allocation = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/allocations`, ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf11-allocation-0001' }, body: JSON.stringify(allocationPayload) }), env);
+  assert.equal(allocation.status, 200);
+  assert.equal((await allocation.json() as { allocations: unknown[] }).allocations.length, 1);
+  const replay = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/allocations`, ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf11-allocation-0001' }, body: JSON.stringify(allocationPayload) }), env);
+  assert.equal(replay.status, 200);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_workforce_allocations')[0].values[0][0], 1);
+
+  const exported = sql.export();
+  const SQL = await initSqlJs();
+  const restarted = new SQL.Database(exported);
+  assert.deepEqual(restarted.exec('SELECT status, version FROM preview_workflow_kickoffs')[0].values[0], ['DRAFTED', 3]);
+  assert.equal(restarted.exec('SELECT COUNT(*) FROM preview_workflow_events')[0].values[0][0], 4);
+  restarted.close();
+  sql.close();
+});
+
+test('CF11 enforces assignment, optimistic versions, team scheduling rules, append-only ledgers, and prompt architecture', async () => {
+  const { sql, env } = await setup();
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/workflow`, OUTSIDER_TOKEN), env)).status, 404);
+
+  const stale = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ meetingAt: '2030-08-13T01:00:00.000Z', location: '', agenda: 'stale', participantUnits: [], rawNotes: '', status: 'PLANNED', expectedVersion: 0 }) }), env);
+  assert.equal(stale.status, 409);
+
+  const invalidMode = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/allocations`, ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf11-invalid-mode' }, body: JSON.stringify({ unitKey: 'vietqs-02', unitLabel: 'Finish Internal 1', office: 'VIETQS', schedulingMode: 'PERSON', discipline: 'FINISH', scopeText: '범위', basisText: '기준', startDate: '2030-08-15', endDate: '2030-08-20' }) }), env);
+  assert.equal(invalidMode.status, 400);
+
+  sql.run('INSERT INTO preview_workflow_events VALUES (?, ?, ?, ?, ?, ?, ?)', ['00000000-0000-4000-8000-000000000099', CASE_ID, ADMIN_ID, 'TEST_EVENT', CASE_ID, '{}', new Date().toISOString()]);
+  assert.throws(() => sql.run("UPDATE preview_workflow_events SET event_type='FORGED'"), /append-only/u);
+  assert.throws(() => sql.run("UPDATE preview_workflow_kickoffs SET agenda='FORGED', version=99, updated_at=? WHERE case_id=?", [new Date(Date.now() + 1000).toISOString(), CASE_ID]), /optimistic version/u);
+
+  const systemPrompt = readFileSync(join(process.cwd(), 'docs', 'report-authoring', 'report-authoring-system-prompt.md'), 'utf8');
+  const agents = readFileSync(join(process.cwd(), 'docs', 'report-authoring', 'chapter-agent-spec.yaml'), 'utf8');
+  const typePrompts = readFileSync(join(process.cwd(), 'docs', 'report-authoring', 'type-chapter-prompts.yaml'), 'utf8');
+  assert.match(systemPrompt, /EVIDENCE/u);
+  assert.match(systemPrompt, /근거가 없거나 서로 충돌/u);
+  assert.doesNotMatch(systemPrompt, /16,000/u);
+  for (let index = 0; index <= 7; index += 1) assert.match(agents, new RegExp(`AGENT-0${index}`, 'u'));
+  for (let index = 1; index <= 6; index += 1) assert.match(typePrompts, new RegExp(`TYPE-0${index}:`, 'u'));
+  assert.match(typePrompts, /TYPE-05:[\s\S]*TEMPLATE_NOT_FOUND/u);
+  sql.close();
+});

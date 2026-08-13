@@ -15,6 +15,8 @@ interface ReportRevision {
   savedBy: { id: string; name: string };
 }
 interface ReportPayload { draft: ReportDraft | null; revisions: ReportRevision[] }
+interface AuthoringChapter { id: string; chapterCode: string; title: string; agentCode: string; ordinal: number; promptVersion: number }
+interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; modelLabel: string; chapters: AuthoringChapter[] }
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
   id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
@@ -40,6 +42,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState('');
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [authoring, setAuthoring] = useState<AuthoringConfig | null>(null);
+  const [selectedChapterId, setSelectedChapterId] = useState('');
+  const [generating, setGenerating] = useState(false);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
@@ -51,10 +56,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const sequence = ++loadSequence.current;
     setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false);
     try {
-      const [result, reviewResult, finalizationResult] = await Promise.all([
+      const [result, reviewResult, finalizationResult, authoringResult] = await Promise.all([
         apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
         apiRequest<{ reviews: PreviewReportReview[] }>(`/api/report-reviews?caseId=${encodeURIComponent(caseId)}`),
-        apiRequest<{ finalizations: Finalization[] }>(`/api/report-finalizations?caseId=${encodeURIComponent(caseId)}`)
+        apiRequest<{ finalizations: Finalization[] }>(`/api/report-finalizations?caseId=${encodeURIComponent(caseId)}`),
+        apiRequest<AuthoringConfig>(`/api/report-authoring/config?caseId=${encodeURIComponent(caseId)}`)
       ]);
       if (sequence !== loadSequence.current || selectedCaseRef.current !== caseId) return;
       const caseRecord = cases.find((record) => record.id === caseId);
@@ -69,6 +75,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setRevisions(result.revisions);
       setReviews(reviewResult.reviews);
       setFinalizations(finalizationResult.finalizations);
+      setAuthoring(authoringResult);
+      setSelectedChapterId((current) => authoringResult.chapters.some((chapter) => chapter.id === current) ? current : authoringResult.chapters[0]?.id ?? '');
       setLoadedCaseId(caseId);
     } catch (reason) {
       if (sequence === loadSequence.current && selectedCaseRef.current === caseId) setError(reason instanceof Error ? reason.message : String(reason));
@@ -132,7 +140,27 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     loadSequence.current += 1;
     selectedCaseRef.current = caseId;
     titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+  };
+
+  const generateChapter = async () => {
+    if (!editable || !authoring?.available || !authoring.aiConnected || !selectedChapterId || dirty || saving || generating || loadedCaseId !== selectedCaseId) return;
+    const requestCaseId = selectedCaseId;
+    setGenerating(true); setError('');
+    try {
+      const result = await apiRequest<{ chapter: { chapterCode: string; title: string; content: string; promptVersion: number } }>('/api/report-authoring/generate', {
+        method: 'POST', body: JSON.stringify({ caseId: requestCaseId, chapterId: selectedChapterId, expectedDraftVersion: version })
+      });
+      if (selectedCaseRef.current !== requestCaseId) return;
+      const start = `<!-- AI-CHAPTER:${result.chapter.chapterCode}:START -->`;
+      const end = `<!-- AI-CHAPTER:${result.chapter.chapterCode}:END -->`;
+      const block = `${start}\n## ${result.chapter.chapterCode} ${result.chapter.title}\n\n${result.chapter.content}\n${end}`;
+      const escapedCode = result.chapter.chapterCode.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+      const existing = new RegExp(`<!-- AI-CHAPTER:${escapedCode}:START -->[\\s\\S]*?<!-- AI-CHAPTER:${escapedCode}:END -->`, 'u');
+      const nextContent = existing.test(content) ? content.replace(existing, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
+      contentRef.current = nextContent; setContent(nextContent); setDirty(true);
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
   };
 
   const currentReview = reviews.find((review) => review.reportVersion === version) ?? null;
@@ -203,6 +231,17 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       </Card>
 
       {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="사건별 보고서 최신본을 불러오고 있습니다." /> : <>
+        <Card title="AI CHAPTER WORKFLOW · 관리자 승인 프롬프트">
+          {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 챕터 프롬프트가 없습니다.'}</div> : <div className="form-stack">
+            <div className="inline-form">
+              <Select label="자동 작성할 챕터" value={selectedChapterId} onChange={(event) => setSelectedChapterId(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${chapter.title} · prompt v${chapter.promptVersion}` }))} />
+              <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
+            </div>
+            <p className="muted">사건 유형 {authoring.claimType} · 모델 {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
+            {!authoring.aiConnected && <div className="error-box">관리자가 Cloudflare 서버 Secret에 OPENAI_API_KEY를 연결하기 전에는 자동 작성 버튼이 비활성화됩니다.</div>}
+            {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
+          </div>}
+        </Card>
         <Card title={selectedCase ? `${selectedCase.caseNumber} · ${selectedCase.title}` : '보고서 작성'}>
           <div className="form-stack">
             <Input label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />

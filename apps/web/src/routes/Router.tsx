@@ -17,6 +17,8 @@ import { PreviewReportStudio } from './PreviewReportStudio';
 import { PreviewApprovalInbox } from './PreviewApprovalInbox';
 import { PreviewAdminUsers } from './PreviewAdminUsers';
 import { ProjectWorkflowSchedule } from '../workflow/ProjectWorkflowSchedule';
+import { WorkflowOperations } from '../workflow/WorkflowOperations';
+import { PreviewAiAdmin } from './PreviewAiAdmin';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -168,6 +170,9 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   }
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
+  if (previewMode && ['WF-03', 'WF-04', 'WF-05'].includes(currentRoute.id)) {
+    return <WorkflowOperations routeId={currentRoute.id as 'WF-03' | 'WF-04' | 'WF-05'} roles={roles} onNavigate={onNavigate} />;
+  }
   if (['PROJ-01', 'PROJ-02', 'WF-01', 'WF-02', 'WF-03', 'WF-04', 'WF-05', 'WF-06'].includes(currentRoute.id)) {
     return <ProjectWorkflowSchedule routeId={currentRoute.id} onNavigate={onNavigate} />;
   }
@@ -187,6 +192,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;
+  if (previewMode && currentRoute.id === 'AI-01') return <PreviewAiAdmin />;
   if (previewMode && currentRoute.id === 'FEE-01') return <StatusFeedbackState type="empty" title="운영 메뉴에서 제외된 기능입니다" message="성공보수 기능은 현재 클레임센터 스튜디오 업무 범위에서 사용하지 않습니다." actionLabel="업무 홈으로 이동" onAction={() => onNavigate('/dashboard')} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 

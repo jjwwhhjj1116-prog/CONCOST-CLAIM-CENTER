@@ -47,6 +47,8 @@ export interface CloudflareEnv {
   GOOGLE_ALLOWED_DOMAIN?: string;
   ALLOW_TEST_GOOGLE_MODES?: string;
   GOOGLE_TEST_FETCH?: GoogleFetch;
+  OPENAI_API_KEY?: string;
+  OPENAI_TEST_FETCH?: typeof fetch;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -462,10 +464,224 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
   return json({ users: rows.results.map((entry) => ({ id: entry.id, loginId: entry.loginId, displayName: entry.displayName, email: entry.email, roles: parsePreviewRoles(entry.rolesJson), active: entry.active === 1, assignedCaseCount: Number(entry.assignedCaseCount ?? 0) })), phase: 'CF10_PRODUCT_EXPERIENCE' });
 }
 
+interface PreviewKickoffRow {
+  caseId: string;
+  meetingAt: string;
+  location: string | null;
+  agenda: string;
+  participantUnitsJson: string;
+  rawNotes: string;
+  summaryText: string;
+  timelineJson: string;
+  status: string;
+  version: number;
+  updatedAt: string;
+  updatedByName: string;
+}
+
+function workflowJsonArray<T>(value: string): T[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed as T[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizedWorkflowText(value: unknown, maximum: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= maximum ? normalized : null;
+}
+
+function validWorkflowDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
+
+function kickoffDraft(agenda: string, notes: string, meetingAt: string): { summary: string; timeline: Array<{ order: number; title: string; detail: string }> } {
+  const sentences = notes
+    .split(/(?:\r?\n|[.!?]\s+)/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const timeline = (sentences.length > 0 ? sentences : [agenda]).map((detail, index) => ({
+    order: index + 1,
+    title: index === 0 ? '회의 핵심 안건' : index < 4 ? '확인·결정 사항' : '후속 업무',
+    detail: detail.slice(0, 500)
+  }));
+  const summary = [
+    `회의 일시: ${meetingAt}`,
+    `핵심 안건: ${agenda}`,
+    '',
+    '회의 요약',
+    ...timeline.map((item) => `${item.order}. ${item.detail}`),
+    '',
+    '※ 외부 AI 연결 전 생성된 구조화 초안입니다. 담당자가 원문과 대조한 뒤 확정해야 합니다.'
+  ].join('\n').slice(0, 30000);
+  return { summary, timeline };
+}
+
+async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const [kickoff, surveys, allocations, events] = await Promise.all([
+    env.DB.prepare(
+      'SELECT k.case_id AS caseId, k.meeting_at AS meetingAt, k.location, k.agenda, k.participant_units_json AS participantUnitsJson, ' +
+      'k.raw_notes AS rawNotes, k.summary_text AS summaryText, k.timeline_json AS timelineJson, k.status, k.version, k.updated_at AS updatedAt, ' +
+      'u.display_name AS updatedByName FROM preview_workflow_kickoffs k JOIN preview_users u ON u.id = k.updated_by WHERE k.case_id = ? AND k.organization_id = ?'
+    ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<PreviewKickoffRow>(),
+    env.DB.prepare(
+      'SELECT s.id, s.survey_date AS surveyDate, s.location, s.scope_text AS scopeText, s.lead_unit AS leadUnit, s.folder_path AS folderPath, ' +
+      's.photo_count AS photoCount, s.audio_count AS audioCount, s.document_count AS documentCount, s.status, s.version, s.updated_at AS updatedAt, ' +
+      'u.display_name AS updatedByName FROM preview_site_surveys s JOIN preview_users u ON u.id = s.updated_by WHERE s.case_id = ? AND s.organization_id = ? ORDER BY s.survey_date DESC LIMIT 100'
+    ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
+    env.DB.prepare(
+      'SELECT a.id, a.unit_key AS unitKey, a.unit_label AS unitLabel, a.office, a.scheduling_mode AS schedulingMode, a.discipline, ' +
+      'a.scope_text AS scopeText, a.basis_text AS basisText, a.start_date AS startDate, a.end_date AS endDate, a.created_at AS createdAt, ' +
+      'u.display_name AS createdByName FROM preview_workforce_allocations a JOIN preview_users u ON u.id = a.created_by WHERE a.case_id = ? AND a.organization_id = ? ORDER BY a.start_date, a.unit_label LIMIT 100'
+    ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
+    env.DB.prepare(
+      'SELECT e.id, e.event_type AS eventType, e.entity_id AS entityId, e.detail_json AS detailJson, e.created_at AS createdAt, u.display_name AS actorName ' +
+      'FROM preview_workflow_events e JOIN preview_users u ON u.id = e.actor_id WHERE e.case_id = ? ORDER BY e.created_at DESC LIMIT 100'
+    ).bind(caseRow.id).all<{ id: string; eventType: string; entityId: string; detailJson: string; createdAt: string; actorName: string }>()
+  ]);
+  return json({
+    case: previewCaseProjection(caseRow),
+    kickoff: kickoff ? {
+      ...kickoff,
+      participantUnits: workflowJsonArray<string>(kickoff.participantUnitsJson),
+      timeline: workflowJsonArray<{ order: number; title: string; detail: string }>(kickoff.timelineJson),
+      participantUnitsJson: undefined,
+      timelineJson: undefined
+    } : null,
+    siteSurveys: surveys.results,
+    allocations: allocations.results,
+    events: events.results.map((event) => ({ ...event, detail: JSON.parse(event.detailJson) as unknown, detailJson: undefined })),
+    googleDrive: { connected: false, deferredByUser: true, uploadEnabled: false },
+    phase: 'CF11_PROJECT_WORKFLOW'
+  });
+}
+
+async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, url: URL, user: SessionUser, caseId: string, action?: string): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  if (!action && request.method === 'GET') return previewWorkflowPayload(env, caseRow);
+  if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot modify project workflow', code: 'FORBIDDEN' }, 403);
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body) return json({ error: 'Workflow payload is invalid', code: 'INVALID_WORKFLOW_PAYLOAD' }, 400);
+  const now = new Date().toISOString();
+
+  if (action === 'kickoff' && request.method === 'PUT') {
+    if (!exactObjectKeys(body, ['meetingAt', 'location', 'agenda', 'participantUnits', 'rawNotes', 'status', 'expectedVersion'])) return json({ error: 'Kickoff payload is invalid', code: 'INVALID_KICKOFF_PAYLOAD' }, 400);
+    const meetingAt = typeof body.meetingAt === 'string' && !Number.isNaN(Date.parse(body.meetingAt)) ? new Date(body.meetingAt).toISOString() : null;
+    const location = typeof body.location === 'string' ? body.location.trim() : '';
+    const agenda = normalizedWorkflowText(body.agenda, 12000);
+    const rawNotes = typeof body.rawNotes === 'string' && body.rawNotes.length <= 50000 ? body.rawNotes.trim() : null;
+    const participants = Array.isArray(body.participantUnits) ? body.participantUnits.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0 && entry.trim().length <= 120).map((entry) => entry.trim()).slice(0, 30) : null;
+    const status = typeof body.status === 'string' && ['PLANNED', 'COMPLETED', 'DRAFTED', 'CONFIRMED'].includes(body.status) ? body.status : null;
+    const expectedVersion = Number(body.expectedVersion);
+    if (!meetingAt || location.length > 300 || !agenda || rawNotes === null || !participants || !status || !Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error: 'Kickoff fields are invalid', code: 'INVALID_KICKOFF_PAYLOAD' }, 400);
+    const current = await env.DB.prepare('SELECT version FROM preview_workflow_kickoffs WHERE case_id = ?').bind(caseId).first<{ version: number }>();
+    if (Number(current?.version ?? 0) !== expectedVersion) return json({ error: 'Kickoff has changed. Reload the latest version.', code: 'VERSION_CONFLICT' }, 409);
+    const nextVersion = expectedVersion + 1;
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO preview_workflow_kickoffs (case_id, organization_id, meeting_at, location, agenda, participant_units_json, raw_notes, summary_text, timeline_json, status, version, updated_by, created_at, updated_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, \'\', \'[]\', ?, 1, ?, ?, ?) ON CONFLICT(case_id) DO UPDATE SET meeting_at=excluded.meeting_at, location=excluded.location, agenda=excluded.agenda, participant_units_json=excluded.participant_units_json, raw_notes=excluded.raw_notes, status=excluded.status, version=preview_workflow_kickoffs.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_workflow_kickoffs.version=?'
+      ).bind(caseId, PREVIEW_ORGANIZATION_ID, meetingAt, location || null, agenda, JSON.stringify(participants), rawNotes, status, user.id, now, now, expectedVersion),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_workflow_kickoffs WHERE case_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(), caseId, user.id, 'KICKOFF_SAVED', caseId, JSON.stringify({ status, participantCount: participants.length }), now, caseId, nextVersion, now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT version, updated_at AS updatedAt FROM preview_workflow_kickoffs WHERE case_id=?').bind(caseId).first<{ version: number; updatedAt: string }>();
+    if (canonical?.version !== nextVersion || canonical.updatedAt !== now) return json({ error: 'Concurrent kickoff update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewWorkflowPayload(env, caseRow);
+  }
+
+  if (action === 'kickoff-summary' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['expectedVersion'])) return json({ error: 'Summary payload is invalid', code: 'INVALID_SUMMARY_PAYLOAD' }, 400);
+    const expectedVersion = Number(body.expectedVersion);
+    const kickoff = await env.DB.prepare('SELECT meeting_at AS meetingAt, agenda, raw_notes AS rawNotes, version FROM preview_workflow_kickoffs WHERE case_id=?').bind(caseId).first<{ meetingAt: string; agenda: string; rawNotes: string; version: number }>();
+    if (!kickoff || !Number.isInteger(expectedVersion) || kickoff.version !== expectedVersion) return json({ error: 'Kickoff has changed. Reload before generating the draft.', code: 'VERSION_CONFLICT' }, 409);
+    const draft = kickoffDraft(kickoff.agenda, kickoff.rawNotes, kickoff.meetingAt);
+    const nextVersion = expectedVersion + 1;
+    await env.DB.batch([
+      env.DB.prepare('UPDATE preview_workflow_kickoffs SET summary_text=?, timeline_json=?, status=\'DRAFTED\', version=version+1, updated_by=?, updated_at=? WHERE case_id=? AND version=?')
+        .bind(draft.summary, JSON.stringify(draft.timeline), user.id, now, caseId, expectedVersion),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_workflow_kickoffs WHERE case_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(), caseId, user.id, 'KICKOFF_DRAFT_GENERATED', caseId, JSON.stringify({ generator: 'LOCAL_STRUCTURED_DRAFT', timelineCount: draft.timeline.length }), now, caseId, nextVersion, now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT version FROM preview_workflow_kickoffs WHERE case_id=?').bind(caseId).first<{ version: number }>();
+    if (canonical?.version !== nextVersion) return json({ error: 'Concurrent kickoff update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewWorkflowPayload(env, caseRow);
+  }
+
+  if (action === 'site-survey' && request.method === 'PUT') {
+    if (!exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'status', 'expectedVersion'])) return json({ error: 'Site survey payload is invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
+    const surveyDate = validWorkflowDate(body.surveyDate) ? body.surveyDate : null;
+    const location = typeof body.location === 'string' ? body.location.trim() : '';
+    const scopeText = normalizedWorkflowText(body.scopeText, 12000);
+    const leadUnit = normalizedWorkflowText(body.leadUnit, 120);
+    const status = typeof body.status === 'string' && ['PLANNED', 'IN_PROGRESS', 'COMPLETED'].includes(body.status) ? body.status : null;
+    const expectedVersion = Number(body.expectedVersion);
+    if (!surveyDate || location.length > 300 || !scopeText || !leadUnit || !status || !Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error: 'Site survey fields are invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
+    const current = await env.DB.prepare('SELECT id, version FROM preview_site_surveys WHERE case_id=? AND survey_date=?').bind(caseId, surveyDate).first<{ id: string; version: number }>();
+    if (Number(current?.version ?? 0) !== expectedVersion) return json({ error: 'Site survey has changed. Reload the latest version.', code: 'VERSION_CONFLICT' }, 409);
+    const surveyId = current?.id ?? crypto.randomUUID();
+    const folderPath = `${caseRow.caseNumber}_${caseRow.title}/04_현장조사/${surveyDate.slice(2).replaceAll('-', '.')}`.slice(0, 600);
+    const nextVersion = expectedVersion + 1;
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT INTO preview_site_surveys (id, case_id, organization_id, survey_date, location, scope_text, lead_unit, folder_path, photo_count, audio_count, document_count, status, version, updated_by, created_at, updated_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, ?, ?) ON CONFLICT(case_id, survey_date) DO UPDATE SET location=excluded.location, scope_text=excluded.scope_text, lead_unit=excluded.lead_unit, folder_path=excluded.folder_path, status=excluded.status, version=preview_site_surveys.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_site_surveys.version=?'
+      ).bind(surveyId, caseId, PREVIEW_ORGANIZATION_ID, surveyDate, location || null, scopeText, leadUnit, folderPath, status, user.id, now, now, expectedVersion),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_site_surveys WHERE id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(), caseId, user.id, 'SITE_SURVEY_SAVED', surveyId, JSON.stringify({ surveyDate, leadUnit, folderPath }), now, surveyId, nextVersion, now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT version FROM preview_site_surveys WHERE id=?').bind(surveyId).first<{ version: number }>();
+    if (canonical?.version !== nextVersion) return json({ error: 'Concurrent site survey update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewWorkflowPayload(env, caseRow);
+  }
+
+  if (action === 'allocations' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['unitKey', 'unitLabel', 'office', 'schedulingMode', 'discipline', 'scopeText', 'basisText', 'startDate', 'endDate'])) return json({ error: 'Allocation payload is invalid', code: 'INVALID_ALLOCATION_PAYLOAD' }, 400);
+    const unitKey = normalizedWorkflowText(body.unitKey, 120);
+    const unitLabel = normalizedWorkflowText(body.unitLabel, 160);
+    const scopeText = normalizedWorkflowText(body.scopeText, 12000);
+    const basisText = normalizedWorkflowText(body.basisText, 12000);
+    const office = typeof body.office === 'string' && ['CONCOST', 'VIETQS'].includes(body.office) ? body.office : null;
+    const schedulingMode = typeof body.schedulingMode === 'string' && ['PERSON', 'TEAM'].includes(body.schedulingMode) ? body.schedulingMode : null;
+    const discipline = typeof body.discipline === 'string' && ['FINISH', 'STRUCTURE', 'CIVIL_LANDSCAPE'].includes(body.discipline) ? body.discipline : null;
+    const startDate = validWorkflowDate(body.startDate) ? body.startDate : null;
+    const endDate = validWorkflowDate(body.endDate) ? body.endDate : null;
+    const key = request.headers.get('Idempotency-Key');
+    if (!unitKey || !unitLabel || !scopeText || !basisText || !office || !schedulingMode || !discipline || !startDate || !endDate || endDate < startDate || !key || !PREVIEW_CASE_CREATE_KEY.test(key)) return json({ error: 'Allocation fields or Idempotency-Key are invalid', code: 'INVALID_ALLOCATION_PAYLOAD' }, 400);
+    if ((office === 'VIETQS') !== (schedulingMode === 'TEAM')) return json({ error: 'VIETQS must use team scheduling; CONCOST must use person scheduling', code: 'INVALID_SCHEDULING_MODE' }, 400);
+    const fingerprint = await sha256Hex(JSON.stringify({ caseId, unitKey, unitLabel, office, schedulingMode, discipline, scopeText, basisText, startDate, endDate }));
+    const existing = await env.DB.prepare('SELECT id, request_fingerprint AS requestFingerprint FROM preview_workforce_allocations WHERE case_id=? AND idempotency_key=?').bind(caseId, key).first<{ id: string; requestFingerprint: string }>();
+    if (existing) {
+      if (existing.requestFingerprint !== fingerprint) return json({ error: 'Idempotency-Key was used for a different allocation', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+      return previewWorkflowPayload(env, caseRow);
+    }
+    const allocationId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_workforce_allocations (id, case_id, organization_id, unit_key, unit_label, office, scheduling_mode, discipline, scope_text, basis_text, start_date, end_date, idempotency_key, request_fingerprint, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(allocationId, caseId, PREVIEW_ORGANIZATION_ID, unitKey, unitLabel, office, schedulingMode, discipline, scopeText, basisText, startDate, endDate, key, fingerprint, user.id, now),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(crypto.randomUUID(), caseId, user.id, 'WORKFORCE_ALLOCATED', allocationId, JSON.stringify({ unitKey, unitLabel, office, schedulingMode, startDate, endDate }), now)
+    ]);
+    return previewWorkflowPayload(env, caseRow);
+  }
+
+  return json({ error: 'Workflow route or method was not found', code: 'WORKFLOW_ROUTE_NOT_FOUND' }, 404);
+}
+
 async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|allocations))?$/iu);
+  if (workflowPath) return handlePreviewCaseWorkflow(request, env, url, user, workflowPath[1], workflowPath[2]);
   const casePath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})(?:\/(status|parties|schedules))?$/iu);
 
   if (url.pathname === '/api/cases' && request.method === 'GET') {
@@ -683,6 +899,233 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   ]) as Array<{ meta?: { changes?: number } }>;
   if (results[0]?.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
   return previewReportPayload(env, caseId);
+}
+
+// CF12 report-authoring prompts. Prompt bodies are Admin-only and are never
+// included in the writer-facing configuration response.
+const PREVIEW_OPENAI_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+const PREVIEW_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+
+interface PreviewPromptRow {
+  id: string;
+  claimType: string;
+  typeName: string;
+  setStatus: string;
+  chapterCode: string;
+  title: string;
+  agentCode: string;
+  rolePrompt: string;
+  instructionPrompt: string;
+  ordinal: number;
+  version: number;
+  updatedAt: string;
+  updatedByName: string;
+  systemPrompt: string;
+}
+
+interface PreviewAiSettingsRow {
+  providerKind: string;
+  modelCode: string;
+  reasoningEffort: string;
+  version: number;
+  updatedAt: string;
+  updatedByName: string;
+}
+
+async function previewAiSettings(env: CloudflareEnv): Promise<PreviewAiSettingsRow | null> {
+  if (!env.DB) return null;
+  return env.DB.prepare(
+    'SELECT s.provider_kind AS providerKind, s.model_code AS modelCode, s.reasoning_effort AS reasoningEffort, s.version, s.updated_at AS updatedAt, u.display_name AS updatedByName ' +
+    'FROM preview_report_ai_settings s JOIN preview_users u ON u.id = s.updated_by WHERE s.organization_id = ?'
+  ).bind(PREVIEW_ORGANIZATION_ID).first<PreviewAiSettingsRow>();
+}
+
+async function previewPromptRows(env: CloudflareEnv, claimType = ''): Promise<PreviewPromptRow[]> {
+  if (!env.DB) return [];
+  const rows = await env.DB.prepare(
+    'SELECT p.id, s.claim_type AS claimType, s.name AS typeName, s.status AS setStatus, p.chapter_code AS chapterCode, p.title, p.agent_code AS agentCode, ' +
+    'p.role_prompt AS rolePrompt, p.instruction_prompt AS instructionPrompt, p.ordinal, p.version, p.updated_at AS updatedAt, u.display_name AS updatedByName, s.system_prompt AS systemPrompt ' +
+    'FROM preview_report_prompt_sets s LEFT JOIN preview_report_chapter_prompts p ON p.prompt_set_id = s.id ' +
+    'LEFT JOIN preview_users u ON u.id = p.updated_by WHERE s.organization_id = ? AND (? = \'\' OR s.claim_type = ?) ORDER BY s.claim_type, p.ordinal'
+  ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewPromptRow>();
+  return rows.results;
+}
+
+async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (!user.roles.includes('admin')) return json({ error: 'Only Admin can view or modify report prompts', code: 'FORBIDDEN' }, 403);
+
+  if (url.pathname === '/api/admin/report-prompts' && request.method === 'GET') {
+    const settings = await previewAiSettings(env);
+    const rows = await previewPromptRows(env);
+    const typeMap = new Map<string, { claimType: string; name: string; status: string; systemPrompt: string; chapters: Array<Record<string, unknown>> }>();
+    for (const row of rows) {
+      if (!typeMap.has(row.claimType)) typeMap.set(row.claimType, { claimType: row.claimType, name: row.typeName, status: row.setStatus, systemPrompt: row.systemPrompt, chapters: [] });
+      if (row.id) typeMap.get(row.claimType)?.chapters.push({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, rolePrompt: row.rolePrompt, instructionPrompt: row.instructionPrompt, ordinal: Number(row.ordinal), version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName });
+    }
+    return json({ settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(env.OPENAI_API_KEY) } : null, promptSets: [...typeMap.values()], phase: 'CF12_ADMIN_REPORT_PROMPTS' });
+  }
+
+  if (url.pathname === '/api/admin/report-prompts/settings' && request.method === 'PUT') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['modelCode', 'reasoningEffort', 'expectedVersion']) || typeof body.modelCode !== 'string' || typeof body.reasoningEffort !== 'string' || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'AI settings payload is invalid', code: 'INVALID_AI_SETTINGS' }, 400);
+    }
+    if (!PREVIEW_OPENAI_MODELS.has(body.modelCode) || !PREVIEW_REASONING_EFFORTS.has(body.reasoningEffort)) return json({ error: 'Model or reasoning effort is not allowed', code: 'UNSUPPORTED_MODEL' }, 400);
+    const current = await previewAiSettings(env);
+    if (!current || Number(current.version) !== Number(body.expectedVersion)) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current?.version ?? 0) }, 409);
+    const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
+    const result = await env.DB.prepare('UPDATE preview_report_ai_settings SET model_code = ?, reasoning_effort = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE organization_id = ? AND version = ?')
+      .bind(body.modelCode, body.reasoningEffort, user.id, now, PREVIEW_ORGANIZATION_ID, body.expectedVersion).run();
+    if (result.meta?.changes !== 1) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    const settings = await previewAiSettings(env);
+    return json({ settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(env.OPENAI_API_KEY) } : null, phase: 'CF12_ADMIN_REPORT_PROMPTS' });
+  }
+
+  const promptMatch = url.pathname.match(/^\/api\/admin\/report-prompts\/(TYPE-0[1-6])\/(CH-[0-9]{2})$/u);
+  if (promptMatch && request.method === 'PUT') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['rolePrompt', 'instructionPrompt', 'expectedVersion']) || typeof body.rolePrompt !== 'string' || typeof body.instructionPrompt !== 'string' || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Chapter prompt payload is invalid', code: 'INVALID_PROMPT_PAYLOAD' }, 400);
+    }
+    const rolePrompt = body.rolePrompt.trim();
+    const instructionPrompt = body.instructionPrompt.trim();
+    if (rolePrompt.length < 20 || rolePrompt.length > 5000 || instructionPrompt.length < 20 || instructionPrompt.length > 10000) return json({ error: 'Chapter prompt length is invalid', code: 'INVALID_PROMPT_PAYLOAD' }, 400);
+    const current = await env.DB.prepare(
+      'SELECT p.id, p.version, p.updated_at AS updatedAt FROM preview_report_chapter_prompts p JOIN preview_report_prompt_sets s ON s.id = p.prompt_set_id WHERE s.organization_id = ? AND s.claim_type = ? AND p.chapter_code = ?'
+    ).bind(PREVIEW_ORGANIZATION_ID, promptMatch[1], promptMatch[2]).first<{ id: string; version: number; updatedAt: string }>();
+    if (!current) return json({ error: 'Chapter prompt was not found', code: 'PROMPT_NOT_FOUND' }, 404);
+    if (Number(current.version) !== Number(body.expectedVersion)) return json({ error: 'Chapter prompt changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current.version) }, 409);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const nextVersion = Number(current.version) + 1;
+    const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE preview_report_chapter_prompts SET role_prompt = ?, instruction_prompt = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE id = ? AND version = ?').bind(rolePrompt, instructionPrompt, user.id, now, current.id, current.version),
+      env.DB.prepare('INSERT INTO preview_report_prompt_history (id, prompt_id, version, role_prompt, instruction_prompt, changed_by, changed_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_prompts WHERE id = ? AND version = ?)').bind(crypto.randomUUID(), current.id, nextVersion, rolePrompt, instructionPrompt, user.id, now, current.id, nextVersion)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1) return json({ error: 'Chapter prompt changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json({ prompt: { claimType: promptMatch[1], chapterCode: promptMatch[2], rolePrompt, instructionPrompt, version: nextVersion, updatedAt: now }, phase: 'CF12_ADMIN_REPORT_PROMPTS' });
+  }
+
+  return json({ error: 'Report prompt route was not found', code: 'PROMPT_ROUTE_NOT_FOUND' }, 404);
+}
+
+function extractOpenAiText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.output_text === 'string' && record.output_text.trim()) return record.output_text.trim();
+  if (!Array.isArray(record.output)) return null;
+  const pieces: string[] = [];
+  for (const item of record.output) {
+    if (!item || typeof item !== 'object' || !Array.isArray((item as Record<string, unknown>).content)) continue;
+    for (const content of (item as { content: unknown[] }).content) {
+      if (content && typeof content === 'object' && typeof (content as Record<string, unknown>).text === 'string') pieces.push(String((content as Record<string, unknown>).text));
+    }
+  }
+  return pieces.join('\n').trim() || null;
+}
+
+async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Record<string, unknown>> {
+  if (!env.DB) return {};
+  const [kickoff, surveys, allocations, parties, schedules] = await Promise.all([
+    env.DB.prepare('SELECT meeting_at AS meetingAt, location, agenda, participant_units_json AS participantUnitsJson, raw_notes AS rawNotes, summary_text AS summaryText, timeline_json AS timelineJson, status, version FROM preview_workflow_kickoffs WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<Record<string, unknown>>(),
+    env.DB.prepare('SELECT survey_date AS surveyDate, location, scope_text AS scopeText, lead_unit AS leadUnit, folder_path AS folderPath, status, version FROM preview_site_surveys WHERE case_id = ? AND organization_id = ? ORDER BY survey_date').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
+    env.DB.prepare('SELECT unit_label AS unitLabel, office, scheduling_mode AS schedulingMode, discipline, scope_text AS scopeText, basis_text AS basisText, start_date AS startDate, end_date AS endDate FROM preview_workforce_allocations WHERE case_id = ? AND organization_id = ? ORDER BY start_date').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
+    env.DB.prepare('SELECT name, role FROM preview_case_parties WHERE case_id = ? ORDER BY created_at').bind(caseRow.id).all<Record<string, unknown>>(),
+    env.DB.prepare('SELECT title, type, scheduled_at AS scheduledAt, location FROM preview_case_schedules WHERE case_id = ? ORDER BY scheduled_at').bind(caseRow.id).all<Record<string, unknown>>()
+  ]);
+  return {
+    case: previewCaseProjection(caseRow),
+    workflow: { kickoff, siteSurveys: surveys.results, quantityAndWorkforce: allocations.results },
+    parties: parties.results,
+    schedules: schedules.results,
+    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Missing fields must be marked [확인 필요].'
+  };
+}
+
+async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  if (url.pathname === '/api/report-authoring/config' && request.method === 'GET') {
+    const caseId = url.searchParams.get('caseId') ?? '';
+    if (!PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
+    const caseRow = await accessiblePreviewCase(env, user, caseId);
+    if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const settings = await previewAiSettings(env);
+    const prompts = await previewPromptRows(env, caseRow.claimType);
+    const unavailable = caseRow.claimType === 'TYPE-05' || prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
+    return json({
+      claimType: caseRow.claimType,
+      available: !unavailable,
+      unavailableReason: unavailable ? '승인된 유형별 보고서 템플릿과 챕터 프롬프트가 필요합니다.' : null,
+      aiConnected: Boolean(env.OPENAI_API_KEY),
+      modelLabel: settings?.modelCode ?? 'gpt-5.6',
+      chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
+      phase: 'CF12_WRITER_REPORT_AUTHORING'
+    });
+  }
+
+  if (url.pathname === '/api/report-authoring/generate' && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot generate report chapters', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId', 'chapterId', 'expectedDraftVersion']) || typeof body.caseId !== 'string' || typeof body.chapterId !== 'string' || !Number.isInteger(body.expectedDraftVersion)) return json({ error: 'Authoring request is invalid', code: 'INVALID_AUTHORING_PAYLOAD' }, 400);
+    if (!env.OPENAI_API_KEY) return json({ error: '관리자가 Cloudflare 서버 Secret에 OPENAI_API_KEY를 연결해야 합니다.', code: 'OPENAI_NOT_CONFIGURED' }, 503);
+    const caseRow = await accessiblePreviewCase(env, user, body.caseId);
+    if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
+    const currentVersion = Number(draft?.version ?? 0);
+    if (currentVersion !== Number(body.expectedDraftVersion)) return json({ error: 'Report draft changed in another session', code: 'VERSION_CONFLICT', currentVersion }, 409);
+    const prompt = await env.DB.prepare(
+      'SELECT p.id, p.chapter_code AS chapterCode, p.title, p.agent_code AS agentCode, p.role_prompt AS rolePrompt, p.instruction_prompt AS instructionPrompt, p.version, s.system_prompt AS systemPrompt, s.status AS setStatus, s.claim_type AS claimType ' +
+      'FROM preview_report_chapter_prompts p JOIN preview_report_prompt_sets s ON s.id = p.prompt_set_id WHERE p.id = ? AND s.organization_id = ? AND s.claim_type = ?'
+    ).bind(body.chapterId, PREVIEW_ORGANIZATION_ID, caseRow.claimType).first<PreviewPromptRow>();
+    if (!prompt || prompt.setStatus !== 'ACTIVE') return json({ error: 'Approved chapter prompt is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
+    const settings = await previewAiSettings(env);
+    if (!settings || !PREVIEW_OPENAI_MODELS.has(settings.modelCode)) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
+    const context = await previewReportAuthoringContext(env, caseRow);
+    const contextJson = JSON.stringify(context).slice(0, 80_000);
+    const inputSha256 = await sha256Hex(contextJson);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+    let response: Response;
+    try {
+      response = await (env.OPENAI_TEST_FETCH ?? fetch)('https://api.openai.com/v1/responses', {
+        method: 'POST', signal: controller.signal,
+        headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: settings.modelCode,
+          store: false,
+          safety_identifier: await sha256Hex(`${PREVIEW_ORGANIZATION_ID}:${user.id}`),
+          reasoning: { effort: settings.reasoningEffort },
+          text: { verbosity: 'high' },
+          instructions: `${prompt.systemPrompt}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}`,
+          input: `다음 JSON은 현재 사건의 승인된 내부 작업 데이터입니다. ${prompt.chapterCode} ${prompt.title} 장만 작성하십시오.\n${contextJson}`
+        })
+      });
+    } catch {
+      clearTimeout(timeout);
+      return json({ error: 'AI 공급자 응답 시간이 초과되었거나 연결에 실패했습니다.', code: 'OPENAI_UNAVAILABLE' }, 504);
+    }
+    clearTimeout(timeout);
+    if (!response.ok) return json({ error: 'AI 공급자가 요청을 처리하지 못했습니다. 관리자 연결 상태와 예산을 확인해 주세요.', code: 'OPENAI_REQUEST_FAILED', providerStatus: response.status }, response.status === 401 ? 503 : 502);
+    const providerPayload = await response.json().catch(() => null);
+    const content = extractOpenAiText(providerPayload);
+    if (!content || content.length > 200_000) return json({ error: 'AI 공급자 응답 형식이 올바르지 않습니다.', code: 'OPENAI_MALFORMED_RESPONSE' }, 502);
+    const outputSha256 = await sha256Hex(content);
+    const now = new Date().toISOString();
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${prompt.title} · prompt v${prompt.version}`, now)
+    ]);
+    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), generatedAt: now }, phase: 'CF12_WRITER_REPORT_AUTHORING' });
+  }
+
+  return json({ error: 'Report authoring route was not found', code: 'AUTHORING_ROUTE_NOT_FOUND' }, 404);
 }
 
 // CF08 report review and approval. Each request points to one immutable CF07
@@ -1296,12 +1739,20 @@ const worker = {
       return handlePreviewAdminUsers(request, env);
     }
 
+    if (url.pathname === '/api/admin/report-prompts' || url.pathname.startsWith('/api/admin/report-prompts/')) {
+      return handlePreviewPromptAdmin(request, env, url);
+    }
+
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {
       return handlePreviewCases(request, env, url);
     }
 
     if (url.pathname === '/api/report-drafts') {
       return handlePreviewReportDraft(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate') {
+      return handlePreviewReportAuthoring(request, env, url);
     }
 
     if (url.pathname === '/api/report-reviews' || url.pathname.startsWith('/api/report-reviews/')) {

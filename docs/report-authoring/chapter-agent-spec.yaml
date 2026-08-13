@@ -1,0 +1,61 @@
+version: "1.0"
+framework: "EVIDENCE"
+humanApprovalRequired: true
+
+agents:
+  - id: AGENT-00
+    role: "보고서 오케스트레이터"
+    responsibility: "유형·템플릿·입력 스냅샷을 확인하고 목차와 장별 작업을 배정"
+    mayWriteFinalBody: false
+    outputs: [evidenceManifest, missingInputs, issueTree, chapterPlan]
+
+  - id: AGENT-01
+    role: "사실관계·연혁 작성자"
+    responsibility: "제안서, 수주 기록, 계약, 착수회의 및 사건 자료에서 확인된 사실과 연혁 작성"
+    allowedSources: [proposalLink, awardDecision, kickoffRecord, caseMaterials]
+    forbidden: [법률 결론, 책임 비율 추정]
+
+  - id: AGENT-02
+    role: "계약·쟁점 분석자"
+    responsibility: "계약 조항, 당사자 주장, 감정·소송 쟁점과 분석 기준 정리"
+    allowedSources: [caseMaterials, kickoffRecord, templateSnapshot]
+    forbidden: [확인되지 않은 법령·판례 생성]
+
+  - id: AGENT-03
+    role: "현장조사 기술 작성자"
+    responsibility: "조사 범위, 방법, 관찰 결과, 사진·녹음·도면 근거 작성"
+    allowedSources: [siteSurveyRecords, caseMaterials]
+    forbidden: [현장자료에 없는 하자·원인 추정]
+
+  - id: AGENT-04
+    role: "수량·내역·공사비 분석자"
+    responsibility: "산출 범위, 기준, 산식, 수량, 단가, 금액 및 검산표 작성"
+    allowedSources: [quantityRecords, caseMaterials, siteSurveyRecords]
+    mandatoryChecks: [unitConsistency, subtotalTotalMatch, roundingPolicy, taxPolicy]
+
+  - id: AGENT-05
+    role: "인과관계·종합 분석자"
+    responsibility: "확인된 사실·기술·비용 분석을 쟁점별로 종합하고 대안별 영향을 작성"
+    allowedSources: [approvedChapterOutputs]
+    forbidden: [새 사실 추가, 근거 없는 책임 단정]
+
+  - id: AGENT-06
+    role: "결론·권고 작성자"
+    responsibility: "각 장의 승인된 결과를 요약하여 결론, 권고, 협상·후속조치 작성"
+    allowedSources: [approvedChapterOutputs, issueTree]
+    forbidden: [미승인 장 인용, 범위를 넘는 법률 자문]
+
+  - id: AGENT-07
+    role: "근거·수치·일관성 검수자"
+    responsibility: "인용 위치, 수치, 용어, 날짜, 당사자, 장간 결론을 교차 검증"
+    mayEditBody: false
+    outputs: [citationFindings, numericFindings, consistencyFindings, reviewGate]
+
+gates:
+  - id: GATE-INPUT
+    blocksWhen: [missingRequiredSnapshot, crossCaseSource, unverifiedHash]
+  - id: GATE-CHAPTER
+    blocksWhen: [citationMissing, numericMismatch, unresolvedConflict]
+  - id: GATE-MERGE
+    blocksWhen: [requiredChapterUnapproved, staleRevision, unresolvedReviewComment]
+

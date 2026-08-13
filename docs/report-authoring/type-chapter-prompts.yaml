@@ -1,0 +1,69 @@
+version: "1.0"
+sourceOfTruth: "docs/domain/claim-types.yaml"
+templateMapping: "docs/templates/template-classification.yaml"
+
+types:
+  TYPE-01:
+    name: "현장조사 및 수량산출 클레임"
+    templateFamilies: ["04. 하자검토 보고서", "07. 하자조사 보고서", "08. 돌관공사비", "09. 기시공+미시공"]
+    chapters:
+      - { id: CH-01, title: "업무 개요 및 조사 범위", agent: AGENT-01, inputs: [proposalLink, awardDecision, kickoffRecord] }
+      - { id: CH-02, title: "검토 자료 및 적용 기준", agent: AGENT-02, inputs: [caseMaterials, templateSnapshot] }
+      - { id: CH-03, title: "현장조사 방법 및 결과", agent: AGENT-03, inputs: [siteSurveyRecords] }
+      - { id: CH-04, title: "하자·기시공·미시공 항목 분석", agent: AGENT-03, inputs: [siteSurveyRecords, caseMaterials] }
+      - { id: CH-05, title: "수량산출 및 내역 검산", agent: AGENT-04, inputs: [quantityRecords] }
+      - { id: CH-06, title: "원인·책임·비용 종합", agent: AGENT-05, inputs: [approvedChapterOutputs] }
+      - { id: CH-07, title: "결론 및 후속조치", agent: AGENT-06, inputs: [approvedChapterOutputs] }
+
+  TYPE-02:
+    name: "분석 보고서 작성 클레임"
+    templateFamilies: ["01. 감정보완 신청서", "02. 항소에 대한 의견 보고서", "06. 공사비 적정성 검토 보고서"]
+    chapters:
+      - { id: CH-01, title: "검토 목적과 질문", agent: AGENT-01, inputs: [proposalLink, kickoffRecord] }
+      - { id: CH-02, title: "자료 목록과 사실관계 연혁", agent: AGENT-01, inputs: [caseMaterials] }
+      - { id: CH-03, title: "상대방 주장·감정 결과 요약", agent: AGENT-02, inputs: [caseMaterials] }
+      - { id: CH-04, title: "쟁점별 분석 및 반박", agent: AGENT-05, inputs: [caseMaterials, approvedChapterOutputs] }
+      - { id: CH-05, title: "수치·공사비 검산", agent: AGENT-04, inputs: [quantityRecords, caseMaterials] }
+      - { id: CH-06, title: "의견 및 보완 요청사항", agent: AGENT-06, inputs: [approvedChapterOutputs] }
+
+  TYPE-03:
+    name: "일반적인 클레임"
+    templateFamilies: ["03. 설계변경+물가변동+간접비"]
+    chapters:
+      - { id: CH-01, title: "업무 개요 및 범위", agent: AGENT-01, inputs: [proposalLink, awardDecision, kickoffRecord] }
+      - { id: CH-02, title: "사실관계·계약·쟁점", agent: AGENT-02, inputs: [caseMaterials] }
+      - { id: CH-03, title: "기술·현장 검토", agent: AGENT-03, inputs: [siteSurveyRecords, caseMaterials], optional: true }
+      - { id: CH-04, title: "수량·비용 검토", agent: AGENT-04, inputs: [quantityRecords], optional: true }
+      - { id: CH-05, title: "종합 분석 및 결론", agent: AGENT-05, inputs: [approvedChapterOutputs] }
+
+  TYPE-04:
+    name: "재건축·재개발 공사비 협상"
+    templateFamilies: ["06. 공사비 적정성 검토 보고서"]
+    repeatableChapters: [CH-07, CH-08]
+    chapters:
+      - { id: CH-01, title: "협상 업무 범위와 전제", agent: AGENT-01, inputs: [proposalLink, awardDecision, kickoffRecord] }
+      - { id: CH-02, title: "시공사 증액 주장과 근거", agent: AGENT-02, inputs: [caseMaterials] }
+      - { id: CH-03, title: "항목별 공사비 적정성", agent: AGENT-04, inputs: [quantityRecords, caseMaterials] }
+      - { id: CH-04, title: "계약·설계변경·시장조건 분석", agent: AGENT-05, inputs: [caseMaterials] }
+      - { id: CH-05, title: "협상 시나리오와 권고 범위", agent: AGENT-06, inputs: [approvedChapterOutputs] }
+      - { id: CH-06, title: "1차 종합 의견", agent: AGENT-06, inputs: [approvedChapterOutputs] }
+      - { id: CH-07, title: "협상회의 기록과 상대방 반박", agent: AGENT-01, inputs: [kickoffRecord, caseMaterials] }
+      - { id: CH-08, title: "반박 검토 및 수정 의견", agent: AGENT-05, inputs: [approvedChapterOutputs] }
+
+  TYPE-05:
+    name: "사감정보고서"
+    status: "TEMPLATE_NOT_FOUND"
+    chapters: []
+    rule: "전용 템플릿이 HUMAN_APPROVED 되기 전에는 다른 유형 목차를 강제 배정하거나 보고서 생성을 시작하지 않는다."
+
+  TYPE-06:
+    name: "물가변동"
+    templateFamilies: ["03. 설계변경+물가변동+간접비", "05. 설계변경+물가변동"]
+    chapters:
+      - { id: CH-01, title: "계약 조건과 조정 기준", agent: AGENT-02, inputs: [proposalLink, awardDecision, caseMaterials] }
+      - { id: CH-02, title: "기준시점·비교시점·조정기간", agent: AGENT-01, inputs: [caseMaterials] }
+      - { id: CH-03, title: "적용 지수·품목·제외 항목", agent: AGENT-04, inputs: [caseMaterials, quantityRecords] }
+      - { id: CH-04, title: "물가변동 산식과 항목별 계산", agent: AGENT-04, inputs: [quantityRecords] }
+      - { id: CH-05, title: "민감도·대안 비교", agent: AGENT-05, inputs: [approvedChapterOutputs] }
+      - { id: CH-06, title: "추정·확정 결과 및 권고", agent: AGENT-06, inputs: [approvedChapterOutputs] }
+
