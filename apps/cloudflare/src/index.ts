@@ -836,11 +836,12 @@ async function finalizationList(env: CloudflareEnv, user: SessionUser, caseId = 
     'WHERE f.organization_id=? AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ' +
     'ORDER BY f.finalized_at DESC LIMIT 100'
   ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewFinalizationRow>();
-  const projections: Record<string, unknown>[] = [];
-  for (const row of rows.results) {
-    const outputs = await env.DB.prepare('SELECT id, format, file_name AS fileName, content_sha256 AS contentSha256, byte_size AS byteSize, created_at AS createdAt FROM preview_report_outputs WHERE finalization_id=? ORDER BY format').bind(row.id).all<Record<string, unknown>>();
-    projections.push(finalizationProjection(row, outputs.results));
-  }
+  const outputs = await env.DB.prepare(
+    'SELECT o.id,o.finalization_id AS finalizationId,o.format,o.file_name AS fileName,o.content_sha256 AS contentSha256,o.byte_size AS byteSize,o.created_at AS createdAt ' +
+    'FROM preview_report_outputs o JOIN preview_report_finalizations f ON f.id=o.finalization_id ' +
+    'WHERE f.organization_id=? AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ORDER BY o.format'
+  ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<Record<string, unknown> & { finalizationId: string }>();
+  const projections = rows.results.map((row) => finalizationProjection(row, outputs.results.filter((output) => output.finalizationId === row.id)));
   return json({ finalizations: projections, phase: 'CF09_D1_FINAL_OUTPUT' });
 }
 

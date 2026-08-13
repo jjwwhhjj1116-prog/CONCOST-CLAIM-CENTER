@@ -32,7 +32,7 @@ class D1 {
 
 async function fixture(): Promise<{ sql: Database; env: CloudflareEnv }> {
   const SQL = await initSqlJs(); const sql = new SQL.Database(); sql.run('PRAGMA foreign_keys=ON');
-  const migrations = ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql','0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql'];
+  const migrations = ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql','0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql'];
   for (const name of migrations) sql.exec(readFileSync(join(process.cwd(), 'apps/cloudflare/migrations', name), 'utf8'));
   const now = new Date().toISOString();
   const user = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
@@ -95,6 +95,7 @@ test('CF09 Worker document engine is byte deterministic and embeds immutable pro
   const doc: FinalReportDocument = { caseNumber:'CLM-2026-001',caseTitle:'합성 사건',reportTitle:'최종 보고서',reportVersion:3,content:'본문\n두 번째 줄',contentSha256:'a'.repeat(64),approvedBy:'검토자',approvedAt:'2026-08-13T00:00:00.000Z',finalizedBy:'관리자',finalizedAt:'2026-08-13T00:01:00.000Z' };
   const docxA=generateFinalDocx(doc), docxB=generateFinalDocx(doc), pdfA=generateFinalPdf(doc), pdfB=generateFinalPdf(doc);
   assert.deepEqual(docxA,docxB); assert.deepEqual(pdfA,pdfB); assert.equal(String.fromCharCode(...docxA.slice(0,4)),'PK\u0003\u0004'); assert.equal(new TextDecoder().decode(pdfA.slice(0,8)),'%PDF-1.7');
+  const pdfText=new TextDecoder().decode(pdfA); const xrefOffset=Number(pdfText.match(/startxref\n(\d+)\n%%EOF$/u)?.[1]); assert.equal(pdfText.slice(xrefOffset,xrefOffset+4),'xref','PDF xref offset must point to the exact byte position');
 });
 
 test('CF09 production studio exposes finalize, generate and download actions', () => {

@@ -88,7 +88,7 @@ export function generateFinalPdf(document: FinalReportDocument): Uint8Array {
     objects.set(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
     objects.set(contentId, `<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
   });
-  let output = '%PDF-1.7\n%\xE2\xE3\xCF\xD3\n';
+  let output = '%PDF-1.7\n%CLAIM-CENTER\n';
   const offsets: number[] = [0];
   for (let id = 1; id <= objects.size; id += 1) { offsets[id] = output.length; output += `${id} 0 obj\n${objects.get(id)}\nendobj\n`; }
   const xref = output.length;
