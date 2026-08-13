@@ -1,6 +1,6 @@
 import { Button, Card, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiRequest } from '../api';
+import { ApiError, apiDownload, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import type { UserRole } from './Router';
 import type { PreviewReportReview } from './PreviewApprovalInbox';
@@ -15,6 +15,11 @@ interface ReportRevision {
   savedBy: { id: string; name: string };
 }
 interface ReportPayload { draft: ReportDraft | null; revisions: ReportRevision[] }
+interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
+interface Finalization {
+  id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
+  finalizedBy: { id: string; name: string }; approvedBy: string; approvedAt: string; outputs: FinalOutput[];
+}
 
 const EDIT_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm', 'staff'];
 
@@ -27,6 +32,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [version, setVersion] = useState(0);
   const [revisions, setRevisions] = useState<ReportRevision[]>([]);
   const [reviews, setReviews] = useState<PreviewReportReview[]>([]);
+  const [finalizations, setFinalizations] = useState<Finalization[]>([]);
   const [reviewNote, setReviewNote] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -45,9 +51,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const sequence = ++loadSequence.current;
     setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false);
     try {
-      const [result, reviewResult] = await Promise.all([
+      const [result, reviewResult, finalizationResult] = await Promise.all([
         apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
-        apiRequest<{ reviews: PreviewReportReview[] }>(`/api/report-reviews?caseId=${encodeURIComponent(caseId)}`)
+        apiRequest<{ reviews: PreviewReportReview[] }>(`/api/report-reviews?caseId=${encodeURIComponent(caseId)}`),
+        apiRequest<{ finalizations: Finalization[] }>(`/api/report-finalizations?caseId=${encodeURIComponent(caseId)}`)
       ]);
       if (sequence !== loadSequence.current || selectedCaseRef.current !== caseId) return;
       const caseRecord = cases.find((record) => record.id === caseId);
@@ -61,6 +68,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setSavedAt(result.draft?.updatedAt ?? null);
       setRevisions(result.revisions);
       setReviews(reviewResult.reviews);
+      setFinalizations(finalizationResult.finalizations);
       setLoadedCaseId(caseId);
     } catch (reason) {
       if (sequence === loadSequence.current && selectedCaseRef.current === caseId) setError(reason instanceof Error ? reason.message : String(reason));
@@ -123,10 +131,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     loadSequence.current += 1;
     selectedCaseRef.current = caseId;
     titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
   };
 
   const currentReview = reviews.find((review) => review.reportVersion === version) ?? null;
+  const currentFinalization = currentReview ? finalizations.find((entry) => entry.reviewId === currentReview.id) ?? null : null;
   const pendingReview = reviews.find((review) => review.status === 'PENDING') ?? null;
   const requestReview = async () => {
     if (!editable || !selectedCaseId || !version || dirty || saving || currentReview || pendingReview) return;
@@ -141,6 +150,39 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       if (selectedCaseRef.current === requestCaseId) { setReviews(result.reviews); setReviewNote(''); }
     } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (selectedCaseRef.current === requestCaseId) setSubmittingReview(false); }
+  };
+
+  const finalizeApproved = async () => {
+    if (!currentReview || currentReview.status !== 'APPROVED' || !selectedCaseId || currentFinalization) return;
+    setSubmittingReview(true); setError('');
+    try {
+      const result = await apiRequest<{ finalizations: Finalization[] }>('/api/report-finalizations', {
+        method: 'POST', headers: { 'Idempotency-Key': `report-finalize:${selectedCaseId}:v${version}` },
+        body: JSON.stringify({ caseId: selectedCaseId, reviewId: currentReview.id })
+      });
+      setFinalizations(result.finalizations);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSubmittingReview(false); }
+  };
+
+  const generateOutput = async (format: 'DOCX' | 'PDF') => {
+    if (!currentFinalization) return;
+    setSubmittingReview(true); setError('');
+    try {
+      const result = await apiRequest<{ finalizations: Finalization[] }>(`/api/report-finalizations/${encodeURIComponent(currentFinalization.id)}/outputs`, { method: 'POST', body: JSON.stringify({ format }) });
+      setFinalizations(result.finalizations);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSubmittingReview(false); }
+  };
+
+  const downloadOutput = async (output: FinalOutput) => {
+    setError('');
+    try {
+      const result = await apiDownload(`/api/report-outputs/${encodeURIComponent(output.id)}/download`);
+      const anchor = document.createElement('a');
+      anchor.href = URL.createObjectURL(result.blob); anchor.download = result.filename; anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(anchor.href), 1_000);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
   if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 사건이 없습니다" message="먼저 사건을 등록하면 사건별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="새 사건 등록" onAction={() => onNavigate('/cases/new')} />;
@@ -182,6 +224,21 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <div className="action-row"><Button onClick={() => void requestReview()} disabled={!version || dirty || saving || submittingReview || !!pendingReview || loadedCaseId !== selectedCaseId}>{submittingReview ? '제출 중…' : '저장된 최신본 검토 요청'}</Button>{dirty && <span className="muted">변경사항을 먼저 저장해야 합니다.</span>}{pendingReview && <span className="muted">기존 검토가 끝난 뒤 새 버전을 제출할 수 있습니다.</span>}</div>
             </>}
           </div>
+        </Card>
+        <Card title="FINAL OUTPUT · 승인본 확정 및 다운로드">
+          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX/PDF 출력이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
+            <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
+            <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
+          </div> : <div className="form-stack">
+            <p className="notice-box"><strong>최종 확정 완료 · v{currentFinalization.reportVersion}</strong><br />{currentFinalization.finalizedBy.name} · {new Date(currentFinalization.finalizedAt).toLocaleString('ko-KR')} · 승인자 {currentFinalization.approvedBy}</p>
+            <div className="action-row">
+              {(['DOCX', 'PDF'] as const).map((format) => {
+                const output = currentFinalization.outputs.find((entry) => entry.format === format);
+                return output ? <Button key={format} variant="secondary" onClick={() => void downloadOutput(output)}>{format} 다운로드</Button> : <Button key={format} onClick={() => void generateOutput(format)} disabled={submittingReview}>{format} 생성</Button>;
+              })}
+            </div>
+            {currentFinalization.outputs.map((output) => <p className="muted" key={output.id}>{output.format} · {(output.byteSize / 1024).toFixed(1)} KB · SHA {output.contentSha256.slice(0, 16)}…</p>)}
+          </div>}
         </Card>
       </>}
     </div>

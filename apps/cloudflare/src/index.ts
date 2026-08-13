@@ -18,6 +18,7 @@ import {
   verifyDriveFolder,
   type GoogleFetch
 } from './google-drive';
+import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -805,6 +806,136 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
   return json({ error: 'Report review route was not found', code: 'REVIEW_ROUTE_NOT_FOUND' }, 404);
 }
 
+// CF09 final output. D1 keeps the immutable approval/finalization/output ledger;
+// DOCX/PDF bytes are deterministically regenerated from that exact revision.
+const PREVIEW_FINALIZE_ROLES = new Set(['admin', 'ceo', 'director', 'pm']);
+
+interface PreviewFinalizationRow {
+  id: string; caseId: string; caseNumber: string; caseTitle: string; reviewId: string;
+  reportRevisionId: string; reportVersion: number; reportTitle: string; finalizedById: string;
+  finalizedByName: string; finalizedAt: string; approvedByName: string; approvedAt: string;
+}
+
+function finalizationProjection(row: PreviewFinalizationRow, outputs: Array<Record<string, unknown>> = []): Record<string, unknown> {
+  return {
+    id: row.id, caseId: row.caseId, caseNumber: row.caseNumber, caseTitle: row.caseTitle,
+    reviewId: row.reviewId, reportRevisionId: row.reportRevisionId, reportVersion: Number(row.reportVersion), reportTitle: row.reportTitle,
+    finalizedBy: { id: row.finalizedById, name: row.finalizedByName }, finalizedAt: row.finalizedAt,
+    approvedBy: row.approvedByName, approvedAt: row.approvedAt, outputs
+  };
+}
+
+async function finalizationList(env: CloudflareEnv, user: SessionUser, caseId = ''): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const rows = await env.DB.prepare(
+    'SELECT f.id, f.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, f.review_id AS reviewId, f.report_revision_id AS reportRevisionId, ' +
+    'f.report_version AS reportVersion, r.title AS reportTitle, f.finalized_by AS finalizedById, finalizer.display_name AS finalizedByName, f.finalized_at AS finalizedAt, ' +
+    'reviewer.display_name AS approvedByName, v.reviewed_at AS approvedAt FROM preview_report_finalizations f ' +
+    'JOIN preview_cases c ON c.id=f.case_id JOIN preview_report_revisions r ON r.id=f.report_revision_id JOIN preview_report_reviews v ON v.id=f.review_id ' +
+    'JOIN preview_users finalizer ON finalizer.id=f.finalized_by JOIN preview_users reviewer ON reviewer.id=v.reviewed_by ' +
+    'WHERE f.organization_id=? AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ' +
+    'ORDER BY f.finalized_at DESC LIMIT 100'
+  ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewFinalizationRow>();
+  const projections: Record<string, unknown>[] = [];
+  for (const row of rows.results) {
+    const outputs = await env.DB.prepare('SELECT id, format, file_name AS fileName, content_sha256 AS contentSha256, byte_size AS byteSize, created_at AS createdAt FROM preview_report_outputs WHERE finalization_id=? ORDER BY format').bind(row.id).all<Record<string, unknown>>();
+    projections.push(finalizationProjection(row, outputs.results));
+  }
+  return json({ finalizations: projections, phase: 'CF09_D1_FINAL_OUTPUT' });
+}
+
+async function finalDocument(env: CloudflareEnv, finalizationId: string): Promise<(FinalReportDocument & { finalization: PreviewFinalizationRow }) | null> {
+  if (!env.DB) return null;
+  const row = await env.DB.prepare(
+    'SELECT f.id, f.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, f.review_id AS reviewId, f.report_revision_id AS reportRevisionId, ' +
+    'f.report_version AS reportVersion, r.title AS reportTitle, r.content, r.content_sha256 AS contentSha256, f.finalized_by AS finalizedById, ' +
+    'finalizer.display_name AS finalizedByName, f.finalized_at AS finalizedAt, reviewer.display_name AS approvedByName, v.reviewed_at AS approvedAt ' +
+    'FROM preview_report_finalizations f JOIN preview_cases c ON c.id=f.case_id JOIN preview_report_revisions r ON r.id=f.report_revision_id ' +
+    'JOIN preview_report_reviews v ON v.id=f.review_id JOIN preview_users finalizer ON finalizer.id=f.finalized_by JOIN preview_users reviewer ON reviewer.id=v.reviewed_by ' +
+    'WHERE f.id=? AND f.organization_id=?'
+  ).bind(finalizationId, PREVIEW_ORGANIZATION_ID).first<PreviewFinalizationRow & { content: string; contentSha256: string }>();
+  if (!row) return null;
+  return {
+    finalization: row, caseNumber: row.caseNumber, caseTitle: row.caseTitle, reportTitle: row.reportTitle,
+    reportVersion: Number(row.reportVersion), content: row.content, contentSha256: row.contentSha256,
+    approvedBy: row.approvedByName, approvedAt: row.approvedAt, finalizedBy: row.finalizedByName, finalizedAt: row.finalizedAt
+  };
+}
+
+async function handlePreviewFinalOutput(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (url.pathname === '/api/report-finalizations' && request.method === 'GET') {
+    const caseId = url.searchParams.get('caseId') ?? '';
+    if (caseId && !PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
+    return finalizationList(env, user, caseId);
+  }
+  if (url.pathname === '/api/report-finalizations' && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_FINALIZE_ROLES.has(role))) return json({ error: 'Role cannot finalize reports', code: 'FORBIDDEN' }, 403);
+    const key = request.headers.get('Idempotency-Key') ?? '';
+    if (!PREVIEW_REVIEW_KEY.test(key)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId', 'reviewId']) || typeof body.caseId !== 'string' || typeof body.reviewId !== 'string' || !PREVIEW_DRAFT_KEY.test(body.caseId) || !PREVIEW_DRAFT_KEY.test(body.reviewId)) return json({ error: 'Finalization payload is invalid', code: 'INVALID_FINALIZATION_PAYLOAD' }, 400);
+    if (!await accessiblePreviewCase(env, user, body.caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const fingerprint = await sha256Hex(JSON.stringify({ caseId: body.caseId, reviewId: body.reviewId }));
+    const replay = await env.DB.prepare('SELECT request_fingerprint AS fingerprint FROM preview_report_finalizations WHERE organization_id=? AND request_key=?').bind(PREVIEW_ORGANIZATION_ID, key).first<{ fingerprint: string }>();
+    if (replay) return replay.fingerprint === fingerprint ? finalizationList(env, user, body.caseId) : json({ error: 'Idempotency key was used for a different finalization', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    const source = await env.DB.prepare('SELECT v.report_revision_id AS revisionId, v.report_version AS reportVersion FROM preview_report_reviews v JOIN preview_report_drafts d ON d.case_id=v.case_id AND d.version=v.report_version WHERE v.id=? AND v.case_id=? AND v.organization_id=? AND v.status=\'APPROVED\'').bind(body.reviewId, body.caseId, PREVIEW_ORGANIZATION_ID).first<{ revisionId: string; reportVersion: number }>();
+    if (!source) return json({ error: 'Only the currently approved report version can be finalized', code: 'APPROVED_REVISION_REQUIRED' }, 409);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const id = crypto.randomUUID(); const now = new Date().toISOString();
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_finalizations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(id, PREVIEW_ORGANIZATION_ID, body.caseId, body.reviewId, source.revisionId, source.reportVersion, user.id, now, key, fingerprint),
+        env.DB.prepare('INSERT INTO preview_report_output_events VALUES (?, ?, NULL, \'REPORT_FINALIZED\', ?, ?)').bind(crypto.randomUUID(), id, user.id, now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?, ?, ?, \'REPORT_FINALIZED\', ?, NULL, ?)').bind(crypto.randomUUID(), body.caseId, user.id, `보고서 최종 확정 · v${source.reportVersion}`, now)
+      ]);
+    } catch {
+      const canonical = await env.DB.prepare('SELECT request_fingerprint AS fingerprint FROM preview_report_finalizations WHERE organization_id=? AND request_key=?').bind(PREVIEW_ORGANIZATION_ID, key).first<{ fingerprint: string }>();
+      if (canonical?.fingerprint !== fingerprint) return json({ error: 'Report finalization conflict', code: 'FINALIZATION_CONFLICT' }, 409);
+    }
+    const payload = await finalizationList(env, user, body.caseId);
+    return new Response(payload.body, { status: 201, headers: payload.headers });
+  }
+  const outputMatch = url.pathname.match(/^\/api\/report-finalizations\/([0-9a-f-]{36})\/outputs$/iu);
+  if (outputMatch && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_FINALIZE_ROLES.has(role))) return json({ error: 'Role cannot generate final outputs', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['format']) || !['DOCX', 'PDF'].includes(String(body.format))) return json({ error: 'Output format is invalid', code: 'INVALID_OUTPUT_FORMAT' }, 400);
+    const document = await finalDocument(env, outputMatch[1]);
+    if (!document || !await accessiblePreviewCase(env, user, document.finalization.caseId)) return json({ error: 'Finalization was not found', code: 'FINALIZATION_NOT_FOUND' }, 404);
+    const format = String(body.format) as 'DOCX' | 'PDF';
+    const bytes = format === 'DOCX' ? generateFinalDocx(document) : generateFinalPdf(document);
+    const digest = await sha256Hex(bytes);
+    const safeName = document.reportTitle.replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 180) || 'final-report';
+    const fileName = `${safeName}-v${document.reportVersion}.${format.toLowerCase()}`;
+    const existing = await env.DB.prepare('SELECT id,content_sha256 AS contentSha256,byte_size AS byteSize FROM preview_report_outputs WHERE finalization_id=? AND format=?').bind(outputMatch[1], format).first<{ id: string; contentSha256: string; byteSize: number }>();
+    if (existing && (existing.contentSha256 !== digest || Number(existing.byteSize) !== bytes.byteLength)) return json({ error: 'Deterministic output verification failed', code: 'OUTPUT_HASH_MISMATCH' }, 500);
+    if (!existing) {
+      if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+      const outputId = crypto.randomUUID(); const now = new Date().toISOString();
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_outputs VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(outputId, outputMatch[1], format, fileName, digest, bytes.byteLength, user.id, now),
+        env.DB.prepare('INSERT INTO preview_report_output_events VALUES (?, ?, ?, \'OUTPUT_GENERATED\', ?, ?)').bind(crypto.randomUUID(), outputMatch[1], outputId, user.id, now)
+      ]);
+    }
+    return finalizationList(env, user, document.finalization.caseId);
+  }
+  const downloadMatch = url.pathname.match(/^\/api\/report-outputs\/([0-9a-f-]{36})\/download$/iu);
+  if (downloadMatch && request.method === 'GET') {
+    const output = await env.DB.prepare('SELECT o.id,o.finalization_id AS finalizationId,o.format,o.file_name AS fileName,o.content_sha256 AS contentSha256,o.byte_size AS byteSize,f.case_id AS caseId FROM preview_report_outputs o JOIN preview_report_finalizations f ON f.id=o.finalization_id WHERE o.id=?').bind(downloadMatch[1]).first<{ id: string; finalizationId: string; format: 'DOCX'|'PDF'; fileName: string; contentSha256: string; byteSize: number; caseId: string }>();
+    if (!output || !await accessiblePreviewCase(env, user, output.caseId)) return json({ error: 'Output was not found', code: 'OUTPUT_NOT_FOUND' }, 404);
+    const document = await finalDocument(env, output.finalizationId);
+    if (!document) return json({ error: 'Finalization was not found', code: 'FINALIZATION_NOT_FOUND' }, 404);
+    const bytes = output.format === 'DOCX' ? generateFinalDocx(document) : generateFinalPdf(document);
+    if (await sha256Hex(bytes) !== output.contentSha256 || bytes.byteLength !== Number(output.byteSize)) return json({ error: 'Output integrity verification failed', code: 'OUTPUT_HASH_MISMATCH' }, 500);
+    await env.DB.prepare('INSERT INTO preview_report_output_events VALUES (?, ?, ?, \'OUTPUT_DOWNLOADED\', ?, ?)').bind(crypto.randomUUID(), output.finalizationId, output.id, user.id, new Date().toISOString()).run();
+    return new Response(bytes.buffer as ArrayBuffer, { headers: { 'Cache-Control': 'no-store', 'Content-Type': output.format === 'DOCX' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/pdf', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(output.fileName)}`, 'X-Content-SHA256': output.contentSha256, 'X-Content-Type-Options': 'nosniff' } });
+  }
+  return json({ error: 'Final output route was not found', code: 'FINAL_OUTPUT_ROUTE_NOT_FOUND' }, 404);
+}
+
 // Google Drive OAuth and evidence storage. The organization is intentionally
 // fixed for this single-tenant preview; raw credentials never cross this file.
 const PREVIEW_ORGANIZATION_ID = 'concost';
@@ -1145,6 +1276,10 @@ const worker = {
 
     if (url.pathname === '/api/report-reviews' || url.pathname.startsWith('/api/report-reviews/')) {
       return handlePreviewReportReviews(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-finalizations' || url.pathname.startsWith('/api/report-finalizations/') || url.pathname.startsWith('/api/report-outputs/')) {
+      return handlePreviewFinalOutput(request, env, url);
     }
 
     if (url.pathname.startsWith('/api/google/')) {
