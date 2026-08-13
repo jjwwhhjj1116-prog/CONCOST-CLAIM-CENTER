@@ -1,0 +1,34 @@
+{
+  "phase": "CF09",
+  "implementationCommit": "5989d77f5675fd4c4ff183c7a906036bbb308db1",
+  "correctionCommit": "5deb7063706ffdb6308c8ea66544dfdb91a05088",
+  "implementationRange": "fb7777b0dbc433041442f9941a8e2b669779773a..5deb7063706ffdb6308c8ea66544dfdb91a05088",
+  "status": "READY_FOR_REVIEW",
+  "changedFiles": [
+    "apps/cloudflare/migrations/0008_cf09_final_output.sql",
+    "apps/cloudflare/migrations/0009_cf09_output_actor_scope.sql",
+    "apps/cloudflare/src/final-output.ts",
+    "apps/cloudflare/src/index.ts",
+    "apps/web/src/routes/PreviewReportStudio.tsx",
+    "package.json",
+    "scripts/cf09-final-output-test.ts"
+  ],
+  "gates": {
+    "typecheck": "PASS",
+    "lint": "PASS (zero warnings)",
+    "build": "PASS (67 modules; CSS 38.10 kB; JS 369.09 kB)",
+    "cf09": "4/4 PASS",
+    "cloudflareRegression": "39/39 PASS",
+    "fullRegression": "136/136 PASS",
+    "wranglerDryRun": "PASS (104.00 KiB; gzip 21.89 KiB; startup 5 ms on deployed build)",
+    "d1RemoteVerification": "3 tables, 8 invariant triggers, 2 migration ledger rows",
+    "cloudflareDeployment": "PASS (startup 4 ms)"
+  },
+  "cloudflareBuildId": "9d40e781-d5d6-4b86-b410-3382f04718f7",
+  "cloudflareVersionId": "8602c335-c6ce-4dd7-8d16-f2b7f084e10a",
+  "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/reports/studio",
+  "deferred": {
+    "googleDrive": true,
+    "r2": "SKIPPED_BY_USER"
+  }
+}
