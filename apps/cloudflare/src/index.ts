@@ -676,6 +676,232 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
   return json({ error: 'Workflow route or method was not found', code: 'WORKFLOW_ROUTE_NOT_FOUND' }, 404);
 }
 
+const LITIGATION_STAGES = new Set(['FILED', 'PLEADING', 'APPRAISAL', 'HEARING', 'JUDGEMENT', 'APPEAL', 'CLOSED']);
+const LITIGATION_EVENT_TYPES = new Set(['FILED', 'SERVICE', 'BRIEF', 'APPRAISAL', 'HEARING', 'JUDGEMENT', 'APPEAL', 'CORRECTION', 'OTHER']);
+const LITIGATION_VERIFICATION = new Set(['UNVERIFIED', 'VERIFIED', 'CONFLICT']);
+
+interface PreviewLitigationRow {
+  id: string;
+  caseId: string;
+  projectCaseNumber: string;
+  projectTitle: string;
+  courtName: string;
+  courtCaseNumber: string;
+  caseTitle: string;
+  divisionName: string | null;
+  partiesText: string;
+  filedOn: string | null;
+  currentStage: string;
+  nextHearingAt: string | null;
+  verificationStatus: string;
+  officialSourceUrl: string | null;
+  sourceCheckedAt: string | null;
+  sourceCheckedByName: string | null;
+  version: number;
+  eventCount: number;
+  verifiedEventCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function officialCourtSource(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 1200) return null;
+  try {
+    const parsed = new URL(value.trim());
+    const hostname = parsed.hostname.toLowerCase();
+    if (parsed.protocol !== 'https:' || (hostname !== 'scourt.go.kr' && !hostname.endsWith('.scourt.go.kr'))) return null;
+    parsed.username = '';
+    parsed.password = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function litigationText(value: unknown, maximum: number, optional = false): string | null {
+  if (value === null && optional) return null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized && optional) return null;
+  return normalized.length > 0 && normalized.length <= maximum ? normalized : null;
+}
+
+function optionalIso(value: unknown, dateOnly = false): string | null {
+  if (value === null || value === '') return null;
+  if (typeof value !== 'string') return null;
+  if (dateOnly) return validWorkflowDate(value) ? value : null;
+  return Number.isNaN(Date.parse(value)) ? null : new Date(value).toISOString();
+}
+
+function litigationProjection(row: PreviewLitigationRow): Record<string, unknown> {
+  return {
+    ...row,
+    version: Number(row.version),
+    eventCount: Number(row.eventCount ?? 0),
+    verifiedEventCount: Number(row.verifiedEventCount ?? 0),
+    reportEvidenceEligible: row.verificationStatus === 'VERIFIED'
+  };
+}
+
+async function accessibleLitigationRecord(env: CloudflareEnv, user: SessionUser, id: string): Promise<PreviewLitigationRow | null> {
+  if (!env.DB) return null;
+  return env.DB.prepare(
+    'SELECT l.id,l.case_id AS caseId,c.case_number AS projectCaseNumber,c.title AS projectTitle,l.court_name AS courtName,l.court_case_number AS courtCaseNumber,' +
+    'l.case_title AS caseTitle,l.division_name AS divisionName,l.parties_text AS partiesText,l.filed_on AS filedOn,l.current_stage AS currentStage,' +
+    'l.next_hearing_at AS nextHearingAt,l.verification_status AS verificationStatus,l.official_source_url AS officialSourceUrl,l.source_checked_at AS sourceCheckedAt,' +
+    'checker.display_name AS sourceCheckedByName,l.version,(SELECT COUNT(*) FROM preview_litigation_events e WHERE e.litigation_case_id=l.id) AS eventCount,' +
+    '(SELECT COUNT(*) FROM preview_litigation_events e WHERE e.litigation_case_id=l.id AND e.verification_status=\'VERIFIED\') AS verifiedEventCount,' +
+    'l.created_at AS createdAt,l.updated_at AS updatedAt FROM preview_litigation_cases l JOIN preview_cases c ON c.id=l.case_id ' +
+    'LEFT JOIN preview_users checker ON checker.id=l.source_checked_by WHERE l.id=? AND l.organization_id=? AND c.deleted_at IS NULL ' +
+    'AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=l.case_id AND a.user_id=?))'
+  ).bind(id, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewLitigationRow>();
+}
+
+async function litigationDetail(env: CloudflareEnv, user: SessionUser, id: string): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const record = await accessibleLitigationRecord(env, user, id);
+  if (!record) return json({ error: 'Litigation record was not found or is not assigned', code: 'LITIGATION_NOT_FOUND' }, 404);
+  const events = await env.DB.prepare(
+    'SELECT e.id,e.event_type AS eventType,e.occurred_at AS occurredAt,e.title,e.detail_text AS detailText,e.verification_status AS verificationStatus,' +
+    'e.official_source_url AS officialSourceUrl,e.source_sha256 AS sourceSha256,e.schedule_id AS scheduleId,e.created_at AS createdAt,u.display_name AS createdByName ' +
+    'FROM preview_litigation_events e JOIN preview_users u ON u.id=e.created_by WHERE e.litigation_case_id=? ORDER BY e.occurred_at DESC,e.created_at DESC LIMIT 100'
+  ).bind(id).all<Record<string, unknown>>();
+  return json({ record: litigationProjection(record), events: events.results, officialLookupAutomated: false, phase: 'CF13_LITIGATION_RECORDS' });
+}
+
+async function handlePreviewLitigation(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const detailMatch = url.pathname.match(/^\/api\/litigation-records\/([0-9a-f-]{36})(?:\/(events))?$/iu);
+
+  if (url.pathname === '/api/litigation-records' && request.method === 'GET') {
+    const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
+    const caseId = (url.searchParams.get('caseId') ?? '').trim();
+    const stage = (url.searchParams.get('stage') ?? '').trim();
+    const limit = Number(url.searchParams.get('limit') ?? 100);
+    if ((caseId && !/^[0-9a-f-]{36}$/iu.test(caseId)) || (stage && !LITIGATION_STAGES.has(stage)) || !Number.isInteger(limit) || limit < 1 || limit > 100) return json({ error: 'Litigation search parameters are invalid', code: 'INVALID_LITIGATION_SEARCH' }, 400);
+    const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    const rows = await env.DB.prepare(
+      'SELECT l.id,l.case_id AS caseId,c.case_number AS projectCaseNumber,c.title AS projectTitle,l.court_name AS courtName,l.court_case_number AS courtCaseNumber,' +
+      'l.case_title AS caseTitle,l.division_name AS divisionName,l.parties_text AS partiesText,l.filed_on AS filedOn,l.current_stage AS currentStage,' +
+      'l.next_hearing_at AS nextHearingAt,l.verification_status AS verificationStatus,l.official_source_url AS officialSourceUrl,l.source_checked_at AS sourceCheckedAt,' +
+      'checker.display_name AS sourceCheckedByName,l.version,(SELECT COUNT(*) FROM preview_litigation_events e WHERE e.litigation_case_id=l.id) AS eventCount,' +
+      '(SELECT COUNT(*) FROM preview_litigation_events e WHERE e.litigation_case_id=l.id AND e.verification_status=\'VERIFIED\') AS verifiedEventCount,' +
+      'l.created_at AS createdAt,l.updated_at AS updatedAt FROM preview_litigation_cases l JOIN preview_cases c ON c.id=l.case_id LEFT JOIN preview_users checker ON checker.id=l.source_checked_by ' +
+      'WHERE l.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=l.case_id AND a.user_id=?)) ' +
+      'AND (?=\'\' OR l.case_id=?) AND (?=\'\' OR l.current_stage=?) AND (?=\'\' OR l.court_case_number LIKE ? ESCAPE \'\\\' OR l.court_name LIKE ? ESCAPE \'\\\' OR l.parties_text LIKE ? ESCAPE \'\\\' OR c.title LIKE ? ESCAPE \'\\\') ' +
+      'ORDER BY COALESCE(l.next_hearing_at,\'9999-12-31T00:00:00.000Z\'),l.updated_at DESC LIMIT ?'
+    ).bind(PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id, caseId, caseId, stage, stage, query, like, like, like, like, limit).all<PreviewLitigationRow>();
+    return json({ records: rows.results.map(litigationProjection), officialLookupAutomated: false, phase: 'CF13_LITIGATION_RECORDS' });
+  }
+
+  if (url.pathname === '/api/litigation-records' && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot create litigation records', code: 'FORBIDDEN' }, 403);
+    const requestKey = request.headers.get('Idempotency-Key');
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!requestKey || !PREVIEW_CASE_CREATE_KEY.test(requestKey) || !body || !exactObjectKeys(body, ['caseId','courtName','courtCaseNumber','caseTitle','divisionName','partiesText','filedOn','currentStage','nextHearingAt','verificationStatus','officialSourceUrl'])) return json({ error: 'Litigation payload or Idempotency-Key is invalid', code: 'INVALID_LITIGATION_PAYLOAD' }, 400);
+    const caseId = litigationText(body.caseId, 36);
+    const project = caseId ? await accessiblePreviewCase(env, user, caseId) : null;
+    const courtName = litigationText(body.courtName, 200);
+    const courtCaseNumber = litigationText(body.courtCaseNumber, 80);
+    const caseTitle = litigationText(body.caseTitle, 500);
+    const divisionName = litigationText(body.divisionName, 200, true);
+    const partiesText = litigationText(body.partiesText, 2000);
+    const filedOn = optionalIso(body.filedOn, true);
+    const nextHearingAt = optionalIso(body.nextHearingAt);
+    const currentStage = typeof body.currentStage === 'string' && LITIGATION_STAGES.has(body.currentStage) ? body.currentStage : null;
+    const verificationStatus = typeof body.verificationStatus === 'string' && LITIGATION_VERIFICATION.has(body.verificationStatus) ? body.verificationStatus : null;
+    const officialSourceUrl = body.officialSourceUrl ? officialCourtSource(body.officialSourceUrl) : null;
+    if (!project || !courtName || !courtCaseNumber || !caseTitle || !partiesText || !currentStage || !verificationStatus || (body.filedOn && !filedOn) || (body.nextHearingAt && !nextHearingAt) || (body.officialSourceUrl && !officialSourceUrl) || (verificationStatus === 'VERIFIED' && !officialSourceUrl)) return json({ error: 'Litigation fields or official court URL are invalid', code: 'INVALID_LITIGATION_PAYLOAD' }, 400);
+    const fingerprint = await sha256Hex(JSON.stringify({ caseId,courtName,courtCaseNumber,caseTitle,divisionName,partiesText,filedOn,currentStage,nextHearingAt,verificationStatus,officialSourceUrl }));
+    const replay = await env.DB.prepare('SELECT id,request_fingerprint AS fingerprint FROM preview_litigation_cases WHERE create_request_key=?').bind(requestKey).first<{id:string;fingerprint:string}>();
+    if (replay) {
+      if (replay.fingerprint !== fingerprint) return json({ error: 'Idempotency-Key was used for another litigation record', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+      return litigationDetail(env,user,replay.id);
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    try {
+      if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_litigation_cases (id,organization_id,case_id,court_name,court_case_number,case_title,division_name,parties_text,filed_on,current_stage,next_hearing_at,verification_status,official_source_url,source_checked_at,source_checked_by,version,create_request_key,request_fingerprint,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)')
+          .bind(id,PREVIEW_ORGANIZATION_ID,caseId,courtName,courtCaseNumber,caseTitle,divisionName,partiesText,filedOn,currentStage,nextHearingAt,verificationStatus,officialSourceUrl,verificationStatus === 'VERIFIED' ? now : null,verificationStatus === 'VERIFIED' ? user.id : null,requestKey,fingerprint,user.id,now,now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)')
+          .bind(crypto.randomUUID(),caseId,user.id,'LITIGATION_LINKED','법원 사건 연결',`${courtName} · ${courtCaseNumber}`,now)
+      ]);
+    } catch {
+      return json({ error: 'Court case number is already linked or persistence failed', code: 'LITIGATION_CONFLICT' }, 409);
+    }
+    const response = await litigationDetail(env, user, id);
+    return new Response(response.body, { status: 201, headers: response.headers });
+  }
+
+  if (detailMatch && !detailMatch[2] && request.method === 'GET') return litigationDetail(env, user, detailMatch[1]);
+
+  if (detailMatch && !detailMatch[2] && request.method === 'PUT') {
+    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot update litigation records', code: 'FORBIDDEN' }, 403);
+    const current = await accessibleLitigationRecord(env, user, detailMatch[1]);
+    if (!current) return json({ error: 'Litigation record was not found or is not assigned', code: 'LITIGATION_NOT_FOUND' }, 404);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId','courtName','courtCaseNumber','caseTitle','divisionName','partiesText','filedOn','currentStage','nextHearingAt','verificationStatus','officialSourceUrl','expectedVersion'])) return json({ error: 'Litigation payload is invalid', code: 'INVALID_LITIGATION_PAYLOAD' }, 400);
+    const expectedVersion = Number(body.expectedVersion);
+    const courtName = litigationText(body.courtName, 200); const courtCaseNumber = litigationText(body.courtCaseNumber, 80); const caseTitle = litigationText(body.caseTitle, 500);
+    const divisionName = litigationText(body.divisionName, 200, true); const partiesText = litigationText(body.partiesText, 2000);
+    const filedOn = optionalIso(body.filedOn, true); const nextHearingAt = optionalIso(body.nextHearingAt);
+    const currentStage = typeof body.currentStage === 'string' && LITIGATION_STAGES.has(body.currentStage) ? body.currentStage : null;
+    const verificationStatus = typeof body.verificationStatus === 'string' && LITIGATION_VERIFICATION.has(body.verificationStatus) ? body.verificationStatus : null;
+    const officialSourceUrl = body.officialSourceUrl ? officialCourtSource(body.officialSourceUrl) : null;
+    if (!Number.isInteger(expectedVersion) || expectedVersion !== current.version || body.caseId !== current.caseId || !courtName || !courtCaseNumber || !caseTitle || !partiesText || !currentStage || !verificationStatus || (body.filedOn && !filedOn) || (body.nextHearingAt && !nextHearingAt) || (body.officialSourceUrl && !officialSourceUrl) || (verificationStatus === 'VERIFIED' && !officialSourceUrl)) return json({ error: expectedVersion !== current.version ? 'Litigation record has changed' : 'Litigation fields are invalid', code: expectedVersion !== current.version ? 'VERSION_CONFLICT' : 'INVALID_LITIGATION_PAYLOAD' }, expectedVersion !== current.version ? 409 : 400);
+    const now = new Date().toISOString(); const nextVersion = expectedVersion + 1;
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    try {
+      await env.DB.batch([
+        env.DB.prepare('UPDATE preview_litigation_cases SET court_name=?,court_case_number=?,case_title=?,division_name=?,parties_text=?,filed_on=?,current_stage=?,next_hearing_at=?,verification_status=?,official_source_url=?,source_checked_at=?,source_checked_by=?,version=version+1,updated_at=? WHERE id=? AND version=?')
+          .bind(courtName,courtCaseNumber,caseTitle,divisionName,partiesText,filedOn,currentStage,nextHearingAt,verificationStatus,officialSourceUrl,verificationStatus === 'VERIFIED' ? now : null,verificationStatus === 'VERIFIED' ? user.id : null,now,current.id,expectedVersion),
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'LITIGATION_UPDATED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_litigation_cases WHERE id=? AND version=? AND updated_at=?)')
+          .bind(crypto.randomUUID(),current.caseId,user.id,'법원 사건 정보 갱신',`${courtName} · ${courtCaseNumber} · ${currentStage}`,now,current.id,nextVersion,now)
+      ]);
+    } catch { return json({ error: 'Litigation record update conflicted', code: 'LITIGATION_CONFLICT' }, 409); }
+    const canonical = await accessibleLitigationRecord(env,user,current.id);
+    if (canonical?.version !== nextVersion) return json({ error: 'Litigation record has changed', code: 'VERSION_CONFLICT' }, 409);
+    return litigationDetail(env,user,current.id);
+  }
+
+  if (detailMatch?.[2] === 'events' && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot add litigation events', code: 'FORBIDDEN' }, 403);
+    const record = await accessibleLitigationRecord(env,user,detailMatch[1]);
+    if (!record) return json({ error: 'Litigation record was not found or is not assigned', code: 'LITIGATION_NOT_FOUND' }, 404);
+    const key = request.headers.get('Idempotency-Key');
+    const body = await request.json().catch(() => null) as Record<string,unknown> | null;
+    if (!key || !PREVIEW_CASE_CREATE_KEY.test(key) || !body || !exactObjectKeys(body,['eventType','occurredAt','title','detailText','verificationStatus','officialSourceUrl','sourceSha256','createCourtSchedule'])) return json({ error: 'Event payload or Idempotency-Key is invalid', code: 'INVALID_LITIGATION_EVENT' }, 400);
+    const eventType = typeof body.eventType === 'string' && LITIGATION_EVENT_TYPES.has(body.eventType) ? body.eventType : null;
+    const occurredAt = optionalIso(body.occurredAt); const title = litigationText(body.title,300); const detailText = litigationText(body.detailText,5000);
+    const verificationStatus = typeof body.verificationStatus === 'string' && LITIGATION_VERIFICATION.has(body.verificationStatus) ? body.verificationStatus : null;
+    const officialSourceUrl = body.officialSourceUrl ? officialCourtSource(body.officialSourceUrl) : null;
+    const sourceSha256 = typeof body.sourceSha256 === 'string' && /^[0-9a-f]{64}$/iu.test(body.sourceSha256) ? body.sourceSha256.toLowerCase() : null;
+    const createCourtSchedule = body.createCourtSchedule === true;
+    if (!eventType || !occurredAt || !title || !detailText || !verificationStatus || (body.officialSourceUrl && !officialSourceUrl) || (body.sourceSha256 && !sourceSha256) || (verificationStatus === 'VERIFIED' && (!officialSourceUrl || !sourceSha256)) || (createCourtSchedule && eventType !== 'HEARING')) return json({ error: 'Event fields or verification evidence are invalid', code: 'INVALID_LITIGATION_EVENT' }, 400);
+    const fingerprint = await sha256Hex(JSON.stringify({ litigationId:record.id,eventType,occurredAt,title,detailText,verificationStatus,officialSourceUrl,sourceSha256,createCourtSchedule }));
+    const existing = await env.DB.prepare('SELECT id,request_fingerprint AS fingerprint FROM preview_litigation_events WHERE request_key=?').bind(key).first<{id:string;fingerprint:string}>();
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) return json({ error: 'Idempotency-Key was used for another litigation event', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+      return litigationDetail(env,user,record.id);
+    }
+    const eventId=crypto.randomUUID(); const scheduleId=createCourtSchedule?crypto.randomUUID():null; const now=new Date().toISOString();
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const statements:D1StatementLike[]=[];
+    if (scheduleId) statements.push(env.DB.prepare('INSERT INTO preview_case_schedules (id,case_id,title,type,scheduled_at,location,created_by,created_at) VALUES (?,?,?,\'COURT\',?,?,?,?)').bind(scheduleId,record.caseId,`${record.courtName} ${title}`,occurredAt,record.divisionName,user.id,now));
+    statements.push(env.DB.prepare('INSERT INTO preview_litigation_events (id,litigation_case_id,case_id,event_type,occurred_at,title,detail_text,verification_status,official_source_url,source_sha256,schedule_id,request_key,request_fingerprint,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(eventId,record.id,record.caseId,eventType,occurredAt,title,detailText,verificationStatus,officialSourceUrl,sourceSha256,scheduleId,key,fingerprint,user.id,now));
+    statements.push(env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(),record.caseId,user.id,'LITIGATION_EVENT_ADDED',title,`${record.courtCaseNumber} · ${eventType}`,now));
+    try { await env.DB.batch(statements); } catch { return json({ error: 'Litigation event could not be recorded atomically', code: 'LITIGATION_EVENT_CONFLICT' }, 409); }
+    return litigationDetail(env,user,record.id);
+  }
+
+  return json({ error: 'Litigation route was not found', code: 'LITIGATION_ROUTE_NOT_FOUND' }, 404);
+}
+
 async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
@@ -1029,6 +1255,23 @@ function extractOpenAiText(payload: unknown): string | null {
 
 async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Record<string, unknown>> {
   if (!env.DB) return {};
+  let verifiedLitigation: Record<string, unknown>[] = [];
+  let verifiedLitigationEvents: Record<string, unknown>[] = [];
+  try {
+    const [records, events] = await Promise.all([
+      env.DB.prepare(
+        'SELECT id,court_name AS courtName,court_case_number AS courtCaseNumber,case_title AS caseTitle,division_name AS divisionName,parties_text AS partiesText,filed_on AS filedOn,current_stage AS currentStage,next_hearing_at AS nextHearingAt,official_source_url AS officialSourceUrl,source_checked_at AS sourceCheckedAt,version FROM preview_litigation_cases WHERE case_id=? AND organization_id=? AND verification_status=\'VERIFIED\' ORDER BY updated_at DESC'
+      ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
+      env.DB.prepare(
+        'SELECT e.id,e.litigation_case_id AS litigationCaseId,e.event_type AS eventType,e.occurred_at AS occurredAt,e.title,e.detail_text AS detailText,e.official_source_url AS officialSourceUrl,e.source_sha256 AS sourceSha256 FROM preview_litigation_events e JOIN preview_litigation_cases l ON l.id=e.litigation_case_id WHERE e.case_id=? AND l.organization_id=? AND e.verification_status=\'VERIFIED\' ORDER BY e.occurred_at'
+      ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>()
+    ]);
+    verifiedLitigation = records.results;
+    verifiedLitigationEvents = events.results;
+  } catch {
+    // Older local CF12 fixtures may not have the additive CF13 table yet.
+    // Production applies migrations before code deployment.
+  }
   const [kickoff, surveys, allocations, parties, schedules] = await Promise.all([
     env.DB.prepare('SELECT meeting_at AS meetingAt, location, agenda, participant_units_json AS participantUnitsJson, raw_notes AS rawNotes, summary_text AS summaryText, timeline_json AS timelineJson, status, version FROM preview_workflow_kickoffs WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<Record<string, unknown>>(),
     env.DB.prepare('SELECT survey_date AS surveyDate, location, scope_text AS scopeText, lead_unit AS leadUnit, folder_path AS folderPath, status, version FROM preview_site_surveys WHERE case_id = ? AND organization_id = ? ORDER BY survey_date').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
@@ -1041,7 +1284,8 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
     workflow: { kickoff, siteSurveys: surveys.results, quantityAndWorkforce: allocations.results },
     parties: parties.results,
     schedules: schedules.results,
-    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Missing fields must be marked [확인 필요].'
+    litigation: { verifiedCases: verifiedLitigation, verifiedEvents: verifiedLitigationEvents },
+    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Missing or conflicting fields must be marked [확인 필요].'
   };
 }
 
@@ -1741,6 +1985,10 @@ const worker = {
 
     if (url.pathname === '/api/admin/report-prompts' || url.pathname.startsWith('/api/admin/report-prompts/')) {
       return handlePreviewPromptAdmin(request, env, url);
+    }
+
+    if (url.pathname === '/api/litigation-records' || url.pathname.startsWith('/api/litigation-records/')) {
+      return handlePreviewLitigation(request, env, url);
     }
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {

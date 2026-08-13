@@ -19,6 +19,7 @@ import { PreviewAdminUsers } from './PreviewAdminUsers';
 import { ProjectWorkflowSchedule } from '../workflow/ProjectWorkflowSchedule';
 import { WorkflowOperations } from '../workflow/WorkflowOperations';
 import { PreviewAiAdmin } from './PreviewAiAdmin';
+import { PreviewLitigationCenter } from './PreviewLitigationCenter';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -66,7 +67,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'REPO-01', path: '/reports', name: '보고서 목록' },
   { id: 'REPO-02', path: '/reports/studio', name: '보고서 작성' },
   { id: 'APPR-01', path: '/approval', name: '결재·승인' },
-  { id: 'POST-01', path: '/after-delivery', name: '납품 후 관리' },
+  { id: 'POST-01', path: '/after-delivery', name: '납품 후 관리 · 법원 일정' },
   { id: 'OUTCOME-01', path: '/outcomes', name: '판결·성과 관리', allowedRoles: FINANCE_ROLES },
   { id: 'FEE-01', path: '/success-fee', name: '성공보수', allowedRoles: FINANCE_ROLES },
   { id: 'INTEG-01', path: '/integrations/google', name: 'Google Drive 연결', allowedRoles: ADMIN_ONLY },
@@ -193,6 +194,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;
   if (previewMode && currentRoute.id === 'AI-01') return <PreviewAiAdmin />;
+  if (previewMode && currentRoute.id === 'POST-01') return <PreviewLitigationCenter roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'FEE-01') return <StatusFeedbackState type="empty" title="운영 메뉴에서 제외된 기능입니다" message="성공보수 기능은 현재 클레임센터 스튜디오 업무 범위에서 사용하지 않습니다." actionLabel="업무 홈으로 이동" onAction={() => onNavigate('/dashboard')} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 
