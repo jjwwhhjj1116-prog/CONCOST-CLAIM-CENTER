@@ -1,0 +1,37 @@
+{
+  "phase": "CF08",
+  "implementationCommit": "84ffd86cc548724818e70cf75f09ce19ff72ddc9",
+  "status": "READY_FOR_REVIEW",
+  "changedFiles": [
+    "apps/cloudflare/migrations/0007_cf08_report_review_approval.sql",
+    "apps/cloudflare/src/index.ts",
+    "apps/web/src/preview-theme.css",
+    "apps/web/src/routes/PreviewApprovalInbox.tsx",
+    "apps/web/src/routes/PreviewReportStudio.tsx",
+    "apps/web/src/routes/Router.tsx",
+    "docs/harness/CF08-codex-handoff.md",
+    "docs/harness/phase-status.json",
+    "package.json",
+    "scripts/cf06-case-operations-test.ts",
+    "scripts/cf08-report-approval-test.ts"
+  ],
+  "gates": {
+    "typecheck": "PASS",
+    "lint": "PASS",
+    "build": "PASS (67 modules; CSS 38.10 kB; JS 366.47 kB)",
+    "cf08": "4/4 PASS",
+    "cloudflareRegression": "35/35 PASS",
+    "fullRegression": "136/136 PASS",
+    "d1LocalMigration": "PASS (13 commands)",
+    "d1RemoteVerification": "2 review tables, 7 invariant triggers, 1 migration ledger row",
+    "cloudflareDeployment": "PASS"
+  },
+  "cloudflareBuildId": "0d8670bf-0b8f-4978-b31b-66db171aa2f7",
+  "cloudflareVersionId": "4ee7a9f1-4535-4298-ad04-18b870a11759",
+  "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/approval",
+  "deferred": {
+    "googleDrive": true,
+    "r2": "SKIPPED_BY_USER",
+    "finalDocxPdf": "CF09"
+  }
+}

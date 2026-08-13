@@ -1,6 +1,6 @@
 {
   "project": "claim-center-report-studio",
-  "updatedAt": "2026-08-13T09:00:00+09:00",
+  "updatedAt": "2026-08-13T09:26:00+09:00",
   "currentPhase": "CF08",
   "nextPhaseAllowed": false,
   "phases": {
@@ -494,14 +494,24 @@
     },
     "CF08": {
       "name": "D1 Report Review & Independent Approval",
-      "status": "IN_PROGRESS",
+      "status": "READY_FOR_REVIEW",
       "verdict": "PENDING",
       "gatePassed": false,
       "startedAt": "2026-08-13T09:00:00+09:00",
+      "submittedAt": "2026-08-13T09:26:00+09:00",
+      "updatedAt": "2026-08-13T09:26:00+09:00",
       "entryAllowed": true,
       "nextPhaseAllowed": false,
       "predecessor": "CF07",
       "handoff": "docs/harness/CF08-codex-handoff.md",
+      "implementationCommit": "84ffd86cc548724818e70cf75f09ce19ff72ddc9",
+      "reviewRequest": "docs/reviews/requests/CF08-review-request.md",
+      "evidence": "artifacts/harness/CF08/",
+      "deployedUrl": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev/approval",
+      "deployedAt": "2026-08-13T09:24:50+09:00",
+      "cloudflareBuildId": "0d8670bf-0b8f-4978-b31b-66db171aa2f7",
+      "cloudflareVersionId": "4ee7a9f1-4535-4298-ad04-18b870a11759",
+      "nextPhase": "CF09",
       "openDefects": {
         "critical": 0,
         "high": 0,
