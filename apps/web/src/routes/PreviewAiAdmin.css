@@ -3,4 +3,14 @@
 .report-ai-admin__header h2 { margin: .15rem 0 .4rem; }
 .report-ai-admin__settings > label { flex: 1 1 15rem; }
 .report-ai-admin__editor textarea { width: 100%; min-height: 9rem; resize: vertical; border: 1px solid var(--border-color, #334155); border-radius: .7rem; background: rgba(8, 15, 32, .72); color: inherit; padding: .9rem; line-height: 1.65; }
+.report-ai-admin__providers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0; }
+.report-ai-admin__providers > div { display: grid; gap: .25rem; padding: .85rem; border: 1px solid #334155; border-radius: .8rem; background: rgba(15, 23, 42, .68); }
+.report-ai-admin__providers > div[data-connected="true"] { border-color: #22d3a7; box-shadow: inset 0 0 0 1px rgba(34, 211, 167, .18); }
+.report-ai-admin__providers span, .report-ai-admin__routes header > span { color: #f59e0b; font-size: .72rem; font-weight: 800; letter-spacing: .08em; }
+.report-ai-admin__providers [data-connected="true"] span, .report-ai-admin__routes header > span[data-connected="true"] { color: #22d3a7; }
+.report-ai-admin__routes { display: grid; gap: .8rem; margin-bottom: 1rem; }
+.report-ai-admin__routes section { padding: 1rem; border: 1px solid rgba(103, 232, 249, .2); border-radius: .9rem; background: linear-gradient(135deg, rgba(30, 41, 59, .72), rgba(15, 23, 42, .78)); }
+.report-ai-admin__routes header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; }
+.report-ai-admin__routes h3, .report-ai-admin__routes p { margin: 0 0 .2rem; }
 @media (max-width: 720px) { .report-ai-admin__settings { align-items: stretch; flex-direction: column; } .report-ai-admin__settings > * { width: 100%; } }
+@media (max-width: 900px) { .report-ai-admin__providers { grid-template-columns: 1fr; } }

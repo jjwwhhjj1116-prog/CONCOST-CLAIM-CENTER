@@ -49,6 +49,10 @@ export interface CloudflareEnv {
   GOOGLE_TEST_FETCH?: GoogleFetch;
   OPENAI_API_KEY?: string;
   OPENAI_TEST_FETCH?: typeof fetch;
+  GEMINI_API_KEY?: string;
+  GEMINI_TEST_FETCH?: typeof fetch;
+  ANTHROPIC_API_KEY?: string;
+  ANTHROPIC_TEST_FETCH?: typeof fetch;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -1350,7 +1354,32 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
 // CF12 report-authoring prompts. Prompt bodies are Admin-only and are never
 // included in the writer-facing configuration response.
 const PREVIEW_OPENAI_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
-const PREVIEW_REASONING_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+const PREVIEW_ANTHROPIC_MODELS = new Set(['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001']);
+const PREVIEW_GEMINI_MODELS = new Set(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite']);
+const PREVIEW_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const PREVIEW_AI_TASKS = new Set(['OUTLINE_PLANNING', 'CHAPTER_WRITING', 'FACT_CHECK']);
+type PreviewAiProvider = 'OPENAI' | 'ANTHROPIC' | 'GEMINI';
+type PreviewAiTask = 'OUTLINE_PLANNING' | 'CHAPTER_WRITING' | 'FACT_CHECK';
+
+const PREVIEW_AI_MODELS: Record<PreviewAiProvider, Array<{ code: string; label: string }>> = {
+  OPENAI: [
+    { code: 'gpt-5.6', label: 'GPT-5.6 · 최신 최고 성능' },
+    { code: 'gpt-5.6-sol', label: 'GPT-5.6 Sol · 복잡한 기획' },
+    { code: 'gpt-5.6-terra', label: 'GPT-5.6 Terra · 성능/비용 균형' },
+    { code: 'gpt-5.6-luna', label: 'GPT-5.6 Luna · 빠른 대량 처리' }
+  ],
+  ANTHROPIC: [
+    { code: 'claude-fable-5', label: 'Claude Fable 5 · 최고 성능' },
+    { code: 'claude-opus-5', label: 'Claude Opus 5 · 전문 보고서' },
+    { code: 'claude-sonnet-5', label: 'Claude Sonnet 5 · 품질/속도 균형' },
+    { code: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 · 빠른 초안' }
+  ],
+  GEMINI: [
+    { code: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash · 최신 균형 모델' },
+    { code: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash · 고품질 문서 작성' },
+    { code: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite · 무료 검증/대량 처리' }
+  ]
+};
 
 interface PreviewPromptRow {
   id: string;
@@ -1376,6 +1405,11 @@ interface PreviewAiSettingsRow {
   version: number;
   updatedAt: string;
   updatedByName: string;
+}
+
+interface PreviewAiRouteRow extends PreviewAiSettingsRow {
+  taskKind: PreviewAiTask;
+  secretName: 'OPENAI_API_KEY' | 'ANTHROPIC_API_KEY' | 'GEMINI_API_KEY';
 }
 
 interface PreviewOutlineItem {
@@ -1468,6 +1502,53 @@ async function previewAiSettings(env: CloudflareEnv): Promise<PreviewAiSettingsR
   ).bind(PREVIEW_ORGANIZATION_ID).first<PreviewAiSettingsRow>();
 }
 
+function previewProviderConfigured(env: CloudflareEnv, provider: PreviewAiProvider): boolean {
+  if (provider === 'OPENAI') return Boolean(env.OPENAI_API_KEY);
+  if (provider === 'ANTHROPIC') return Boolean(env.ANTHROPIC_API_KEY);
+  return Boolean(env.GEMINI_API_KEY);
+}
+
+function previewProviderSecretName(provider: PreviewAiProvider): PreviewAiRouteRow['secretName'] {
+  if (provider === 'OPENAI') return 'OPENAI_API_KEY';
+  if (provider === 'ANTHROPIC') return 'ANTHROPIC_API_KEY';
+  return 'GEMINI_API_KEY';
+}
+
+function previewModelAllowed(provider: PreviewAiProvider, modelCode: string): boolean {
+  if (provider === 'OPENAI') return PREVIEW_OPENAI_MODELS.has(modelCode);
+  if (provider === 'ANTHROPIC') return PREVIEW_ANTHROPIC_MODELS.has(modelCode);
+  return PREVIEW_GEMINI_MODELS.has(modelCode);
+}
+
+async function previewAiRoutes(env: CloudflareEnv): Promise<PreviewAiRouteRow[]> {
+  if (!env.DB) return [];
+  try {
+    const rows = await env.DB.prepare(
+      'SELECT r.task_kind AS taskKind, r.provider_kind AS providerKind, r.model_code AS modelCode, r.reasoning_effort AS reasoningEffort, r.secret_name AS secretName, r.version, r.updated_at AS updatedAt, u.display_name AS updatedByName ' +
+      'FROM preview_report_ai_routes r JOIN preview_users u ON u.id=r.updated_by WHERE r.organization_id=? ORDER BY CASE r.task_kind WHEN \'OUTLINE_PLANNING\' THEN 1 WHEN \'CHAPTER_WRITING\' THEN 2 ELSE 3 END'
+    ).bind(PREVIEW_ORGANIZATION_ID).all<PreviewAiRouteRow>();
+    return rows.results.map((row) => ({ ...row, version: Number(row.version) }));
+  } catch {
+    // Backward compatibility for isolated fixtures that end at CF12.
+    const legacy = await previewAiSettings(env);
+    return legacy ? [{ ...legacy, taskKind: 'CHAPTER_WRITING', secretName: 'OPENAI_API_KEY' }] : [];
+  }
+}
+
+function previewAiPublicConfiguration(env: CloudflareEnv, routes: PreviewAiRouteRow[]): Record<string, unknown> {
+  const providers = (['OPENAI', 'ANTHROPIC', 'GEMINI'] as PreviewAiProvider[]).map((providerKind) => ({
+    providerKind,
+    label: providerKind === 'OPENAI' ? 'OpenAI · ChatGPT' : providerKind === 'ANTHROPIC' ? 'Anthropic · Claude' : 'Google · Gemini',
+    secretName: previewProviderSecretName(providerKind),
+    connected: previewProviderConfigured(env, providerKind),
+    models: PREVIEW_AI_MODELS[providerKind]
+  }));
+  return {
+    providers,
+    routes: routes.map((route) => ({ ...route, providerKind: route.providerKind, version: Number(route.version), connected: previewProviderConfigured(env, route.providerKind as PreviewAiProvider) }))
+  };
+}
+
 async function previewPromptRows(env: CloudflareEnv, claimType = ''): Promise<PreviewPromptRow[]> {
   if (!env.DB) return [];
   const rows = await env.DB.prepare(
@@ -1486,30 +1567,62 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
   if (!user.roles.includes('admin')) return json({ error: 'Only Admin can view or modify report prompts', code: 'FORBIDDEN' }, 403);
 
   if (url.pathname === '/api/admin/report-prompts' && request.method === 'GET') {
-    const settings = await previewAiSettings(env);
+    const routes = await previewAiRoutes(env);
+    const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
     const rows = await previewPromptRows(env);
     const typeMap = new Map<string, { claimType: string; name: string; status: string; systemPrompt: string; chapters: Array<Record<string, unknown>> }>();
     for (const row of rows) {
       if (!typeMap.has(row.claimType)) typeMap.set(row.claimType, { claimType: row.claimType, name: row.typeName, status: row.setStatus, systemPrompt: row.systemPrompt, chapters: [] });
       if (row.id) typeMap.get(row.claimType)?.chapters.push({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, rolePrompt: row.rolePrompt, instructionPrompt: row.instructionPrompt, ordinal: Number(row.ordinal), version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName });
     }
-    return json({ settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(env.OPENAI_API_KEY) } : null, promptSets: [...typeMap.values()], phase: 'CF12_ADMIN_REPORT_PROMPTS' });
+    return json({
+      settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null,
+      aiConfig: previewAiPublicConfiguration(env, routes),
+      promptSets: [...typeMap.values()],
+      phase: 'CF19_MULTI_PROVIDER_AI'
+    });
   }
 
   if (url.pathname === '/api/admin/report-prompts/settings' && request.method === 'PUT') {
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['modelCode', 'reasoningEffort', 'expectedVersion']) || typeof body.modelCode !== 'string' || typeof body.reasoningEffort !== 'string' || !Number.isInteger(body.expectedVersion)) {
+    if (!body || typeof body.modelCode !== 'string' || typeof body.reasoningEffort !== 'string' || !Number.isInteger(body.expectedVersion)) {
       return json({ error: 'AI settings payload is invalid', code: 'INVALID_AI_SETTINGS' }, 400);
     }
-    if (!PREVIEW_OPENAI_MODELS.has(body.modelCode) || !PREVIEW_REASONING_EFFORTS.has(body.reasoningEffort)) return json({ error: 'Model or reasoning effort is not allowed', code: 'UNSUPPORTED_MODEL' }, 400);
-    const current = await previewAiSettings(env);
+    const isRoutePayload = exactObjectKeys(body, ['taskKind', 'providerKind', 'modelCode', 'reasoningEffort', 'expectedVersion']);
+    const isLegacyPayload = exactObjectKeys(body, ['modelCode', 'reasoningEffort', 'expectedVersion']);
+    if (!isRoutePayload && !isLegacyPayload) return json({ error: 'AI settings payload is invalid', code: 'INVALID_AI_SETTINGS' }, 400);
+    const taskKind = isRoutePayload && typeof body.taskKind === 'string' ? body.taskKind : 'CHAPTER_WRITING';
+    const providerKind = isRoutePayload && typeof body.providerKind === 'string' ? body.providerKind : 'OPENAI';
+    if (!PREVIEW_AI_TASKS.has(taskKind) || !['OPENAI', 'ANTHROPIC', 'GEMINI'].includes(providerKind)
+      || !previewModelAllowed(providerKind as PreviewAiProvider, body.modelCode) || !PREVIEW_REASONING_EFFORTS.has(body.reasoningEffort)) {
+      return json({ error: 'Provider, model, task, or reasoning effort is not allowed', code: 'UNSUPPORTED_MODEL' }, 400);
+    }
+    const routes = await previewAiRoutes(env);
+    const current = routes.find((route) => route.taskKind === taskKind) ?? null;
     if (!current || Number(current.version) !== Number(body.expectedVersion)) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current?.version ?? 0) }, 409);
     const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
-    const result = await env.DB.prepare('UPDATE preview_report_ai_settings SET model_code = ?, reasoning_effort = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE organization_id = ? AND version = ?')
-      .bind(body.modelCode, body.reasoningEffort, user.id, now, PREVIEW_ORGANIZATION_ID, body.expectedVersion).run();
-    if (result.meta?.changes !== 1) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
-    const settings = await previewAiSettings(env);
-    return json({ settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(env.OPENAI_API_KEY) } : null, phase: 'CF12_ADMIN_REPORT_PROMPTS' });
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    try {
+      const nextVersion = Number(current.version) + 1;
+      const results = await env.DB.batch([
+        env.DB.prepare('UPDATE preview_report_ai_routes SET provider_kind=?, model_code=?, reasoning_effort=?, secret_name=?, version=version+1, updated_by=?, updated_at=? WHERE organization_id=? AND task_kind=? AND version=?')
+          .bind(providerKind, body.modelCode, body.reasoningEffort, previewProviderSecretName(providerKind as PreviewAiProvider), user.id, now, PREVIEW_ORGANIZATION_ID, taskKind, body.expectedVersion),
+        env.DB.prepare('INSERT INTO preview_report_ai_route_history (id, organization_id, task_kind, provider_kind, model_code, reasoning_effort, version, changed_by, changed_at) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_ai_routes WHERE organization_id=? AND task_kind=? AND version=?)')
+          .bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, taskKind, providerKind, body.modelCode, body.reasoningEffort, nextVersion, user.id, now, PREVIEW_ORGANIZATION_ID, taskKind, nextVersion)
+      ]) as Array<{ meta?: { changes?: number } }>;
+      if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
+      const nextRoutes = await previewAiRoutes(env);
+      const settings = nextRoutes.find((route) => route.taskKind === taskKind) ?? null;
+      return json({ settings: settings ? { ...settings, apiKeyConfigured: previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null, aiConfig: previewAiPublicConfiguration(env, nextRoutes), phase: 'CF19_MULTI_PROVIDER_AI' });
+    } catch {
+      // Legacy CF12 fixture compatibility.
+      if (!isLegacyPayload || providerKind !== 'OPENAI') return json({ error: 'Multi-provider AI migration is not available', code: 'AI_ROUTE_STORAGE_NOT_READY' }, 503);
+      const result = await env.DB.prepare('UPDATE preview_report_ai_settings SET model_code=?, reasoning_effort=?, version=version+1, updated_by=?, updated_at=? WHERE organization_id=? AND version=?')
+        .bind(body.modelCode, body.reasoningEffort, user.id, now, PREVIEW_ORGANIZATION_ID, body.expectedVersion).run();
+      if (result.meta?.changes !== 1) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
+      const settings = await previewAiSettings(env);
+      return json({ settings: settings ? { ...settings, apiKeyConfigured: Boolean(env.OPENAI_API_KEY) } : null, phase: 'CF12_ADMIN_REPORT_PROMPTS' });
+    }
   }
 
   const promptMatch = url.pathname.match(/^\/api\/admin\/report-prompts\/(TYPE-0[1-6])\/(CH-[0-9]{2})$/u);
@@ -1553,6 +1666,73 @@ function extractOpenAiText(payload: unknown): string | null {
     }
   }
   return pieces.join('\n').trim() || null;
+}
+
+function extractGeminiText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const candidates = (payload as Record<string, unknown>).candidates;
+  if (!Array.isArray(candidates)) return null;
+  const pieces: string[] = [];
+  for (const candidate of candidates) {
+    const content = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>).content : null;
+    const parts = content && typeof content === 'object' ? (content as Record<string, unknown>).parts : null;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) if (part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') pieces.push(String((part as Record<string, unknown>).text));
+  }
+  return pieces.join('\n').trim() || null;
+}
+
+function extractAnthropicText(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as Record<string, unknown>).content)) return null;
+  const pieces: string[] = [];
+  for (const part of (payload as { content: unknown[] }).content) {
+    if (part && typeof part === 'object' && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string') pieces.push(String((part as Record<string, unknown>).text));
+  }
+  return pieces.join('\n').trim() || null;
+}
+
+async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRow, system: string, input: string, actorId: string): Promise<{ content?: string; response?: Response }> {
+  const provider = route.providerKind as PreviewAiProvider;
+  const apiKey = provider === 'OPENAI' ? env.OPENAI_API_KEY : provider === 'ANTHROPIC' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY;
+  if (!apiKey) return { response: json({ error: `관리자가 Cloudflare 서버 Secret에 ${previewProviderSecretName(provider)}를 연결해야 합니다.`, code: `${provider}_NOT_CONFIGURED` }, 503) };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90_000);
+  let endpoint = '';
+  let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  let body: Record<string, unknown>;
+  let providerFetch: typeof fetch;
+  if (provider === 'OPENAI') {
+    endpoint = 'https://api.openai.com/v1/responses';
+    headers = { ...headers, Authorization: `Bearer ${apiKey}` };
+    providerFetch = env.OPENAI_TEST_FETCH ?? fetch;
+    body = {
+      model: route.modelCode, store: false, safety_identifier: await sha256Hex(`${PREVIEW_ORGANIZATION_ID}:${actorId}`),
+      reasoning: { effort: route.reasoningEffort }, text: { verbosity: 'high' }, instructions: system, input
+    };
+  } else if (provider === 'GEMINI') {
+    endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(route.modelCode)}:generateContent`;
+    headers = { ...headers, 'x-goog-api-key': apiKey };
+    providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
+    body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: input }] }] };
+  } else {
+    endpoint = 'https://api.anthropic.com/v1/messages';
+    headers = { ...headers, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+    providerFetch = env.ANTHROPIC_TEST_FETCH ?? fetch;
+    body = { model: route.modelCode, max_tokens: 16_000, system, messages: [{ role: 'user', content: input }] };
+  }
+  let response: Response;
+  try {
+    response = await providerFetch(endpoint, { method: 'POST', signal: controller.signal, headers, body: JSON.stringify(body) });
+  } catch {
+    clearTimeout(timeout);
+    return { response: json({ error: 'AI 공급자 응답 시간이 초과되었거나 연결에 실패했습니다.', code: `${provider}_UNAVAILABLE` }, 504) };
+  }
+  clearTimeout(timeout);
+  if (!response.ok) return { response: json({ error: 'AI 공급자가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', code: `${provider}_REQUEST_FAILED`, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
+  const payload = await response.json().catch(() => null);
+  const content = provider === 'OPENAI' ? extractOpenAiText(payload) : provider === 'GEMINI' ? extractGeminiText(payload) : extractAnthropicText(payload);
+  if (!content || content.length > 200_000) return { response: json({ error: 'AI 공급자 응답 형식이 올바르지 않습니다.', code: `${provider}_MALFORMED_RESPONSE` }, 502) };
+  return { content };
 }
 
 async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Record<string, unknown>> {
@@ -1629,7 +1809,8 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
     const caseRow = await accessiblePreviewCase(env, user, caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
-    const settings = await previewAiSettings(env);
+    const routes = await previewAiRoutes(env);
+    const writingRoute = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
     const prompts = await previewPromptRows(env, caseRow.claimType);
     const unavailable = caseRow.claimType === 'TYPE-05' || prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
     const [outlinePlan, sourceGroups] = await Promise.all([
@@ -1640,8 +1821,9 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       claimType: caseRow.claimType,
       available: !unavailable,
       unavailableReason: unavailable ? '승인된 유형별 보고서 템플릿과 챕터 프롬프트가 필요합니다.' : null,
-      aiConnected: Boolean(env.OPENAI_API_KEY),
-      modelLabel: settings?.modelCode ?? 'gpt-5.6',
+      aiConnected: writingRoute ? previewProviderConfigured(env, writingRoute.providerKind as PreviewAiProvider) : false,
+      providerLabel: writingRoute?.providerKind ?? 'OPENAI',
+      modelLabel: writingRoute?.modelCode ?? 'gpt-5.6',
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
       outlinePlan,
       sourceGroups,
@@ -1697,7 +1879,6 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot generate report chapters', code: 'FORBIDDEN' }, 403);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || !exactObjectKeys(body, ['caseId', 'chapterId', 'expectedDraftVersion']) || typeof body.caseId !== 'string' || typeof body.chapterId !== 'string' || !Number.isInteger(body.expectedDraftVersion)) return json({ error: 'Authoring request is invalid', code: 'INVALID_AUTHORING_PAYLOAD' }, 400);
-    if (!env.OPENAI_API_KEY) return json({ error: '관리자가 Cloudflare 서버 Secret에 OPENAI_API_KEY를 연결해야 합니다.', code: 'OPENAI_NOT_CONFIGURED' }, 503);
     const caseRow = await accessiblePreviewCase(env, user, body.caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
     const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
@@ -1712,47 +1893,39 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (outlinePlan.persistenceAvailable && (outlinePlan.status !== 'CONFIRMED' || !outlinePlan.items.some((item) => item.chapterId === prompt.id && item.promptVersion === Number(prompt.version)))) {
       return json({ error: 'Confirm the current report outline before AI authoring', code: 'OUTLINE_CONFIRMATION_REQUIRED' }, 409);
     }
-    const settings = await previewAiSettings(env);
-    if (!settings || !PREVIEW_OPENAI_MODELS.has(settings.modelCode)) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
+    const routes = await previewAiRoutes(env);
+    const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
+    if (!settings || !previewModelAllowed(settings.providerKind as PreviewAiProvider, settings.modelCode)) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
     const context = await previewReportAuthoringContext(env, caseRow);
     const chapterPlanningNote = outlinePlan.items.find((item) => item.chapterId === prompt.id)?.planningNote ?? '';
     context.outlinePlanning = { chapterCode: prompt.chapterCode, planningNote: chapterPlanningNote, outlineVersion: outlinePlan.version, outlineStatus: outlinePlan.status };
     const contextJson = JSON.stringify(context).slice(0, 80_000);
     const inputSha256 = await sha256Hex(contextJson);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
-    let response: Response;
-    try {
-      response = await (env.OPENAI_TEST_FETCH ?? fetch)('https://api.openai.com/v1/responses', {
-        method: 'POST', signal: controller.signal,
-        headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: settings.modelCode,
-          store: false,
-          safety_identifier: await sha256Hex(`${PREVIEW_ORGANIZATION_ID}:${user.id}`),
-          reasoning: { effort: settings.reasoningEffort },
-          text: { verbosity: 'high' },
-          instructions: `${prompt.systemPrompt}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}`,
-          input: `다음 JSON은 현재 사건의 승인된 내부 작업 데이터입니다. ${prompt.chapterCode} ${prompt.title} 장만 작성하십시오.\n${contextJson}`
-        })
-      });
-    } catch {
-      clearTimeout(timeout);
-      return json({ error: 'AI 공급자 응답 시간이 초과되었거나 연결에 실패했습니다.', code: 'OPENAI_UNAVAILABLE' }, 504);
-    }
-    clearTimeout(timeout);
-    if (!response.ok) return json({ error: 'AI 공급자가 요청을 처리하지 못했습니다. 관리자 연결 상태와 예산을 확인해 주세요.', code: 'OPENAI_REQUEST_FAILED', providerStatus: response.status }, response.status === 401 ? 503 : 502);
-    const providerPayload = await response.json().catch(() => null);
-    const content = extractOpenAiText(providerPayload);
-    if (!content || content.length > 200_000) return json({ error: 'AI 공급자 응답 형식이 올바르지 않습니다.', code: 'OPENAI_MALFORMED_RESPONSE' }, 502);
+    const generated = await generatePreviewAiText(
+      env,
+      settings,
+      `${prompt.systemPrompt}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}`,
+      `다음 JSON은 현재 사건의 승인된 내부 작업 데이터입니다. ${prompt.chapterCode} ${prompt.title} 장만 작성하십시오.\n${contextJson}`,
+      user.id
+    );
+    if (generated.response) return generated.response;
+    const content = generated.content as string;
     const outputSha256 = await sha256Hex(content);
     const now = new Date().toISOString();
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
-    await env.DB.batch([
-      env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
-      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${prompt.title} · prompt v${prompt.version}`, now)
-    ]);
-    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), generatedAt: now }, phase: 'CF12_WRITER_REPORT_AUTHORING' });
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING'),
+        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${settings.providerKind} · ${settings.modelCode} · prompt v${prompt.version}`, now)
+      ]);
+    } catch {
+      // Backward compatibility for the CF12 isolated migration fixture.
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${prompt.title} · prompt v${prompt.version}`, now)
+      ]);
+    }
+    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, generatedAt: now }, phase: 'CF19_MULTI_PROVIDER_AI' });
   }
 
   return json({ error: 'Report authoring route was not found', code: 'AUTHORING_ROUTE_NOT_FOUND' }, 404);

@@ -19,7 +19,7 @@ interface AuthoringChapter { id: string; chapterCode: string; title: string; age
 interface OutlineItem { chapterId: string; chapterCode: string; promptVersion: number; planningNote: string }
 interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
 interface SourceGroup { code: 'PROJECT' | 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY' | 'QUANTITY' | 'EVIDENCE' | 'LITIGATION'; label: string; status: 'READY' | 'PARTIAL' | 'EMPTY'; itemCount: number; detail: string; route: string }
-interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
+interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; providerLabel: string; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
   id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
@@ -326,9 +326,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
             </div>
             {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>목차 기획 메모</strong> {outlineNotes[selectedChapter.id]?.trim() || '별도 메모 없음 · 승인된 기본 챕터 지시를 사용합니다.'}</p></div>}
-            <p className="muted">프로젝트 유형 {authoring.claimType} · 모델 {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
+            <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
-            {!authoring.aiConnected && <div className="error-box">관리자가 Cloudflare 서버 Secret에 OPENAI_API_KEY를 연결하기 전에는 자동 작성 버튼이 비활성화됩니다.</div>}
+            {!authoring.aiConnected && <div className="error-box">관리자가 선택한 {authoring.providerLabel} 공급자의 서버 Secret을 연결하기 전에는 자동 작성 버튼이 비활성화됩니다.</div>}
             {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
           </div>}
         </Card>
