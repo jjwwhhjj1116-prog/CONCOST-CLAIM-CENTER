@@ -27,7 +27,7 @@ test('CF20 gives proposal, project workflow, and report authoring steps distinct
   assert.match(proposal, /proposal-step-button/u);
   assert.match(workflow, /--step-color/u);
   for (const step of ['1', '2', '3', '4', '5']) assert.match(report, new RegExp(`report-step-card--${step}`));
-  for (const color of ['#f97316', '#2563eb', '#7c3aed', '#059669']) assert.match(theme, new RegExp(color));
+  for (const color of ['#c8794d', '#4a86c5', '#766bb5', '#4b967f']) assert.match(theme, new RegExp(color));
   assert.match(theme, /--report-step-number/u);
   assert.match(theme, /\.case-create-number strong/u);
 });
@@ -38,9 +38,30 @@ test('CF21 keeps active navigation legible and harmonizes light workspace surfac
 
   assert.match(shell, /navigation-group\$\{isCurrentGroup \? ' is-current' : ''\}/u);
   assert.match(theme, /\.navigation-group\.is-current header/u);
-  assert.match(theme, /box-shadow: inset 3px 0 var\(--group-accent\)/u);
+  assert.match(theme, /box-shadow: inset 3px 0 #4a86c5/u);
   assert.doesNotMatch(theme, /\.navigation-group \.navigation-link\[aria-current='page'\] \{ background: linear-gradient/u);
   assert.match(theme, /:root\[data-theme='light'\] \.schedule-board/u);
   assert.match(theme, /:root\[data-theme='light'\] \.case-evidence-categories button/u);
   assert.match(theme, /:root\[data-theme='light'\] \.litigation-kpis article/u);
+});
+
+test('CF22 applies the pastel overlay system and project-specific work tags', () => {
+  const html = read('apps/web/index.html');
+  const theme = read('apps/web/src/theme-system.css');
+  const model = read('apps/web/src/workflow/workflow-model.ts');
+  const schedule = read('apps/web/src/workflow/ProjectWorkflowSchedule.tsx');
+  const scheduleCss = read('apps/web/src/workflow/ProjectWorkflowSchedule.css');
+
+  assert.match(html, /family=Noto\+Sans\+KR/u);
+  assert.match(html, /family=DM\+Mono/u);
+  assert.match(theme, /--page-bg: #f4f7fb/u);
+  assert.match(theme, /0 6px 18px rgba\(34, 62, 94, \.04\)/u);
+  assert.match(theme, /\.navigation-group \.navigation-link\[aria-current='page'\].*background: #e5f0f8/u);
+  assert.match(model, /highlights: readonly/u);
+  assert.match(model, /마감팀 · 마감 물량 산출/u);
+  assert.match(schedule, /project-brief-board/u);
+  assert.match(schedule, /project\.highlights\.map/u);
+  for (const tone of ['finish', 'structure', 'civil', 'report', 'survey', 'pending']) {
+    assert.match(scheduleCss, new RegExp(`data-tone='${tone}'`));
+  }
 });

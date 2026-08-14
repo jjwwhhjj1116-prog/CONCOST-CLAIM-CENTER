@@ -18,7 +18,7 @@ export const WORKFLOW_STAGES: readonly WorkflowStageDefinition[] = [
     name: '제안서 연동',
     eyebrow: 'PROPOSAL LINK',
     description: '제안서 작성 메뉴에서 완성해 발송한 제안서를 프로젝트에 연결합니다.',
-    color: '#7c6cff'
+    color: '#7b72c9'
   },
   {
     id: 2,
@@ -27,7 +27,7 @@ export const WORKFLOW_STAGES: readonly WorkflowStageDefinition[] = [
     name: '수주 확정',
     eyebrow: 'AWARD DECISION',
     description: '거래처 회신과 수주 여부를 기록하고 수주된 건만 수행 프로젝트로 전환합니다.',
-    color: '#3b8cff'
+    color: '#5b93c9'
   },
   {
     id: 3,
@@ -36,7 +36,7 @@ export const WORKFLOW_STAGES: readonly WorkflowStageDefinition[] = [
     name: '착수회의',
     eyebrow: 'KICK-OFF',
     description: '회의 녹음·자료를 모아 AI 요약, 회의록, 결정사항과 타임라인을 만듭니다.',
-    color: '#12b5cb'
+    color: '#4ba6b5'
   },
   {
     id: 4,
@@ -45,7 +45,7 @@ export const WORKFLOW_STAGES: readonly WorkflowStageDefinition[] = [
     name: '현장조사',
     eyebrow: 'SITE SURVEY',
     description: '사진·녹음·도면을 조사일과 유형별로 정리하고 Drive 연결을 준비합니다.',
-    color: '#1db979'
+    color: '#57a98c'
   },
   {
     id: 5,
@@ -54,7 +54,7 @@ export const WORKFLOW_STAGES: readonly WorkflowStageDefinition[] = [
     name: '수량산출·내역작성',
     eyebrow: 'QUANTITY & BOQ',
     description: '산출 범위와 기준, 마감·구조·토목조경·VIETQS 팀 일정과 투입률을 관리합니다.',
-    color: '#f6a23a'
+    color: '#d69a56'
   },
   {
     id: 6,
@@ -63,7 +63,7 @@ export const WORKFLOW_STAGES: readonly WorkflowStageDefinition[] = [
     name: '보고서 작성',
     eyebrow: 'REPORT AUTHORING',
     description: '1~5단계 근거를 유형별 목차와 프롬프트로 묶어 장별 AI 초안을 작성합니다.',
-    color: '#f05e8a'
+    color: '#cc7693'
   }
 ] as const;
 
@@ -130,6 +130,10 @@ export interface WorkflowProject {
   start: string;
   end: string;
   awardStatus: 'WON' | 'PENDING' | 'LOST';
+  highlights: readonly {
+    label: string;
+    tone: 'finish' | 'structure' | 'civil' | 'report' | 'survey' | 'pending';
+  }[];
   stages: readonly ProjectWorkflowItem[];
 }
 
@@ -145,6 +149,11 @@ export const WORKFLOW_PROJECTS: readonly WorkflowProject[] = [
     start: '2026-08-03',
     end: '2026-09-11',
     awardStatus: 'WON',
+    highlights: [
+      { label: '마감팀 · 마감 물량 산출', tone: 'finish' },
+      { label: '구조팀 · 구조 물량 산출', tone: 'structure' },
+      { label: '토목조경팀 · 범위 확인', tone: 'civil' }
+    ],
     stages: [
       { stageId: 1, startDay: 3, endDay: 5, status: 'DONE', owner: '제안 담당', detail: '작성 완료 제안서 v3 연동' },
       { stageId: 2, startDay: 6, endDay: 7, status: 'DONE', owner: '프로젝트 책임자', detail: '수주 확정 · 프로젝트 전환' },
@@ -157,6 +166,11 @@ export const WORKFLOW_PROJECTS: readonly WorkflowProject[] = [
   {
     id: 'project-demo-02', caseId: 'demo-case-02', code: 'CLM-2026-014', name: '공동주택 공사비 적정성 검토', client: '합성 테스트 조합', claimType: 'TYPE-01', progress: 61,
     start: '2026-08-01', end: '2026-08-29', awardStatus: 'WON',
+    highlights: [
+      { label: 'Finish Internal 1 · 마감 산출', tone: 'finish' },
+      { label: 'Structure Horizon 1 · 구조 산출', tone: 'structure' },
+      { label: '보고서 근거 검토', tone: 'report' }
+    ],
     stages: [
       { stageId: 1, startDay: 1, endDay: 2, status: 'DONE', owner: '제안 담당', detail: '제안서 연동' },
       { stageId: 2, startDay: 3, endDay: 4, status: 'DONE', owner: 'PM', detail: '수주 확정' },
@@ -169,6 +183,10 @@ export const WORKFLOW_PROJECTS: readonly WorkflowProject[] = [
   {
     id: 'project-demo-03', caseId: 'demo-case-03', code: 'CLM-2026-018', name: '물가변동 검토 및 협상 보고서', client: '합성 테스트 시공사', claimType: 'TYPE-06', progress: 17,
     start: '2026-08-12', end: '2026-09-30', awardStatus: 'PENDING',
+    highlights: [
+      { label: '물가변동 기준지수 검토', tone: 'survey' },
+      { label: '제안서 회신 대기', tone: 'pending' }
+    ],
     stages: [
       { stageId: 1, startDay: 12, endDay: 16, status: 'IN_PROGRESS', owner: '제안 담당', detail: '제안서 발송·회신 대기' },
       { stageId: 2, startDay: 17, endDay: 19, status: 'PLANNED', owner: '프로젝트 책임자', detail: '수주 여부 결정' },

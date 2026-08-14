@@ -4,7 +4,7 @@
   --studio-pink: #ec4899;
   --studio-ink: #050712;
   --studio-panel: rgba(15, 18, 38, 0.88);
-  font-family: Inter, Pretendard, system-ui, sans-serif;
+  font-family: 'Noto Sans KR', Manrope, system-ui, sans-serif;
 }
 
 body {
@@ -30,7 +30,7 @@ body {
 .preview-hero h2,
 .preview-entry h1,
 .preview-feature h2 {
-  font-family: 'Space Grotesk', Inter, sans-serif;
+  font-family: Manrope, 'Noto Sans KR', sans-serif;
   letter-spacing: -0.04em;
 }
 

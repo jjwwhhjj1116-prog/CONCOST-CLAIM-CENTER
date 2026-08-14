@@ -102,6 +102,28 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             </div>
           </div>
 
+          <section className="project-brief-board" aria-labelledby="project-brief-title">
+            <header>
+              <div><span>PROJECT SNAPSHOT</span><h3 id="project-brief-title">프로젝트별 작업 특이사항</h3></div>
+              <p>산출 범위와 투입 팀처럼 일정만으로 놓치기 쉬운 내용을 함께 표시합니다.</p>
+            </header>
+            <div className="project-brief-list">
+              {WORKFLOW_PROJECTS.map((project) => (
+                <button key={project.id} type="button" className="project-brief-row" onClick={() => onNavigate(`/projects/workflow?projectId=${encodeURIComponent(project.id)}`)}>
+                  <span className="project-brief-copy">
+                    <b>{project.code}</b>
+                    <strong>{project.name}</strong>
+                    <small>{project.claimType} · {project.client}</small>
+                  </span>
+                  <span className="project-highlight-list" aria-label={`${project.name} 작업 특이사항`}>
+                    {project.highlights.map((highlight) => <em key={highlight.label} data-tone={highlight.tone}>{highlight.label}</em>)}
+                  </span>
+                  <span className="project-brief-action">상세 보기 <b aria-hidden="true">›</b></span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           <div className="schedule-board" role="table" aria-label="프로젝트 월간 일정표">
             <div className="schedule-board-header" role="row">
               <div className="schedule-left-heading" role="columnheader">프로젝트 정보 <span>공정률</span></div>
