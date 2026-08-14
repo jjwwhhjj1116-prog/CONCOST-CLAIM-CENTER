@@ -43,7 +43,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; requests: A
     const headers = new Headers(init?.headers); const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     requests.push({ url: String(input), headers, body });
     assert.equal(headers.get('x-goog-api-key'), GEMINI_KEY); assert.equal(headers.has('Authorization'), false);
-    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '## Gemini 검증 초안\n\n승인된 사건 자료만 사용한 챕터입니다. [확인 필요]' }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: '## Gemini 검증 초안\n\n승인된 사건 자료만 사용한 챕터입니다. [확인 필요]' }] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   return { sql, requests, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: GEMINI_KEY, GEMINI_TEST_FETCH: geminiFetch } };
 }
@@ -71,8 +71,8 @@ test('CF19 routes chapter writing through Gemini and never exposes the API key',
   assert.equal(config.aiConnected, true); assert.equal(config.providerLabel, 'GEMINI'); assert.equal(config.modelLabel, 'gemini-3.6-flash');
   const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
   assert.equal(generated.status, 200); const generatedText = await generated.text(); assert.match(generatedText, /Gemini 검증 초안/u); assert.doesNotMatch(generatedText, new RegExp(GEMINI_KEY, 'u'));
-  assert.equal(requests.length, 1); assert.match(requests[0].url, /generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.6-flash:generateContent/u);
-  assert.ok(Array.isArray(requests[0].body.contents)); assert.ok(requests[0].body.systemInstruction);
+  assert.equal(requests.length, 1); assert.match(requests[0].url, /generativelanguage\.googleapis\.com\/v1beta\/interactions/u);
+  assert.equal(requests[0].body.model, 'gemini-3.6-flash'); assert.equal(typeof requests[0].body.input, 'string'); assert.equal(typeof requests[0].body.system_instruction, 'string');
   assert.deepEqual(sql.exec('SELECT provider_kind, task_kind, model_code FROM preview_report_ai_generations')[0].values[0], ['GEMINI','CHAPTER_WRITING','gemini-3.6-flash']);
   sql.close();
 });

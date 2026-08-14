@@ -1670,14 +1670,24 @@ function extractOpenAiText(payload: unknown): string | null {
 
 function extractGeminiText(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null;
-  const candidates = (payload as Record<string, unknown>).candidates;
-  if (!Array.isArray(candidates)) return null;
   const pieces: string[] = [];
-  for (const candidate of candidates) {
-    const content = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>).content : null;
-    const parts = content && typeof content === 'object' ? (content as Record<string, unknown>).parts : null;
-    if (!Array.isArray(parts)) continue;
-    for (const part of parts) if (part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') pieces.push(String((part as Record<string, unknown>).text));
+  const steps = (payload as Record<string, unknown>).steps;
+  if (Array.isArray(steps)) {
+    for (const step of steps) {
+      if (!step || typeof step !== 'object' || (step as Record<string, unknown>).type !== 'model_output' || !Array.isArray((step as Record<string, unknown>).content)) continue;
+      for (const part of (step as { content: unknown[] }).content) {
+        if (part && typeof part === 'object' && (part as Record<string, unknown>).type === 'text' && typeof (part as Record<string, unknown>).text === 'string') pieces.push(String((part as Record<string, unknown>).text));
+      }
+    }
+  }
+  const candidates = (payload as Record<string, unknown>).candidates;
+  if (Array.isArray(candidates)) {
+    for (const candidate of candidates) {
+      const content = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>).content : null;
+      const parts = content && typeof content === 'object' ? (content as Record<string, unknown>).parts : null;
+      if (!Array.isArray(parts)) continue;
+      for (const part of parts) if (part && typeof part === 'object' && typeof (part as Record<string, unknown>).text === 'string') pieces.push(String((part as Record<string, unknown>).text));
+    }
   }
   return pieces.join('\n').trim() || null;
 }
@@ -1737,10 +1747,10 @@ async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRo
       reasoning: { effort: route.reasoningEffort }, text: { verbosity: 'high' }, instructions: system, input
     };
   } else if (provider === 'GEMINI') {
-    endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(route.modelCode)}:generateContent`;
+    endpoint = 'https://generativelanguage.googleapis.com/v1beta/interactions';
     headers = { ...headers, 'x-goog-api-key': apiKey };
     providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
-    body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: input }] }] };
+    body = { model: route.modelCode, system_instruction: system, input };
   } else {
     endpoint = 'https://api.anthropic.com/v1/messages';
     headers = { ...headers, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
