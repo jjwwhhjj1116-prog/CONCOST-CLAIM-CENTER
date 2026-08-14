@@ -16,7 +16,10 @@ interface ReportRevision {
 }
 interface ReportPayload { draft: ReportDraft | null; revisions: ReportRevision[] }
 interface AuthoringChapter { id: string; chapterCode: string; title: string; agentCode: string; ordinal: number; promptVersion: number }
-interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; modelLabel: string; chapters: AuthoringChapter[] }
+interface OutlineItem { chapterId: string; chapterCode: string; promptVersion: number; planningNote: string }
+interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
+interface SourceGroup { code: 'PROJECT' | 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY' | 'QUANTITY' | 'EVIDENCE' | 'LITIGATION'; label: string; status: 'READY' | 'PARTIAL' | 'EMPTY'; itemCount: number; detail: string; route: string }
+interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
   id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
@@ -24,6 +27,14 @@ interface Finalization {
 }
 
 const EDIT_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm', 'staff'];
+const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
+  'AGENT-01': ['PROJECT', 'PROPOSAL', 'KICKOFF'],
+  'AGENT-02': ['PROJECT', 'PROPOSAL', 'LITIGATION'],
+  'AGENT-03': ['PROJECT', 'SITE_SURVEY', 'EVIDENCE'],
+  'AGENT-04': ['PROJECT', 'QUANTITY', 'EVIDENCE'],
+  'AGENT-05': ['PROJECT', 'PROPOSAL', 'KICKOFF', 'SITE_SURVEY', 'QUANTITY', 'EVIDENCE', 'LITIGATION'],
+  'AGENT-06': ['PROJECT', 'PROPOSAL', 'KICKOFF', 'SITE_SURVEY', 'QUANTITY', 'EVIDENCE', 'LITIGATION']
+};
 
 export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; onNavigate: (path: string) => void }): React.ReactElement {
   const [cases, setCases] = useState<CaseSummary[]>([]);
@@ -45,6 +56,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [authoring, setAuthoring] = useState<AuthoringConfig | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [savingOutline, setSavingOutline] = useState(false);
+  const [outlineStatus, setOutlineStatus] = useState<'DRAFT' | 'CONFIRMED'>('DRAFT');
+  const [outlineVersion, setOutlineVersion] = useState(0);
+  const [outlineNotes, setOutlineNotes] = useState<Record<string, string>>({});
+  const [outlineDirty, setOutlineDirty] = useState(false);
   const [showGuide, setShowGuide] = useState(true);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
@@ -53,6 +69,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const editable = roles.some((role) => EDIT_ROLES.includes(role));
   const selectedCase = useMemo(() => cases.find((record) => record.id === selectedCaseId) ?? null, [cases, selectedCaseId]);
   const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
+  const selectedChapterSources = useMemo(() => {
+    const codes = selectedChapter ? CHAPTER_SOURCE_CODES[selectedChapter.agentCode] ?? ['PROJECT'] : [];
+    return authoring?.sourceGroups.filter((group) => codes.includes(group.code)) ?? [];
+  }, [authoring, selectedChapter]);
   const authoredChapterCodes = useMemo(() => new Set(Array.from(content.matchAll(/<!-- AI-CHAPTER:([^:]+):START -->/gu), (match) => match[1])), [content]);
 
   const loadDraft = useCallback(async (caseId: string) => {
@@ -79,6 +99,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setReviews(reviewResult.reviews);
       setFinalizations(finalizationResult.finalizations);
       setAuthoring(authoringResult);
+      setOutlineStatus(authoringResult.outlinePlan.status);
+      setOutlineVersion(authoringResult.outlinePlan.version);
+      setOutlineNotes(Object.fromEntries(authoringResult.outlinePlan.items.map((item) => [item.chapterId, item.planningNote])));
+      setOutlineDirty(false);
       setSelectedChapterId((current) => authoringResult.chapters.some((chapter) => chapter.id === current) ? current : authoringResult.chapters[0]?.id ?? '');
       setLoadedCaseId(caseId);
     } catch (reason) {
@@ -143,11 +167,33 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     loadSequence.current += 1;
     selectedCaseRef.current = caseId;
     titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setOutlineStatus('DRAFT'); setOutlineVersion(0); setOutlineNotes({}); setOutlineDirty(false); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+  };
+
+  const saveOutline = async (status: 'DRAFT' | 'CONFIRMED') => {
+    if (!editable || !authoring?.available || !authoring.outlinePlan.persistenceAvailable || savingOutline || loadedCaseId !== selectedCaseId) return;
+    const requestCaseId = selectedCaseId;
+    setSavingOutline(true); setError('');
+    try {
+      const result = await apiRequest<{ outlinePlan: OutlinePlan }>('/api/report-authoring/outline', {
+        method: 'PUT',
+        body: JSON.stringify({
+          caseId: requestCaseId,
+          status,
+          expectedVersion: outlineVersion,
+          items: authoring.chapters.map((chapter) => ({ chapterId: chapter.id, chapterCode: chapter.chapterCode, promptVersion: chapter.promptVersion, planningNote: outlineNotes[chapter.id]?.trim() ?? '' }))
+        })
+      });
+      if (selectedCaseRef.current !== requestCaseId) return;
+      setOutlineStatus(result.outlinePlan.status); setOutlineVersion(result.outlinePlan.version); setOutlineDirty(false);
+      setAuthoring((current) => current ? { ...current, outlinePlan: result.outlinePlan } : current);
+    } catch (reason) {
+      if (selectedCaseRef.current === requestCaseId) setError(reason instanceof ApiError && reason.status === 409 ? '목차 또는 관리자 템플릿이 변경되었습니다. 최신본을 다시 불러와 목차를 확인해 주세요.' : reason instanceof Error ? reason.message : String(reason));
+    } finally { if (selectedCaseRef.current === requestCaseId) setSavingOutline(false); }
   };
 
   const generateChapter = async () => {
-    if (!editable || !authoring?.available || !authoring.aiConnected || !selectedChapterId || dirty || saving || generating || loadedCaseId !== selectedCaseId) return;
+    if (!editable || !authoring?.available || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating || loadedCaseId !== selectedCaseId) return;
     const requestCaseId = selectedCaseId;
     setGenerating(true); setError('');
     try {
@@ -257,20 +303,31 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       </Card>
 
       {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="프로젝트별 보고서 최신본을 불러오고 있습니다." /> : <>
+        <Card title="SOURCE READINESS · 워크플로우 1~5 근거 준비도">
+          <div className="report-source-readiness">
+            <header><div><span>PROJECT EVIDENCE MAP</span><h3>AI가 참고할 프로젝트 자료를 먼저 확인하세요.</h3><p>제안서부터 착수회의·현장조사·물량산출·자료실·법원자료까지 현재 프로젝트에 연결된 기록만 표시합니다.</p></div><strong>{authoring?.sourceGroups.filter((group) => group.status === 'READY').length ?? 0}/{authoring?.sourceGroups.length ?? 0}<small>READY</small></strong></header>
+            <div className="report-source-grid">{authoring?.sourceGroups.map((group) => <button key={group.code} type="button" data-source-state={group.status} onClick={() => onNavigate(group.route)}><span aria-hidden="true">{group.status === 'READY' ? '✓' : group.status === 'PARTIAL' ? '!' : '+'}</span><div><strong>{group.label}</strong><small>{group.detail}</small></div><em>{group.status === 'READY' ? '준비됨' : group.status === 'PARTIAL' ? '일부 준비' : '자료 연결'}</em></button>)}</div>
+            <p className="report-source-policy"><strong>근거 사용 원칙</strong> 파일명·업로더·업로드 시각·SHA-256은 파일 존재를 확인하는 정보입니다. PDF·HWP·도면의 본문을 아직 추출하지 않은 경우 AI가 내용을 추측하지 않고 <b>[확인 필요]</b>로 남깁니다.</p>
+          </div>
+        </Card>
         <Card title="TABLE OF CONTENTS · 2단계 목차 기획">
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 목차 템플릿이 없습니다.'}</div> : <div className="report-outline-planner">
-            <header><div><span>{authoring.claimType} · APPROVED OUTLINE</span><h3>보고서를 쓰기 전에 챕터 구성부터 확인하세요.</h3><p>아래 목차는 관리자가 승인한 유형별 템플릿에서 불러왔습니다. 챕터를 선택하면 다음 단계의 자동 작성 대상으로 연결됩니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
+            <header><div><span>{authoring.claimType} · APPROVED OUTLINE · PLAN v{outlineVersion || 'NEW'}</span><h3>보고서를 쓰기 전에 챕터별 작성 방향을 확정하세요.</h3><p>관리자가 승인한 목차는 빠뜨리거나 바꿀 수 없습니다. 각 챕터를 눌러 이번 프로젝트에서 다룰 쟁점과 검토 방향을 메모한 뒤 목차 기획을 확정합니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
             <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => setSelectedChapterId(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {chapter.title}</strong><small>{chapter.agentCode} · prompt v{chapter.promptVersion}</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
+            {selectedChapter && <div className="report-outline-note"><label htmlFor="report-outline-note"><span>{selectedChapter.chapterCode}</span> 이번 챕터 작성 방향</label><textarea id="report-outline-note" maxLength={2000} value={outlineNotes[selectedChapter.id] ?? ''} disabled={!editable || savingOutline} onChange={(event) => { setOutlineNotes((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} placeholder="예: 현장조사 사진과 실측 수량의 차이를 표로 비교하고, 계약도면 기준과 실제 시공상태를 구분해 작성" /><small>{(outlineNotes[selectedChapter.id] ?? '').length}/2,000 · 빈 메모도 허용되지만 핵심 쟁점을 적으면 챕터 작성 지시에 함께 반영됩니다.</small></div>}
+            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 기획 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 기획 대기'}</span><Button variant="secondary" disabled={!editable || savingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '목차 메모 저장'}</Button><Button disabled={!editable || savingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 기획 확정'}</Button></div>
+            {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장용 D1 마이그레이션이 아직 적용되지 않았습니다. 배포 상태를 확인해 주세요.</div>}
           </div>}
         </Card>
         <Card title="AI CHAPTER WORKFLOW · 3단계 챕터별 자동 작성">
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 챕터 프롬프트가 없습니다.'}</div> : <div className="form-stack">
             <div className="inline-form">
               <Select label="자동 작성할 챕터" value={selectedChapterId} onChange={(event) => setSelectedChapterId(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${chapter.title} · prompt v${chapter.promptVersion}` }))} />
-              <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
+              <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
             </div>
-            {selectedChapter && <p className="notice-box"><strong>현재 작성 역할 · {selectedChapter.agentCode}</strong><br />{selectedChapter.chapterCode} {selectedChapter.title} 전용 프롬프트로 프로젝트 근거를 분석합니다.</p>}
+            {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>목차 기획 메모</strong> {outlineNotes[selectedChapter.id]?.trim() || '별도 메모 없음 · 승인된 기본 챕터 지시를 사용합니다.'}</p></div>}
             <p className="muted">프로젝트 유형 {authoring.claimType} · 모델 {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
+            {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
             {!authoring.aiConnected && <div className="error-box">관리자가 Cloudflare 서버 Secret에 OPENAI_API_KEY를 연결하기 전에는 자동 작성 버튼이 비활성화됩니다.</div>}
             {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
           </div>}

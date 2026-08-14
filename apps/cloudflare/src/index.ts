@@ -1378,6 +1378,88 @@ interface PreviewAiSettingsRow {
   updatedByName: string;
 }
 
+interface PreviewOutlineItem {
+  chapterId: string;
+  chapterCode: string;
+  promptVersion: number;
+  planningNote: string;
+}
+
+interface PreviewOutlineRow {
+  outlineJson: string;
+  status: 'DRAFT' | 'CONFIRMED';
+  version: number;
+  updatedAt: string;
+  updatedByName: string;
+}
+
+function defaultPreviewOutline(prompts: PreviewPromptRow[]): PreviewOutlineItem[] {
+  return prompts.filter((row) => Boolean(row.id)).map((row) => ({
+    chapterId: row.id,
+    chapterCode: row.chapterCode,
+    promptVersion: Number(row.version),
+    planningNote: ''
+  }));
+}
+
+function parsePreviewOutline(value: string): PreviewOutlineItem[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is PreviewOutlineItem => Boolean(
+      item && typeof item === 'object' && typeof (item as PreviewOutlineItem).chapterId === 'string'
+      && typeof (item as PreviewOutlineItem).chapterCode === 'string'
+      && Number.isInteger((item as PreviewOutlineItem).promptVersion)
+      && typeof (item as PreviewOutlineItem).planningNote === 'string'
+    ));
+  } catch { return []; }
+}
+
+async function previewOutlinePlan(env: CloudflareEnv, caseId: string, prompts: PreviewPromptRow[]): Promise<{ persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: PreviewOutlineItem[] }> {
+  if (!env.DB) return { persistenceAvailable: false, status: 'DRAFT', version: 0, updatedAt: null, updatedBy: null, items: defaultPreviewOutline(prompts) };
+  try {
+    const row = await env.DB.prepare(
+      'SELECT o.outline_json AS outlineJson, o.status, o.version, o.updated_at AS updatedAt, u.display_name AS updatedByName ' +
+      'FROM preview_report_outline_plans o JOIN preview_users u ON u.id=o.updated_by WHERE o.case_id=? AND o.organization_id=?'
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewOutlineRow>();
+    if (!row) return { persistenceAvailable: true, status: 'DRAFT', version: 0, updatedAt: null, updatedBy: null, items: defaultPreviewOutline(prompts) };
+    const items = parsePreviewOutline(row.outlineJson);
+    return { persistenceAvailable: true, status: row.status, version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName, items: items.length ? items : defaultPreviewOutline(prompts) };
+  } catch {
+    // Old isolated test fixtures may intentionally stop before the additive
+    // outline migration. Production always applies migrations before deploy.
+    return { persistenceAvailable: false, status: 'DRAFT', version: 0, updatedAt: null, updatedBy: null, items: defaultPreviewOutline(prompts) };
+  }
+}
+
+async function previewReportSourceGroups(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Array<Record<string, unknown>>> {
+  if (!env.DB) return [];
+  const count = async (sql: string): Promise<number> => {
+    try { return Number((await env.DB?.prepare(sql).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ total: number }>())?.total ?? 0); }
+    catch { return 0; }
+  };
+  const [proposalCount, kickoffCount, surveyCount, allocationCount, evidenceCount, takeoffCount, costCount, litigationCount] = await Promise.all([
+    count("SELECT COUNT(*) AS total FROM preview_proposal_links WHERE case_id=? AND organization_id=? AND verification_status='VERIFIED'"),
+    count("SELECT COUNT(*) AS total FROM preview_workflow_kickoffs WHERE case_id=? AND organization_id=? AND status IN ('COMPLETED','DRAFTED','CONFIRMED')"),
+    count("SELECT COUNT(*) AS total FROM preview_site_surveys WHERE case_id=? AND organization_id=?"),
+    count("SELECT COUNT(*) AS total FROM preview_workforce_allocations WHERE case_id=? AND organization_id=?"),
+    count('SELECT COUNT(*) AS total FROM preview_case_evidence WHERE case_id=? AND organization_id=?'),
+    count("SELECT COUNT(*) AS total FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND category='TAKEOFF_SOURCE'"),
+    count("SELECT COUNT(*) AS total FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND category='COST_BREAKDOWN'"),
+    count("SELECT COUNT(*) AS total FROM preview_litigation_cases WHERE case_id=? AND organization_id=? AND verification_status='VERIFIED'")
+  ]);
+  const status = (items: number, partial = false): 'READY' | 'PARTIAL' | 'EMPTY' => items > 0 ? (partial ? 'PARTIAL' : 'READY') : 'EMPTY';
+  return [
+    { code: 'PROJECT', label: '프로젝트 기본정보', status: 'READY', itemCount: 1, detail: `${caseRow.caseNumber} · ${caseRow.claimType}`, route: '/cases/detail' },
+    { code: 'PROPOSAL', label: '제안서·수주', status: status(proposalCount), itemCount: proposalCount, detail: proposalCount ? '검증된 제안서 연동본' : '검증된 제안서 연동 필요', route: '/proposals/editor' },
+    { code: 'KICKOFF', label: '착수회의·회의록', status: status(kickoffCount), itemCount: kickoffCount, detail: kickoffCount ? '회의 기록과 요약 준비' : '착수회의 기록 필요', route: '/workflow/kickoff' },
+    { code: 'SITE_SURVEY', label: '현장조사', status: status(surveyCount, surveyCount > 0 && evidenceCount === 0), itemCount: surveyCount, detail: surveyCount ? `조사 ${surveyCount}건 · 첨부 ${evidenceCount}건` : '현장조사 계획·결과 필요', route: '/workflow/site-survey' },
+    { code: 'QUANTITY', label: '물량산출·내역', status: status(allocationCount + takeoffCount + costCount, allocationCount === 0 || takeoffCount === 0 || costCount === 0), itemCount: allocationCount + takeoffCount + costCount, detail: `팀 일정 ${allocationCount} · 산출자료 ${takeoffCount} · 내역자료 ${costCount}`, route: '/workflow/quantity' },
+    { code: 'EVIDENCE', label: '클레임센터 자료실', status: status(evidenceCount), itemCount: evidenceCount, detail: evidenceCount ? `SHA-256 확인 파일 ${evidenceCount}건` : '프로젝트 근거 파일 필요', route: `/cases/files?caseId=${encodeURIComponent(caseRow.id)}` },
+    { code: 'LITIGATION', label: '법원·소송 자료', status: status(litigationCount), itemCount: litigationCount, detail: litigationCount ? `공식 출처 확인 ${litigationCount}건` : '해당 시 공식 자료를 연결', route: '/after-delivery' }
+  ];
+}
+
 async function previewAiSettings(env: CloudflareEnv): Promise<PreviewAiSettingsRow | null> {
   if (!env.DB) return null;
   return env.DB.prepare(
@@ -1479,6 +1561,7 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
   let verifiedLitigationEvents: Record<string, unknown>[] = [];
   let verifiedProposals: Record<string, unknown>[] = [];
   let proposalAwardDecisions: Record<string, unknown>[] = [];
+  let evidenceCatalog: Record<string, unknown>[] = [];
   try {
     const [records, events] = await Promise.all([
       env.DB.prepare(
@@ -1508,6 +1591,15 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
   } catch {
     // Older fixtures remain readable until the additive CF14 migration is applied.
   }
+  try {
+    const evidence = await env.DB.prepare(
+      'SELECT id, category, original_name AS originalName, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_provider AS storageProvider, uploaded_by_name AS uploadedBy, uploaded_at AS uploadedAt ' +
+      'FROM preview_case_evidence WHERE case_id=? AND organization_id=? ORDER BY uploaded_at DESC LIMIT 100'
+    ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>();
+    evidenceCatalog = evidence.results;
+  } catch {
+    // The additive project evidence library may be absent in older fixtures.
+  }
   const [kickoff, surveys, allocations, parties, schedules] = await Promise.all([
     env.DB.prepare('SELECT meeting_at AS meetingAt, location, agenda, participant_units_json AS participantUnitsJson, raw_notes AS rawNotes, summary_text AS summaryText, timeline_json AS timelineJson, status, version FROM preview_workflow_kickoffs WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<Record<string, unknown>>(),
     env.DB.prepare('SELECT survey_date AS surveyDate, location, scope_text AS scopeText, lead_unit AS leadUnit, folder_path AS folderPath, status, version FROM preview_site_surveys WHERE case_id = ? AND organization_id = ? ORDER BY survey_date').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
@@ -1522,7 +1614,8 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
     schedules: schedules.results,
     proposalWorkflow: { verifiedProposalSnapshots: verifiedProposals, awardDecisions: proposalAwardDecisions },
     litigation: { verifiedCases: verifiedLitigation, verifiedEvents: verifiedLitigationEvents },
-    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Proposal facts require VERIFIED document URL plus SHA-256. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Missing or conflicting fields must be marked [확인 필요].'
+    evidenceCatalog,
+    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Proposal facts require VERIFIED document URL plus SHA-256. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Evidence catalog rows prove file identity, category, uploader, time, size and SHA-256 only; binary file contents must not be inferred unless separately extracted. Missing or conflicting fields must be marked [확인 필요].'
   };
 }
 
@@ -1539,6 +1632,10 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const settings = await previewAiSettings(env);
     const prompts = await previewPromptRows(env, caseRow.claimType);
     const unavailable = caseRow.claimType === 'TYPE-05' || prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
+    const [outlinePlan, sourceGroups] = await Promise.all([
+      previewOutlinePlan(env, caseRow.id, prompts),
+      previewReportSourceGroups(env, caseRow)
+    ]);
     return json({
       claimType: caseRow.claimType,
       available: !unavailable,
@@ -1546,8 +1643,54 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       aiConnected: Boolean(env.OPENAI_API_KEY),
       modelLabel: settings?.modelCode ?? 'gpt-5.6',
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
+      outlinePlan,
+      sourceGroups,
       phase: 'CF12_WRITER_REPORT_AUTHORING'
     });
+  }
+
+  if (url.pathname === '/api/report-authoring/outline' && request.method === 'PUT') {
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot plan report outlines', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId', 'items', 'status', 'expectedVersion']) || typeof body.caseId !== 'string' || !Array.isArray(body.items) || !['DRAFT', 'CONFIRMED'].includes(String(body.status)) || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Report outline payload is invalid', code: 'INVALID_OUTLINE_PAYLOAD' }, 400);
+    }
+    const caseRow = await accessiblePreviewCase(env, user, body.caseId);
+    if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const prompts = await previewPromptRows(env, caseRow.claimType);
+    if (caseRow.claimType === 'TYPE-05' || !prompts.length || prompts[0]?.setStatus !== 'ACTIVE') return json({ error: 'Approved report template is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
+    const allowed = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.id, row]));
+    const items: PreviewOutlineItem[] = [];
+    for (const item of body.items) {
+      if (!item || typeof item !== 'object' || !exactObjectKeys(item as Record<string, unknown>, ['chapterId', 'chapterCode', 'promptVersion', 'planningNote'])) return json({ error: 'Outline item is invalid', code: 'INVALID_OUTLINE_PAYLOAD' }, 400);
+      const row = item as Record<string, unknown>;
+      const prompt = typeof row.chapterId === 'string' ? allowed.get(row.chapterId) : undefined;
+      if (!prompt || row.chapterCode !== prompt.chapterCode || Number(row.promptVersion) !== Number(prompt.version) || typeof row.planningNote !== 'string' || row.planningNote.length > 2000) return json({ error: 'Outline does not match the approved template', code: 'OUTLINE_TEMPLATE_MISMATCH' }, 409);
+      items.push({ chapterId: prompt.id, chapterCode: prompt.chapterCode, promptVersion: Number(prompt.version), planningNote: row.planningNote.trim() });
+    }
+    if (items.length !== allowed.size || new Set(items.map((item) => item.chapterId)).size !== allowed.size) return json({ error: 'Every approved chapter must appear exactly once', code: 'OUTLINE_TEMPLATE_MISMATCH' }, 409);
+    let current: { status: string; version: number; updatedAt: string } | null;
+    try {
+      current = await env.DB.prepare('SELECT status, version, updated_at AS updatedAt FROM preview_report_outline_plans WHERE case_id=? AND organization_id=?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ status: string; version: number; updatedAt: string }>();
+    } catch {
+      return json({ error: 'Report outline migration is not available', code: 'OUTLINE_STORAGE_NOT_READY' }, 503);
+    }
+    if (Number(current?.version ?? 0) !== Number(body.expectedVersion)) return json({ error: 'Report outline changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current?.version ?? 0) }, 409);
+    if (current?.status === 'CONFIRMED' && body.status !== 'CONFIRMED') return json({ error: 'Confirmed outline cannot return to draft', code: 'OUTLINE_ALREADY_CONFIRMED' }, 409);
+    const now = new Date(Math.max(Date.now(), Date.parse(current?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const nextVersion = Number(body.expectedVersion) + 1;
+    const outlineJson = JSON.stringify(items);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const write = current
+      ? env.DB.prepare('UPDATE preview_report_outline_plans SET outline_json=?, status=?, version=version+1, updated_by=?, updated_at=? WHERE case_id=? AND organization_id=? AND version=?').bind(outlineJson, body.status, user.id, now, caseRow.id, PREVIEW_ORGANIZATION_ID, body.expectedVersion)
+      : env.DB.prepare('INSERT INTO preview_report_outline_plans (case_id, organization_id, claim_type, outline_json, status, version, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)').bind(caseRow.id, PREVIEW_ORGANIZATION_ID, caseRow.claimType, outlineJson, body.status, user.id, now, now);
+    const results = await env.DB.batch([
+      write,
+      env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_outline_plans WHERE case_id=? AND version=?)')
+        .bind(crypto.randomUUID(), caseRow.id, user.id, body.status === 'CONFIRMED' ? 'REPORT_OUTLINE_CONFIRMED' : 'REPORT_OUTLINE_SAVED', `보고서 목차 ${body.status === 'CONFIRMED' ? '기획 확정' : '계획 저장'} · v${nextVersion}`, `${items.length}개 챕터`, now, caseRow.id, nextVersion)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Report outline changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json({ outlinePlan: { persistenceAvailable: true, status: body.status, version: nextVersion, updatedAt: now, updatedBy: user.displayName, items }, phase: 'CF18_REPORT_OUTLINE_EVIDENCE' });
   }
 
   if (url.pathname === '/api/report-authoring/generate' && request.method === 'POST') {
@@ -1565,9 +1708,15 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       'FROM preview_report_chapter_prompts p JOIN preview_report_prompt_sets s ON s.id = p.prompt_set_id WHERE p.id = ? AND s.organization_id = ? AND s.claim_type = ?'
     ).bind(body.chapterId, PREVIEW_ORGANIZATION_ID, caseRow.claimType).first<PreviewPromptRow>();
     if (!prompt || prompt.setStatus !== 'ACTIVE') return json({ error: 'Approved chapter prompt is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
+    const outlinePlan = await previewOutlinePlan(env, caseRow.id, [prompt]);
+    if (outlinePlan.persistenceAvailable && (outlinePlan.status !== 'CONFIRMED' || !outlinePlan.items.some((item) => item.chapterId === prompt.id && item.promptVersion === Number(prompt.version)))) {
+      return json({ error: 'Confirm the current report outline before AI authoring', code: 'OUTLINE_CONFIRMATION_REQUIRED' }, 409);
+    }
     const settings = await previewAiSettings(env);
     if (!settings || !PREVIEW_OPENAI_MODELS.has(settings.modelCode)) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
     const context = await previewReportAuthoringContext(env, caseRow);
+    const chapterPlanningNote = outlinePlan.items.find((item) => item.chapterId === prompt.id)?.planningNote ?? '';
+    context.outlinePlanning = { chapterCode: prompt.chapterCode, planningNote: chapterPlanningNote, outlineVersion: outlinePlan.version, outlineStatus: outlinePlan.status };
     const contextJson = JSON.stringify(context).slice(0, 80_000);
     const inputSha256 = await sha256Hex(contextJson);
     const controller = new AbortController();
@@ -2354,7 +2503,7 @@ const worker = {
       return handlePreviewReportDraft(request, env, url);
     }
 
-    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate') {
+    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate' || url.pathname === '/api/report-authoring/outline') {
       return handlePreviewReportAuthoring(request, env, url);
     }
 
