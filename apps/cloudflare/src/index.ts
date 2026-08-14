@@ -1691,6 +1691,33 @@ function extractAnthropicText(payload: unknown): string | null {
   return pieces.join('\n').trim() || null;
 }
 
+function safeGeminiProviderError(payload: unknown, httpStatus: number): { code: string; error: string; providerReason: string } {
+  const errorRecord = payload && typeof payload === 'object' && (payload as Record<string, unknown>).error && typeof (payload as Record<string, unknown>).error === 'object'
+    ? (payload as { error: Record<string, unknown> }).error
+    : null;
+  const providerReason = typeof errorRecord?.status === 'string' && /^[A-Z_]{2,64}$/u.test(errorRecord.status)
+    ? errorRecord.status
+    : `HTTP_${httpStatus}`;
+  const providerMessage = typeof errorRecord?.message === 'string' ? errorRecord.message.toLowerCase() : '';
+  if (providerMessage.includes('api key not valid') || (providerMessage.includes('api key') && providerMessage.includes('invalid'))) {
+    return {
+      code: 'GEMINI_INVALID_API_KEY',
+      error: 'Google AI Studio에서 발급된 유효한 Gemini API 키가 아닙니다. 관리자에게 키 교체를 요청해 주세요.',
+      providerReason
+    };
+  }
+  if (httpStatus === 429 || providerReason === 'RESOURCE_EXHAUSTED') {
+    return { code: 'GEMINI_QUOTA_EXHAUSTED', error: 'Gemini 무료 사용 한도 또는 프로젝트 할당량을 초과했습니다. 잠시 후 다시 시도해 주세요.', providerReason };
+  }
+  if (httpStatus === 403 || providerReason === 'PERMISSION_DENIED') {
+    return { code: 'GEMINI_PERMISSION_DENIED', error: 'Gemini API 또는 선택 모델 사용 권한이 없습니다. Google AI Studio 프로젝트 설정을 확인해 주세요.', providerReason };
+  }
+  if (httpStatus === 400 || providerReason === 'INVALID_ARGUMENT') {
+    return { code: 'GEMINI_INVALID_REQUEST', error: 'Gemini가 요청 또는 API 키를 승인하지 않았습니다. Google AI Studio의 키와 모델 권한을 확인해 주세요.', providerReason };
+  }
+  return { code: 'GEMINI_REQUEST_FAILED', error: 'Gemini가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', providerReason };
+}
+
 async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRow, system: string, input: string, actorId: string): Promise<{ content?: string; response?: Response }> {
   const provider = route.providerKind as PreviewAiProvider;
   const apiKey = provider === 'OPENAI' ? env.OPENAI_API_KEY : provider === 'ANTHROPIC' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY;
@@ -1728,7 +1755,13 @@ async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRo
     return { response: json({ error: 'AI 공급자 응답 시간이 초과되었거나 연결에 실패했습니다.', code: `${provider}_UNAVAILABLE` }, 504) };
   }
   clearTimeout(timeout);
-  if (!response.ok) return { response: json({ error: 'AI 공급자가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', code: `${provider}_REQUEST_FAILED`, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
+  if (!response.ok) {
+    if (provider === 'GEMINI') {
+      const safeFailure = safeGeminiProviderError(await response.json().catch(() => null), response.status);
+      return { response: json({ ...safeFailure, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
+    }
+    return { response: json({ error: 'AI 공급자가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', code: `${provider}_REQUEST_FAILED`, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502) };
+  }
   const payload = await response.json().catch(() => null);
   const content = provider === 'OPENAI' ? extractOpenAiText(payload) : provider === 'GEMINI' ? extractGeminiText(payload) : extractAnthropicText(payload);
   if (!content || content.length > 200_000) return { response: json({ error: 'AI 공급자 응답 형식이 올바르지 않습니다.', code: `${provider}_MALFORMED_RESPONSE` }, 502) };

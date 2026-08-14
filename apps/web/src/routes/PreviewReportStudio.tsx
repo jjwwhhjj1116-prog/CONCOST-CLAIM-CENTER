@@ -208,7 +208,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const existing = new RegExp(`<!-- AI-CHAPTER:${escapedCode}:START -->[\\s\\S]*?<!-- AI-CHAPTER:${escapedCode}:END -->`, 'u');
       const nextContent = existing.test(content) ? content.replace(existing, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
       contentRef.current = nextContent; setContent(nextContent); setDirty(true);
-    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    } catch (reason) {
+      if (selectedCaseRef.current !== requestCaseId) return;
+      const providerStatus = reason instanceof ApiError && typeof reason.payload.providerStatus === 'number' ? ` · 공급자 HTTP ${reason.payload.providerStatus}` : '';
+      setError(`${reason instanceof Error ? reason.message : String(reason)}${providerStatus}`);
+    }
     finally { if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
   };
 

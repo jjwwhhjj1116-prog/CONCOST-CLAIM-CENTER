@@ -77,6 +77,22 @@ test('CF19 routes chapter writing through Gemini and never exposes the API key',
   sql.close();
 });
 
+test('CF19 maps Gemini key failures to a safe diagnostic without exposing provider details', async () => {
+  const { sql, env } = await setup();
+  env.GEMINI_TEST_FETCH = async () => new Response(JSON.stringify({
+    error: { code: 400, status: 'INVALID_ARGUMENT', message: `API key not valid. ${GEMINI_KEY}` }
+  }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  const configResponse = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+  const config = await configResponse.json() as { chapters: Array<{ id: string }> };
+  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
+  assert.equal(generated.status, 502);
+  const text = await generated.text();
+  assert.doesNotMatch(text, new RegExp(GEMINI_KEY, 'u'));
+  const body = JSON.parse(text) as { code: string; providerReason: string; providerStatus: number };
+  assert.deepEqual([body.code, body.providerReason, body.providerStatus], ['GEMINI_INVALID_API_KEY','INVALID_ARGUMENT',400]);
+  sql.close();
+});
+
 test('CF19 Admin can switch each role to an allowed provider/model with optimistic history', async () => {
   const { sql, env } = await setup();
   const update = await worker.fetch(request('/api/admin/report-prompts/settings', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ taskKind: 'CHAPTER_WRITING', providerKind: 'ANTHROPIC', modelCode: 'claude-sonnet-5', reasoningEffort: 'medium', expectedVersion: 1 }) }), env);
