@@ -19,6 +19,8 @@ test('CF15 sidebar follows the five requested business categories without duplic
   assert.match(router, /CASE-02'.*'프로젝트 의뢰'/u);
   assert.match(router, /PROP-02'.*'제안서 작성'/u);
   assert.match(router, /WF-02'.*'프로젝트 접수'/u);
+  assert.match(shell, /<button\s+type="button"\s+key=\{route\.id\}/u);
+  assert.doesNotMatch(shell, /<a\s+key=\{route\.id\}/u);
 });
 
 test('CF15 report writing menu opens the real studio with template, outline, tutorial and admin prompt boundaries', () => {

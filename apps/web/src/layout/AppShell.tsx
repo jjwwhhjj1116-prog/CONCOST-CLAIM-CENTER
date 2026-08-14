@@ -65,8 +65,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const go = (event: React.MouseEvent<HTMLAnchorElement>, path: string) => {
-    event.preventDefault();
+  const go = (path: string) => {
     onNavigate(path);
     closeDrawer();
   };
@@ -84,16 +83,16 @@ export const AppShell: React.FC<AppShellProps> = ({
             <div><span>{group.eyebrow}</span><h2>{group.label}</h2></div>
           </header>
           {routes.map((route) => route && (
-            <a
+            <button
+              type="button"
               key={route.id}
-              href={route.path}
-              onClick={(event) => go(event, route.path)}
+              onClick={() => go(route.path)}
               aria-current={currentPath === route.path ? 'page' : undefined}
               className="navigation-link"
             >
               <span className="navigation-dot" aria-hidden="true" />
               <span className="text-ellipsis">{route.name}</span>
-            </a>
+            </button>
           ))}
         </section>;
       })}

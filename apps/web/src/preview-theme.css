@@ -64,7 +64,7 @@ body {
 .navigation-group header h2 { margin: 0; color: #cbd5e1; font-size: 0.72rem; letter-spacing: 0; text-transform: none; }
 .navigation-group-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid rgba(103, 232, 249, 0.16); border-radius: 9px; background: linear-gradient(145deg, rgba(124, 58, 237, 0.2), rgba(6, 182, 212, 0.1)); color: #8be9ff; box-shadow: inset 0 1px rgba(255, 255, 255, 0.06); }
 .navigation-group-icon svg { width: 17px; height: 17px; }
-.navigation-link { justify-content: flex-start; gap: 10px; min-height: 42px; padding: 10px 12px; }
+.navigation-link { width: 100%; justify-content: flex-start; gap: 10px; min-height: 42px; padding: 10px 12px; border: 0; background: transparent; color: hsl(215,20%,75%); font: inherit; text-align: left; cursor: pointer; }
 .navigation-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #475569; transition: background 160ms ease, box-shadow 160ms ease; }
 .navigation-link[aria-current='page'] .navigation-dot { background: #cffafe; box-shadow: 0 0 14px rgba(207, 250, 254, 0.9); }
 
