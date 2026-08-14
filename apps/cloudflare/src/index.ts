@@ -2174,6 +2174,116 @@ async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: 
   }
 }
 
+const CASE_EVIDENCE_CATEGORIES = new Set(['TAKEOFF_SOURCE', 'COST_BREAKDOWN']);
+const CASE_EVIDENCE_UPLOAD_ROLES = new Set(['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer']);
+const CASE_EVIDENCE_CHUNK_BYTES = 450_000;
+
+interface CaseEvidenceRow {
+  id: string;
+  category: string;
+  originalName: string;
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  chunkCount: number;
+  storageProvider: string;
+  uploadedBy: string;
+  uploadedAt: string;
+  requestFingerprint?: string;
+}
+
+function caseEvidenceProjection(row: CaseEvidenceRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    category: row.category,
+    originalName: row.originalName,
+    mimeType: row.mimeType,
+    byteSize: Number(row.byteSize),
+    sha256: row.sha256,
+    storageProvider: row.storageProvider,
+    uploadedBy: row.uploadedBy,
+    uploadedAt: row.uploadedAt,
+    downloadUrl: `/api/cases/evidence/${row.id}/download`
+  };
+}
+
+async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  const db = env.DB;
+  if (!db) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  const downloadMatch = url.pathname.match(/^\/api\/cases\/evidence\/([0-9a-f-]{36})\/download$/iu);
+  if (downloadMatch && request.method === 'GET') {
+    const evidence = await db.prepare(
+      'SELECT e.id,e.case_id AS caseId,e.original_name AS originalName,e.mime_type AS mimeType,e.byte_size AS byteSize,e.sha256,e.chunk_count AS chunkCount ' +
+      'FROM preview_case_evidence e WHERE e.id=? AND e.organization_id=?'
+    ).bind(downloadMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; originalName: string; mimeType: string; byteSize: number; sha256: string; chunkCount: number }>();
+    if (!evidence || !await accessiblePreviewCase(env, user, evidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+    const chunks = await db.prepare('SELECT chunk_index AS chunkIndex,payload FROM preview_case_evidence_chunks WHERE evidence_id=? ORDER BY chunk_index ASC')
+      .bind(evidence.id).all<{ chunkIndex: number; payload: ArrayBuffer | Uint8Array | number[] }>();
+    if (chunks.results.length !== Number(evidence.chunkCount)) return json({ error: 'Evidence chunks are incomplete', code: 'EVIDENCE_INTEGRITY_FAILED' }, 503);
+    const bytes = new Uint8Array(Number(evidence.byteSize));
+    let offset = 0;
+    for (const chunk of chunks.results) {
+      const value = chunk.payload instanceof Uint8Array ? chunk.payload : chunk.payload instanceof ArrayBuffer ? new Uint8Array(chunk.payload) : new Uint8Array(chunk.payload);
+      if (offset + value.byteLength > bytes.byteLength) return json({ error: 'Evidence size is invalid', code: 'EVIDENCE_INTEGRITY_FAILED' }, 503);
+      bytes.set(value, offset); offset += value.byteLength;
+    }
+    if (offset !== bytes.byteLength || !constantTimeHexEqual(await sha256Hex(bytes), evidence.sha256)) return json({ error: 'Evidence integrity verification failed', code: 'EVIDENCE_INTEGRITY_FAILED' }, 503);
+    return new Response(bytes.buffer as ArrayBuffer, { headers: { 'Cache-Control': 'private, no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(evidence.originalName)}`, 'Content-Type': evidence.mimeType, 'X-Content-Type-Options': 'nosniff' } });
+  }
+
+  const collectionMatch = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/evidence$/iu);
+  if (!collectionMatch) return json({ error: 'Case evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
+  const caseId = collectionMatch[1];
+  if (!await accessiblePreviewCase(env, user, caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+
+  if (request.method === 'GET') {
+    const category = url.searchParams.get('category') ?? '';
+    if (category && !CASE_EVIDENCE_CATEGORIES.has(category)) return json({ error: 'Evidence category is invalid', code: 'INVALID_EVIDENCE_CATEGORY' }, 400);
+    const rows = await db.prepare(
+      'SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt ' +
+      'FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND (?=\'\' OR category=?) ORDER BY uploaded_at DESC LIMIT 100'
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID, category, category).all<CaseEvidenceRow>();
+    return json({ files: rows.results.map(caseEvidenceProjection), temporaryStorage: true, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF15_CASE_EVIDENCE_LIBRARY' });
+  }
+  if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);
+  const idempotencyKey = request.headers.get('Idempotency-Key');
+  if (!idempotencyKey || !GOOGLE_IDEMPOTENCY_KEY.test(idempotencyKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+  const form = await request.formData().catch(() => null);
+  const file = form?.get('file');
+  const category = form?.get('category');
+  if (!(file instanceof File) || typeof category !== 'string' || !CASE_EVIDENCE_CATEGORIES.has(category)) return json({ error: 'file and a valid category are required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
+
+  try {
+    const validated = await validateEvidenceFile(file);
+    const fingerprint = await sha256Hex(`${caseId}:${category}:${file.name}:${validated.mimeType}:${file.size}:${validated.sha256}`);
+    const existing = await db.prepare(
+      'SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,request_fingerprint AS requestFingerprint ' +
+      'FROM preview_case_evidence WHERE organization_id=? AND case_id=? AND idempotency_key=?'
+    ).bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<CaseEvidenceRow>();
+    if (existing) return existing.requestFingerprint === fingerprint ? json({ file: caseEvidenceProjection(existing), replay: true, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    const chunks: Uint8Array[] = [];
+    for (let offset = 0; offset < validated.bytes.length; offset += CASE_EVIDENCE_CHUNK_BYTES) chunks.push(validated.bytes.slice(offset, Math.min(validated.bytes.length, offset + CASE_EVIDENCE_CHUNK_BYTES)));
+    if (!db.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const evidenceId = crypto.randomUUID();
+    const uploadedAt = new Date().toISOString();
+    const statements = [
+      db.prepare('INSERT INTO preview_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,chunk_count,storage_provider,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, category, file.name, validated.mimeType, file.size, validated.sha256, chunks.length, 'D1_TEMPORARY', user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint),
+      ...chunks.map((chunk, index) => db.prepare('INSERT INTO preview_case_evidence_chunks (evidence_id,chunk_index,byte_size,payload) VALUES (?,?,?,?)').bind(evidenceId, index, chunk.byteLength, chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength))),
+      db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)')
+        .bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED', `${category === 'TAKEOFF_SOURCE' ? '산출자료' : '내역자료'} 업로드`, file.name, uploadedAt)
+    ];
+    await db.batch(statements);
+    return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: chunks.length, storageProvider: 'D1_TEMPORARY', uploadedBy: user.displayName, uploadedAt }), replay: false, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }, 201);
+  } catch (reason) {
+    return reason instanceof GoogleDriveError ? json({ error: reason.message, code: reason.code }, reason.status) : json({ error: 'Evidence upload failed safely', code: 'EVIDENCE_UPLOAD_FAILED' }, 500);
+  }
+}
+
 // Router dispatch
 const worker = {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
@@ -2230,6 +2340,10 @@ const worker = {
 
     if (url.pathname === '/api/proposal-workflow' || url.pathname.startsWith('/api/proposal-workflow/')) {
       return handlePreviewProposalWorkflow(request, env, url);
+    }
+
+    if (/^\/api\/cases\/(?:[0-9a-f-]{36}\/evidence|evidence\/[0-9a-f-]{36}\/download)$/iu.test(url.pathname)) {
+      return handleCaseEvidence(request, env, url);
     }
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {

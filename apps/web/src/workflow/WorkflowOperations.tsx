@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@claim-studio/ui';
 import { ApiError, apiRequest } from '../api';
+import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
 import { WORKFLOW_STAGES, WORKFORCE_UNITS } from './workflow-model';
 
 type WorkflowRouteId = 'WF-03' | 'WF-04' | 'WF-05';
@@ -263,7 +264,7 @@ export const WorkflowOperations: React.FC<{
 
       {!loading && data && stageId === 3 && <KickoffEditor form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy)} onSave={saveKickoff} onGenerate={generateSummary} busy={busy} />}
       {!loading && data && stageId === 4 && <SurveyEditor form={survey} setForm={setSurvey} surveys={data.siteSurveys} drive={data.googleDrive} disabled={!canEdit || Boolean(busy)} onSave={saveSurvey} busy={busy} />}
-      {!loading && data && stageId === 5 && <AllocationEditor form={allocation} setForm={setAllocation} allocations={data.allocations} disabled={!canEdit || Boolean(busy)} onSave={saveAllocation} busy={busy} />}
+      {!loading && data && stageId === 5 && <AllocationEditor caseId={selectedCaseId} form={allocation} setForm={setAllocation} allocations={data.allocations} disabled={!canEdit || Boolean(busy)} onSave={saveAllocation} busy={busy} onNavigate={onNavigate} />}
     </section>
   );
 };
@@ -328,13 +329,15 @@ const SurveyEditor: React.FC<{
 );
 
 const AllocationEditor: React.FC<{
+  caseId: string;
   form: { unitKey: string; scopeText: string; basisText: string; startDate: string; endDate: string };
   setForm: React.Dispatch<React.SetStateAction<{ unitKey: string; scopeText: string; basisText: string; startDate: string; endDate: string }>>;
   allocations: AllocationRecord[];
   disabled: boolean;
   busy: string;
   onSave: () => void;
-}> = ({ form, setForm, allocations, disabled, busy, onSave }) => (
+  onNavigate: (path: string) => void;
+}> = ({ caseId, form, setForm, allocations, disabled, busy, onSave, onNavigate }) => (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>TAKEOFF & RESOURCE PLAN</span><h3>산출 범위·팀 투입 일정</h3></div><em>한국 개인 · 베트남 팀</em></header>
@@ -350,6 +353,14 @@ const AllocationEditor: React.FC<{
     <article className="workflow-editor-card is-output">
       <header><div><span>ALLOCATION LEDGER</span><h3>프로젝트 투입 현황</h3></div><em>{allocations.length}건</em></header>
       {allocations.length ? <div className="allocation-list">{allocations.map((item) => <section key={item.id}><div className={`allocation-office is-${item.office.toLowerCase()}`}>{item.office}</div><div><strong>{item.unitLabel}</strong><span>{item.schedulingMode === 'TEAM' ? '팀 단위 일정' : '인원 단위 일정'} · {item.startDate} → {item.endDate}</span><p>{item.scopeText}</p><small>{item.basisText} · {item.createdByName}</small></div></section>)}</div> : <div className="workflow-empty"><strong>아직 투입 일정이 없습니다.</strong><p>범위와 기준을 확정한 뒤 팀 일정을 추가하세요.</p></div>}
+    </article>
+    <article className="workflow-editor-card workflow-evidence-card">
+      <header>
+        <div><span>PROJECT EVIDENCE INTAKE</span><h3>산출자료·내역자료 업로드</h3></div>
+        <em>프로젝트 자료실 자동 연동</em>
+      </header>
+      <p className="workflow-evidence-intro">도면, 산출서, 내역서 등 원본을 구분해 올리면 현재 프로젝트의 자료실에 즉시 저장됩니다. 업로드 사용자와 일시는 자동 기록됩니다.</p>
+      <CaseEvidencePanel caseId={caseId} compact onNavigate={onNavigate} />
     </article>
   </div>
 );
