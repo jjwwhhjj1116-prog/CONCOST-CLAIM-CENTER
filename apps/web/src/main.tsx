@@ -6,8 +6,10 @@ import './fees/FeeSuccessCompensation.css';
 import './integrations/GoogleWorkspaceCaseTools.css';
 import './layout/StatusFeedbackState.css';
 import './workflow/ProjectWorkflowSchedule.css';
+import './workflow/ProposalAwardWorkflow.css';
 import './workflow/WorkflowOperations.css';
 import './routes/PreviewAiAdmin.css';
+import './routes/PreviewReportStudio.css';
 import './routes/PreviewLitigationCenter.css';
 import './preview-theme.css';
 

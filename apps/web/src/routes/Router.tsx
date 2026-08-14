@@ -17,6 +17,7 @@ import { PreviewReportStudio } from './PreviewReportStudio';
 import { PreviewApprovalInbox } from './PreviewApprovalInbox';
 import { PreviewAdminUsers } from './PreviewAdminUsers';
 import { ProjectWorkflowSchedule } from '../workflow/ProjectWorkflowSchedule';
+import { ProposalAwardWorkflow } from '../workflow/ProposalAwardWorkflow';
 import { WorkflowOperations } from '../workflow/WorkflowOperations';
 import { PreviewAiAdmin } from './PreviewAiAdmin';
 import { PreviewLitigationCenter } from './PreviewLitigationCenter';
@@ -46,33 +47,33 @@ const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'admin'
 
 export const ROUTES: RouteConfig[] = [
   { id: 'AUTH-01', path: '/login', name: '로그인' },
-  { id: 'DASH-01', path: '/dashboard', name: '업무 홈' },
-  { id: 'CASE-01', path: '/cases', name: '프로젝트 접수' },
-  { id: 'CASE-02', path: '/cases/new', name: '새 프로젝트 접수', allowedRoles: CASE_CREATE_ROLES },
+  { id: 'DASH-01', path: '/dashboard', name: 'CLAIM CENTER HOME' },
+  { id: 'CASE-01', path: '/cases', name: '전체 프로젝트' },
+  { id: 'CASE-02', path: '/cases/new', name: '1-1. 프로젝트 의뢰', allowedRoles: CASE_CREATE_ROLES },
   { id: 'CASE-03', path: '/cases/detail', name: '사건 상세-개요' },
   { id: 'CASE-04', path: '/cases/schedule', name: '사건 상세-일정' },
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
-  { id: 'CASE-06', path: '/cases/files', name: '자료실' },
+  { id: 'CASE-06', path: '/cases/files', name: '3. 클레임센터 자료실' },
   { id: 'MEET-01', path: '/meetings', name: '착수회의·회의록' },
   { id: 'PROP-01', path: '/proposals/templates', name: '제안서 템플릿 선택' },
-  { id: 'PROP-02', path: '/proposals/editor', name: '제안서 작성' },
-  { id: 'PROJ-01', path: '/projects/schedule', name: '프로젝트 일정표' },
+  { id: 'PROP-02', path: '/proposals/editor', name: '1-2. 제안서 작성' },
+  { id: 'PROJ-01', path: '/projects/schedule', name: '2-1. 프로젝트 일정표' },
   { id: 'PROJ-02', path: '/projects/workflow', name: '프로젝트 세부 워크플로우' },
   { id: 'WF-01', path: '/workflow/proposal-link', name: '1. 제안서 연동' },
-  { id: 'WF-02', path: '/workflow/award', name: '2. 수주 확정' },
-  { id: 'WF-03', path: '/workflow/kickoff', name: '3. 착수회의' },
-  { id: 'WF-04', path: '/workflow/site-survey', name: '4. 현장조사' },
-  { id: 'WF-05', path: '/workflow/quantity', name: '5. 수량산출·내역작성' },
+  { id: 'WF-02', path: '/workflow/award', name: '1-3. 프로젝트 접수' },
+  { id: 'WF-03', path: '/workflow/kickoff', name: '2-2. 착수회의' },
+  { id: 'WF-04', path: '/workflow/site-survey', name: '2-3. 현장조사' },
+  { id: 'WF-05', path: '/workflow/quantity', name: '2-4. 물량산출 및 내역' },
   { id: 'WF-06', path: '/workflow/report', name: '6. 보고서 작성' },
-  { id: 'REPO-01', path: '/reports', name: '보고서 목록' },
-  { id: 'REPO-02', path: '/reports/studio', name: '보고서 작성' },
-  { id: 'APPR-01', path: '/approval', name: '결재·승인' },
-  { id: 'POST-01', path: '/after-delivery', name: '납품 후 관리 · 법원 일정' },
-  { id: 'OUTCOME-01', path: '/outcomes', name: '판결·성과 관리', allowedRoles: FINANCE_ROLES },
+  { id: 'REPO-01', path: '/reports', name: '5-2. 납품 보고서' },
+  { id: 'REPO-02', path: '/reports/studio', name: '2-5. 보고서 작성' },
+  { id: 'APPR-01', path: '/approval', name: '5-1. 검토·승인' },
+  { id: 'POST-01', path: '/after-delivery', name: '4. 법원 자료·소송 일정' },
+  { id: 'OUTCOME-01', path: '/outcomes', name: '5-3. 판결·성과 관리', allowedRoles: FINANCE_ROLES },
   { id: 'FEE-01', path: '/success-fee', name: '성공보수', allowedRoles: FINANCE_ROLES },
   { id: 'INTEG-01', path: '/integrations/google', name: 'Google Drive 연결', allowedRoles: ADMIN_ONLY },
-  { id: 'TPL-01', path: '/templates', name: '템플릿 관리' },
-  { id: 'AI-01', path: '/ai-config', name: 'AI 공급자 설정', allowedRoles: ADMIN_ONLY },
+  { id: 'TPL-01', path: '/templates', name: '유형별 보고서 템플릿', allowedRoles: ADMIN_ONLY },
+  { id: 'AI-01', path: '/ai-config', name: '챕터 프롬프트·AI 설정', allowedRoles: ADMIN_ONLY },
   { id: 'USER-01', path: '/users', name: '사용자와 권한', allowedRoles: ADMIN_ONLY },
   { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: ADMIN_ONLY },
   { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }
@@ -174,6 +175,9 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   if (previewMode && ['WF-03', 'WF-04', 'WF-05'].includes(currentRoute.id)) {
     return <WorkflowOperations routeId={currentRoute.id as 'WF-03' | 'WF-04' | 'WF-05'} roles={roles} onNavigate={onNavigate} />;
   }
+  if (previewMode && ['WF-01', 'WF-02'].includes(currentRoute.id)) {
+    return <ProposalAwardWorkflow routeId={currentRoute.id as 'WF-01' | 'WF-02'} roles={roles} onNavigate={onNavigate} />;
+  }
   if (['PROJ-01', 'PROJ-02', 'WF-01', 'WF-02', 'WF-03', 'WF-04', 'WF-05', 'WF-06'].includes(currentRoute.id)) {
     return <ProjectWorkflowSchedule routeId={currentRoute.id} onNavigate={onNavigate} />;
   }
@@ -190,6 +194,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   }
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'WF-06') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;

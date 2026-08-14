@@ -8,11 +8,13 @@ const NAVIGATION_GROUPS: readonly {
   routeIds: readonly string[];
   allowedRoles?: readonly UserRole[];
 }[] = [
-  { label: '업무 홈', eyebrow: 'WORKSPACE', routeIds: ['DASH-01'] },
-  { label: '영업·프로젝트 접수', eyebrow: 'PROPOSAL & INTAKE', routeIds: ['PROP-02', 'CASE-01', 'CASE-02'] },
-  { label: '프로젝트 워크플로우', eyebrow: 'DELIVERY WORKFLOW', routeIds: ['PROJ-01', 'WF-01', 'WF-02', 'WF-03', 'WF-04', 'WF-05', 'WF-06'] },
-  { label: '검토·납품·사후관리', eyebrow: 'DELIVERY & AFTERCARE', routeIds: ['APPR-01', 'POST-01', 'OUTCOME-01'] },
-  { label: '관리자 설정', eyebrow: 'ADMIN ONLY', routeIds: ['USER-01', 'INTEG-01'], allowedRoles: ['admin'] }
+  { label: 'CLAIM CENTER HOME', eyebrow: 'HOME', routeIds: ['DASH-01'] },
+  { label: '프로젝트 제안 및 수주', eyebrow: '01 · PROPOSAL & AWARD', routeIds: ['CASE-02', 'PROP-02', 'WF-02'] },
+  { label: '프로젝트 워크', eyebrow: '02 · PROJECT WORK', routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'] },
+  { label: '클레임센터 자료실', eyebrow: '03 · EVIDENCE LIBRARY', routeIds: ['CASE-06'] },
+  { label: '법원 자료', eyebrow: '04 · COURT & LITIGATION', routeIds: ['POST-01'] },
+  { label: '검토·납품·품질관리', eyebrow: '05 · QUALITY & DELIVERY', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
+  { label: '관리자 설정', eyebrow: 'ADMIN ONLY', routeIds: ['TPL-01', 'AI-01', 'INTEG-01', 'USER-01', 'AUD-01'], allowedRoles: ['admin'] }
 ];
 
 export interface AppShellProps {

@@ -45,12 +45,15 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [authoring, setAuthoring] = useState<AuthoringConfig | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [showGuide, setShowGuide] = useState(true);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
   const contentRef = useRef('');
   const editable = roles.some((role) => EDIT_ROLES.includes(role));
   const selectedCase = useMemo(() => cases.find((record) => record.id === selectedCaseId) ?? null, [cases, selectedCaseId]);
+  const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
+  const authoredChapterCodes = useMemo(() => new Set(Array.from(content.matchAll(/<!-- AI-CHAPTER:([^:]+):START -->/gu), (match) => match[1])), [content]);
 
   const loadDraft = useCallback(async (caseId: string) => {
     const sequence = ++loadSequence.current;
@@ -214,35 +217,65 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
-  if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 사건이 없습니다" message="먼저 사건을 등록하면 사건별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="새 사건 등록" onAction={() => onNavigate('/cases/new')} />;
+  if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
 
   return (
-    <div className="content-stack" aria-label="D1 보고서 자동 저장 스튜디오">
-      <Card title="REPORT STUDIO · D1 AUTOSAVE">
+    <div className="content-stack report-authoring-studio" aria-label="D1 보고서 자동 저장 스튜디오">
+      <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
+        <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
+        <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
+      </section>
+
+      {showGuide && <section className="report-authoring-guide" aria-label="처음 사용자 보고서 작성 가이드">
+        <header><div><span>START HERE · 초등학생도 따라가는 순서</span><h3>처음이라면 아래 5단계만 차례대로 진행하세요.</h3></div><button type="button" onClick={() => setShowGuide(false)} aria-label="사용 가이드 닫기">×</button></header>
+        <ol>
+          <li><b>1</b><span><strong>프로젝트 선택</strong><small>작성할 프로젝트를 고릅니다.</small></span></li>
+          <li><b>2</b><span><strong>유형·템플릿 확인</strong><small>등록된 클레임 유형에 맞는 승인 템플릿을 확인합니다.</small></span></li>
+          <li><b>3</b><span><strong>목차 기획</strong><small>필요한 챕터와 순서를 먼저 검토합니다.</small></span></li>
+          <li><b>4</b><span><strong>챕터별 자동 작성</strong><small>근거를 분석해 한 장씩 초안을 만듭니다.</small></span></li>
+          <li><b>5</b><span><strong>사람 검토·납품</strong><small>내용을 고친 뒤 승인과 출력으로 보냅니다.</small></span></li>
+        </ol>
+        <p><strong>도움말:</strong> AI 결과는 확정본이 아닙니다. 출처와 수치를 사람이 확인한 뒤 저장하고 검토 요청을 보내세요.</p>
+      </section>}
+
+      <Card title="PROJECT & TEMPLATE · 1단계">
         <div className="inline-form">
-          <Select label="작성할 사건" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
+          <Select label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row" aria-live="polite">
             <span className="preview-pill">{error ? '저장 확인 필요' : saving ? 'D1 저장 중' : dirty ? '변경사항 있음' : version ? `D1 저장 완료 · v${version}` : '새 초안'}</span>
             <Button onClick={() => void saveNow()} disabled={!editable || !dirty || saving || loadedCaseId !== selectedCaseId}>{saving ? '저장 중…' : '지금 저장'}</Button>
             {error && <Button variant="secondary" onClick={() => selectedCaseId && void loadDraft(selectedCaseId)}>최신본 다시 불러오기</Button>}
           </div>
         </div>
-        <p className="muted">본문과 저장 이력은 Cloudflare D1에 보존됩니다. Google Drive 파일 연결은 현재 보류 중입니다.</p>
+        <div className="report-template-contract">
+          <div><span>CLAIM TYPE</span><strong>{authoring?.claimType ?? selectedCase?.claimType ?? '불러오는 중'}</strong><small>프로젝트 의뢰에 등록된 6대 고정 유형</small></div>
+          <div><span>APPROVED TEMPLATE</span><strong>{authoring?.available ? '유형별 템플릿 적용' : '템플릿 확인 필요'}</strong><small>{authoring?.available ? `${authoring.chapters.length}개 챕터 구성` : authoring?.unavailableReason ?? '구성을 불러오는 중'}</small></div>
+          <div><span>AUTOSAVE</span><strong>D1 VERSION {version || 'NEW'}</strong><small>본문·목차 진행·수정 이력 자동 저장</small></div>
+          {roles.includes('admin') && <Button variant="secondary" onClick={() => onNavigate('/templates')}>유형별 템플릿 관리</Button>}
+        </div>
+        <p className="muted">보고서 유형은 프로젝트 의뢰에서 선택한 클레임 유형을 따르며, 다른 유형 템플릿을 임의로 대체하지 않습니다. Google Drive 파일 연결은 현재 보류 중입니다.</p>
       </Card>
 
-      {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="사건별 보고서 최신본을 불러오고 있습니다." /> : <>
-        <Card title="AI CHAPTER WORKFLOW · 관리자 승인 프롬프트">
+      {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="프로젝트별 보고서 최신본을 불러오고 있습니다." /> : <>
+        <Card title="TABLE OF CONTENTS · 2단계 목차 기획">
+          {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 목차 템플릿이 없습니다.'}</div> : <div className="report-outline-planner">
+            <header><div><span>{authoring.claimType} · APPROVED OUTLINE</span><h3>보고서를 쓰기 전에 챕터 구성부터 확인하세요.</h3><p>아래 목차는 관리자가 승인한 유형별 템플릿에서 불러왔습니다. 챕터를 선택하면 다음 단계의 자동 작성 대상으로 연결됩니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
+            <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => setSelectedChapterId(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {chapter.title}</strong><small>{chapter.agentCode} · prompt v{chapter.promptVersion}</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
+          </div>}
+        </Card>
+        <Card title="AI CHAPTER WORKFLOW · 3단계 챕터별 자동 작성">
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 챕터 프롬프트가 없습니다.'}</div> : <div className="form-stack">
             <div className="inline-form">
               <Select label="자동 작성할 챕터" value={selectedChapterId} onChange={(event) => setSelectedChapterId(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${chapter.title} · prompt v${chapter.promptVersion}` }))} />
               <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
             </div>
-            <p className="muted">사건 유형 {authoring.claimType} · 모델 {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
+            {selectedChapter && <p className="notice-box"><strong>현재 작성 역할 · {selectedChapter.agentCode}</strong><br />{selectedChapter.chapterCode} {selectedChapter.title} 전용 프롬프트로 프로젝트 근거를 분석합니다.</p>}
+            <p className="muted">프로젝트 유형 {authoring.claimType} · 모델 {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
             {!authoring.aiConnected && <div className="error-box">관리자가 Cloudflare 서버 Secret에 OPENAI_API_KEY를 연결하기 전에는 자동 작성 버튼이 비활성화됩니다.</div>}
             {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
           </div>}
         </Card>
-        <Card title={selectedCase ? `${selectedCase.caseNumber} · ${selectedCase.title}` : '보고서 작성'}>
+        <Card title={selectedCase ? `4단계 편집 · ${selectedCase.caseNumber} · ${selectedCase.title}` : '4단계 보고서 편집'}>
           <div className="form-stack">
             <Input label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
             <label htmlFor="preview-report-body">보고서 본문</label>
@@ -254,7 +287,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <Card title={`저장 이력 ${revisions.length}건`}>
           {revisions.length ? <ul className="dashboard-work-list">{revisions.map((revision) => <li key={revision.id}><span><strong>버전 {revision.version} · {revision.title}</strong><small>{new Date(revision.savedAt).toLocaleString('ko-KR')} · {revision.savedBy.name} · SHA {revision.contentSha256.slice(0, 12)}…</small></span></li>)}</ul> : <p className="empty-box">아직 저장된 버전이 없습니다. 첫 내용을 입력하면 자동 저장됩니다.</p>}
         </Card>
-        <Card title="검토·승인 제출">
+        <Card title="5단계 검토·승인 제출">
           <div className="form-stack">
             <div className="action-row"><span className="preview-pill">{currentReview ? currentReview.status === 'PENDING' ? `v${version} 검토 대기` : currentReview.status === 'APPROVED' ? `v${version} 승인 완료` : `v${version} 수정 요청` : pendingReview ? `v${pendingReview.reportVersion} 검토 중 · 현재 v${version}` : version ? `v${version} 제출 가능` : '저장 후 제출 가능'}</span><Button variant="secondary" onClick={() => onNavigate('/approval')}>검토·승인함 보기</Button></div>
             {currentReview?.decisionNote && <p className="notice-box"><strong>검토 의견</strong><br />{currentReview.decisionNote}</p>}

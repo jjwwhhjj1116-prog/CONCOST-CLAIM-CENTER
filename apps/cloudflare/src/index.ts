@@ -676,6 +676,226 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
   return json({ error: 'Workflow route or method was not found', code: 'WORKFLOW_ROUTE_NOT_FOUND' }, 404);
 }
 
+const PROPOSAL_AWARD_STATUSES = new Set(['PENDING', 'WON', 'LOST']);
+const PROPOSAL_VERIFICATION_STATUSES = new Set(['UNVERIFIED', 'VERIFIED', 'CONFLICT']);
+
+interface PreviewProposalRow {
+  id: string;
+  caseId: string;
+  caseNumber: string;
+  caseTitle: string;
+  caseStatus: string;
+  caseVersion: number;
+  proposalNumber: string;
+  proposalTitle: string;
+  revisionLabel: string;
+  clientName: string;
+  sentAt: string;
+  responseDueOn: string | null;
+  proposedAmountKrw: number | null;
+  documentUrl: string | null;
+  documentSha256: string | null;
+  verificationStatus: string;
+  awardStatus: string;
+  awardDecidedAt: string | null;
+  awardDecidedBy: string | null;
+  awardDecidedByName: string | null;
+  contractAmountKrw: number | null;
+  projectStartOn: string | null;
+  projectEndOn: string | null;
+  version: number;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function proposalText(value: unknown, maximum: number, optional = false): string | null {
+  if ((value === null || value === undefined || value === '') && optional) return null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (!normalized && optional) return null;
+  return normalized.length > 0 && normalized.length <= maximum ? normalized : null;
+}
+
+function proposalDate(value: unknown, dateOnly = false, optional = false): string | null {
+  if ((value === null || value === undefined || value === '') && optional) return null;
+  if (typeof value !== 'string') return null;
+  if (dateOnly) return validWorkflowDate(value) ? value : null;
+  return Number.isNaN(Date.parse(value)) ? null : new Date(value).toISOString();
+}
+
+function proposalMoney(value: unknown, optional = false): number | null {
+  if ((value === null || value === undefined || value === '') && optional) return null;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 && amount <= 100_000_000_000_000 ? amount : null;
+}
+
+function proposalDocumentUrl(value: unknown, optional = false): string | null {
+  if ((value === null || value === undefined || value === '') && optional) return null;
+  if (typeof value !== 'string' || value.length > 1200) return null;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function proposalProjection(row: PreviewProposalRow): Record<string, unknown> {
+  return {
+    ...row,
+    proposedAmountKrw: row.proposedAmountKrw === null ? null : Number(row.proposedAmountKrw),
+    contractAmountKrw: row.contractAmountKrw === null ? null : Number(row.contractAmountKrw),
+    version: Number(row.version),
+    caseVersion: Number(row.caseVersion),
+    isPerformanceProject: row.awardStatus === 'WON',
+    reportEvidenceEligible: row.verificationStatus === 'VERIFIED'
+  };
+}
+
+const previewProposalSelect =
+  'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,' +
+  'p.proposal_number AS proposalNumber,p.proposal_title AS proposalTitle,p.revision_label AS revisionLabel,p.client_name AS clientName,' +
+  'p.sent_at AS sentAt,p.response_due_on AS responseDueOn,p.proposed_amount_krw AS proposedAmountKrw,p.document_url AS documentUrl,' +
+  'p.document_sha256 AS documentSha256,p.verification_status AS verificationStatus,p.award_status AS awardStatus,' +
+  'p.award_decided_at AS awardDecidedAt,p.award_decided_by AS awardDecidedBy,decider.display_name AS awardDecidedByName,' +
+  'p.contract_amount_krw AS contractAmountKrw,p.project_start_on AS projectStartOn,p.project_end_on AS projectEndOn,p.version,' +
+  'creator.display_name AS createdByName,p.created_at AS createdAt,p.updated_at AS updatedAt ' +
+  'FROM preview_proposal_links p JOIN preview_cases c ON c.id=p.case_id AND c.organization_id=p.organization_id ' +
+  'JOIN preview_users creator ON creator.id=p.created_by LEFT JOIN preview_users decider ON decider.id=p.award_decided_by ';
+
+async function previewProposalDetail(env: CloudflareEnv, user: SessionUser, id: string): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const admin = user.roles.includes('admin') ? 1 : 0;
+  const record = await env.DB.prepare(
+    previewProposalSelect +
+    'WHERE p.id=? AND p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?))'
+  ).bind(id, PREVIEW_ORGANIZATION_ID, admin, user.id).first<PreviewProposalRow>();
+  if (!record) return json({ error: 'Proposal link was not found or is outside your assigned projects', code: 'PROPOSAL_NOT_FOUND' }, 404);
+  const decisions = await env.DB.prepare(
+    'SELECT d.id,d.decision,d.decision_note AS decisionNote,d.decided_at AS decidedAt,d.contract_amount_krw AS contractAmountKrw,' +
+    'd.project_start_on AS projectStartOn,d.project_end_on AS projectEndOn,d.expected_link_version AS expectedLinkVersion,' +
+    'd.created_at AS createdAt,u.display_name AS decidedByName FROM preview_award_decisions d JOIN preview_users u ON u.id=d.decided_by ' +
+    'WHERE d.proposal_link_id=? ORDER BY d.created_at DESC LIMIT 100'
+  ).bind(id).all<Record<string, unknown>>();
+  return json({ proposal: proposalProjection(record), decisions: decisions.results, phase: 'CF14_PROPOSAL_AWARD_WORKFLOW' });
+}
+
+async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const detailMatch = url.pathname.match(/^\/api\/proposal-workflow\/links\/([0-9a-f-]{36})(?:\/(decision))?$/iu);
+
+  if (url.pathname === '/api/proposal-workflow' && request.method === 'GET') {
+    const awardStatus = url.searchParams.get('awardStatus') ?? '';
+    if (awardStatus && !PROPOSAL_AWARD_STATUSES.has(awardStatus)) return json({ error: 'awardStatus is invalid', code: 'INVALID_AWARD_STATUS' }, 400);
+    const caseId = url.searchParams.get('caseId') ?? '';
+    if (caseId && !PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'caseId is invalid', code: 'INVALID_CASE_ID' }, 400);
+    const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
+    const requestedLimit = Number(url.searchParams.get('limit') ?? 100);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(200, Math.max(1, requestedLimit)) : 100;
+    const admin = user.roles.includes('admin') ? 1 : 0;
+    const like = `%${q}%`;
+    const rows = await env.DB.prepare(
+      previewProposalSelect +
+      'WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) ' +
+      'AND (?=\'\' OR p.award_status=?) AND (?=\'\' OR p.case_id=?) ' +
+      'AND (?=\'\' OR p.proposal_number LIKE ? OR p.proposal_title LIKE ? OR p.client_name LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ' +
+      'ORDER BY CASE p.award_status WHEN \'PENDING\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.response_due_on,p.sent_at DESC LIMIT ?'
+    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, awardStatus, awardStatus, caseId, caseId, q, like, like, like, like, like, limit).all<PreviewProposalRow>();
+    return json({ proposals: rows.results.map(proposalProjection), phase: 'CF14_PROPOSAL_AWARD_WORKFLOW' });
+  }
+
+  if (url.pathname === '/api/proposal-workflow/links' && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot link proposal snapshots', code: 'FORBIDDEN' }, 403);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId','proposalNumber','proposalTitle','revisionLabel','clientName','sentAt','responseDueOn','proposedAmountKrw','documentUrl','documentSha256','verificationStatus','expectedCaseVersion'])) return json({ error: 'Proposal link payload is invalid', code: 'INVALID_PROPOSAL_PAYLOAD' }, 400);
+    const caseId = typeof body.caseId === 'string' ? body.caseId : '';
+    const project = PREVIEW_DRAFT_KEY.test(caseId) ? await accessiblePreviewCase(env, user, caseId) : null;
+    const proposalNumber = proposalText(body.proposalNumber, 100);
+    const proposalTitle = proposalText(body.proposalTitle, 500);
+    const revisionLabel = proposalText(body.revisionLabel, 80);
+    const clientName = proposalText(body.clientName, 300);
+    const sentAt = proposalDate(body.sentAt);
+    const responseDueOn = proposalDate(body.responseDueOn, true, true);
+    const proposedAmountKrw = proposalMoney(body.proposedAmountKrw, true);
+    const documentUrl = proposalDocumentUrl(body.documentUrl, true);
+    const documentSha256 = typeof body.documentSha256 === 'string' && /^[0-9a-f]{64}$/i.test(body.documentSha256.trim()) ? body.documentSha256.trim().toLowerCase() : null;
+    const verificationStatus = typeof body.verificationStatus === 'string' && PROPOSAL_VERIFICATION_STATUSES.has(body.verificationStatus) ? body.verificationStatus : null;
+    const expectedCaseVersion = Number(body.expectedCaseVersion);
+    if (!project || !proposalNumber || !proposalTitle || !revisionLabel || !clientName || !sentAt || proposedAmountKrw === null || !verificationStatus || !Number.isInteger(expectedCaseVersion) || expectedCaseVersion < 1 || (verificationStatus === 'VERIFIED' && (!documentUrl || !documentSha256))) return json({ error: 'Proposal fields are invalid', code: 'INVALID_PROPOSAL_PAYLOAD' }, 400);
+    const requestKey = request.headers.get('Idempotency-Key') ?? '';
+    if (!PREVIEW_CASE_CREATE_KEY.test(requestKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+    const fingerprint = await sha256Hex(JSON.stringify({ caseId,proposalNumber,proposalTitle,revisionLabel,clientName,sentAt,responseDueOn,proposedAmountKrw,documentUrl,documentSha256,verificationStatus,expectedCaseVersion }));
+    const replay = await env.DB.prepare('SELECT id,request_fingerprint AS fingerprint FROM preview_proposal_links WHERE request_key=?').bind(requestKey).first<{id:string;fingerprint:string}>();
+    if (replay) return replay.fingerprint === fingerprint ? previewProposalDetail(env,user,replay.id) : json({ error: 'Idempotency-Key was used for another proposal link', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    if (project.version !== expectedCaseVersion) return json({ error: 'Project changed. Reload before linking the proposal.', code: 'VERSION_CONFLICT', currentVersion: project.version }, 409);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const nextCaseStatus = project.status === 'INQUIRY' ? 'PROPOSAL' : project.status;
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_proposal_links (id,organization_id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,response_due_on,proposed_amount_krw,document_url,document_sha256,verification_status,award_status,version,request_key,request_fingerprint,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,\'PENDING\',1,?,?,?,?,?)')
+        .bind(id,PREVIEW_ORGANIZATION_ID,caseId,proposalNumber,proposalTitle,revisionLabel,clientName,sentAt,responseDueOn,proposedAmountKrw,documentUrl,documentSha256,verificationStatus,requestKey,fingerprint,user.id,now,now),
+      env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL')
+        .bind(nextCaseStatus,now,caseId,PREVIEW_ORGANIZATION_ID,expectedCaseVersion),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'PROPOSAL_LINKED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(),caseId,user.id,'제안서 연동',`${proposalNumber} · ${revisionLabel} · ${clientName}`,now,caseId,expectedCaseVersion+1,now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT version FROM preview_cases WHERE id=?').bind(caseId).first<{version:number}>();
+    if (Number(canonical?.version) !== expectedCaseVersion + 1) return json({ error: 'Concurrent project update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewProposalDetail(env,user,id);
+  }
+
+  if (detailMatch && !detailMatch[2] && request.method === 'GET') return previewProposalDetail(env,user,detailMatch[1]);
+
+  if (detailMatch?.[2] === 'decision' && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot decide proposal awards', code: 'FORBIDDEN' }, 403);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['decision','decisionNote','decidedAt','contractAmountKrw','projectStartOn','projectEndOn','expectedLinkVersion','expectedCaseVersion'])) return json({ error: 'Award decision payload is invalid', code: 'INVALID_AWARD_PAYLOAD' }, 400);
+    const current = await env.DB.prepare(previewProposalSelect + 'WHERE p.id=? AND p.organization_id=?').bind(detailMatch[1],PREVIEW_ORGANIZATION_ID).first<PreviewProposalRow>();
+    if (!current || !await accessiblePreviewCase(env,user,current.caseId)) return json({ error: 'Proposal link was not found or is outside your assigned projects', code: 'PROPOSAL_NOT_FOUND' }, 404);
+    const decision = typeof body.decision === 'string' && ['WON','LOST'].includes(body.decision) ? body.decision : null;
+    const decisionNote = proposalText(body.decisionNote,5000);
+    const decidedAt = proposalDate(body.decidedAt);
+    const expectedLinkVersion = Number(body.expectedLinkVersion);
+    const expectedCaseVersion = Number(body.expectedCaseVersion);
+    const contractAmountKrw = decision === 'WON' ? proposalMoney(body.contractAmountKrw) : null;
+    const projectStartOn = decision === 'WON' ? proposalDate(body.projectStartOn,true) : null;
+    const projectEndOn = decision === 'WON' ? proposalDate(body.projectEndOn,true) : null;
+    if (!decision || !decisionNote || !decidedAt || (decision === 'WON' && (contractAmountKrw === null || !projectStartOn || !projectEndOn || projectEndOn < projectStartOn))) return json({ error: 'Award decision fields are invalid', code: 'INVALID_AWARD_PAYLOAD' }, 400);
+    const requestKey = request.headers.get('Idempotency-Key') ?? '';
+    if (!PREVIEW_CASE_CREATE_KEY.test(requestKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+    const fingerprint = await sha256Hex(JSON.stringify({ proposalLinkId:current.id,decision,decisionNote,decidedAt,contractAmountKrw,projectStartOn,projectEndOn,expectedLinkVersion,expectedCaseVersion }));
+    const replay = await env.DB.prepare('SELECT proposal_link_id AS proposalLinkId,request_fingerprint AS fingerprint FROM preview_award_decisions WHERE request_key=?').bind(requestKey).first<{proposalLinkId:string;fingerprint:string}>();
+    if (replay) return replay.fingerprint === fingerprint ? previewProposalDetail(env,user,replay.proposalLinkId) : json({ error: 'Idempotency-Key was used for another award decision', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+    const versionConflict = current.awardStatus !== 'PENDING' || current.version !== expectedLinkVersion || current.caseVersion !== expectedCaseVersion;
+    if (versionConflict) return json({ error: 'Proposal or project changed. Reload before deciding.', code: 'VERSION_CONFLICT', currentLinkVersion: current.version, currentCaseVersion: current.caseVersion }, 409);
+    const now = new Date().toISOString();
+    const nextCaseStatus = decision === 'WON' && ['INQUIRY','PROPOSAL','ESTIMATE'].includes(current.caseStatus) ? 'CONTRACT' : current.caseStatus;
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_award_decisions (id,proposal_link_id,case_id,decision,decision_note,decided_at,contract_amount_krw,project_start_on,project_end_on,expected_link_version,request_key,request_fingerprint,decided_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(crypto.randomUUID(),current.id,current.caseId,decision,decisionNote,decidedAt,contractAmountKrw,projectStartOn,projectEndOn,expectedLinkVersion,requestKey,fingerprint,user.id,now),
+      env.DB.prepare('UPDATE preview_proposal_links SET award_status=?,award_decided_at=?,award_decided_by=?,contract_amount_krw=?,project_start_on=?,project_end_on=?,version=version+1,updated_at=? WHERE id=? AND version=? AND award_status=\'PENDING\'')
+        .bind(decision,decidedAt,user.id,contractAmountKrw,projectStartOn,projectEndOn,now,current.id,expectedLinkVersion),
+      env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL')
+        .bind(nextCaseStatus,now,current.caseId,PREVIEW_ORGANIZATION_ID,expectedCaseVersion),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'AWARD_DECIDED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(),current.caseId,user.id,decision === 'WON' ? '수주 확정' : '미수주 결정',decisionNote,now,current.caseId,expectedCaseVersion+1,now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT award_status AS awardStatus,version FROM preview_proposal_links WHERE id=?').bind(current.id).first<{awardStatus:string;version:number}>();
+    const canonicalCase = await env.DB.prepare('SELECT version FROM preview_cases WHERE id=?').bind(current.caseId).first<{version:number}>();
+    if (canonical?.awardStatus !== decision || Number(canonical.version) !== expectedLinkVersion + 1 || Number(canonicalCase?.version) !== expectedCaseVersion + 1) return json({ error: 'Concurrent award update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewProposalDetail(env,user,current.id);
+  }
+
+  return json({ error: 'Proposal workflow route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
+}
+
 const LITIGATION_STAGES = new Set(['FILED', 'PLEADING', 'APPRAISAL', 'HEARING', 'JUDGEMENT', 'APPEAL', 'CLOSED']);
 const LITIGATION_EVENT_TYPES = new Set(['FILED', 'SERVICE', 'BRIEF', 'APPRAISAL', 'HEARING', 'JUDGEMENT', 'APPEAL', 'CORRECTION', 'OTHER']);
 const LITIGATION_VERIFICATION = new Set(['UNVERIFIED', 'VERIFIED', 'CONFLICT']);
@@ -1257,6 +1477,8 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
   if (!env.DB) return {};
   let verifiedLitigation: Record<string, unknown>[] = [];
   let verifiedLitigationEvents: Record<string, unknown>[] = [];
+  let verifiedProposals: Record<string, unknown>[] = [];
+  let proposalAwardDecisions: Record<string, unknown>[] = [];
   try {
     const [records, events] = await Promise.all([
       env.DB.prepare(
@@ -1272,6 +1494,20 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
     // Older local CF12 fixtures may not have the additive CF13 table yet.
     // Production applies migrations before code deployment.
   }
+  try {
+    const [proposals, decisions] = await Promise.all([
+      env.DB.prepare(
+        'SELECT id,proposal_number AS proposalNumber,proposal_title AS proposalTitle,revision_label AS revisionLabel,client_name AS clientName,sent_at AS sentAt,response_due_on AS responseDueOn,proposed_amount_krw AS proposedAmountKrw,document_url AS documentUrl,document_sha256 AS documentSha256,award_status AS awardStatus,contract_amount_krw AS contractAmountKrw,project_start_on AS projectStartOn,project_end_on AS projectEndOn,version FROM preview_proposal_links WHERE case_id=? AND organization_id=? AND verification_status=\'VERIFIED\' ORDER BY sent_at DESC'
+      ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
+      env.DB.prepare(
+        'SELECT d.id,d.proposal_link_id AS proposalLinkId,d.decision,d.decision_note AS decisionNote,d.decided_at AS decidedAt,d.contract_amount_krw AS contractAmountKrw,d.project_start_on AS projectStartOn,d.project_end_on AS projectEndOn,u.display_name AS decidedByName FROM preview_award_decisions d JOIN preview_proposal_links p ON p.id=d.proposal_link_id JOIN preview_users u ON u.id=d.decided_by WHERE d.case_id=? AND p.organization_id=? ORDER BY d.created_at DESC'
+      ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>()
+    ]);
+    verifiedProposals = proposals.results;
+    proposalAwardDecisions = decisions.results;
+  } catch {
+    // Older fixtures remain readable until the additive CF14 migration is applied.
+  }
   const [kickoff, surveys, allocations, parties, schedules] = await Promise.all([
     env.DB.prepare('SELECT meeting_at AS meetingAt, location, agenda, participant_units_json AS participantUnitsJson, raw_notes AS rawNotes, summary_text AS summaryText, timeline_json AS timelineJson, status, version FROM preview_workflow_kickoffs WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<Record<string, unknown>>(),
     env.DB.prepare('SELECT survey_date AS surveyDate, location, scope_text AS scopeText, lead_unit AS leadUnit, folder_path AS folderPath, status, version FROM preview_site_surveys WHERE case_id = ? AND organization_id = ? ORDER BY survey_date').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
@@ -1284,8 +1520,9 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
     workflow: { kickoff, siteSurveys: surveys.results, quantityAndWorkforce: allocations.results },
     parties: parties.results,
     schedules: schedules.results,
+    proposalWorkflow: { verifiedProposalSnapshots: verifiedProposals, awardDecisions: proposalAwardDecisions },
     litigation: { verifiedCases: verifiedLitigation, verifiedEvents: verifiedLitigationEvents },
-    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Missing or conflicting fields must be marked [확인 필요].'
+    sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Proposal facts require VERIFIED document URL plus SHA-256. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Missing or conflicting fields must be marked [확인 필요].'
   };
 }
 
@@ -1989,6 +2226,10 @@ const worker = {
 
     if (url.pathname === '/api/litigation-records' || url.pathname.startsWith('/api/litigation-records/')) {
       return handlePreviewLitigation(request, env, url);
+    }
+
+    if (url.pathname === '/api/proposal-workflow' || url.pathname.startsWith('/api/proposal-workflow/')) {
+      return handlePreviewProposalWorkflow(request, env, url);
     }
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {
