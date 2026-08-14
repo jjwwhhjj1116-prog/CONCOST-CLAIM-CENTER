@@ -20,22 +20,22 @@
 }
 
 :root[data-theme='light'] {
-  --page-bg: #edf2f8;
+  --page-bg: #f3f5f8;
   --surface-card: #ffffff;
-  --surface-raised: #f7f9fc;
-  --surface-soft: #eef3f8;
+  --surface-raised: #f8fafc;
+  --surface-soft: #f0f3f7;
   --field-bg: #ffffff;
   --text-primary: #142033;
   --text-secondary: #45556d;
   --text-muted: #68778c;
-  --border-soft: #dce4ef;
-  --border-strong: #b9c7d9;
+  --border-soft: #e0e5ec;
+  --border-strong: #c4cedb;
   --action-primary: linear-gradient(135deg, #2457e6, #0d86c9);
   --action-primary-text: #ffffff;
   --action-secondary: #eef3f9;
   --action-danger: #dc294d;
   --section-soft: rgba(37, 99, 235, .08);
-  --panel-shadow: 0 14px 34px rgba(31, 55, 88, .09);
+  --panel-shadow: 0 3px 12px rgba(31, 45, 66, .07);
 }
 
 .app-shell[data-workspace-section='home'] { --section-accent: #2563eb; --section-accent-rgb: 37, 99, 235; --action-primary: linear-gradient(135deg, #2563eb, #0284c7); }
@@ -90,7 +90,7 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .theme-toggle strong { font-size: .72rem; }
 
 .ui-card {
-  border-radius: 16px !important;
+  border-radius: 13px !important;
   box-shadow: var(--panel-shadow);
 }
 .ui-card__title {
@@ -118,8 +118,18 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .navigation-group[data-nav-group='court'] { --group-accent: #d97706; --group-rgb: 217, 119, 6; }
 .navigation-group[data-nav-group='quality'] { --group-accent: #10b981; --group-rgb: 16, 185, 129; }
 .navigation-group[data-nav-group='admin'] { --group-accent: #ec4899; --group-rgb: 236, 72, 153; }
-.navigation-group .navigation-group-icon { color: var(--group-accent); border-color: rgba(var(--group-rgb), .28); background: rgba(var(--group-rgb), .1); }
-.navigation-group .navigation-link[aria-current='page'] { background: linear-gradient(105deg, var(--group-accent), color-mix(in srgb, var(--group-accent), #2563eb 42%)); box-shadow: 0 9px 24px rgba(var(--group-rgb), .24); }
+.sidebar { width: 270px; flex-basis: 270px; padding-inline: 15px; }
+.navigation-list { gap: 18px; }
+.navigation-group { gap: 6px; }
+.navigation-group header { position: relative; min-height: 46px; padding: 6px 9px 7px 10px; border-left: 3px solid transparent; border-radius: 10px; }
+.navigation-group header > div > span { font-size: .58rem; font-weight: 800; }
+.navigation-group header h2 { margin-top: 2px; font-size: .8rem; font-weight: 800; line-height: 1.25; }
+.navigation-group .navigation-group-icon { width: 32px; height: 32px; flex-basis: 32px; color: var(--group-accent); border-color: rgba(var(--group-rgb), .28); background: rgba(var(--group-rgb), .1); }
+.navigation-group.is-current header { border-left-color: var(--group-accent); background: rgba(var(--group-rgb), .08); }
+.navigation-group.is-current header h2 { color: var(--group-accent); }
+.navigation-group .navigation-link { position: relative; min-height: 43px; padding: 10px 11px 10px 15px; border: 1px solid transparent; border-radius: 9px; font-size: .83rem; font-weight: 700; line-height: 1.28; }
+.navigation-group .navigation-link[aria-current='page'] { border-color: rgba(var(--group-rgb), .26); background: rgba(var(--group-rgb), .1); color: var(--group-accent); font-weight: 800; box-shadow: inset 3px 0 var(--group-accent); }
+.navigation-group .navigation-link[aria-current='page'] .navigation-dot { background: var(--group-accent); box-shadow: 0 0 0 4px rgba(var(--group-rgb), .13); }
 .navigation-group .navigation-link:hover:not([aria-current='page']) { color: var(--group-accent); background: rgba(var(--group-rgb), .08); }
 
 .case-create-hero { border-color: rgba(var(--section-accent-rgb), .36); }
@@ -186,12 +196,12 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .report-authoring-guide li strong { font-size: .9rem; }
 
 :root[data-theme='light'] body {
-  background: radial-gradient(circle at 8% 5%, rgba(37, 99, 235, .08), transparent 28rem), #edf2f8;
+  background: #f3f5f8;
   color: var(--text-primary);
 }
-:root[data-theme='light'] .app-shell { background: linear-gradient(180deg, #f8fafc 0%, #edf2f8 100%); }
-:root[data-theme='light'] .topbar { background: rgba(255, 255, 255, .93); border-bottom-color: #dce4ef; box-shadow: 0 8px 26px rgba(31, 55, 88, .08); }
-:root[data-theme='light'] .sidebar { background: #ffffff; border-right-color: #dce4ef; }
+:root[data-theme='light'] .app-shell { background: #f3f5f8; }
+:root[data-theme='light'] .topbar { background: rgba(255, 255, 255, .97); border-bottom-color: #e1e6ed; box-shadow: 0 1px 8px rgba(31, 45, 66, .06); }
+:root[data-theme='light'] .sidebar { background: #ffffff; border-right-color: #e1e6ed; }
 :root[data-theme='light'] .brand-copy h1,
 :root[data-theme='light'] .navigation-group header h2,
 :root[data-theme='light'] .session-identity strong { color: #172033; }
@@ -199,8 +209,10 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .preview-chip { border-color: #a5d8e4; background: #ecfeff; color: #0e7490; }
 :root[data-theme='light'] .session-avatar { background: #e5eef8; color: #1d4ed8; }
 :root[data-theme='light'] .navigation-group header > div > span { color: #8290a3; }
-:root[data-theme='light'] .navigation-link { color: #536176; }
+:root[data-theme='light'] .navigation-link { color: #3f4d61; }
 :root[data-theme='light'] .navigation-dot { background: #c1ccd9; }
+:root[data-theme='light'] .navigation-group.is-current header h2 { color: var(--group-accent); }
+:root[data-theme='light'] .navigation-group .navigation-link[aria-current='page'] { color: color-mix(in srgb, var(--group-accent), #172033 18%); background: rgba(var(--group-rgb), .09); }
 :root[data-theme='light'] .drawer-panel,
 :root[data-theme='light'] .dialog-panel { background: #fff !important; color: #172033; border-color: #d3deeb; }
 
@@ -306,6 +318,114 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .dashboard-kpi strong,
 :root[data-theme='light'] .preview-dashboard .dashboard-kpi strong,
 :root[data-theme='light'] .report-summary-grid strong { color: #172033; }
+
+/* Light workspace harmony: white surfaces, quiet borders, and one accent per task. */
+:root[data-theme='light'] .ui-card,
+:root[data-theme='light'] .workflow-summary article,
+:root[data-theme='light'] .project-workflow-summary > div {
+  border-color: #e0e5ec !important;
+  background: #ffffff !important;
+  color: #1b2738;
+  box-shadow: 0 3px 12px rgba(31, 45, 66, .06);
+}
+:root[data-theme='light'] .ui-card:hover { box-shadow: 0 5px 16px rgba(31, 45, 66, .08); }
+:root[data-theme='light'] .workflow-summary span,
+:root[data-theme='light'] .project-workflow-summary span,
+:root[data-theme='light'] .workflow-summary small { color: #66758a; }
+:root[data-theme='light'] .workflow-summary strong,
+:root[data-theme='light'] .project-workflow-summary strong { color: #1b2738; }
+
+/* The schedule remains dense, but reads as a light planning surface instead of a dark island. */
+:root[data-theme='light'] .schedule-board,
+:root[data-theme='light'] .detail-schedule-board { border-color: #d8e0ea; background: #ffffff; scrollbar-color: #a8b6c8 #eef2f6; box-shadow: 0 3px 12px rgba(31, 45, 66, .06); }
+:root[data-theme='light'] .schedule-board-header,
+:root[data-theme='light'] .detail-schedule-header { background: #eef2f7; }
+:root[data-theme='light'] .schedule-left-heading,
+:root[data-theme='light'] .detail-schedule-header > div:first-child { border-right-color: #d8e0ea; background: #eef2f7; color: #263449; }
+:root[data-theme='light'] .schedule-left-heading span { color: #718096; }
+:root[data-theme='light'] .schedule-day { border-right-color: #dfe5ed; color: #46556b; }
+:root[data-theme='light'] .schedule-day small { color: #8794a7; }
+:root[data-theme='light'] .schedule-day.is-weekend { background: #f6f8fb; color: #718096; }
+:root[data-theme='light'] .schedule-day.is-today { color: #087e8f; background: #e8f9fb; box-shadow: inset 1px 0 #22b8c8, inset -1px 0 #22b8c8; }
+:root[data-theme='light'] .schedule-project-row,
+:root[data-theme='light'] .workflow-stage-row { border-top-color: #e1e6ed; }
+:root[data-theme='light'] .schedule-project-info,
+:root[data-theme='light'] .workflow-stage-info { border-right-color: #d8e0ea; background: #ffffff; color: #263449; }
+:root[data-theme='light'] .schedule-project-info:hover,
+:root[data-theme='light'] .workflow-stage-info:hover,
+:root[data-theme='light'] .workflow-stage-row.is-focused .workflow-stage-info { background: #f1f5fa; }
+:root[data-theme='light'] .schedule-project-copy strong,
+:root[data-theme='light'] .workflow-stage-info strong { color: #1b2738; }
+:root[data-theme='light'] .schedule-project-copy small,
+:root[data-theme='light'] .workflow-stage-info small,
+:root[data-theme='light'] .workflow-stage-info em { color: #718096; }
+:root[data-theme='light'] .schedule-progress b { color: #087e8f; }
+:root[data-theme='light'] .schedule-progress i,
+:root[data-theme='light'] .mini-track { background: #e5eaf0; }
+:root[data-theme='light'] .schedule-grid-cell { border-right-color: #e3e8ef; background: #ffffff; }
+:root[data-theme='light'] .schedule-grid-cell:nth-child(7n + 1),
+:root[data-theme='light'] .schedule-grid-cell:nth-child(7n + 2) { background: #f7f9fb; }
+:root[data-theme='light'] .schedule-grid-cell.is-today { background: #ebfafb; box-shadow: inset 1px 0 rgba(34, 184, 200, .65), inset -1px 0 rgba(34, 184, 200, .65); }
+:root[data-theme='light'] .schedule-legend { color: #5f6e82; }
+:root[data-theme='light'] .legend-weekend { background: #dfe5ed; }
+:root[data-theme='light'] .focused-stage-card,
+:root[data-theme='light'] .workforce-columns > article,
+:root[data-theme='light'] .report-author-panel li { border-color: #dde4ec; background: #f7f9fc; color: #1b2738; }
+:root[data-theme='light'] .focused-stage-card p,
+:root[data-theme='light'] .workforce-panel header p,
+:root[data-theme='light'] .report-author-panel p,
+:root[data-theme='light'] .workforce-row small,
+:root[data-theme='light'] .workforce-row > span { color: #66758a; }
+
+/* Evidence, court, and AI admin screens share the same light surface contract. */
+:root[data-theme='light'] .case-evidence-categories button,
+:root[data-theme='light'] .case-evidence-dropzone,
+:root[data-theme='light'] .case-evidence-list,
+:root[data-theme='light'] .report-ai-admin__providers > div,
+:root[data-theme='light'] .report-ai-admin__routes section,
+:root[data-theme='light'] .litigation-kpis article,
+:root[data-theme='light'] .litigation-search,
+:root[data-theme='light'] .litigation-list,
+:root[data-theme='light'] .litigation-panel,
+:root[data-theme='light'] .litigation-record-head,
+:root[data-theme='light'] .litigation-welcome { border-color: #dfe5ed; background: #ffffff; color: #1b2738; box-shadow: 0 3px 12px rgba(31, 45, 66, .06); }
+:root[data-theme='light'] .case-evidence-categories strong,
+:root[data-theme='light'] .case-evidence-dropzone strong,
+:root[data-theme='light'] .case-evidence-list li strong,
+:root[data-theme='light'] .litigation-kpis strong,
+:root[data-theme='light'] .litigation-list > button,
+:root[data-theme='light'] .litigation-record-head h3,
+:root[data-theme='light'] .litigation-section-heading h3 { color: #1b2738; }
+:root[data-theme='light'] .case-evidence-categories small,
+:root[data-theme='light'] .case-evidence-dropzone small,
+:root[data-theme='light'] .case-evidence-storage-note,
+:root[data-theme='light'] .case-evidence-list header em,
+:root[data-theme='light'] .litigation-kpis span,
+:root[data-theme='light'] .litigation-kpis small,
+:root[data-theme='light'] .litigation-list > button small,
+:root[data-theme='light'] .litigation-record-head p,
+:root[data-theme='light'] .litigation-record-head span,
+:root[data-theme='light'] .litigation-timeline p { color: #66758a; }
+:root[data-theme='light'] .case-evidence-list > header,
+:root[data-theme='light'] .case-evidence-list li,
+:root[data-theme='light'] .litigation-list > header,
+:root[data-theme='light'] .litigation-list > button { border-color: #e4e9f0; }
+:root[data-theme='light'] .case-evidence-categories button.is-active,
+:root[data-theme='light'] .litigation-list > button:hover,
+:root[data-theme='light'] .litigation-list > button.is-active { border-color: rgba(var(--section-accent-rgb), .32); background: rgba(var(--section-accent-rgb), .07); }
+:root[data-theme='light'] .litigation-center { color: #1b2738; }
+:root[data-theme='light'] .litigation-search label,
+:root[data-theme='light'] .litigation-form-grid label,
+:root[data-theme='light'] .litigation-check { color: #536176; }
+:root[data-theme='light'] .litigation-secondary,
+:root[data-theme='light'] .litigation-welcome button { border-color: #cbd5e1; background: #f5f7fa; color: #334155; }
+:root[data-theme='light'] .litigation-timeline-dot { background: #ffffff; }
+:root[data-theme='light'] .report-ai-admin__editor textarea,
+:root[data-theme='light'] .litigation-search input,
+:root[data-theme='light'] .litigation-search select,
+:root[data-theme='light'] .litigation-form-grid input,
+:root[data-theme='light'] .litigation-form-grid select,
+:root[data-theme='light'] .litigation-form-grid textarea { border-color: #c4cedb !important; background: #ffffff !important; color: #1b2738 !important; }
 
 @media (max-width: 760px) {
   .theme-toggle strong { display: none; }

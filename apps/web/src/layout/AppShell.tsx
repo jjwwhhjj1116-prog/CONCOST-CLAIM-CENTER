@@ -92,7 +92,8 @@ export const AppShell: React.FC<AppShellProps> = ({
           .map((id) => ROUTES.find((route) => route.id === id))
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;
-        return <section className="navigation-group" key={group.label} aria-label={group.label} data-nav-group={group.icon}>
+        const isCurrentGroup = group === activeGroup;
+        return <section className={`navigation-group${isCurrentGroup ? ' is-current' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
           <header>
             <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
             <div><span>{group.eyebrow}</span><h2>{group.label}</h2></div>

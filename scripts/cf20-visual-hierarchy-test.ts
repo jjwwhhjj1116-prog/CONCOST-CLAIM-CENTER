@@ -31,3 +31,16 @@ test('CF20 gives proposal, project workflow, and report authoring steps distinct
   assert.match(theme, /--report-step-number/u);
   assert.match(theme, /\.case-create-number strong/u);
 });
+
+test('CF21 keeps active navigation legible and harmonizes light workspace surfaces', () => {
+  const shell = read('apps/web/src/layout/AppShell.tsx');
+  const theme = read('apps/web/src/theme-system.css');
+
+  assert.match(shell, /navigation-group\$\{isCurrentGroup \? ' is-current' : ''\}/u);
+  assert.match(theme, /\.navigation-group\.is-current header/u);
+  assert.match(theme, /box-shadow: inset 3px 0 var\(--group-accent\)/u);
+  assert.doesNotMatch(theme, /\.navigation-group \.navigation-link\[aria-current='page'\] \{ background: linear-gradient/u);
+  assert.match(theme, /:root\[data-theme='light'\] \.schedule-board/u);
+  assert.match(theme, /:root\[data-theme='light'\] \.case-evidence-categories button/u);
+  assert.match(theme, /:root\[data-theme='light'\] \.litigation-kpis article/u);
+});
