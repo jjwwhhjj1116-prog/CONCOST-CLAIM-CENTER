@@ -178,7 +178,8 @@ body {
   line-height: 1.65;
 }
 
-.login-page { display: grid; grid-template-columns: minmax(0, 1.07fr) minmax(500px, .93fr); width: 100%; min-height: 100vh; background: #f7f9fc; color: #0f172a; color-scheme: light; }
+.login-page { display: grid; grid-template-columns: minmax(0, 1.07fr) minmax(500px, .93fr); width: 100%; min-height: 100vh; padding: 0; place-items: stretch; background: #f7f9fc; color: #0f172a; color-scheme: light; }
+.login-page > * { width: auto; }
 .login-visual { position: relative; display: flex; min-width: 0; min-height: 100vh; overflow: hidden; padding: clamp(34px, 5vw, 72px); flex-direction: column; justify-content: space-between; isolation: isolate; background: #07101e url('/assets/claim-login-hero.png') center 54% / cover no-repeat; color: #fff; }
 .login-visual::before { position: absolute; z-index: -1; inset: 0; content: ''; background: linear-gradient(90deg, rgba(3, 8, 19, .92) 0%, rgba(5, 13, 28, .58) 56%, rgba(5, 13, 28, .17) 100%), linear-gradient(0deg, rgba(2, 7, 17, .9) 0%, transparent 52%, rgba(2, 7, 17, .22) 100%); }
 .login-visual::after { position: absolute; z-index: -1; inset: 0 auto 0 0; width: 5px; content: ''; background: linear-gradient(180deg, #8b5cf6, #22d3ee 56%, #f59e0b); }

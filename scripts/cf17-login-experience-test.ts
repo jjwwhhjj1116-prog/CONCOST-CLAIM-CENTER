@@ -20,6 +20,8 @@ test('CF17 login uses a project-owned claim investigation hero and responsive de
   const hero = statSync('apps/web/public/assets/claim-login-hero.png');
   assert.ok(hero.size > 100_000 && hero.size < 5_000_000);
   assert.match(css, /grid-template-columns: minmax\(0, 1\.07fr\) minmax\(500px, \.93fr\)/u);
+  assert.match(css, /\.login-page \{[^}]*padding: 0;[^}]*place-items: stretch/u);
+  assert.match(css, /\.login-page > \* \{ width: auto; \}/u);
   assert.match(css, /url\('\/assets\/claim-login-hero\.png'\)/u);
   assert.match(css, /@media \(max-width: 980px\)[\s\S]*grid-template-columns: 1fr/u);
   assert.match(css, /@media \(max-width: 560px\)/u);
