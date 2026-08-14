@@ -71,7 +71,7 @@ test('CF19 routes chapter writing through Gemini and never exposes the API key',
   assert.equal(config.aiConnected, true); assert.equal(config.providerLabel, 'GEMINI'); assert.equal(config.modelLabel, 'gemini-3.6-flash');
   const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
   assert.equal(generated.status, 200); const generatedText = await generated.text(); assert.match(generatedText, /Gemini 검증 초안/u); assert.doesNotMatch(generatedText, new RegExp(GEMINI_KEY, 'u'));
-  assert.equal(requests.length, 1); assert.match(requests[0].url, /generativelanguage\.googleapis\.com\/v1beta\/interactions/u);
+  assert.equal(requests.length, 1); assert.match(requests[0].url, /generativelanguage\.googleapis\.com\/v1\/interactions/u);
   assert.equal(requests[0].body.model, 'gemini-3.6-flash'); assert.equal(typeof requests[0].body.input, 'string'); assert.equal(typeof requests[0].body.system_instruction, 'string');
   assert.deepEqual(sql.exec('SELECT provider_kind, task_kind, model_code FROM preview_report_ai_generations')[0].values[0], ['GEMINI','CHAPTER_WRITING','gemini-3.6-flash']);
   sql.close();
@@ -90,6 +90,64 @@ test('CF19 maps Gemini key failures to a safe diagnostic without exposing provid
   assert.doesNotMatch(text, new RegExp(GEMINI_KEY, 'u'));
   const body = JSON.parse(text) as { code: string; providerReason: string; providerStatus: number };
   assert.deepEqual([body.code, body.providerReason, body.providerStatus], ['GEMINI_INVALID_API_KEY','INVALID_ARGUMENT',400]);
+  sql.close();
+});
+
+test('CF19 exposes only a safe nested Gemini reason code', async () => {
+  const { sql, env } = await setup();
+  env.GEMINI_TEST_FETCH = async () => new Response(JSON.stringify({
+    error: {
+      code: 400,
+      status: 'INVALID_ARGUMENT',
+      message: `Sensitive provider message ${GEMINI_KEY}`,
+      details: [{
+        '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+        reason: 'ACCESS_TOKEN_TYPE_UNSUPPORTED',
+        metadata: { secret: GEMINI_KEY, service: 'generativelanguage.googleapis.com' }
+      }]
+    }
+  }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  const configResponse = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+  const config = await configResponse.json() as { chapters: Array<{ id: string }> };
+  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
+  assert.equal(generated.status, 502);
+  const text = await generated.text();
+  assert.doesNotMatch(text, new RegExp(GEMINI_KEY, 'u'));
+  assert.doesNotMatch(text, /Sensitive provider message|generativelanguage\.googleapis\.com/u);
+  const body = JSON.parse(text) as { code: string; providerReason: string; providerStatus: number };
+  assert.deepEqual([body.code, body.providerReason, body.providerStatus], ['GEMINI_AUTH_KEY_NOT_READY','ACCESS_TOKEN_TYPE_UNSUPPORTED',400]);
+  sql.close();
+});
+
+test('CF19 safely classifies the Interactions API error envelope', async () => {
+  const { sql, env } = await setup();
+  env.GEMINI_TEST_FETCH = async () => new Response(JSON.stringify({
+    error: { code: 'model_not_found', message: `Model does not exist. ${GEMINI_KEY}` }
+  }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  const configResponse = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+  const config = await configResponse.json() as { chapters: Array<{ id: string }> };
+  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
+  const text = await generated.text();
+  assert.equal(generated.status, 502);
+  assert.doesNotMatch(text, new RegExp(GEMINI_KEY, 'u'));
+  const body = JSON.parse(text) as { code: string; providerReason: string };
+  assert.deepEqual([body.code, body.providerReason], ['GEMINI_MODEL_NOT_AVAILABLE','MODEL_NOT_AVAILABLE']);
+  sql.close();
+});
+
+test('CF19 maps provider location failures without exposing the raw message', async () => {
+  const { sql, env } = await setup();
+  env.GEMINI_TEST_FETCH = async () => new Response(JSON.stringify({
+    error: { code: 'invalid_request', message: `This API is not available in your current location. ${GEMINI_KEY}` }
+  }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+  const configResponse = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+  const config = await configResponse.json() as { chapters: Array<{ id: string }> };
+  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
+  const text = await generated.text();
+  assert.doesNotMatch(text, new RegExp(GEMINI_KEY, 'u'));
+  assert.doesNotMatch(text, /This API is not available/u);
+  const body = JSON.parse(text) as { code: string; providerReason: string };
+  assert.deepEqual([body.code, body.providerReason], ['GEMINI_REGION_UNAVAILABLE','REGION_UNAVAILABLE']);
   sql.close();
 });
 

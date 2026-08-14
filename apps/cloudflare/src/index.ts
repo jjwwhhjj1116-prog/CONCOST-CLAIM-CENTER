@@ -1701,14 +1701,91 @@ function extractAnthropicText(payload: unknown): string | null {
   return pieces.join('\n').trim() || null;
 }
 
+function safeGeminiReason(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/^.*\//u, '').replace(/[^A-Za-z0-9]+/gu, '_').toUpperCase();
+  return /^[A-Z][A-Z0-9_]{1,63}$/u.test(normalized) ? normalized : null;
+}
+
+function nestedGeminiProviderReason(errorRecord: Record<string, unknown> | null): string | null {
+  if (!errorRecord || !Array.isArray(errorRecord.details)) return null;
+  for (const detail of errorRecord.details) {
+    if (!detail || typeof detail !== 'object') continue;
+    const reason = safeGeminiReason((detail as Record<string, unknown>).reason);
+    if (reason) return reason;
+  }
+  return null;
+}
+
 function safeGeminiProviderError(payload: unknown, httpStatus: number): { code: string; error: string; providerReason: string } {
-  const errorRecord = payload && typeof payload === 'object' && (payload as Record<string, unknown>).error && typeof (payload as Record<string, unknown>).error === 'object'
-    ? (payload as { error: Record<string, unknown> }).error
+  const payloadRecord = payload && typeof payload === 'object' ? payload as Record<string, unknown> : null;
+  const rawError = payloadRecord?.error;
+  const errorRecord = rawError && typeof rawError === 'object' ? rawError as Record<string, unknown> : null;
+  const firstInteractionError = Array.isArray(payloadRecord?.errors) && payloadRecord.errors[0] && typeof payloadRecord.errors[0] === 'object'
+    ? payloadRecord.errors[0] as Record<string, unknown>
     : null;
-  const providerReason = typeof errorRecord?.status === 'string' && /^[A-Z_]{2,64}$/u.test(errorRecord.status)
-    ? errorRecord.status
-    : `HTTP_${httpStatus}`;
-  const providerMessage = typeof errorRecord?.message === 'string' ? errorRecord.message.toLowerCase() : '';
+  const providerReason = nestedGeminiProviderReason(errorRecord)
+    ?? safeGeminiReason(errorRecord?.status)
+    ?? safeGeminiReason(errorRecord?.reason)
+    ?? safeGeminiReason(errorRecord?.code)
+    ?? safeGeminiReason(firstInteractionError?.code)
+    ?? safeGeminiReason(payloadRecord?.status)
+    ?? safeGeminiReason(payloadRecord?.reason)
+    ?? safeGeminiReason(payloadRecord?.code)
+    ?? `HTTP_${httpStatus}`;
+  const providerMessage = [errorRecord?.message, firstInteractionError?.message, payloadRecord?.message, typeof rawError === 'string' ? rawError : null]
+    .find((value): value is string => typeof value === 'string')?.toLowerCase() ?? '';
+  if (providerMessage.includes('not available in your current location')) {
+    return {
+      code: 'GEMINI_REGION_UNAVAILABLE',
+      error: '현재 서버 실행 지역에서는 Gemini API를 사용할 수 없습니다. 관리자에게 Cloudflare 실행 지역 설정 확인을 요청해 주세요.',
+      providerReason: 'REGION_UNAVAILABLE'
+    };
+  }
+  if ((providerMessage.includes('access token type') && (providerMessage.includes('unsupported') || providerMessage.includes('not supported')))
+    || providerReason === 'ACCESS_TOKEN_TYPE_UNSUPPORTED') {
+    return {
+      code: 'GEMINI_AUTH_KEY_NOT_READY',
+      error: 'Google Auth Key의 서비스 계정 연결이 아직 Gemini API에서 승인되지 않았습니다. Google AI Studio 프로젝트의 키 상태와 API 활성화를 확인해 주세요.',
+      providerReason: 'ACCESS_TOKEN_TYPE_UNSUPPORTED'
+    };
+  }
+  if ((providerMessage.includes('model') && (providerMessage.includes('not found') || providerMessage.includes('not supported') || providerMessage.includes('does not exist')))
+    || providerReason === 'MODEL_NOT_FOUND') {
+    return {
+      code: 'GEMINI_MODEL_NOT_AVAILABLE',
+      error: '선택한 Gemini 모델을 이 프로젝트 또는 API 버전에서 사용할 수 없습니다. 관리자 모델 설정을 확인해 주세요.',
+      providerReason: 'MODEL_NOT_AVAILABLE'
+    };
+  }
+  if ((providerMessage.includes('unknown name') || providerMessage.includes('invalid json payload')) && providerReason === 'INVALID_ARGUMENT') {
+    return {
+      code: 'GEMINI_REQUEST_SCHEMA_REJECTED',
+      error: 'Gemini가 요청 형식을 승인하지 않았습니다. 서버의 Gemini API 버전 설정을 확인해 주세요.',
+      providerReason: 'REQUEST_SCHEMA_REJECTED'
+    };
+  }
+  if (providerReason === 'SERVICE_DISABLED') {
+    return {
+      code: 'GEMINI_API_DISABLED',
+      error: '선택한 Google Cloud 프로젝트에서 Generative Language API가 활성화되지 않았습니다.',
+      providerReason
+    };
+  }
+  if (providerReason === 'BILLING_DISABLED') {
+    return {
+      code: 'GEMINI_BILLING_DISABLED',
+      error: 'Google AI Studio 프로젝트의 결제 또는 무료 등급 사용 상태를 확인해 주세요.',
+      providerReason
+    };
+  }
+  if (providerReason === 'API_KEY_INVALID' || providerReason === 'API_KEY_NOT_VALID') {
+    return {
+      code: 'GEMINI_INVALID_API_KEY',
+      error: 'Google AI Studio에서 발급된 유효한 Gemini API 키가 아닙니다. 관리자에게 키 교체를 요청해 주세요.',
+      providerReason
+    };
+  }
   if (providerMessage.includes('api key not valid') || (providerMessage.includes('api key') && providerMessage.includes('invalid'))) {
     return {
       code: 'GEMINI_INVALID_API_KEY',
@@ -1747,7 +1824,7 @@ async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRo
       reasoning: { effort: route.reasoningEffort }, text: { verbosity: 'high' }, instructions: system, input
     };
   } else if (provider === 'GEMINI') {
-    endpoint = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+    endpoint = 'https://generativelanguage.googleapis.com/v1/interactions';
     headers = { ...headers, 'x-goog-api-key': apiKey };
     providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
     body = { model: route.modelCode, system_instruction: system, input };

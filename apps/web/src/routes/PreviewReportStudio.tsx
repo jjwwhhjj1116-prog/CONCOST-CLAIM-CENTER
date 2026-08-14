@@ -211,7 +211,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     } catch (reason) {
       if (selectedCaseRef.current !== requestCaseId) return;
       const providerStatus = reason instanceof ApiError && typeof reason.payload.providerStatus === 'number' ? ` · 공급자 HTTP ${reason.payload.providerStatus}` : '';
-      setError(`${reason instanceof Error ? reason.message : String(reason)}${providerStatus}`);
+      const providerReason = reason instanceof ApiError && typeof reason.payload.providerReason === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/u.test(reason.payload.providerReason)
+        ? ` · Google 사유 ${reason.payload.providerReason}`
+        : '';
+      setError(`${reason instanceof Error ? reason.message : String(reason)}${providerStatus}${providerReason}`);
     }
     finally { if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
   };
