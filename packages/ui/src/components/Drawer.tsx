@@ -57,7 +57,7 @@ export const Drawer: React.FC<DrawerProps> = ({ isOpen, onClose, title, children
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        style={{ background: color.background.primary, padding: spacing.lg }}
+        style={{ background: `var(--surface-card, ${color.background.primary})`, color: 'var(--text-primary, #f8fafc)', padding: spacing.lg }}
       >
         <div className="drawer-header">
           <h2 id={titleId}>{title}</h2>

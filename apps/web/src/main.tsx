@@ -13,6 +13,7 @@ import './routes/PreviewAiAdmin.css';
 import './routes/PreviewReportStudio.css';
 import './routes/PreviewLitigationCenter.css';
 import './preview-theme.css';
+import './theme-system.css';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

@@ -366,9 +366,9 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
 
       {/* PROP-02: Stepper Writer & Review/Approval Section */}
       {(routeId === 'PROP-02' || activeProposal) && (
-        <Card title={`PROP-02: 단계형 제안서 작성기 ${activeProposal ? `[${activeProposal.title}]` : ''}`}>
+        <Card title={`PROP-02: 단계형 제안서 작성기 ${activeProposal ? `[${activeProposal.title}]` : ''}`} className="proposal-step-card">
           {activeProposal ? (
-            <div>
+            <div data-active-step={step}>
               <div className="proposal-status-header" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
                 <span>현재 상태:</span>
                 <StatusBadge status={proposalStatusBadge(activeProposal.status)} />
@@ -378,10 +378,10 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
 
               {/* Wizard Stepper Tabs */}
               <div className="stepper-nav" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-                <Button size="sm" variant={step === 1 ? 'primary' : 'secondary'} onClick={() => setStep(1)}>Step 1: 의뢰 배경</Button>
-                <Button size="sm" variant={step === 2 ? 'primary' : 'secondary'} onClick={() => setStep(2)}>Step 2: 수행 방법</Button>
-                <Button size="sm" variant={step === 3 ? 'primary' : 'secondary'} onClick={() => setStep(3)}>Step 3: 성과물 & 제외</Button>
-                <Button size="sm" variant={step === 4 ? 'primary' : 'secondary'} onClick={() => setStep(4)}>Step 4: 미리보기 & 승인</Button>
+                <Button className="proposal-step-button" size="sm" variant={step === 1 ? 'primary' : 'secondary'} onClick={() => setStep(1)}><b>01</b><span>의뢰 배경</span></Button>
+                <Button className="proposal-step-button" size="sm" variant={step === 2 ? 'primary' : 'secondary'} onClick={() => setStep(2)}><b>02</b><span>수행 방법</span></Button>
+                <Button className="proposal-step-button" size="sm" variant={step === 3 ? 'primary' : 'secondary'} onClick={() => setStep(3)}><b>03</b><span>성과물·제외</span></Button>
+                <Button className="proposal-step-button" size="sm" variant={step === 4 ? 'primary' : 'secondary'} onClick={() => setStep(4)}><b>04</b><span>미리보기·승인</span></Button>
               </div>
 
               {step === 1 && (

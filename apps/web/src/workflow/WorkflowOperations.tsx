@@ -247,7 +247,7 @@ export const WorkflowOperations: React.FC<{
       </header>
 
       <nav className="workflow-stepper" aria-label="프로젝트 6단계">
-        {WORKFLOW_STAGES.map((entry) => <button key={entry.id} className={entry.id === stageId ? 'is-active' : ''} onClick={() => onNavigate(entry.path)}><span>{entry.id}</span>{entry.name}</button>)}
+        {WORKFLOW_STAGES.map((entry) => <button key={entry.id} className={entry.id === stageId ? 'is-active' : ''} style={{ '--step-color': entry.color } as React.CSSProperties} onClick={() => onNavigate(entry.path)}><span>{String(entry.id).padStart(2, '0')}</span><strong>{entry.name}</strong></button>)}
       </nav>
 
       <div className="workflow-project-selector">

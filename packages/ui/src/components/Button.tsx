@@ -31,10 +31,10 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   const variantStyles: Record<string, React.CSSProperties> = {
-    primary: { background: color.primary.main, color: color.text.primary },
-    secondary: { background: color.background.tertiary, color: color.text.primary, border: `1px solid ${color.glass.border}` },
-    danger: { background: color.status.danger, color: color.text.primary },
-    ghost: { background: 'transparent', color: color.text.secondary }
+    primary: { background: `var(--action-primary, ${color.primary.main})`, color: `var(--action-primary-text, ${color.text.primary})` },
+    secondary: { background: `var(--action-secondary, ${color.background.tertiary})`, color: `var(--text-primary, ${color.text.primary})`, border: `1px solid var(--border-strong, ${color.glass.border})` },
+    danger: { background: `var(--action-danger, ${color.status.danger})`, color: `var(--action-primary-text, ${color.text.primary})` },
+    ghost: { background: 'transparent', color: `var(--text-secondary, ${color.text.secondary})` }
   };
 
   const sizeStyles: Record<string, React.CSSProperties> = {
@@ -45,7 +45,7 @@ export const Button: React.FC<ButtonProps> = ({
 
   return (
     <button
-      className={className}
+      className={`ui-button ui-button--${variant} ui-button--${size} ${className}`.trim()}
       style={{
         ...baseStyle,
         ...variantStyles[variant],

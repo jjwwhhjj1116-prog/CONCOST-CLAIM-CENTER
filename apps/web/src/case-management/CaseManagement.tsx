@@ -258,7 +258,7 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   };
   return <div className="case-create-page">
     <section className="workspace-hero case-create-hero"><div><span className="workspace-eyebrow">NEW CLAIM WORKSPACE</span><h3>새 사건을 시작합니다.</h3><p>사건을 등록하면 일정·관계자·자료실·보고서 자동저장 공간이 함께 준비됩니다.</p></div><div className="case-create-number"><strong>01</strong><span>CASE SETUP</span></div></section>
-    <Card title="사건 기본정보">
+    <Card title="사건 기본정보" className="case-create-card">
       <form className="case-create-form" onSubmit={(event) => void submit(event)}>
         <Input label="사건명" value={title} maxLength={500} required placeholder="예: 공동주택 공사비 적정성 검토" onChange={(event) => setTitle(event.target.value)} />
         <Select label="클레임 업무 유형" value={claimType} options={[...CLAIM_TYPES]} onChange={(event) => setClaimType(event.target.value)} />

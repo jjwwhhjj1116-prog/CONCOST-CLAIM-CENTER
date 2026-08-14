@@ -41,6 +41,13 @@ export interface AppShellProps {
   children: React.ReactNode;
 }
 
+type ThemeMode = 'light' | 'dark';
+
+const readInitialTheme = (): ThemeMode => {
+  const stored = window.localStorage.getItem('claim-center-theme');
+  return stored === 'dark' || stored === 'light' ? stored : 'light';
+};
+
 export const AppShell: React.FC<AppShellProps> = ({
   currentPath,
   roles,
@@ -53,7 +60,15 @@ export const AppShell: React.FC<AppShellProps> = ({
   const safeUserName = typeof userName === 'string' && userName.trim() ? userName.trim() : 'User';
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
+  const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
+  const activeGroup = NAVIGATION_GROUPS.find((group) => group.routeIds.some((id) => ROUTES.find((route) => route.id === id)?.path === currentPath));
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem('claim-center-theme', theme);
+  }, [theme]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -77,7 +92,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           .map((id) => ROUTES.find((route) => route.id === id))
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;
-        return <section className="navigation-group" key={group.label} aria-label={group.label}>
+        return <section className="navigation-group" key={group.label} aria-label={group.label} data-nav-group={group.icon}>
           <header>
             <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
             <div><span>{group.eyebrow}</span><h2>{group.label}</h2></div>
@@ -100,7 +115,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   );
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-workspace-section={activeGroup?.icon ?? 'home'}>
       <SkipLink targetId="main-content" />
       <header className="topbar">
         <div className="brand-group">
@@ -110,6 +125,16 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
         <div className="session-tools">
           {previewMode && <span className="preview-chip" aria-label="D1 로그인·사건·초안 저장 활성">CLOUD WORKSPACE · 자동저장</span>}
+          <button
+            type="button"
+            className="theme-toggle"
+            aria-label={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
+            aria-pressed={theme === 'dark'}
+            onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+          >
+            <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+            <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
+          </button>
           <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
           <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>

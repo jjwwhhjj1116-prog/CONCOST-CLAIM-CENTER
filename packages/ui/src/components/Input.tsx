@@ -12,7 +12,7 @@ export const Input: React.FC<InputProps> = ({ label, error, className = '', id, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
       {label && (
-        <label htmlFor={inputId} style={{ fontSize: typography.fontSize.sm, color: color.text.secondary, fontWeight: 500 }}>
+        <label htmlFor={inputId} style={{ fontSize: typography.fontSize.sm, color: `var(--text-secondary, ${color.text.secondary})`, fontWeight: 650 }}>
           {label}
         </label>
       )}
@@ -21,10 +21,10 @@ export const Input: React.FC<InputProps> = ({ label, error, className = '', id, 
         className={className}
         style={{
           padding: '10px 12px',
-          background: color.background.primary,
-          border: `1px solid ${error ? color.status.danger : color.glass.border}`,
+          background: `var(--field-bg, ${color.background.primary})`,
+          border: `1px solid ${error ? color.status.danger : `var(--border-strong, ${color.glass.border})`}`,
           borderRadius: borderRadius.md,
-          color: color.text.primary,
+          color: `var(--text-primary, ${color.text.primary})`,
           fontSize: typography.fontSize.sm,
           outlineOffset: '2px',
           boxSizing: 'border-box',
