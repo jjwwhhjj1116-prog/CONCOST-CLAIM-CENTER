@@ -4,6 +4,50 @@
   color: #eef4ff;
 }
 
+.project-detail-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(19, 31, 51, .52);
+  backdrop-filter: blur(8px);
+}
+
+.project-detail-modal {
+  width: min(1540px, 96vw);
+  max-height: min(900px, 92vh);
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 20px;
+  background: var(--surface-card);
+  box-shadow: 0 28px 90px rgba(15, 28, 48, .3);
+}
+
+.project-detail-modal__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 20px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--border-soft);
+  background: linear-gradient(135deg, color-mix(in srgb, #5b93c9 11%, var(--surface-card)), color-mix(in srgb, #766bb5 9%, var(--surface-card)));
+}
+
+.project-detail-modal__header > div:first-child { min-width: 0; }
+.project-detail-modal__header span { color: #4a86c5; font: 600 .62rem 'DM Mono', monospace; letter-spacing: .13em; }
+.project-detail-modal__header h3 { overflow: hidden; margin: 5px 0 4px; color: var(--text-primary); font-size: clamp(1.1rem, 2vw, 1.55rem); letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+.project-detail-modal__header p { margin: 0; color: var(--text-secondary); font-size: .76rem; }
+.project-detail-modal__identity { display: grid; grid-template-columns: auto auto; align-items: center; gap: 3px 12px; padding: 9px 12px; border: 1px solid color-mix(in srgb, #5b93c9 25%, var(--border-soft)); border-radius: 12px; background: color-mix(in srgb, #5b93c9 8%, var(--surface-raised)); }
+.project-detail-modal__identity b { color: #4b967f; font-size: .67rem; }
+.project-detail-modal__identity strong { color: #315f87; font-size: 1.05rem; }
+.project-detail-modal__identity small { grid-column: 1 / -1; color: var(--text-muted); font-size: .61rem; }
+.project-detail-modal__close { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--border-soft); border-radius: 11px; background: var(--surface-card); color: var(--text-secondary); font-size: 1.45rem; line-height: 1; cursor: pointer; }
+.project-detail-modal__close:hover,
+.project-detail-modal__close:focus-visible { border-color: #5b93c9; color: #315f87; outline: 3px solid rgba(91, 147, 201, .2); }
+.project-detail-modal__body { display: grid; gap: 16px; max-height: calc(min(900px, 92vh) - 106px); overflow: auto; padding: 18px; color: var(--text-primary); }
+
 .project-context-strip {
   position: sticky;
   top: 66px;
@@ -299,6 +343,12 @@
 }
 
 @media (max-width: 720px) {
+  .project-detail-modal-backdrop { padding: 8px; }
+  .project-detail-modal { width: 100%; max-height: 96vh; border-radius: 15px; }
+  .project-detail-modal__header { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 15px; }
+  .project-detail-modal__header p,
+  .project-detail-modal__identity { display: none; }
+  .project-detail-modal__body { max-height: calc(96vh - 78px); padding: 12px; }
   .workflow-hero,
   .schedule-toolbar,
   .workforce-panel header { align-items: stretch; flex-direction: column; }

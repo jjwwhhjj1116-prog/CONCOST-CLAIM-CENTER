@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button } from '@claim-studio/ui';
 import {
   REPORT_AUTHOR_NAMES,
@@ -59,6 +59,25 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
   );
   const showOverview = routeId === 'PROJ-01';
   const focusedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
+  const isProjectDialogOpen = showOverview && Boolean(requestedProjectId);
+
+  useEffect(() => {
+    if (!isProjectDialogOpen) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onNavigate('/projects/schedule');
+    };
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isProjectDialogOpen, onNavigate]);
+
+  const openProjectDialog = (project: WorkflowProject) => {
+    onNavigate(`/projects/schedule?projectId=${encodeURIComponent(project.id)}`);
+  };
 
   const navigateAction = (stageId: WorkflowStageId) => {
     const action = actionForStage(stageId, selectedProject);
@@ -91,7 +110,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
         </div>
         <div className="workflow-hero-actions">
           {!showOverview && <Button variant="secondary" onClick={() => onNavigate('/projects/schedule')}>← 전체 프로젝트</Button>}
-          <span className="workflow-live-badge">FRONTEND MODEL · D1 연결 예정</span>
+          <span className="workflow-live-badge">SAMPLE SCHEDULE · 실제 프로젝트 API 연동 전</span>
         </div>
       </header>
 
@@ -122,7 +141,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             </header>
             <div className="project-brief-list">
               {WORKFLOW_PROJECTS.map((project) => (
-                <button key={project.id} type="button" className="project-brief-row" onClick={() => onNavigate(`/projects/workflow?projectId=${encodeURIComponent(project.id)}`)}>
+                <button key={project.id} type="button" className="project-brief-row" onClick={() => openProjectDialog(project)} aria-haspopup="dialog">
                   <span className="project-brief-copy">
                     <b>{project.code}</b>
                     <strong>{project.name}</strong>
@@ -149,7 +168,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             </div>
             {WORKFLOW_PROJECTS.map((project) => (
               <div className="schedule-project-row" role="row" key={project.id}>
-                <button className="schedule-project-info" role="cell" onClick={() => onNavigate(`/projects/workflow?projectId=${encodeURIComponent(project.id)}`)}>
+                <button className="schedule-project-info" role="cell" onClick={() => openProjectDialog(project)} aria-haspopup="dialog">
                   <span className={`award-dot award-${project.awardStatus.toLowerCase()}`} aria-hidden="true" />
                   <span className="schedule-project-copy"><strong>{project.name}</strong><small>{project.code} · {project.claimType} · {awardLabel(project.awardStatus)}</small></span>
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
@@ -159,8 +178,9 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                   <button
                     className="project-range-bar"
                     style={barStyle(project.stages[0]?.startDay ?? 1, project.stages.at(-1)?.endDay ?? 31)}
-                    onClick={() => onNavigate(`/projects/workflow?projectId=${encodeURIComponent(project.id)}`)}
-                    aria-label={`${project.name} 상세 워크플로우 열기`}
+                    onClick={() => openProjectDialog(project)}
+                    aria-label={`${project.name} 프로젝트 상세 팝업 열기`}
+                    aria-haspopup="dialog"
                   >
                     <span>{project.name}</span><b>{project.progress}%</b>
                   </button>
@@ -175,6 +195,46 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             <span><i className="legend-weekend" />주말</span>
             <span>프로젝트를 클릭하면 1~6단계 세부 작업과 팀 배정이 열립니다.</span>
           </div>
+
+          {isProjectDialogOpen && (
+            <div
+              className="project-detail-modal-backdrop"
+              role="presentation"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) onNavigate('/projects/schedule');
+              }}
+            >
+              <section
+                className="project-detail-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="project-detail-modal-title"
+                aria-describedby="project-detail-modal-description"
+              >
+                <header className="project-detail-modal__header">
+                  <div>
+                    <span>SELECTED PROJECT · 1~6단계 워크플로우</span>
+                    <h3 id="project-detail-modal-title">{selectedProject.code} · {selectedProject.name}</h3>
+                    <p id="project-detail-modal-description">현재 선택한 프로젝트의 일정, 단계별 담당자, 투입 팀을 확인합니다.</p>
+                  </div>
+                  <div className="project-detail-modal__identity" aria-label="선택 프로젝트 요약">
+                    <b>{awardLabel(selectedProject.awardStatus)}</b>
+                    <strong>{selectedProject.progress}%</strong>
+                    <small>{selectedProject.start} ~ {selectedProject.end}</small>
+                  </div>
+                  <button type="button" className="project-detail-modal__close" onClick={() => onNavigate('/projects/schedule')} autoFocus aria-label="프로젝트 상세 팝업 닫기">×</button>
+                </header>
+                <div className="project-detail-modal__body">
+                  <ProjectDetail
+                    project={selectedProject}
+                    focusedStageId={focusedStageId}
+                    onNavigate={onNavigate}
+                    onAction={navigateAction}
+                  />
+                </div>
+              </section>
+            </div>
+          )}
         </>
       ) : (
         <ProjectDetail

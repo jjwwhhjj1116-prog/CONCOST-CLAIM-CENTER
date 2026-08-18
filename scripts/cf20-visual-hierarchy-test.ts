@@ -66,7 +66,7 @@ test('CF22 applies the pastel overlay system and project-specific work tags', ()
   }
 });
 
-test('CF23 keeps the selected project and current workflow stage visible across screens', () => {
+test('CF23 opens project workflow as a contextual schedule dialog without a duplicate sidebar category', () => {
   const app = read('apps/web/src/App.tsx');
   const shell = read('apps/web/src/layout/AppShell.tsx');
   const schedule = read('apps/web/src/workflow/ProjectWorkflowSchedule.tsx');
@@ -74,14 +74,20 @@ test('CF23 keeps the selected project and current workflow stage visible across 
 
   assert.match(app, /currentBrowserLocation/u);
   assert.match(app, /currentSearch=\{currentSearch\}/u);
-  assert.match(shell, /'PROJ-01', 'PROJ-02'/u);
+  assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.match(shell, /sidebar-project-context/u);
   assert.match(shell, /CURRENT PROJECT/u);
   assert.match(shell, /selectedStage \? `\$\{selectedStage\.id\}단계/u);
+  assert.match(shell, /상세 팝업/u);
   assert.match(schedule, /project-context-strip/u);
   assert.match(schedule, /전체 단계 워크플로우/u);
   assert.match(schedule, /projectId=\$\{projectId\}/u);
+  assert.match(schedule, /project-detail-modal/u);
+  assert.match(schedule, /role="dialog"/u);
+  assert.match(schedule, /aria-modal="true"/u);
+  assert.match(schedule, /SAMPLE SCHEDULE · 실제 프로젝트 API 연동 전/u);
   assert.match(scheduleCss, /\.project-context-strip \{/u);
+  assert.match(scheduleCss, /\.project-detail-modal-backdrop \{/u);
 });
 
 test('CF24 renders report authoring as a gated one-step-at-a-time wizard', () => {

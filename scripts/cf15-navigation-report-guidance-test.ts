@@ -11,7 +11,8 @@ test('CF15 sidebar follows the five requested business categories without duplic
     assert.match(shell, new RegExp(label, 'u'));
   }
   assert.match(shell, /routeIds: \['CASE-02', 'PROP-02', 'WF-02'\]/u);
-  assert.match(shell, /routeIds: \['PROJ-01', 'PROJ-02', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'\]/u);
+  assert.match(shell, /routeIds: \['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'\]/u);
+  assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
   assert.match(shell, /icon: 'proposal'/u);
   assert.match(shell, /icon: 'library'/u);
