@@ -187,6 +187,13 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .workflow-stepper button.is-active span { background: var(--step-color); color: #fff; transform: scale(1.1); }
 
 .proposal-step-card { border-top: 5px solid #c8794d !important; }
+.proposal-intake-context { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:15px 17px; border:1px solid #bae6fd; border-left:5px solid #0ea5e9; border-radius:14px; background:linear-gradient(120deg,#f0f9ff,#f8fafc); }
+.proposal-intake-context div { display:grid; gap:3px; }
+.proposal-intake-context span { color:#0284c7; font-size:.7rem; font-weight:900; letter-spacing:.08em; }
+.proposal-intake-context strong { color:#172033; font-size:1rem; }
+.proposal-intake-context small { color:#64748b; }
+.proposal-intake-context p { max-width:520px; margin:0; color:#475569; line-height:1.55; }
+.proposal-intake-context p b { color:#0f766e; }
 .stepper-nav { display: grid !important; grid-template-columns: repeat(4, minmax(145px, 1fr)); gap: 10px !important; }
 .proposal-step-button { min-height: 68px !important; justify-content: flex-start !important; padding: 10px 13px !important; border-top: 4px solid var(--step-accent) !important; text-align: left; }
 .proposal-step-button b { width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--step-accent) 18%, transparent); color: var(--step-accent); font-size: .82rem; }
@@ -197,6 +204,10 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .proposal-step-button:nth-child(4) { --step-accent: #4b967f; }
 .proposal-step-button.ui-button--primary { --action-primary: linear-gradient(135deg, var(--step-accent), color-mix(in srgb, var(--step-accent), #111827 20%)); }
 .proposal-step-button.ui-button--primary b { background: rgba(255,255,255,.2); color: #fff; }
+@media (max-width:760px) { .proposal-intake-context { align-items:flex-start; flex-direction:column; } }
+:root[data-theme='dark'] .proposal-intake-context { border-color:#155e75; background:linear-gradient(120deg,#0c4a6e,#111827); }
+:root[data-theme='dark'] .proposal-intake-context strong { color:#f8fafc; }
+:root[data-theme='dark'] .proposal-intake-context p,:root[data-theme='dark'] .proposal-intake-context small { color:#cbd5e1; }
 .step-content { border-left: 5px solid #2563eb; border-radius: 14px; padding: clamp(18px, 3vw, 28px); background: var(--surface-raised); }
 [data-active-step='1'] .step-content { border-left-color: #c8794d; }
 [data-active-step='2'] .step-content { border-left-color: #4a86c5; }

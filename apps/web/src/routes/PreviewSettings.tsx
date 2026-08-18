@@ -75,6 +75,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         <div className="credential-state"><span>{state.storage === 'ENCRYPTED_D1' ? 'AES-256-GCM 암호화 저장' : state.storage === 'CLOUDFLARE_SECRET' ? 'Cloudflare 서버 Secret' : '저장된 키 없음'}</span>{state.fingerprint && <small>키 지문 {state.fingerprint}… · v{state.version}</small>}</div>
         <label htmlFor={`${field}-key`}>{state.configured ? '새 키로 교체' : 'API Key 입력'}</label>
         <input id={`${field}-key`} type="password" value={keys[field] ?? ''} autoComplete="new-password" spellCheck={false} placeholder={PROVIDER_COPY[provider.providerKind].placeholder} onChange={(event) => setKeys((current) => ({ ...current, [field]: event.target.value }))} />
+        {!keys[field]?.trim() && <small className="credential-input-help">API 키를 입력하면 암호화 저장 버튼이 활성화됩니다.</small>}
         <div className="action-row"><Button onClick={() => void save(provider, scope)} disabled={isBusy || !(keys[field]?.trim())}>{isBusy ? '처리 중…' : state.configured ? '키 교체' : '암호화 저장'}</Button>{state.configured && <Button variant="secondary" onClick={() => void test(provider, scope)} disabled={isBusy}>연결 확인</Button>}{state.storage === 'ENCRYPTED_D1' && <Button variant="ghost" onClick={() => void disable(provider, scope)} disabled={isBusy}>비활성화</Button>}</div>
       </section>;
     })}</div>
@@ -82,6 +83,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
 
   return <div className="content-stack preview-settings" aria-label="개인 및 관리자 설정">
     <section className="preview-settings-hero"><div><span>SECURE WORKSPACE SETTINGS</span><h2>내 AI 도우미와 조직 연결을<br />한곳에서 관리합니다.</h2><p>키 원문은 저장 직후 사라지고, 브라우저·API 응답·D1에는 다시 표시되지 않습니다.</p></div><div><strong>{payload.masterKeyReady ? '암호화 저장 준비됨' : '서버 암호화키 필요'}</strong><small>개인 Gemini 키는 글쓰기와 문장 개선에서 자동 우선 사용</small></div></section>
+    <section className="settings-access-strip" aria-label="현재 계정 설정 권한"><div><span>현재 로그인 역할</span><strong>{roles.map((role) => role.toUpperCase()).join(' · ') || 'USER'}</strong></div><p><b>개인 API 키 연결</b>은 현재 화면에서 바로 사용할 수 있습니다. {payload.canManageOrganization ? '조직 공용 API 키와 Google Drive 관리자 연결도 아래에서 관리할 수 있습니다.' : '조직 공용 API 키·Google Drive 회사 연결은 ADMIN 계정에서만 표시됩니다.'}</p></section>
     {!payload.masterKeyReady && <p className="error-box" role="alert">Cloudflare 암호화 Secret이 아직 준비되지 않아 새 키를 저장할 수 없습니다.</p>}
     {renderScope('USER', '내 AI 설정', '내 계정에서만 사용하는 개인 API 키입니다. 다른 사용자와 관리자에게도 원문이 보이지 않습니다.')}
     {payload.canManageOrganization && renderScope('ORGANIZATION', '관리자 · 조직 공용 AI 설정', '회사 공용으로 사용할 API 키입니다. Admin만 교체하거나 비활성화할 수 있습니다.')}

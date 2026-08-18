@@ -199,6 +199,17 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   if (previewMode && currentRoute.id === 'WF-06') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && ['PROP-01', 'PROP-02'].includes(currentRoute.id)) {
+    return (
+      <section className="route-view" aria-labelledby="route-title">
+        <div className="route-heading">
+          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <span className="preview-pill">D1 LIVE PROPOSAL</span>
+        </div>
+        <ProposalView routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
+      </section>
+    );
+  }
   if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;
   if (previewMode && currentRoute.id === 'AI-01') return <PreviewAiAdmin />;
   if (previewMode && currentRoute.id === 'MY-01') return <PreviewSettings roles={roles} onNavigate={onNavigate} />;

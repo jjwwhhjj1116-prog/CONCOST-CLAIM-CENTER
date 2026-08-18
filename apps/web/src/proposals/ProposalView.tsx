@@ -83,8 +83,10 @@ function proposalStatusBadge(status: string): StatusType {
 }
 
 export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNavigate }) => {
+  const requestedCaseId = new URLSearchParams(window.location.search).get('caseId') ?? '';
+  const fromIntake = new URLSearchParams(window.location.search).get('from') === 'intake';
   const [cases, setCases] = useState<CaseItem[]>([]);
-  const [selectedCaseId, setSelectedCaseId] = useState<string>('');
+  const [selectedCaseId, setSelectedCaseId] = useState<string>(requestedCaseId);
   const [templates, setTemplates] = useState<ProposalTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
 
@@ -99,8 +101,8 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
   const [expectedOutcome, setExpectedOutcome] = useState<string>('');
   const [exclusions, setExclusions] = useState<string>('');
   const [sourceDocumentVersionIds, setSourceDocumentVersionIds] = useState<string>('');
-  const [providerId, setProviderId] = useState<string>('local-fake-ai');
-  const [modelId, setModelId] = useState<string>('fake-claim-v1');
+  const [providerId, setProviderId] = useState<string>('GEMINI');
+  const [modelId, setModelId] = useState<string>('gemini-3.5-flash');
 
   const [reviewComment, setReviewComment] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -115,7 +117,10 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
       .then((res) => {
         setCases(res.cases || []);
         if (res.cases && res.cases.length > 0) {
-          setSelectedCaseId(res.cases[0].id);
+          setSelectedCaseId((current) => {
+            const preferred = current || requestedCaseId;
+            return res.cases.some((item) => item.id === preferred) ? preferred : res.cases[0].id;
+          });
         }
       })
       .catch((err: Error) => setErrorMessage(err.message));
@@ -193,7 +198,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
       setSuccessMessage('신규 제안서가 성공적으로 생성되었습니다.');
       await loadCaseData(selectedCaseId);
       loadProposalDetail(selectedCaseId, res.proposal.id);
-      onNavigate('/proposals/editor');
+      onNavigate(`/proposals/editor?caseId=${encodeURIComponent(selectedCaseId)}`);
     } catch (err: unknown) {
       if (err instanceof ApiError) setErrorMessage(err.message);
       else setErrorMessage('제안서 생성 중 오류 발생');
@@ -294,6 +299,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
   };
 
   const currentVer = activeProposal?.versions?.[0];
+  const selectedCase = cases.find((item) => item.id === selectedCaseId);
 
   return (
     <div className="proposal-view-container">
@@ -310,7 +316,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
       )}
 
       {/* Case Selector Header */}
-      <Card title="사건 및 제안서 선택">
+      <Card title="현재 프로젝트 · 제안서 작성 연결">
         <div className="form-stack">
           <Select
             label="사건 선택"
@@ -318,6 +324,11 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
             onChange={(e) => setSelectedCaseId(e.target.value)}
             options={cases.map((c) => ({ value: c.id, label: `[${c.caseNumber}] ${c.title} (${c.claimType})` }))}
           />
+
+          {selectedCase && <section className="proposal-intake-context" aria-label="현재 선택된 프로젝트">
+            <div><span>{fromIntake ? '방금 저장한 프로젝트 의뢰' : '현재 선택 프로젝트'}</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>
+            <p><b>다음 할 일</b> 유형에 맞는 템플릿을 선택해 제안서를 만들고, 의뢰 배경부터 순서대로 작성하세요.</p>
+          </section>}
 
           {proposals.length > 0 && (
             <Select
@@ -331,9 +342,9 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
       </Card>
 
       {/* PROP-01: Template Selection Section */}
-      {routeId === 'PROP-01' && (
-        <Card title="PROP-01: 클레임 제안서 템플릿 선택">
-          <p className="muted">6대 고정 클레임 유형(TYPE-01~TYPE-06)에 맞춤화된 표준 기술제안서 템플릿을 선택합니다.</p>
+      {(routeId === 'PROP-01' || (!activeProposal && selectedCaseId)) && (
+        <Card title={routeId === 'PROP-01' ? '제안서 템플릿 선택' : '제안서 작성 1단계 · 유형별 템플릿 선택'}>
+          <p className="muted">현재 프로젝트 유형에 맞는 표준 기술제안서 템플릿을 선택하세요. 생성하면 의뢰 배경 작성부터 바로 시작합니다.</p>
           <div className="form-stack" style={{ marginTop: '1rem' }}>
             <Select
               label="적용 템플릿 선택"
@@ -356,19 +367,18 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
               <Button onClick={handleCreateProposal} disabled={isSubmitting || !selectedTemplateId || !canEdit}>
                 선택한 템플릿으로 제안서 생성
               </Button>
-              <Button variant="secondary" onClick={() => onNavigate('/proposals/editor')}>
+              {routeId === 'PROP-01' && <Button variant="secondary" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(selectedCaseId)}`)}>
                 제안서 단계형 작성기로 이동
-              </Button>
+              </Button>}
             </div>
           </div>
         </Card>
       )}
 
       {/* PROP-02: Stepper Writer & Review/Approval Section */}
-      {(routeId === 'PROP-02' || activeProposal) && (
-        <Card title={`PROP-02: 단계형 제안서 작성기 ${activeProposal ? `[${activeProposal.title}]` : ''}`} className="proposal-step-card">
-          {activeProposal ? (
-            <div data-active-step={step}>
+      {activeProposal && (
+        <Card title={`단계형 제안서 작성기 [${activeProposal.title}]`} className="proposal-step-card">
+          <div data-active-step={step}>
               <div className="proposal-status-header" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
                 <span>현재 상태:</span>
                 <StatusBadge status={proposalStatusBadge(activeProposal.status)} />
@@ -433,13 +443,13 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
                   )}
 
                   <div className="action-row" style={{ marginTop: '1rem' }}>
-                    <Select label="AI 공급자" value={providerId} onChange={(event) => setProviderId(event.target.value)} options={[{ value: 'local-fake-ai', label: 'Local deterministic fake provider' }]} />
-                    <Select label="AI 모델" value={modelId} onChange={(event) => setModelId(event.target.value)} options={[{ value: 'fake-claim-v1', label: 'fake-claim-v1' }]} />
+                    <Select label="AI 공급자" value={providerId} onChange={(event) => setProviderId(event.target.value)} options={[{ value: 'GEMINI', label: 'Google · Gemini (서버 보안 연결)' }]} />
+                    <Select label="AI 모델" value={modelId} onChange={(event) => setModelId(event.target.value)} options={[{ value: 'gemini-3.5-flash', label: 'gemini-3.5-flash' }]} />
                     <Button variant="secondary" onClick={() => handleSaveVersion('MANUAL')} disabled={isSubmitting || !canEdit}>
                       수동 버전 저장
                     </Button>
                     <Button onClick={() => handleSaveVersion('AI')} disabled={isSubmitting || !canEdit}>
-                      🤖 AI 초안 생성 (local-fake-ai)
+                      🤖 Gemini 제안서 초안 생성
                     </Button>
                   </div>
 
@@ -494,9 +504,6 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
                 </div>
               )}
             </div>
-          ) : (
-            <p>선택된 사건에 등록된 제안서가 없습니다. PROP-01 탭에서 템플릿을 선택하여 제안서를 먼저 생성하세요.</p>
-          )}
         </Card>
       )}
     </div>

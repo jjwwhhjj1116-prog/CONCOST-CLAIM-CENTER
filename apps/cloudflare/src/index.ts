@@ -1127,6 +1127,141 @@ async function handlePreviewLitigation(request: Request, env: CloudflareEnv, url
   return json({ error: 'Litigation route was not found', code: 'LITIGATION_ROUTE_NOT_FOUND' }, 404);
 }
 
+const PREVIEW_PROPOSAL_TEMPLATES = [...PREVIEW_CLAIM_TYPES].sort().map((claimType) => ({
+  id: `CF27-${claimType}`,
+  name: `${claimType} 표준 기술제안서`,
+  claimType,
+  description: `${claimType} 프로젝트 의뢰를 수행범위·방법·성과물·제외사항 순서로 작성하는 표준 템플릿`,
+  bodyTemplate: '# 기술제안서\n\n## 1. 의뢰 배경\n{{background}}\n\n## 2. 수행 목적\n{{objective}}\n\n## 3. 수행 방법 및 범위\n{{method}}\n\n## 4. 예상 성과물\n{{expectedOutcome}}\n\n## 5. 제외 사항\n{{exclusions}}',
+  placeholdersJson: JSON.stringify(['background', 'objective', 'method', 'expectedOutcome', 'exclusions'])
+}));
+
+interface PreviewProposalRow {
+  id: string; caseId: string; templateId: string; title: string; status: string;
+  currentVersionId: string | null; approvedVersionId: string | null; version: number;
+  templateName: string; templateBody: string; createdBy: string; createdAt: string; updatedAt: string;
+}
+
+function previewProposalProjection(row: PreviewProposalRow): Record<string, unknown> {
+  const template = PREVIEW_PROPOSAL_TEMPLATES.find((item) => item.id === row.templateId);
+  return {
+    id: row.id, caseId: row.caseId, templateId: row.templateId, title: row.title, status: row.status,
+    currentVersionId: row.currentVersionId, approvedVersionId: row.approvedVersionId, version: Number(row.version),
+    template: template ?? { id: row.templateId, name: row.templateName, claimType: 'UNKNOWN', description: '저장된 템플릿 스냅샷', bodyTemplate: row.templateBody, placeholdersJson: '[]' },
+    createdAt: row.createdAt, updatedAt: row.updatedAt
+  };
+}
+
+async function previewDraftProposalDetail(env: CloudflareEnv, proposalId: string, caseId: string): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const row = await env.DB.prepare(
+    'SELECT id,case_id AS caseId,template_id AS templateId,title,status,current_version_id AS currentVersionId,approved_version_id AS approvedVersionId,version,template_name_snapshot AS templateName,template_body_snapshot AS templateBody,created_by AS createdBy,created_at AS createdAt,updated_at AS updatedAt FROM preview_proposals WHERE id=? AND case_id=? AND organization_id=?'
+  ).bind(proposalId, caseId, PREVIEW_ORGANIZATION_ID).first<PreviewProposalRow>();
+  if (!row) return json({ error: 'Proposal was not found', code: 'PROPOSAL_NOT_FOUND' }, 404);
+  const versions = await env.DB.prepare(
+    'SELECT v.id,v.version_number AS versionNumber,v.body_text AS bodyText,v.structured_inputs_json AS structuredInputsJson,v.generation_mode AS generationMode,v.provider_id AS providerId,v.model_id AS modelId,v.input_sha256 AS inputSha256,v.source_document_version_ids_json AS sourceDocumentVersionIdsJson,v.missing_fields_json AS missingFieldsJson,v.sha256,(v.id=p.approved_version_id) AS isApproved,v.created_at AS createdAt,u.id AS createdById,u.display_name AS createdByName FROM preview_proposal_versions v JOIN preview_proposals p ON p.id=v.proposal_id JOIN preview_users u ON u.id=v.created_by WHERE v.proposal_id=? ORDER BY v.version_number DESC'
+  ).bind(proposalId).all<Record<string, unknown>>();
+  const reviews = await env.DB.prepare(
+    'SELECT r.id,r.action,r.comment,r.created_at AS createdAt,u.id AS reviewerId,u.display_name AS reviewerName FROM preview_proposal_reviews r JOIN preview_users u ON u.id=r.reviewer_id WHERE r.proposal_id=? ORDER BY r.created_at DESC'
+  ).bind(proposalId).all<Record<string, unknown>>();
+  return json({ proposal: { ...previewProposalProjection(row), versions: versions.results.map((item) => ({ ...item, isApproved: Boolean(item.isApproved), createdBy: { id: item.createdById, name: item.createdByName } })), reviews: reviews.results.map((item) => ({ id: item.id, action: item.action, comment: item.comment, createdAt: item.createdAt, reviewer: { id: item.reviewerId, name: item.reviewerName } })) }, phase: 'CF27_D1_PROPOSAL_AUTHORING' });
+}
+
+async function handlePreviewProposalAuthoring(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (url.pathname === '/api/proposal-templates' && request.method === 'GET') {
+    const claimType = url.searchParams.get('claimType') ?? '';
+    return json({ templates: PREVIEW_PROPOSAL_TEMPLATES.filter((item) => !claimType || item.claimType === claimType), phase: 'CF27_D1_PROPOSAL_AUTHORING' });
+  }
+  const match = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36}))?(?:\/(versions|reviews|render))?$/iu);
+  if (!match) return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
+  const [, caseId, proposalId, action] = match;
+  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+
+  if (!proposalId && request.method === 'GET') {
+    const rows = await env.DB.prepare(
+      'SELECT id,case_id AS caseId,template_id AS templateId,title,status,current_version_id AS currentVersionId,approved_version_id AS approvedVersionId,version,template_name_snapshot AS templateName,template_body_snapshot AS templateBody,created_by AS createdBy,created_at AS createdAt,updated_at AS updatedAt FROM preview_proposals WHERE case_id=? AND organization_id=? ORDER BY updated_at DESC'
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID).all<PreviewProposalRow>();
+    return json({ proposals: rows.results.map(previewProposalProjection), phase: 'CF27_D1_PROPOSAL_AUTHORING' });
+  }
+
+  const canEdit = user.roles.some((role) => ['admin', 'ceo', 'director', 'pm'].includes(role));
+  if (!proposalId && request.method === 'POST') {
+    if (!canEdit) return json({ error: 'Role cannot create proposals', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['templateId']) || typeof body.templateId !== 'string') return json({ error: 'Template selection is invalid', code: 'INVALID_TEMPLATE' }, 400);
+    const template = PREVIEW_PROPOSAL_TEMPLATES.find((item) => item.id === body.templateId && item.claimType === caseRow.claimType);
+    if (!template) return json({ error: 'Template does not match the project claim type', code: 'TEMPLATE_MISMATCH' }, 400);
+    const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID();
+    const structured = JSON.stringify({ background: caseRow.description ?? '', objective: '', method: '', expectedOutcome: '', exclusions: '' });
+    const initialBody = template.bodyTemplate.replace('{{background}}', caseRow.description || '[입력 필요]').replace('{{objective}}', '[입력 필요]').replace('{{method}}', '[입력 필요]').replace('{{expectedOutcome}}', '[입력 필요]').replace('{{exclusions}}', '[입력 필요]');
+    const inputSha = await sha256Hex(structured); const bodySha = await sha256Hex(initialBody);
+    try {
+      await env.DB.batch?.([
+        env.DB.prepare('INSERT INTO preview_proposals (id,organization_id,case_id,template_id,template_name_snapshot,template_body_snapshot,title,status,current_version_id,approved_version_id,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'DRAFT\',?,NULL,1,?,?,?)').bind(id, PREVIEW_ORGANIZATION_ID, caseId, template.id, template.name, template.bodyTemplate, `${caseRow.title} 기술제안서`, versionId, user.id, now, now),
+        env.DB.prepare('INSERT INTO preview_proposal_versions (id,proposal_id,case_id,version_number,body_text,structured_inputs_json,generation_mode,provider_id,model_id,input_sha256,source_document_version_ids_json,missing_fields_json,sha256,is_approved,created_by,created_at) VALUES (?,?,?,1,?,?,\'MANUAL\',NULL,NULL,?,\'[]\',?, ?,0,?,?)').bind(versionId, id, caseId, initialBody, structured, inputSha, JSON.stringify(['objective','method','expectedOutcome','exclusions']), bodySha, user.id, now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'PROPOSAL_CREATED', '제안서 작성 시작', template.name, now)
+      ]);
+      const detail = await previewDraftProposalDetail(env, id, caseId); const detailBody = await detail.json() as Record<string, unknown>;
+      return json({ ...detailBody, versionId }, 201);
+    } catch { return json({ error: 'Proposal could not be created atomically', code: 'PROPOSAL_CREATE_FAILED' }, 409); }
+  }
+
+  if (!proposalId) return json({ error: 'Proposal ID is required', code: 'PROPOSAL_ID_REQUIRED' }, 400);
+  if (!action && request.method === 'GET') return previewDraftProposalDetail(env, proposalId, caseId);
+  const current = await env.DB.prepare('SELECT id,status,version,current_version_id AS currentVersionId,created_by AS createdBy,template_body_snapshot AS templateBody,updated_at AS updatedAt FROM preview_proposals WHERE id=? AND case_id=? AND organization_id=?').bind(proposalId, caseId, PREVIEW_ORGANIZATION_ID).first<{id:string;status:string;version:number;currentVersionId:string;createdBy:string;templateBody:string;updatedAt:string}>();
+  if (!current) return json({ error: 'Proposal was not found', code: 'PROPOSAL_NOT_FOUND' }, 404);
+
+  if (action === 'versions' && request.method === 'POST') {
+    if (!canEdit || current.status !== 'DRAFT') return json({ error: 'Only an editable draft can receive a new version', code: 'PROPOSAL_LOCKED' }, 409);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    const required = ['background','objective','method','expectedOutcome','exclusions'];
+    if (!body || !required.every((key) => typeof body[key] === 'string' && String(body[key]).trim()) || !Number.isInteger(body.version) || !['MANUAL','AI'].includes(String(body.generationMode)) || !Array.isArray(body.sourceDocumentVersionIds)) return json({ error: 'Proposal version payload is invalid', code: 'INVALID_PROPOSAL_VERSION' }, 400);
+    if (Number(body.version) !== Number(current.version)) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current.version) }, 409);
+    const inputs = Object.fromEntries(required.map((key) => [key, String(body[key]).trim()]));
+    const structured = JSON.stringify(inputs); const inputSha = await sha256Hex(structured); let bodyText = current.templateBody;
+    for (const key of required) bodyText = bodyText.replace(`{{${key}}}`, inputs[key]);
+    let providerId: string | null = null; let modelId: string | null = null;
+    if (body.generationMode === 'AI') {
+      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.5-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'SERVER' };
+      const generated = await generatePreviewAiText(env, route, '당신은 건설 클레임 기술제안서 작성자입니다. 사용자가 제공한 사실만 사용하고, 근거 없는 수치와 계약조건을 만들지 마세요. 한국어로 명확한 제목과 1~5장 구조의 제안서를 작성하세요.', structured, user.id);
+      if (generated.response) return generated.response;
+      bodyText = generated.content ?? bodyText; providerId = 'GEMINI'; modelId = route.modelCode;
+    }
+    if (bodyText.length > 200_000 || !body.sourceDocumentVersionIds.every((item) => typeof item === 'string')) return json({ error: 'Proposal content or source list is invalid', code: 'INVALID_PROPOSAL_VERSION' }, 400);
+    const versionId = crypto.randomUUID(); const nextVersion = Number(current.version) + 1; const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString(); const bodySha = await sha256Hex(bodyText);
+    const results = await env.DB.batch?.([
+      env.DB.prepare('INSERT INTO preview_proposal_versions (id,proposal_id,case_id,version_number,body_text,structured_inputs_json,generation_mode,provider_id,model_id,input_sha256,source_document_version_ids_json,missing_fields_json,sha256,is_approved,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,\'[]\',?,0,?,?)').bind(versionId, proposalId, caseId, nextVersion, bodyText, structured, body.generationMode, providerId, modelId, inputSha, JSON.stringify(body.sourceDocumentVersionIds), bodySha, user.id, now),
+      env.DB.prepare('UPDATE preview_proposals SET current_version_id=?,status=\'DRAFT\',version=version+1,updated_at=? WHERE id=? AND version=? AND status=\'DRAFT\'').bind(versionId, now, proposalId, current.version),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'PROPOSAL_VERSION_SAVED', '제안서 버전 저장', `${body.generationMode} · v${nextVersion}`, now)
+    ]) as Array<{meta?:{changes?:number}}> | undefined;
+    if (!results || results[1]?.meta?.changes !== 1) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return previewDraftProposalDetail(env, proposalId, caseId);
+  }
+
+  if (action === 'reviews' && request.method === 'POST') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['action','comment','versionId','version']) || !['REQUEST_REVIEW','APPROVE','REJECT'].includes(String(body.action)) || typeof body.comment !== 'string' || typeof body.versionId !== 'string' || !Number.isInteger(body.version)) return json({ error: 'Proposal review payload is invalid', code: 'INVALID_REVIEW' }, 400);
+    if (Number(body.version) !== Number(current.version) || body.versionId !== current.currentVersionId) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    const reviewAction = String(body.action); const isApprover = user.roles.some((role) => ['admin','ceo','director','reviewer'].includes(role));
+    if (reviewAction === 'REQUEST_REVIEW' ? (!canEdit || current.status !== 'DRAFT') : (!isApprover || current.status !== 'IN_REVIEW' || current.createdBy === user.id)) return json({ error: 'Review role or state is invalid', code: 'FORBIDDEN_REVIEW' }, 403);
+    const nextStatus = reviewAction === 'REQUEST_REVIEW' ? 'IN_REVIEW' : reviewAction === 'APPROVE' ? 'APPROVED' : 'REJECTED'; const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
+    const results = await env.DB.batch?.([
+      env.DB.prepare('UPDATE preview_proposals SET status=?,approved_version_id=?,version=version+1,updated_at=? WHERE id=? AND version=? AND status=?').bind(nextStatus, reviewAction === 'APPROVE' ? current.currentVersionId : null, now, proposalId, current.version, current.status),
+      env.DB.prepare('INSERT INTO preview_proposal_reviews (id,proposal_id,case_id,version_id,action,comment,reviewer_id,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), proposalId, caseId, current.currentVersionId, reviewAction, body.comment.trim() || null, user.id, now),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, `PROPOSAL_${reviewAction}`, '제안서 검토 상태 변경', nextStatus, now)
+    ]) as Array<{meta?:{changes?:number}}> | undefined;
+    if (!results || results[0]?.meta?.changes !== 1) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json({ message: 'Proposal workflow updated', status: nextStatus, phase: 'CF27_D1_PROPOSAL_AUTHORING' });
+  }
+
+  if (action === 'render') return json({ error: '승인본 DOCX/PDF 출력은 보고서 출력 엔진 연결 단계에서 제공됩니다.', code: 'PROPOSAL_RENDER_NOT_READY' }, 501);
+  return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
+}
+
 async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
@@ -3011,6 +3146,10 @@ const worker = {
 
     if (url.pathname === '/api/proposal-workflow' || url.pathname.startsWith('/api/proposal-workflow/')) {
       return handlePreviewProposalWorkflow(request, env, url);
+    }
+
+    if (url.pathname === '/api/proposal-templates' || /^\/api\/cases\/[0-9a-f-]{36}\/proposals(?:\/|$)/iu.test(url.pathname)) {
+      return handlePreviewProposalAuthoring(request, env, url);
     }
 
     if (/^\/api\/cases\/(?:[0-9a-f-]{36}\/evidence|evidence\/[0-9a-f-]{36}\/download)$/iu.test(url.pathname)) {

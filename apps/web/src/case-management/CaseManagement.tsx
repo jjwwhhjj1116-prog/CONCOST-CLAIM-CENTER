@@ -252,20 +252,20 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
         method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, category: { major: '건설 클레임', middle: claimType, minor: '사건 업무' } })
       });
       setIdempotencyKey(crypto.randomUUID());
-      onNavigate(`/cases/detail?caseId=${encodeURIComponent(result.case.id)}`);
+      onNavigate(`/proposals/editor?caseId=${encodeURIComponent(result.case.id)}&from=intake`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
   };
   return <div className="case-create-page">
-    <section className="workspace-hero case-create-hero"><div><span className="workspace-eyebrow">NEW CLAIM WORKSPACE</span><h3>새 사건을 시작합니다.</h3><p>사건을 등록하면 일정·관계자·자료실·보고서 자동저장 공간이 함께 준비됩니다.</p></div><div className="case-create-number"><strong>01</strong><span>CASE SETUP</span></div></section>
+    <section className="workspace-hero case-create-hero"><div><span className="workspace-eyebrow">NEW PROJECT INTAKE</span><h3>새 프로젝트 의뢰를 등록합니다.</h3><p>저장하면 해당 의뢰가 선택된 제안서 작성 화면으로 바로 이어집니다.</p></div><div className="case-create-number"><strong>01</strong><span>INTAKE → PROPOSAL</span></div></section>
     <Card title="사건 기본정보" className="case-create-card">
       <form className="case-create-form" onSubmit={(event) => void submit(event)}>
         <Input label="사건명" value={title} maxLength={500} required placeholder="예: 공동주택 공사비 적정성 검토" onChange={(event) => setTitle(event.target.value)} />
         <Select label="클레임 업무 유형" value={claimType} options={[...CLAIM_TYPES]} onChange={(event) => setClaimType(event.target.value)} />
         <label className="case-description-field" htmlFor="case-description"><span>사건 설명</span><textarea id="case-description" value={description} maxLength={5000} placeholder="사건의 배경, 주요 쟁점, 현재 확보한 자료를 간단히 입력하세요." onChange={(event) => setDescription(event.target.value)} /></label>
-        <div className="case-create-summary"><span>자동 설정</span><p>대분류·중분류·소분류는 선택한 유형에 맞춰 자동 지정됩니다. 등록자는 담당자로 자동 배정되며 보고서 작성 공간이 즉시 열립니다.</p></div>
+        <div className="case-create-summary"><span>저장 후 다음 단계</span><p>대분류·중분류·소분류와 담당자를 D1에 함께 저장한 뒤, 이 프로젝트가 선택된 제안서 작성 1단계로 이동합니다.</p></div>
         {error && <ErrorBox error={error} />}
-        <div className="case-create-actions"><Button type="button" variant="secondary" onClick={() => onNavigate('/cases')}>취소</Button><Button type="submit" isLoading={saving}>사건 등록하고 시작</Button></div>
+        <div className="case-create-actions"><Button type="button" variant="secondary" onClick={() => onNavigate('/dashboard')}>취소</Button><Button type="submit" isLoading={saving}>의뢰 저장 후 제안서 작성</Button></div>
       </form>
     </Card>
   </div>;
