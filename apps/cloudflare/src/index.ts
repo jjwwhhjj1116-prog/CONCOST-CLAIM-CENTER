@@ -7,6 +7,7 @@ import {
   decryptSecret,
   downloadEvidenceFromDrive,
   ensureClaimCenterFolder,
+  ensureReportTemplateFolder,
   encryptSecret,
   exchangeAuthorizationCode,
   getDriveAccount,
@@ -16,6 +17,7 @@ import {
   sha256Hex,
   uploadEvidenceToDrive,
   validateEvidenceFile,
+  validateReportTemplateFile,
   verifyDriveFolder,
   type GoogleFetch
 } from './google-drive';
@@ -1535,6 +1537,9 @@ interface PreviewPromptRow {
   updatedAt: string;
   updatedByName: string;
   systemPrompt: string;
+  sourceCategoryCodesJson: string | null;
+  sourceAnalysisNote: string | null;
+  sourceAnalysisVersion: number | null;
 }
 
 interface PreviewAiSettingsRow {
@@ -1814,13 +1819,211 @@ async function previewAiPublicConfiguration(env: CloudflareEnv, routes: PreviewA
 
 async function previewPromptRows(env: CloudflareEnv, claimType = ''): Promise<PreviewPromptRow[]> {
   if (!env.DB) return [];
-  const rows = await env.DB.prepare(
-    'SELECT p.id, s.claim_type AS claimType, s.name AS typeName, s.status AS setStatus, p.chapter_code AS chapterCode, p.title, p.agent_code AS agentCode, ' +
-    'p.role_prompt AS rolePrompt, p.instruction_prompt AS instructionPrompt, p.ordinal, p.version, p.updated_at AS updatedAt, u.display_name AS updatedByName, s.system_prompt AS systemPrompt ' +
-    'FROM preview_report_prompt_sets s LEFT JOIN preview_report_chapter_prompts p ON p.prompt_set_id = s.id ' +
-    'LEFT JOIN preview_users u ON u.id = p.updated_by WHERE s.organization_id = ? AND (? = \'\' OR s.claim_type = ?) ORDER BY s.claim_type, p.ordinal'
-  ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewPromptRow>();
-  return rows.results;
+  const baseSelect = 'SELECT p.id, s.claim_type AS claimType, s.name AS typeName, s.status AS setStatus, p.chapter_code AS chapterCode, p.title, p.agent_code AS agentCode, ' +
+    'p.role_prompt AS rolePrompt, p.instruction_prompt AS instructionPrompt, p.ordinal, p.version, p.updated_at AS updatedAt, u.display_name AS updatedByName, s.system_prompt AS systemPrompt, ';
+  const tail = 'FROM preview_report_prompt_sets s LEFT JOIN preview_report_chapter_prompts p ON p.prompt_set_id = s.id ';
+  const where = 'LEFT JOIN preview_users u ON u.id = p.updated_by WHERE s.organization_id = ? AND (? = \'\' OR s.claim_type = ?) ORDER BY s.claim_type, p.ordinal';
+  try {
+    const rows = await env.DB.prepare(baseSelect +
+      'b.source_category_codes_json AS sourceCategoryCodesJson,b.analysis_note AS sourceAnalysisNote,b.analysis_version AS sourceAnalysisVersion ' +
+      tail + 'LEFT JOIN preview_report_prompt_source_basis b ON b.prompt_id=p.id ' + where
+    ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewPromptRow>();
+    return rows.results;
+  } catch {
+    const rows = await env.DB.prepare(baseSelect +
+      'NULL AS sourceCategoryCodesJson,NULL AS sourceAnalysisNote,NULL AS sourceAnalysisVersion ' + tail + where
+    ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewPromptRow>();
+    return rows.results;
+  }
+}
+
+interface PreviewTemplateLibraryFileRow {
+  id: string;
+  categoryId: string;
+  originalName: string;
+  fileExtension: 'pdf' | 'hwp' | 'hwpx' | 'xlsx';
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  uploadedAt: string;
+  uploadedByName: string;
+}
+
+interface PreviewTemplateLibraryCategoryRow {
+  id: string;
+  categoryCode: string;
+  displayName: string;
+  primaryClaimType: string;
+  secondaryClaimTypesJson: string;
+  sourceFileCount: number;
+  analysisSummary: string;
+  outlineJson: string;
+  analysisVersion: number;
+}
+
+function jsonStringArray(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function previewReportTemplateLibrary(env: CloudflareEnv, currentClaimType = ''): Promise<Array<Record<string, unknown>>> {
+  if (!env.DB) return [];
+  try {
+    const [categoryResult, fileResult] = await Promise.all([
+      env.DB.prepare(
+        'SELECT id,category_code AS categoryCode,display_name AS displayName,primary_claim_type AS primaryClaimType,secondary_claim_types_json AS secondaryClaimTypesJson,source_file_count AS sourceFileCount,analysis_summary AS analysisSummary,outline_json AS outlineJson,version AS analysisVersion FROM preview_report_template_categories ORDER BY category_code'
+      ).all<PreviewTemplateLibraryCategoryRow>(),
+      env.DB.prepare(
+        'SELECT f.id,f.category_id AS categoryId,f.original_name AS originalName,f.file_extension AS fileExtension,f.mime_type AS mimeType,f.byte_size AS byteSize,f.sha256,f.uploaded_at AS uploadedAt,u.display_name AS uploadedByName FROM preview_report_template_files f JOIN preview_users u ON u.id=f.uploaded_by WHERE f.organization_id=? ORDER BY f.category_id,f.uploaded_at DESC,f.original_name'
+      ).bind(PREVIEW_ORGANIZATION_ID).all<PreviewTemplateLibraryFileRow>()
+    ]);
+    const filesByCategory = new Map<string, PreviewTemplateLibraryFileRow[]>();
+    for (const file of fileResult.results ?? []) filesByCategory.set(file.categoryId, [...(filesByCategory.get(file.categoryId) ?? []), file]);
+    return (categoryResult.results ?? []).map((category) => {
+      const secondaryClaimTypes = jsonStringArray(category.secondaryClaimTypesJson);
+      const files = (filesByCategory.get(category.id) ?? []).map((file) => ({
+        id: file.id,
+        originalName: file.originalName,
+        fileExtension: file.fileExtension,
+        mimeType: file.mimeType,
+        byteSize: Number(file.byteSize),
+        sha256: file.sha256,
+        uploadedAt: file.uploadedAt,
+        uploadedByName: file.uploadedByName,
+        viewMode: file.fileExtension === 'pdf' ? 'INLINE' : 'DOWNLOAD',
+        contentUrl: `/api/report-templates/files/${encodeURIComponent(file.id)}/content`
+      }));
+      return {
+        id: category.id,
+        categoryCode: category.categoryCode,
+        displayName: category.displayName,
+        primaryClaimType: category.primaryClaimType,
+        secondaryClaimTypes,
+        matchesCurrentType: Boolean(currentClaimType && (category.primaryClaimType === currentClaimType || secondaryClaimTypes.includes(currentClaimType))),
+        expectedSourceCount: Number(category.sourceFileCount),
+        analysisSummary: category.analysisSummary,
+        outline: jsonStringArray(category.outlineJson),
+        analysisVersion: Number(category.analysisVersion),
+        uploadedSourceCount: files.length,
+        files
+      };
+    }).sort((left, right) => Number(right.matchesCurrentType) - Number(left.matchesCurrentType) || String(left.categoryCode).localeCompare(String(right.categoryCode)));
+  } catch {
+    return [];
+  }
+}
+
+async function handlePreviewReportTemplateLibrary(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  if (url.pathname === '/api/report-templates/library' && request.method === 'GET') {
+    const claimType = url.searchParams.get('claimType') ?? '';
+    if (claimType && !/^TYPE-0[1-6]$/u.test(claimType)) return json({ error: 'Claim type is invalid', code: 'INVALID_CLAIM_TYPE' }, 400);
+    return json({ categories: await previewReportTemplateLibrary(env, claimType), privateStorage: 'COMPANY_GOOGLE_DRIVE', phase: 'CF32_SOURCE_TEMPLATE_LIBRARY' });
+  }
+
+  const contentMatch = url.pathname.match(/^\/api\/report-templates\/files\/([0-9a-f-]{36})\/content$/iu);
+  if (contentMatch && request.method === 'GET') {
+    const file = await env.DB.prepare(
+      'SELECT original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,google_file_id AS googleFileId FROM preview_report_template_files WHERE id=? AND organization_id=?'
+    ).bind(contentMatch[1], PREVIEW_ORGANIZATION_ID).first<{ originalName: string; mimeType: string; byteSize: number; sha256: string; googleFileId: string }>();
+    if (!file) return json({ error: 'Report template source was not found', code: 'TEMPLATE_SOURCE_NOT_FOUND' }, 404);
+    try {
+      const providerResponse = await downloadEvidenceFromDrive(googleFetch(env), await accessToken(env), file.googleFileId);
+      const bytes = new Uint8Array(await providerResponse.arrayBuffer());
+      if (bytes.byteLength !== Number(file.byteSize) || await sha256Hex(bytes) !== file.sha256) {
+        return json({ error: 'Report template source integrity verification failed', code: 'TEMPLATE_SOURCE_INTEGRITY_MISMATCH' }, 409);
+      }
+      const inline = file.mimeType === 'application/pdf';
+      return new Response(bytes, {
+        status: 200,
+        headers: {
+          'Cache-Control': 'private, no-store, max-age=0',
+          'Content-Type': file.mimeType,
+          'Content-Length': String(file.byteSize),
+          'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.originalName)}`,
+          'Content-Security-Policy': "sandbox; default-src 'none'",
+          'X-Content-Type-Options': 'nosniff'
+        }
+      });
+    } catch (reason) {
+      return googleFailure(reason);
+    }
+  }
+
+  if (url.pathname !== '/api/admin/report-templates/import' || request.method !== 'POST') return json({ error: 'Report template route was not found', code: 'TEMPLATE_ROUTE_NOT_FOUND' }, 404);
+  if (!user.roles.includes('admin')) return json({ error: 'Only Admin can import report templates', code: 'FORBIDDEN' }, 403);
+  const requestKey = request.headers.get('Idempotency-Key')?.trim() ?? '';
+  if (requestKey.length < 16 || requestKey.length > 200) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+  const form = await request.formData().catch(() => null);
+  const file = form?.get('file');
+  const categoryCode = form?.get('categoryCode');
+  if (!(file instanceof File) || typeof categoryCode !== 'string' || !/^REF-0[1-9]$/u.test(categoryCode)) return json({ error: 'Template file and category are required', code: 'INVALID_TEMPLATE_IMPORT' }, 400);
+  const category = await env.DB.prepare('SELECT id,display_name AS displayName FROM preview_report_template_categories WHERE category_code=?').bind(categoryCode).first<{ id: string; displayName: string }>();
+  if (!category) return json({ error: 'Template category was not found', code: 'TEMPLATE_CATEGORY_NOT_FOUND' }, 404);
+  let validated: Awaited<ReturnType<typeof validateReportTemplateFile>>;
+  try { validated = await validateReportTemplateFile(file); } catch (reason) { return googleFailure(reason); }
+  const fingerprint = await sha256Hex(`${categoryCode}\n${file.name}\n${file.size}\n${validated.sha256}`);
+  const existingOperation = await env.DB.prepare('SELECT id,status,request_fingerprint AS requestFingerprint FROM preview_report_template_import_operations WHERE request_key=? AND organization_id=?')
+    .bind(requestKey, PREVIEW_ORGANIZATION_ID).first<{ id: string; status: string; requestFingerprint: string }>();
+  if (existingOperation) {
+    if (existingOperation.requestFingerprint !== fingerprint) return json({ error: 'Idempotency key was already used with different template data', code: 'IDEMPOTENCY_CONFLICT' }, 409);
+    const replay = await env.DB.prepare('SELECT id FROM preview_report_template_files WHERE operation_id=?').bind(existingOperation.id).first<{ id: string }>();
+    if (replay) return json({ replay: true, fileId: replay.id, categories: await previewReportTemplateLibrary(env), phase: 'CF32_SOURCE_TEMPLATE_LIBRARY' });
+    return json({ error: 'Template import requires reconciliation before retry', code: existingOperation.status === 'PENDING' ? 'IMPORT_IN_PROGRESS' : 'RECONCILIATION_REQUIRED' }, 409);
+  }
+  const duplicate = await env.DB.prepare('SELECT id FROM preview_report_template_files WHERE organization_id=? AND category_id=? AND sha256=?')
+    .bind(PREVIEW_ORGANIZATION_ID, category.id, validated.sha256).first<{ id: string }>();
+  if (duplicate) return json({ replay: true, fileId: duplicate.id, categories: await previewReportTemplateLibrary(env), phase: 'CF32_SOURCE_TEMPLATE_LIBRARY' });
+
+  const operationId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  try {
+    await env.DB.prepare('INSERT INTO preview_report_template_import_operations (id,organization_id,category_id,request_key,request_fingerprint,status,actor_id,created_at,updated_at) VALUES (?,?,?,?,?,\'PENDING\',?,?,?)')
+      .bind(operationId, PREVIEW_ORGANIZATION_ID, category.id, requestKey, fingerprint, user.id, createdAt, createdAt).run();
+  } catch {
+    return json({ error: 'Template import request conflicted with another request', code: 'IMPORT_CONFLICT' }, 409);
+  }
+  try {
+    const token = await accessToken(env);
+    const folder = await ensureReportTemplateFolder(googleFetch(env), { accessToken: token, categoryCode, categoryName: category.displayName });
+    const templateFileId = crypto.randomUUID();
+    const uploaded = await uploadEvidenceToDrive(googleFetch(env), {
+      accessToken: token,
+      folderId: folder.categoryId,
+      evidenceId: templateFileId,
+      fileName: file.name,
+      mimeType: validated.mimeType,
+      sha256: validated.sha256,
+      bytes: validated.bytes,
+      category: `REPORT_TEMPLATE:${categoryCode}`,
+      uploadedById: user.id,
+      uploadedAt: createdAt
+    });
+    if (!env.DB.batch) throw new GoogleDriveError('D1_BATCH_REQUIRED', 503, 'D1 batch is unavailable', true);
+    const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+    const completedAt = new Date().toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_report_template_files (id,organization_id,category_id,original_name,file_extension,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by,uploaded_at,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .bind(templateFileId, PREVIEW_ORGANIZATION_ID, category.id, file.name, extension, validated.mimeType, file.size, validated.sha256, uploaded.fileId, folder.categoryId, user.id, completedAt, operationId),
+      env.DB.prepare("UPDATE preview_report_template_import_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId, completedAt, operationId),
+      env.DB.prepare('INSERT INTO preview_report_template_audit (id,organization_id,event_type,category_id,file_id,actor_id,detail_json,created_at) VALUES (?,?,?,?,?,?,?,?)')
+        .bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, 'TEMPLATE_SOURCE_IMPORTED', category.id, templateFileId, user.id, JSON.stringify({ categoryCode, originalName: file.name, byteSize: file.size, sha256: validated.sha256 }), completedAt)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results.some((result) => result.meta?.changes !== 1)) throw new GoogleDriveError('TEMPLATE_METADATA_COMMIT_FAILED', 503, 'Template metadata did not commit atomically', true);
+    return json({ replay: false, fileId: templateFileId, categories: await previewReportTemplateLibrary(env), phase: 'CF32_SOURCE_TEMPLATE_LIBRARY' }, 201);
+  } catch (reason) {
+    const uncertain = reason instanceof GoogleDriveError && reason.uncertain;
+    await env.DB.prepare('UPDATE preview_report_template_import_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status=\'PENDING\'')
+      .bind(uncertain ? 'RECONCILIATION_REQUIRED' : 'FAILED', reason instanceof GoogleDriveError ? reason.code : 'TEMPLATE_IMPORT_FAILED', new Date().toISOString(), operationId).run().catch(() => undefined);
+    return googleFailure(reason);
+  }
 }
 
 async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -1836,13 +2039,14 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
     const typeMap = new Map<string, { claimType: string; name: string; status: string; systemPrompt: string; chapters: Array<Record<string, unknown>> }>();
     for (const row of rows) {
       if (!typeMap.has(row.claimType)) typeMap.set(row.claimType, { claimType: row.claimType, name: row.typeName, status: row.setStatus, systemPrompt: row.systemPrompt, chapters: [] });
-      if (row.id) typeMap.get(row.claimType)?.chapters.push({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, rolePrompt: row.rolePrompt, instructionPrompt: row.instructionPrompt, ordinal: Number(row.ordinal), version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName });
+      if (row.id) typeMap.get(row.claimType)?.chapters.push({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, rolePrompt: row.rolePrompt, instructionPrompt: row.instructionPrompt, ordinal: Number(row.ordinal), version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName, sourceCategoryCodes: jsonStringArray(row.sourceCategoryCodesJson ?? '[]'), sourceAnalysisNote: row.sourceAnalysisNote ?? '', sourceAnalysisVersion: Number(row.sourceAnalysisVersion ?? 0) });
     }
     return json({
       settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(await previewStoredAiCredential(env, settings.providerKind as PreviewAiProvider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID)) || previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null,
       aiConfig: await previewAiPublicConfiguration(env, routes),
       promptSets: [...typeMap.values()],
-      phase: 'CF19_MULTI_PROVIDER_AI'
+      templateLibrary: await previewReportTemplateLibrary(env),
+      phase: 'CF32_SOURCE_TEMPLATE_LIBRARY'
     });
   }
 
@@ -2587,7 +2791,8 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       outlinePlan,
       sourceGroups,
       templates,
-      phase: 'CF30_SETTINGS_TEMPLATE_PREVIEW'
+      templateLibrary: await previewReportTemplateLibrary(env, caseRow.claimType),
+      phase: 'CF32_SOURCE_TEMPLATE_LIBRARY'
     });
   }
 
@@ -3639,6 +3844,10 @@ const worker = {
 
     if (url.pathname === '/api/admin/users') {
       return handlePreviewAdminUsers(request, env);
+    }
+
+    if (url.pathname === '/api/report-templates/library' || url.pathname.startsWith('/api/report-templates/files/') || url.pathname === '/api/admin/report-templates/import') {
+      return handlePreviewReportTemplateLibrary(request, env, url);
     }
 
     if (url.pathname === '/api/admin/report-prompts' || url.pathname.startsWith('/api/admin/report-prompts/')) {

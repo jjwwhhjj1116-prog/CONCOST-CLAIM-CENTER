@@ -5,6 +5,7 @@ export const GOOGLE_OAUTH_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 export const GOOGLE_DRIVE_API = 'https://www.googleapis.com/drive/v3';
 export const GOOGLE_DRIVE_UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3';
 export const MAX_EVIDENCE_BYTES = 10_000_000;
+export const MAX_REPORT_TEMPLATE_BYTES = 50_000_000;
 
 export type GoogleFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -246,7 +247,72 @@ export async function validateEvidenceFile(file: File): Promise<{ bytes: Uint8Ar
   return { bytes, mimeType: rule.mime, sha256: await sha256Hex(bytes) };
 }
 
+export async function validateReportTemplateFile(file: File): Promise<{ bytes: Uint8Array; mimeType: string; sha256: string }> {
+  if (file.size <= 0 || file.size > MAX_REPORT_TEMPLATE_BYTES) throw new GoogleDriveError('REPORT_TEMPLATE_TOO_LARGE', 413, 'Report template must be between 1 byte and 50 MB');
+  if (file.name.length > 240 || /[\\/:*?"<>|\u0000-\u001f]/u.test(file.name)) throw new GoogleDriveError('INVALID_FILE_NAME', 400, 'Report template file name is invalid');
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+  if (!['pdf', 'hwp', 'hwpx', 'xlsx'].includes(extension)) throw new GoogleDriveError('REPORT_TEMPLATE_TYPE_NOT_ALLOWED', 415, 'Only PDF, HWP, HWPX, and XLSX report templates are allowed');
+  const rule = extensionMime[extension];
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!rule?.magic(bytes)) throw new GoogleDriveError('REPORT_TEMPLATE_SIGNATURE_MISMATCH', 415, 'Report template content does not match its extension');
+  return { bytes, mimeType: rule.mime, sha256: await sha256Hex(bytes) };
+}
+
 const GOOGLE_ID = /^[A-Za-z0-9_-]{10,200}$/u;
+
+export async function ensureReportTemplateFolder(
+  fetcher: GoogleFetch,
+  input: { accessToken: string; categoryCode: string; categoryName: string }
+): Promise<{ rootId: string; categoryId: string }> {
+  if (!/^REF-0[1-9]$/u.test(input.categoryCode) || input.categoryName.trim().length < 2) {
+    throw new GoogleDriveError('INVALID_REPORT_TEMPLATE_CATEGORY', 400, 'Report template category is invalid');
+  }
+  const ensureFolder = async (kind: 'REPORT_TEMPLATE_LIBRARY' | 'REPORT_TEMPLATE_CATEGORY', name: string, parentId?: string): Promise<string> => {
+    const q = [
+      "trashed = false",
+      "mimeType = 'application/vnd.google-apps.folder'",
+      `appProperties has { key='claimCenterFolderKind' and value='${kind}' }`,
+      `appProperties has { key='claimCenterTemplateCategory' and value='${kind === 'REPORT_TEMPLATE_LIBRARY' ? 'ROOT' : input.categoryCode}' }`
+    ];
+    if (parentId) q.push(`'${driveQueryValue(parentId)}' in parents`);
+    const listUrl = new URL(`${GOOGLE_DRIVE_API}/files`);
+    listUrl.searchParams.set('q', q.join(' and '));
+    listUrl.searchParams.set('spaces', 'drive');
+    listUrl.searchParams.set('pageSize', '10');
+    listUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed)');
+    const listed = await fetchWithTimeout(fetcher, listUrl.toString(), { headers: { Authorization: `Bearer ${input.accessToken}` } });
+    if (!listed.ok) throw providerFailure(listed, 'Google Drive report-template folder lookup');
+    const listing = await safeJson(listed);
+    if (!Array.isArray(listing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid report-template folder list');
+    const existing = listing.files.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
+      .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+    if (existing) return String(existing.id);
+    const metadata = {
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+      ...(parentId ? { parents: [parentId] } : {}),
+      appProperties: {
+        claimCenterFolderKind: kind,
+        claimCenterTemplateCategory: kind === 'REPORT_TEMPLATE_LIBRARY' ? 'ROOT' : input.categoryCode
+      }
+    };
+    const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(metadata)
+    });
+    if (!created.ok) throw providerFailure(created, 'Google Drive report-template folder creation', true);
+    const result = await safeJson(created);
+    if (typeof result.id !== 'string' || !GOOGLE_ID.test(result.id) || result.name !== name || result.mimeType !== 'application/vnd.google-apps.folder' || result.trashed === true) {
+      throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid report-template folder metadata', true);
+    }
+    return result.id;
+  };
+  const rootId = await ensureFolder('REPORT_TEMPLATE_LIBRARY', 'CONCOST CLAIM CENTER - 보고서 템플릿');
+  const categoryId = await ensureFolder('REPORT_TEMPLATE_CATEGORY', `${input.categoryCode} ${input.categoryName}`, rootId);
+  return { rootId, categoryId };
+}
 
 export async function verifyDriveFolder(fetcher: GoogleFetch, accessToken: string, folderId: string): Promise<{ id: string; name: string }> {
   if (!GOOGLE_ID.test(folderId)) throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_ID', 400, 'Google Drive folder ID is invalid');

@@ -1,5 +1,5 @@
 import { Button, Card, Select, StatusBadge } from '@claim-studio/ui';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 
@@ -8,9 +8,11 @@ type TaskKind = 'OUTLINE_PLANNING' | 'CHAPTER_WRITING' | 'FACT_CHECK';
 interface AiProvider { providerKind: ProviderKind; label: string; secretName: string; connected: boolean; models: Array<{ code: string; label: string }> }
 interface AiRoute { taskKind: TaskKind; providerKind: ProviderKind; modelCode: string; reasoningEffort: string; version: number; updatedAt: string; updatedByName: string; connected: boolean }
 interface AiConfig { providers: AiProvider[]; routes: AiRoute[] }
-interface ChapterPrompt { id: string; chapterCode: string; title: string; agentCode: string; rolePrompt: string; instructionPrompt: string; ordinal: number; version: number; updatedAt: string; updatedBy: string }
+interface ChapterPrompt { id: string; chapterCode: string; title: string; agentCode: string; rolePrompt: string; instructionPrompt: string; ordinal: number; version: number; updatedAt: string; updatedBy: string; sourceCategoryCodes: string[]; sourceAnalysisNote: string; sourceAnalysisVersion: number }
 interface PromptSet { claimType: string; name: string; status: string; systemPrompt: string; chapters: ChapterPrompt[] }
-interface AdminPromptPayload { aiConfig: AiConfig; promptSets: PromptSet[] }
+interface TemplateLibraryFile { id: string; originalName: string; fileExtension: string; byteSize: number; sha256: string; uploadedAt: string; uploadedByName: string; viewMode: 'INLINE' | 'DOWNLOAD'; contentUrl: string }
+interface TemplateLibraryCategory { id: string; categoryCode: string; displayName: string; primaryClaimType: string; secondaryClaimTypes: string[]; expectedSourceCount: number; uploadedSourceCount: number; analysisSummary: string; outline: string[]; analysisVersion: number; files: TemplateLibraryFile[] }
+interface AdminPromptPayload { aiConfig: AiConfig; promptSets: PromptSet[]; templateLibrary: TemplateLibraryCategory[] }
 
 const TASK_LABELS: Record<TaskKind, { title: string; detail: string }> = {
   OUTLINE_PLANNING: { title: '목차 기획', detail: '보고서 구조와 챕터별 계획을 설계합니다.' },
@@ -29,12 +31,19 @@ export function PreviewAiAdmin(): React.ReactElement {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [templateCategoryCode, setTemplateCategoryCode] = useState('REF-01');
+  const [templateImporting, setTemplateImporting] = useState(false);
+  const [templateImportProgress, setTemplateImportProgress] = useState('');
+  const templateImportKeys = useRef(new Map<string, string>());
+  const templateFolderInput = useRef<HTMLInputElement | null>(null);
 
   const load = async () => {
     setLoading(true); setError('');
     try {
       const next = await apiRequest<AdminPromptPayload>('/api/admin/report-prompts');
-      setPayload(next); setRouteDrafts(Object.fromEntries(next.aiConfig.routes.map((route) => [route.taskKind, route])));
+      const templateLibrary = next.templateLibrary ?? [];
+      setPayload({ ...next, templateLibrary }); setRouteDrafts(Object.fromEntries(next.aiConfig.routes.map((route) => [route.taskKind, route])));
+      setTemplateCategoryCode((current) => templateLibrary.some((category) => category.categoryCode === current) ? current : templateLibrary[0]?.categoryCode ?? 'REF-01');
       const type = next.promptSets.some((entry) => entry.claimType === selectedType) ? selectedType : next.promptSets[0]?.claimType ?? '';
       setSelectedType(type);
       setSelectedChapter((current) => next.promptSets.find((entry) => entry.claimType === type)?.chapters.some((chapter) => chapter.id === current) ? current : next.promptSets.find((entry) => entry.claimType === type)?.chapters[0]?.id ?? '');
@@ -79,6 +88,36 @@ export function PreviewAiAdmin(): React.ReactElement {
     finally { setSaving(false); }
   };
 
+  const importTemplateFolder = async (incoming: FileList | null) => {
+    if (!incoming?.length || !payload) return;
+    const files = Array.from(incoming).filter((file) => /\.(?:pdf|hwp|hwpx|xlsx)$/iu.test(file.name));
+    if (!files.length) { setError('선택한 폴더에 PDF·HWP·HWPX·XLSX 보고서 템플릿이 없습니다.'); return; }
+    setTemplateImporting(true); setError(''); setNotice('');
+    let completed = 0;
+    let failed = 0;
+    for (const file of files) {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? '';
+      const detectedCode = relativePath.split('/').map((part) => part.match(/^(0[1-9])\./u)?.[1]).find(Boolean);
+      const categoryCode = detectedCode ? `REF-${detectedCode}` : templateCategoryCode;
+      const fingerprint = `${categoryCode}:${relativePath || file.name}:${file.size}:${file.lastModified}`;
+      const requestKey = templateImportKeys.current.get(fingerprint) ?? `template-${crypto.randomUUID()}`;
+      templateImportKeys.current.set(fingerprint, requestKey);
+      setTemplateImportProgress(`${completed + failed + 1}/${files.length} · ${file.name}`);
+      try {
+        const form = new FormData(); form.set('categoryCode', categoryCode); form.set('file', file);
+        const response = await fetch('/api/admin/report-templates/import', { method: 'POST', credentials: 'include', headers: { 'Idempotency-Key': requestKey }, body: form });
+        const result = await response.json() as { categories?: TemplateLibraryCategory[]; error?: string };
+        if (!response.ok || !result.categories) throw new Error(result.error ?? `${file.name} 등록에 실패했습니다.`);
+        templateImportKeys.current.delete(fingerprint);
+        setPayload((current) => current ? { ...current, templateLibrary: result.categories as TemplateLibraryCategory[] } : current);
+        completed += 1;
+      } catch (reason) { failed += 1; setError(reason instanceof Error ? reason.message : `${file.name} 등록에 실패했습니다.`); }
+    }
+    setTemplateImportProgress(''); setTemplateImporting(false);
+    if (templateFolderInput.current) templateFolderInput.current.value = '';
+    if (completed) setNotice(`회사 Google Drive 보고서 템플릿 라이브러리에 ${completed}개 원본을 등록했습니다.${failed ? ` ${failed}개는 오류를 확인해 주세요.` : ''}`);
+  };
+
   if (loading) return <StatusFeedbackState type="loading" message="관리자 전용 AI 라우팅과 프롬프트를 불러오고 있습니다." />;
   if (!payload) return <StatusFeedbackState type="error" title="AI 설정을 불러오지 못했습니다" message={error || 'D1 마이그레이션 상태를 확인해 주세요.'} actionLabel="다시 시도" onAction={() => void load()} />;
   const connectedCount = payload.aiConfig.providers.filter((item) => item.connected).length;
@@ -98,8 +137,13 @@ export function PreviewAiAdmin(): React.ReactElement {
     </Card>
     <Card title="TYPE별 챕터 프롬프트 편집">
       <div className="report-ai-admin__settings"><Select label="보고서 유형" value={selectedType} onChange={(event) => changeType(event.target.value)} options={payload.promptSets.map((entry) => ({ value: entry.claimType, label: `${entry.claimType} · ${entry.name}` }))} /><Select label="챕터" value={selectedChapter} disabled={!promptSet?.chapters.length} onChange={(event) => setSelectedChapter(event.target.value)} options={(promptSet?.chapters ?? []).map((entry) => ({ value: entry.id, label: `${entry.chapterCode} · ${entry.title}` }))} /></div>
-      {promptSet?.status === 'TEMPLATE_NOT_FOUND' ? <div className="error-box">TYPE-05는 승인된 전용 템플릿이 없어 자동 생성을 시작하지 않습니다.</div> : chapter ? <div className="form-stack report-ai-admin__editor"><div className="notice-box"><strong>{chapter.agentCode} · {chapter.chapterCode} {chapter.title}</strong><br />프롬프트 v{chapter.version} · {chapter.updatedBy}</div><label htmlFor="chapter-role-prompt">챕터 작성자 역할</label><textarea id="chapter-role-prompt" value={rolePrompt} maxLength={5000} onChange={(event) => setRolePrompt(event.target.value)} /><label htmlFor="chapter-instruction-prompt">챕터 작성 지시</label><textarea id="chapter-instruction-prompt" value={instructionPrompt} maxLength={10000} onChange={(event) => setInstructionPrompt(event.target.value)} /><div className="action-row"><Button onClick={() => void savePrompt()} disabled={saving || rolePrompt.trim().length < 20 || instructionPrompt.trim().length < 20}>{saving ? '저장 중…' : '새 프롬프트 버전 저장'}</Button><span className="muted">변경 이력은 D1에 append-only로 보존됩니다.</span></div></div> : <p className="empty-box">편집할 챕터가 없습니다.</p>}
+      {promptSet?.status === 'TEMPLATE_NOT_FOUND' ? <div className="error-box">TYPE-05는 폴더에서 확인된 전용 원본 템플릿이 없어 자동 생성을 시작하지 않습니다.</div> : chapter ? <div className="form-stack report-ai-admin__editor"><div className="notice-box"><strong>{chapter.agentCode} · {chapter.chapterCode} {chapter.title}</strong><br />프롬프트 v{chapter.version} · {chapter.updatedBy}</div><div className="report-ai-admin__source-basis"><strong>원본 분석 근거 · v{chapter.sourceAnalysisVersion || 1}</strong><span>{chapter.sourceCategoryCodes.length ? chapter.sourceCategoryCodes.join(' · ') : '원본 근거 미지정'}</span><p>{chapter.sourceAnalysisNote || '이 챕터와 연결된 원본 분석 메모가 없습니다.'}</p></div><label htmlFor="chapter-role-prompt">챕터 작성자 역할</label><textarea id="chapter-role-prompt" value={rolePrompt} maxLength={5000} onChange={(event) => setRolePrompt(event.target.value)} /><label htmlFor="chapter-instruction-prompt">챕터 작성 지시</label><textarea id="chapter-instruction-prompt" value={instructionPrompt} maxLength={10000} onChange={(event) => setInstructionPrompt(event.target.value)} /><div className="action-row"><Button onClick={() => void savePrompt()} disabled={saving || rolePrompt.trim().length < 20 || instructionPrompt.trim().length < 20}>{saving ? '저장 중…' : '새 프롬프트 버전 저장'}</Button><span className="muted">변경 이력은 D1에 append-only로 보존됩니다.</span></div></div> : <p className="empty-box">편집할 챕터가 없습니다.</p>}
       {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error}</p>}
+    </Card>
+    <Card title="원본 보고서 템플릿 라이브러리 · 회사 Google Drive">
+      <div className="template-library-admin__intro"><div><p className="eyebrow">PRIVATE SOURCE LIBRARY · 32 ORIGINAL FILES</p><h2>원본 폴더를 그대로 등록하고, 분석 근거와 함께 관리합니다.</h2><p className="muted">원본은 공개 Git·정적 웹 자산에 포함하지 않습니다. 관리자만 등록하며 로그인 사용자는 보고서 작성 화면에서 PDF를 열람하고 HWP·HWPX·XLSX를 내려받을 수 있습니다.</p></div><strong>{payload.templateLibrary.reduce((sum, category) => sum + category.uploadedSourceCount, 0)}/{payload.templateLibrary.reduce((sum, category) => sum + category.expectedSourceCount, 0)}<small>GOOGLE DRIVE REGISTERED</small></strong></div>
+      <div className="template-library-admin__actions"><Select label="단일 파일 기본 분류" value={templateCategoryCode} onChange={(event) => setTemplateCategoryCode(event.target.value)} options={payload.templateLibrary.map((category) => ({ value: category.categoryCode, label: `${category.categoryCode} · ${category.displayName}` }))} /><input ref={(node) => { templateFolderInput.current = node; if (node) node.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden accept=".pdf,.hwp,.hwpx,.xlsx" onChange={(event) => void importTemplateFolder(event.target.files)} /><Button onClick={() => templateFolderInput.current?.click()} disabled={templateImporting}>{templateImporting ? templateImportProgress || '원본 등록 중…' : '원본 32개 폴더 선택·등록'}</Button></div>
+      <div className="template-library-admin__grid">{payload.templateLibrary.map((category) => <article key={category.id} data-complete={category.uploadedSourceCount >= category.expectedSourceCount}><header><span>{category.categoryCode} · {category.primaryClaimType}</span><strong>{category.displayName}</strong><em>{category.uploadedSourceCount}/{category.expectedSourceCount}</em></header><p>{category.analysisSummary}</p><ol>{category.outline.map((item) => <li key={item}>{item}</li>)}</ol>{category.files.length ? <details><summary>등록 원본 {category.files.length}개 보기</summary><ul>{category.files.map((file) => <li key={file.id}><a href={file.contentUrl} target={file.viewMode === 'INLINE' ? '_blank' : undefined} rel="noreferrer">{file.originalName}</a><small>{(file.byteSize / 1024 / 1024).toFixed(1)} MB · SHA {file.sha256.slice(0, 12)}…</small></li>)}</ul></details> : <small className="template-library-admin__empty">아직 Drive 원본 미등록 · 구조 분석과 프롬프트는 적용됨</small>}</article>)}</div>
     </Card>
   </div>;
 }
