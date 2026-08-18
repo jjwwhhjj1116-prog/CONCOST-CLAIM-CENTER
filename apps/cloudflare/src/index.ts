@@ -48,6 +48,7 @@ export interface CloudflareEnv {
   AI_CREDENTIAL_MASTER_KEY?: string;
   GOOGLE_OAUTH_REDIRECT_ORIGIN?: string;
   GOOGLE_ALLOWED_DOMAIN?: string;
+  GOOGLE_ALLOWED_ACCOUNT?: string;
   ALLOW_TEST_GOOGLE_MODES?: string;
   GOOGLE_TEST_FETCH?: GoogleFetch;
   OPENAI_API_KEY?: string;
@@ -3048,10 +3049,12 @@ async function storedGoogleOAuthAppSettings(env: CloudflareEnv): Promise<GoogleO
   }
 }
 
-async function googleConfig(env: CloudflareEnv): Promise<{ clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string; allowedDomain: string; source: 'CLOUDFLARE_SECRET' | 'ENCRYPTED_D1' } | null> {
-  const { GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin, GOOGLE_ALLOWED_DOMAIN: allowedDomainRaw } = env;
+async function googleConfig(env: CloudflareEnv): Promise<{ clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string; allowedDomain: string; allowedAccount: string | null; source: 'CLOUDFLARE_SECRET' | 'ENCRYPTED_D1' } | null> {
+  const { GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin, GOOGLE_ALLOWED_DOMAIN: allowedDomainRaw, GOOGLE_ALLOWED_ACCOUNT: allowedAccountRaw } = env;
   const allowedDomain = allowedDomainRaw?.trim().toLowerCase();
+  const allowedAccount = allowedAccountRaw?.trim().toLowerCase() || null;
   if (!masterKey || !/^[0-9a-f]{64}$/iu.test(masterKey) || !redirectOrigin || !allowedDomain || !/^[a-z0-9.-]+\.[a-z]{2,}$/u.test(allowedDomain)) return null;
+  if (allowedAccount && !/^[^@\s]+@[^@\s]+$/u.test(allowedAccount)) return null;
   try {
     const origin = new URL(redirectOrigin);
     if (origin.protocol !== 'https:' || origin.origin !== redirectOrigin || origin.pathname !== '/') return null;
@@ -3061,14 +3064,14 @@ async function googleConfig(env: CloudflareEnv): Promise<{ clientId: string; cli
   const environmentClientId = env.GOOGLE_CLIENT_ID?.trim() ?? '';
   const environmentClientSecret = env.GOOGLE_CLIENT_SECRET?.trim() ?? '';
   if (validGoogleOAuthClientId(environmentClientId) && validGoogleOAuthClientSecret(environmentClientSecret)) {
-    return { clientId: environmentClientId, clientSecret: environmentClientSecret, masterKey, redirectOrigin, allowedDomain, source: 'CLOUDFLARE_SECRET' };
+    return { clientId: environmentClientId, clientSecret: environmentClientSecret, masterKey, redirectOrigin, allowedDomain, allowedAccount, source: 'CLOUDFLARE_SECRET' };
   }
   const stored = await storedGoogleOAuthAppSettings(env);
   if (!stored || !validGoogleOAuthClientId(stored.clientId)) return null;
   try {
     const clientSecret = await decryptSecret(stored.encryptedClientSecret, stored.iv, masterKey, googleOAuthAppAad());
     if (!clientSecret || !validGoogleOAuthClientSecret(clientSecret)) return null;
-    return { clientId: stored.clientId, clientSecret, masterKey, redirectOrigin, allowedDomain, source: 'ENCRYPTED_D1' };
+    return { clientId: stored.clientId, clientSecret, masterKey, redirectOrigin, allowedDomain, allowedAccount, source: 'ENCRYPTED_D1' };
   } catch {
     return null;
   }
@@ -3213,9 +3216,9 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
       const exchanged = await exchangeAuthorizationCode(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, code, verifier, redirectUri });
       newlyIssuedRefreshToken = exchanged.refreshToken;
       const account = await getDriveAccount(googleFetch(env), exchanged.accessToken);
-      if (!isAllowedGoogleAccountEmail(account.email, config.allowedDomain)) {
+      if (!isAllowedGoogleAccountEmail(account.email, config.allowedDomain, config.allowedAccount)) {
         await revokeGoogleCredential(googleFetch(env), exchanged.refreshToken).catch(() => undefined);
-        return json({ error: `Only ${config.allowedDomain} company accounts may be connected`, code: 'GOOGLE_COMPANY_ACCOUNT_REQUIRED' }, 403);
+        return json({ error: 'Only the approved company Google Drive account may be connected', code: 'GOOGLE_COMPANY_ACCOUNT_REQUIRED' }, 403);
       }
       const encrypted = await encryptSecret(exchanged.refreshToken, config.masterKey, `${PREVIEW_ORGANIZATION_ID}:google-refresh`);
       if (!env.DB.batch) throw new Error('D1 batch unavailable');

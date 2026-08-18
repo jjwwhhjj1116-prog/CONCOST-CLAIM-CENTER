@@ -138,6 +138,8 @@ describe('CF05 Google Drive direct storage contract', () => {
     }, 'access-token-12345');
     assert.deepEqual(account, { displayName: 'Claim Admin', email: 'admin@con-cost.com' });
     assert.equal(isAllowedGoogleAccountEmail(account.email, 'con-cost.com'), true);
+    assert.equal(isAllowedGoogleAccountEmail('concost0010@gmail.com', 'con-cost.com', 'concost0010@gmail.com'), true);
+    assert.equal(isAllowedGoogleAccountEmail('other@gmail.com', 'con-cost.com', 'concost0010@gmail.com'), false);
     assert.equal(isAllowedGoogleAccountEmail('admin@personal.example', 'con-cost.com'), false);
     assert.equal(isAllowedGoogleAccountEmail('admin@sub.con-cost.com', 'con-cost.com'), false);
     await expectGoogleError(getDriveAccount(async () => Response.json({ user: { emailAddress: 'invalid' } }), 'token'), 'GOOGLE_MALFORMED_RESPONSE');

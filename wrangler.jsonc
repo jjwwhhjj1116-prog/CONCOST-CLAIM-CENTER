@@ -16,6 +16,7 @@
   },
   "vars": {
     "GOOGLE_ALLOWED_DOMAIN": "con-cost.com",
+    "GOOGLE_ALLOWED_ACCOUNT": "concost0010@gmail.com",
     "GOOGLE_OAUTH_REDIRECT_ORIGIN": "https://concost-claim-center-preview.jjwwhhjj1116.workers.dev"
   },
   "assets": {

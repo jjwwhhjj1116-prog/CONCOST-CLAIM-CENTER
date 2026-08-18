@@ -180,8 +180,10 @@ export async function getDriveAccount(fetcher: GoogleFetch, accessToken: string)
   return { email: account.emailAddress.toLowerCase(), displayName: account.displayName.slice(0, 120) };
 }
 
-export function isAllowedGoogleAccountEmail(email: string, allowedDomain: string): boolean {
-  return email.trim().toLowerCase().endsWith(`@${allowedDomain.trim().toLowerCase()}`);
+export function isAllowedGoogleAccountEmail(email: string, allowedDomain: string, allowedAccount?: string | null): boolean {
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedAccount = allowedAccount?.trim().toLowerCase();
+  return normalizedEmail.endsWith(`@${allowedDomain.trim().toLowerCase()}`) || Boolean(normalizedAccount && normalizedEmail === normalizedAccount);
 }
 
 export async function refreshAccessToken(
