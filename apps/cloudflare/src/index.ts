@@ -1542,6 +1542,21 @@ interface PreviewPromptRow {
   sourceAnalysisVersion: number | null;
 }
 
+interface PreviewTypeGuidelineRow {
+  claimType: string;
+  typeName: string;
+  targetWork: string;
+  tocBlueprint: string;
+  stage1Prompt: string;
+  stage2Prompt: string;
+  sourceFileName: string;
+  sourceSha256: string;
+  status: string;
+  version: number;
+  updatedAt: string;
+  updatedByName: string;
+}
+
 interface PreviewAiSettingsRow {
   providerKind: string;
   modelCode: string;
@@ -1821,19 +1836,36 @@ async function previewPromptRows(env: CloudflareEnv, claimType = ''): Promise<Pr
   if (!env.DB) return [];
   const baseSelect = 'SELECT p.id, s.claim_type AS claimType, s.name AS typeName, s.status AS setStatus, p.chapter_code AS chapterCode, p.title, p.agent_code AS agentCode, ' +
     'p.role_prompt AS rolePrompt, p.instruction_prompt AS instructionPrompt, p.ordinal, p.version, p.updated_at AS updatedAt, u.display_name AS updatedByName, s.system_prompt AS systemPrompt, ';
-  const tail = 'FROM preview_report_prompt_sets s LEFT JOIN preview_report_chapter_prompts p ON p.prompt_set_id = s.id ';
+  const activeTail = 'FROM preview_report_prompt_sets s LEFT JOIN preview_report_chapter_prompts p ON p.prompt_set_id = s.id AND p.status = \'ACTIVE\' ';
+  const legacyTail = 'FROM preview_report_prompt_sets s LEFT JOIN preview_report_chapter_prompts p ON p.prompt_set_id = s.id ';
   const where = 'LEFT JOIN preview_users u ON u.id = p.updated_by WHERE s.organization_id = ? AND (? = \'\' OR s.claim_type = ?) ORDER BY s.claim_type, p.ordinal';
   try {
     const rows = await env.DB.prepare(baseSelect +
       'b.source_category_codes_json AS sourceCategoryCodesJson,b.analysis_note AS sourceAnalysisNote,b.analysis_version AS sourceAnalysisVersion ' +
-      tail + 'LEFT JOIN preview_report_prompt_source_basis b ON b.prompt_id=p.id ' + where
+      activeTail + 'LEFT JOIN preview_report_prompt_source_basis b ON b.prompt_id=p.id ' + where
     ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewPromptRow>();
     return rows.results;
   } catch {
     const rows = await env.DB.prepare(baseSelect +
-      'NULL AS sourceCategoryCodesJson,NULL AS sourceAnalysisNote,NULL AS sourceAnalysisVersion ' + tail + where
+      'NULL AS sourceCategoryCodesJson,NULL AS sourceAnalysisNote,NULL AS sourceAnalysisVersion ' + legacyTail + where
     ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewPromptRow>();
     return rows.results;
+  }
+}
+
+async function previewTypeGuidelines(env: CloudflareEnv, claimType = ''): Promise<PreviewTypeGuidelineRow[]> {
+  if (!env.DB) return [];
+  try {
+    const rows = await env.DB.prepare(
+      'SELECT g.claim_type AS claimType,g.type_name AS typeName,g.target_work AS targetWork,g.toc_blueprint AS tocBlueprint,' +
+      'g.stage1_prompt AS stage1Prompt,g.stage2_prompt AS stage2Prompt,g.source_file_name AS sourceFileName,g.source_sha256 AS sourceSha256,' +
+      'g.status,g.version,g.updated_at AS updatedAt,u.display_name AS updatedByName ' +
+      'FROM preview_report_type_guidelines g JOIN preview_users u ON u.id=g.updated_by ' +
+      'WHERE g.organization_id=? AND (?=\'\' OR g.claim_type=?) ORDER BY g.claim_type'
+    ).bind(PREVIEW_ORGANIZATION_ID, claimType, claimType).all<PreviewTypeGuidelineRow>();
+    return (rows.results ?? []).map((row) => ({ ...row, version: Number(row.version) }));
+  } catch {
+    return [];
   }
 }
 
@@ -2035,7 +2067,7 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
   if (url.pathname === '/api/admin/report-prompts' && request.method === 'GET') {
     const routes = await previewAiRoutes(env);
     const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
-    const rows = await previewPromptRows(env);
+    const [rows, typeGuidelines] = await Promise.all([previewPromptRows(env), previewTypeGuidelines(env)]);
     const typeMap = new Map<string, { claimType: string; name: string; status: string; systemPrompt: string; chapters: Array<Record<string, unknown>> }>();
     for (const row of rows) {
       if (!typeMap.has(row.claimType)) typeMap.set(row.claimType, { claimType: row.claimType, name: row.typeName, status: row.setStatus, systemPrompt: row.systemPrompt, chapters: [] });
@@ -2045,9 +2077,43 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
       settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(await previewStoredAiCredential(env, settings.providerKind as PreviewAiProvider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID)) || previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null,
       aiConfig: await previewAiPublicConfiguration(env, routes),
       promptSets: [...typeMap.values()],
+      typeGuidelines,
       templateLibrary: await previewReportTemplateLibrary(env),
-      phase: 'CF32_SOURCE_TEMPLATE_LIBRARY'
+      phase: 'CF33_TYPE_AUTHORING_GUIDELINES'
     });
+  }
+
+  const guidelineMatch = url.pathname.match(/^\/api\/admin\/report-guidelines\/(TYPE-0[1-6])$/u);
+  if (guidelineMatch && request.method === 'PUT') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['targetWork','tocBlueprint','stage1Prompt','stage2Prompt','expectedVersion'])
+      || typeof body.targetWork !== 'string' || typeof body.tocBlueprint !== 'string' || typeof body.stage1Prompt !== 'string'
+      || typeof body.stage2Prompt !== 'string' || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Report type guideline payload is invalid', code: 'INVALID_GUIDELINE_PAYLOAD' }, 400);
+    }
+    const targetWork = body.targetWork.trim(); const tocBlueprint = body.tocBlueprint.trim();
+    const stage1Prompt = body.stage1Prompt.trim(); const stage2Prompt = body.stage2Prompt.trim();
+    if (targetWork.length < 10 || targetWork.length > 3000 || tocBlueprint.length < 20 || tocBlueprint.length > 30000
+      || stage1Prompt.length < 50 || stage1Prompt.length > 20000 || stage2Prompt.length < 50 || stage2Prompt.length > 30000) {
+      return json({ error: 'Report type guideline length is invalid', code: 'INVALID_GUIDELINE_PAYLOAD' }, 400);
+    }
+    const current = await env.DB.prepare(
+      'SELECT version,updated_at AS updatedAt FROM preview_report_type_guidelines WHERE organization_id=? AND claim_type=?'
+    ).bind(PREVIEW_ORGANIZATION_ID, guidelineMatch[1]).first<{ version: number; updatedAt: string }>();
+    if (!current) return json({ error: 'Report type guideline was not found', code: 'GUIDELINE_NOT_FOUND' }, 404);
+    if (Number(current.version) !== Number(body.expectedVersion)) return json({ error: 'Report type guideline changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current.version) }, 409);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const nextVersion = Number(current.version) + 1;
+    const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE preview_report_type_guidelines SET target_work=?,toc_blueprint=?,stage1_prompt=?,stage2_prompt=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND claim_type=? AND version=?')
+        .bind(targetWork,tocBlueprint,stage1Prompt,stage2Prompt,user.id,now,PREVIEW_ORGANIZATION_ID,guidelineMatch[1],current.version),
+      env.DB.prepare('INSERT INTO preview_report_type_guideline_history (id,organization_id,claim_type,version,target_work,toc_blueprint,stage1_prompt,stage2_prompt,changed_by,changed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_type_guidelines WHERE organization_id=? AND claim_type=? AND version=?)')
+        .bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,guidelineMatch[1],nextVersion,targetWork,tocBlueprint,stage1Prompt,stage2Prompt,user.id,now,PREVIEW_ORGANIZATION_ID,guidelineMatch[1],nextVersion)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Report type guideline changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    const guideline = (await previewTypeGuidelines(env, guidelineMatch[1]))[0] ?? null;
+    return json({ guideline, phase: 'CF33_TYPE_AUTHORING_GUIDELINES' });
   }
 
   if (url.pathname === '/api/admin/report-prompts/settings' && request.method === 'PUT') {
@@ -2743,6 +2809,24 @@ async function handlePreviewReportMemory(request: Request, env: CloudflareEnv, u
   return json({ candidates: await previewMemoryCandidates(env), phase: 'CF29_REPORT_MEMORY_LEARNING' });
 }
 
+function parsePreviewOutlineSuggestions(content: string, prompts: PreviewPromptRow[]): Array<{ chapterId: string; chapterCode: string; planningNote: string }> | null {
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/iu)?.[1]?.trim() ?? content.trim();
+  let parsed: unknown;
+  try { parsed = JSON.parse(fenced); } catch { return null; }
+  const rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).chapters : null;
+  if (!Array.isArray(rows)) return null;
+  const byCode = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.chapterCode, row]));
+  const suggestions: Array<{ chapterId: string; chapterCode: string; planningNote: string }> = [];
+  for (const item of rows) {
+    if (!item || typeof item !== 'object') continue;
+    const chapterCode = String((item as Record<string, unknown>).chapterCode ?? '');
+    const planningNote = String((item as Record<string, unknown>).planningNote ?? '').trim();
+    const prompt = byCode.get(chapterCode);
+    if (prompt && planningNote && planningNote.length <= 2000) suggestions.push({ chapterId: prompt.id, chapterCode, planningNote });
+  }
+  return suggestions.length === byCode.size && new Set(suggestions.map((row) => row.chapterCode)).size === byCode.size ? suggestions : null;
+}
+
 async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
@@ -2755,11 +2839,13 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
     const routes = await previewAiRoutes(env);
     const writingRoute = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
+    const outlineRoute = routes.find((route) => route.taskKind === 'OUTLINE_PLANNING') ?? writingRoute;
     const prompts = await previewPromptRows(env, caseRow.claimType);
-    const unavailable = caseRow.claimType === 'TYPE-05' || prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
-    const [outlinePlan, sourceGroups] = await Promise.all([
+    const unavailable = prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
+    const [outlinePlan, sourceGroups, typeGuideline] = await Promise.all([
       previewOutlinePlan(env, caseRow.id, prompts),
-      previewReportSourceGroups(env, caseRow)
+      previewReportSourceGroups(env, caseRow),
+      previewTypeGuidelines(env, caseRow.claimType).then((rows) => rows[0] ?? null)
     ]);
     let templates: Array<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }> = [];
     try {
@@ -2771,8 +2857,9 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       templates = [];
     }
     const assistantRoute = previewPersonalGeminiAssistantRoute(routes);
-    const [writingCredential, personalGeminiCredential] = await Promise.all([
+    const [writingCredential, outlineCredential, personalGeminiCredential] = await Promise.all([
       writingRoute ? resolvePreviewAiCredential(env, user.id, writingRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
+      outlineRoute ? resolvePreviewAiCredential(env, user.id, outlineRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
       previewStoredAiCredential(env, 'GEMINI', 'USER', user.id)
     ]);
     return json({
@@ -2783,17 +2870,51 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       credentialSource: writingCredential?.source ?? 'NONE',
       providerLabel: writingRoute?.providerKind ?? 'OPENAI',
       modelLabel: writingRoute?.modelCode ?? 'gpt-5.6',
+      outlineAiConnected: Boolean(outlineCredential),
+      outlineProviderLabel: outlineRoute?.providerKind ?? 'OPENAI',
+      outlineModelLabel: outlineRoute?.modelCode ?? 'gpt-5.6',
       assistantConnected: Boolean(personalGeminiCredential),
       assistantCredentialSource: personalGeminiCredential ? 'PERSONAL' : 'NONE',
       assistantProviderLabel: 'GEMINI',
       assistantModelLabel: assistantRoute.modelCode,
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
+      typeGuideline: typeGuideline ? { claimType: typeGuideline.claimType, typeName: typeGuideline.typeName, targetWork: typeGuideline.targetWork, tocBlueprint: typeGuideline.tocBlueprint, version: Number(typeGuideline.version), sourceFileName: typeGuideline.sourceFileName, sourceSha256: typeGuideline.sourceSha256 } : null,
       outlinePlan,
       sourceGroups,
       templates,
       templateLibrary: await previewReportTemplateLibrary(env, caseRow.claimType),
-      phase: 'CF32_SOURCE_TEMPLATE_LIBRARY'
+      phase: 'CF33_TYPE_AUTHORING_GUIDELINES'
     });
+  }
+
+  if (url.pathname === '/api/report-authoring/outline/generate' && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot generate report outlines', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId']) || typeof body.caseId !== 'string' || !PREVIEW_DRAFT_KEY.test(body.caseId)) return json({ error: 'Outline generation payload is invalid', code: 'INVALID_OUTLINE_PAYLOAD' }, 400);
+    const caseRow = await accessiblePreviewCase(env, user, body.caseId);
+    if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const [prompts, guidelineRows, routes] = await Promise.all([previewPromptRows(env, caseRow.claimType), previewTypeGuidelines(env, caseRow.claimType), previewAiRoutes(env)]);
+    const guideline = guidelineRows[0] ?? null;
+    if (!guideline || guideline.status !== 'ACTIVE' || !prompts.length || prompts[0]?.setStatus !== 'ACTIVE') return json({ error: 'Approved report type guideline is unavailable', code: 'GUIDELINE_NOT_AVAILABLE' }, 409);
+    const route = routes.find((row) => row.taskKind === 'OUTLINE_PLANNING') ?? routes.find((row) => row.taskKind === 'CHAPTER_WRITING') ?? null;
+    if (!route || !previewModelAllowed(route.providerKind as PreviewAiProvider, route.modelCode)) return json({ error: 'Outline AI setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
+    const context = await previewReportAuthoringContext(env, caseRow);
+    const approvedChapters = prompts.filter((row) => Boolean(row.id)).map((row) => ({ chapterCode: row.chapterCode, title: row.title }));
+    const contextJson = JSON.stringify(context).slice(0, 60_000);
+    const generated = await generatePreviewAiText(
+      env,
+      route,
+      `${prompts[0]?.systemPrompt ?? ''}\n\n[유형별 Stage 1 목차 기획 지침]\n${guideline.stage1Prompt}\n\n[승인 목차 블루프린트]\n${guideline.tocBlueprint}`,
+      `현재 프로젝트 자료를 읽고 승인된 각 챕터에 들어갈 구체 쟁점과 근거 계획을 작성하십시오. 반드시 다른 문장 없이 {"chapters":[{"chapterCode":"CH-01","planningNote":"..."}]} JSON만 출력하십시오. 모든 승인 챕터를 정확히 한 번 포함하십시오.\n\n[승인 챕터]\n${JSON.stringify(approvedChapters)}\n\n[현재 프로젝트 데이터]\n${contextJson}`,
+      user.id
+    );
+    if (generated.response) return generated.response;
+    const suggestions = parsePreviewOutlineSuggestions(generated.content as string, prompts);
+    if (!suggestions) return json({ error: 'AI outline response did not match the approved chapters', code: 'MALFORMED_AI_OUTLINE' }, 502);
+    const now = new Date().toISOString();
+    await env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)')
+      .bind(crypto.randomUUID(),caseRow.id,user.id,'REPORT_OUTLINE_AI_SUGGESTED',`AI 목차 작성계획 제안 · ${caseRow.claimType}`,`${route.providerKind} · ${route.modelCode} · 지침 v${guideline.version}`,now).run();
+    return json({ suggestions, providerKind: route.providerKind, modelCode: route.modelCode, guidelineVersion: guideline.version, phase: 'CF33_TYPE_AUTHORING_GUIDELINES' });
   }
 
   if (url.pathname === '/api/report-authoring/outline' && request.method === 'PUT') {
@@ -2805,7 +2926,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const caseRow = await accessiblePreviewCase(env, user, body.caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
     const prompts = await previewPromptRows(env, caseRow.claimType);
-    if (caseRow.claimType === 'TYPE-05' || !prompts.length || prompts[0]?.setStatus !== 'ACTIVE') return json({ error: 'Approved report template is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
+    if (!prompts.length || prompts[0]?.setStatus !== 'ACTIVE') return json({ error: 'Approved report template is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
     const allowed = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.id, row]));
     const items: PreviewOutlineItem[] = [];
     for (const item of body.items) {
@@ -2854,6 +2975,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       'FROM preview_report_chapter_prompts p JOIN preview_report_prompt_sets s ON s.id = p.prompt_set_id WHERE p.id = ? AND s.organization_id = ? AND s.claim_type = ?'
     ).bind(body.chapterId, PREVIEW_ORGANIZATION_ID, caseRow.claimType).first<PreviewPromptRow>();
     if (!prompt || prompt.setStatus !== 'ACTIVE') return json({ error: 'Approved chapter prompt is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
+    const typeGuideline = (await previewTypeGuidelines(env, caseRow.claimType))[0] ?? null;
     const outlinePlan = await previewOutlinePlan(env, caseRow.id, [prompt]);
     if (outlinePlan.persistenceAvailable && (outlinePlan.status !== 'CONFIRMED' || !outlinePlan.items.some((item) => item.chapterId === prompt.id && item.promptVersion === Number(prompt.version)))) {
       return json({ error: 'Confirm the current report outline before AI authoring', code: 'OUTLINE_CONFIRMATION_REQUIRED' }, 409);
@@ -2872,7 +2994,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const generated = await generatePreviewAiText(
       env,
       settings,
-      `${prompt.systemPrompt}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}${defaultMemoryAgent.composePrompt(memoryContext.longTermRules.map((row) => row.ruleText))}`,
+      `${prompt.systemPrompt}${typeGuideline ? `\n\n[관리자 승인 유형별 Stage 2 공통 지침 · v${typeGuideline.version}]\n${typeGuideline.stage2Prompt}` : ''}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}${defaultMemoryAgent.composePrompt(memoryContext.longTermRules.map((row) => row.ruleText))}`,
       `다음 JSON은 현재 사건의 승인된 내부 작업 데이터입니다. ${prompt.chapterCode} ${prompt.title} 장만 작성하십시오.\n${contextJson}`,
       user.id
     );
@@ -2926,10 +3048,11 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const settings = previewPersonalGeminiAssistantRoute(routes);
     const personalGeminiCredential = await previewStoredAiCredential(env, 'GEMINI', 'USER', user.id);
     if (!personalGeminiCredential) return json({ error: '설정에서 개인 Gemini API 키를 연결한 뒤 다시 시도해 주세요.', code: 'PERSONAL_GEMINI_NOT_CONFIGURED' }, 503);
+    const typeGuideline = (await previewTypeGuidelines(env, caseRow.claimType))[0] ?? null;
     const improved = await generatePreviewAiText(
       env,
       settings,
-      '당신은 건설 클레임 보고서 편집자입니다. 사용자가 준 사실·숫자·날짜·인용·근거 식별자를 추가하거나 삭제하지 마십시오. 문장 명료성, 구조, 전문 용어의 일관성만 개선하고 결과 본문만 반환하십시오.',
+      `당신은 건설 클레임 보고서 편집자입니다. 사용자가 준 사실·숫자·날짜·인용·근거 식별자를 추가하거나 삭제하지 마십시오. 문장 명료성, 구조, 전문 용어의 일관성만 개선하고 결과 본문만 반환하십시오.${typeGuideline ? `\n\n[관리자 승인 유형별 작성 지침]\n${typeGuideline.stage2Prompt}` : ''}`,
       `개선 요청: ${body.instruction.trim()}\n\n수정할 보고서 본문:\n${body.content}`,
       user.id,
       personalGeminiCredential
@@ -3850,7 +3973,7 @@ const worker = {
       return handlePreviewReportTemplateLibrary(request, env, url);
     }
 
-    if (url.pathname === '/api/admin/report-prompts' || url.pathname.startsWith('/api/admin/report-prompts/')) {
+    if (url.pathname === '/api/admin/report-prompts' || url.pathname.startsWith('/api/admin/report-prompts/') || url.pathname.startsWith('/api/admin/report-guidelines/')) {
       return handlePreviewPromptAdmin(request, env, url);
     }
 
@@ -3890,7 +4013,7 @@ const worker = {
       return handlePreviewReportDraft(request, env, url);
     }
 
-    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate' || url.pathname === '/api/report-authoring/improve' || url.pathname === '/api/report-authoring/outline') {
+    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate' || url.pathname === '/api/report-authoring/improve' || url.pathname === '/api/report-authoring/outline' || url.pathname === '/api/report-authoring/outline/generate') {
       return handlePreviewReportAuthoring(request, env, url);
     }
 

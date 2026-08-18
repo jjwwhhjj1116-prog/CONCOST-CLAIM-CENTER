@@ -93,6 +93,19 @@
 .report-outline-planner header p { margin: 7px 0 0; color: #94a3b8; line-height: 1.55; }
 .report-outline-planner > header > strong { flex: 0 0 96px; display: grid; align-content: center; justify-items: center; border: 1px solid rgba(34, 211, 238, .3); border-radius: 16px; color: #67e8f9; font: 750 1.4rem 'Space Grotesk', sans-serif; }
 .report-outline-planner > header > strong small { color: #64748b; font: 700 .58rem Inter, sans-serif; }
+.report-outline-guideline { border:1px solid #bae6fd; border-radius:14px; background:#f0f9ff; color:#172033; overflow:hidden; }
+.report-outline-guideline summary { display:flex; justify-content:space-between; gap:12px; padding:13px 15px; cursor:pointer; background:linear-gradient(90deg,#e0f2fe,#ecfdf5); }
+.report-outline-guideline summary span { color:#0369a1; font-weight:900; }
+.report-outline-guideline summary strong { color:#172033; }
+.report-outline-guideline p { margin:14px 15px 0; color:#475569; line-height:1.55; }
+.report-outline-guideline pre { margin:12px 15px; padding:14px; overflow:auto; border:1px solid #dbeafe; border-radius:10px; background:#fff; color:#172033; font:650 .78rem/1.7 'Pretendard Variable','Noto Sans KR',sans-serif; white-space:pre-wrap; }
+.report-outline-guideline > small { display:block; margin:0 15px 14px; color:#64748b; }
+:root[data-theme='dark'] .report-outline-guideline { border-color:#155e75; background:#0f172a; color:#f8fafc; }
+:root[data-theme='dark'] .report-outline-guideline summary { background:linear-gradient(90deg,#172554,#134e4a); }
+:root[data-theme='dark'] .report-outline-guideline summary span { color:#67e8f9; }
+:root[data-theme='dark'] .report-outline-guideline summary strong { color:#f8fafc; }
+:root[data-theme='dark'] .report-outline-guideline p { color:#cbd5e1; }
+:root[data-theme='dark'] .report-outline-guideline pre { border-color:#334155; background:#020617; color:#e2e8f0; }
 .report-outline-planner ol { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .report-outline-planner li button { width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid rgba(148, 163, 184, .16); border-radius: 14px; background: rgba(8, 14, 31, .72); color: inherit; text-align: left; cursor: pointer; }
 .report-outline-planner li button.is-active { border-color: rgba(34, 211, 238, .55); background: rgba(34, 211, 238, .08); box-shadow: 0 0 0 3px rgba(34, 211, 238, .06); }

@@ -31,7 +31,7 @@ export const CLAIM_TYPES = [
   { value: 'TYPE-02', label: 'TYPE-02: 분석 보고서 작성 클레임' },
   { value: 'TYPE-03', label: 'TYPE-03: 일반적인 클레임' },
   { value: 'TYPE-04', label: 'TYPE-04: 재건축·재개발 공사비 협상' },
-  { value: 'TYPE-05', label: 'TYPE-05: 사감정보고서 (TEMPLATE_NOT_FOUND)' },
+  { value: 'TYPE-05', label: 'TYPE-05: 사감정보고서' },
   { value: 'TYPE-06', label: 'TYPE-06: 물가변동' }
 ] as const;
 

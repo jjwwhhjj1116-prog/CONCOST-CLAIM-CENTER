@@ -10,9 +10,10 @@ interface AiRoute { taskKind: TaskKind; providerKind: ProviderKind; modelCode: s
 interface AiConfig { providers: AiProvider[]; routes: AiRoute[] }
 interface ChapterPrompt { id: string; chapterCode: string; title: string; agentCode: string; rolePrompt: string; instructionPrompt: string; ordinal: number; version: number; updatedAt: string; updatedBy: string; sourceCategoryCodes: string[]; sourceAnalysisNote: string; sourceAnalysisVersion: number }
 interface PromptSet { claimType: string; name: string; status: string; systemPrompt: string; chapters: ChapterPrompt[] }
+interface TypeGuideline { claimType: string; typeName: string; targetWork: string; tocBlueprint: string; stage1Prompt: string; stage2Prompt: string; sourceFileName: string; sourceSha256: string; status: string; version: number; updatedAt: string; updatedByName: string }
 interface TemplateLibraryFile { id: string; originalName: string; fileExtension: string; byteSize: number; sha256: string; uploadedAt: string; uploadedByName: string; viewMode: 'INLINE' | 'DOWNLOAD'; contentUrl: string }
 interface TemplateLibraryCategory { id: string; categoryCode: string; displayName: string; primaryClaimType: string; secondaryClaimTypes: string[]; expectedSourceCount: number; uploadedSourceCount: number; analysisSummary: string; outline: string[]; analysisVersion: number; files: TemplateLibraryFile[] }
-interface AdminPromptPayload { aiConfig: AiConfig; promptSets: PromptSet[]; templateLibrary: TemplateLibraryCategory[] }
+interface AdminPromptPayload { aiConfig: AiConfig; promptSets: PromptSet[]; typeGuidelines: TypeGuideline[]; templateLibrary: TemplateLibraryCategory[] }
 
 const TASK_LABELS: Record<TaskKind, { title: string; detail: string }> = {
   OUTLINE_PLANNING: { title: '목차 기획', detail: '보고서 구조와 챕터별 계획을 설계합니다.' },
@@ -27,6 +28,7 @@ export function PreviewAiAdmin(): React.ReactElement {
   const [selectedChapter, setSelectedChapter] = useState('');
   const [rolePrompt, setRolePrompt] = useState('');
   const [instructionPrompt, setInstructionPrompt] = useState('');
+  const [guidelineDraft, setGuidelineDraft] = useState({ targetWork: '', tocBlueprint: '', stage1Prompt: '', stage2Prompt: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -53,8 +55,10 @@ export function PreviewAiAdmin(): React.ReactElement {
 
   useEffect(() => { void load(); }, []);
   const promptSet = useMemo(() => payload?.promptSets.find((entry) => entry.claimType === selectedType) ?? null, [payload, selectedType]);
+  const typeGuideline = useMemo(() => payload?.typeGuidelines?.find((entry) => entry.claimType === selectedType) ?? null, [payload, selectedType]);
   const chapter = useMemo(() => promptSet?.chapters.find((entry) => entry.id === selectedChapter) ?? null, [promptSet, selectedChapter]);
   useEffect(() => { setRolePrompt(chapter?.rolePrompt ?? ''); setInstructionPrompt(chapter?.instructionPrompt ?? ''); }, [chapter?.id, chapter?.version]);
+  useEffect(() => { setGuidelineDraft(typeGuideline ? { targetWork: typeGuideline.targetWork, tocBlueprint: typeGuideline.tocBlueprint, stage1Prompt: typeGuideline.stage1Prompt, stage2Prompt: typeGuideline.stage2Prompt } : { targetWork: '', tocBlueprint: '', stage1Prompt: '', stage2Prompt: '' }); }, [typeGuideline?.claimType, typeGuideline?.version]);
 
   const provider = (kind: ProviderKind) => payload?.aiConfig.providers.find((item) => item.providerKind === kind);
   const changeRoute = (task: TaskKind, change: Partial<AiRoute>) => setRouteDrafts((current) => {
@@ -85,6 +89,17 @@ export function PreviewAiAdmin(): React.ReactElement {
       setPayload({ ...payload, promptSets: payload.promptSets.map((set) => set.claimType !== selectedType ? set : { ...set, chapters: set.chapters.map((item) => item.id !== chapter.id ? item : { ...item, ...result.prompt, updatedBy: '현재 관리자' }) }) });
       setNotice(`${chapter.chapterCode} 프롬프트 v${result.prompt.version}을 저장했습니다.`);
     } catch (reason) { setError(reason instanceof ApiError && reason.status === 409 ? '다른 관리자가 프롬프트를 변경했습니다. 새로고침 후 다시 시도하세요.' : reason instanceof Error ? reason.message : String(reason)); }
+    finally { setSaving(false); }
+  };
+
+  const saveTypeGuideline = async () => {
+    if (!payload || !typeGuideline) return;
+    setSaving(true); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ guideline: TypeGuideline }>(`/api/admin/report-guidelines/${selectedType}`, { method: 'PUT', body: JSON.stringify({ ...guidelineDraft, expectedVersion: typeGuideline.version }) });
+      setPayload({ ...payload, typeGuidelines: payload.typeGuidelines.map((item) => item.claimType === selectedType ? result.guideline : item) });
+      setNotice(`${selectedType} 유형별 작성 지침 v${result.guideline.version}을 저장했습니다.`);
+    } catch (reason) { setError(reason instanceof ApiError && reason.status === 409 ? '다른 관리자가 유형별 지침을 변경했습니다. 새로고침 후 다시 시도하세요.' : reason instanceof Error ? reason.message : String(reason)); }
     finally { setSaving(false); }
   };
 
@@ -135,9 +150,20 @@ export function PreviewAiAdmin(): React.ReactElement {
       })}</div>
       <div className="notice-box">현재 권장 구성: 목차는 ChatGPT, 본문은 Gemini로 먼저 검증하고 Claude API Key 연결 후 Claude Sonnet/Opus로 교체, 사실확인은 Gemini.</div>
     </Card>
-    <Card title="TYPE별 챕터 프롬프트 편집">
+    <Card title="보고서 유형별 작성 지침 · 관리자 전용">
+      <div className="report-ai-admin__settings"><Select label="보고서 유형" value={selectedType} onChange={(event) => changeType(event.target.value)} options={payload.promptSets.map((entry) => ({ value: entry.claimType, label: `${entry.claimType} · ${entry.name}` }))} /></div>
+      {typeGuideline ? <div className="form-stack report-ai-admin__type-guideline">
+        <div className="report-ai-admin__guideline-meta"><div><span>APPROVED TWO-STAGE AUTHORING POLICY</span><strong>{typeGuideline.claimType} · {typeGuideline.typeName}</strong><small>지침 v{typeGuideline.version} · {typeGuideline.updatedByName} · {new Date(typeGuideline.updatedAt).toLocaleString('ko-KR')}</small></div><div><span>IMPORT SOURCE</span><strong>{typeGuideline.sourceFileName}</strong><small>SHA-256 {typeGuideline.sourceSha256.slice(0, 16)}…</small></div></div>
+        <label htmlFor="type-target-work">대상 업무와 적용 범위</label><textarea id="type-target-work" value={guidelineDraft.targetWork} maxLength={3000} onChange={(event) => setGuidelineDraft((current) => ({ ...current, targetWork: event.target.value }))} />
+        <label htmlFor="type-toc-blueprint">승인 목차 블루프린트</label><textarea id="type-toc-blueprint" className="report-ai-admin__blueprint" value={guidelineDraft.tocBlueprint} maxLength={30000} onChange={(event) => setGuidelineDraft((current) => ({ ...current, tocBlueprint: event.target.value }))} />
+        <div className="report-ai-admin__stage-grid"><section><span>STAGE 1 · 목차 생성</span><label htmlFor="type-stage1-prompt">목차 기획 프롬프트</label><textarea id="type-stage1-prompt" value={guidelineDraft.stage1Prompt} maxLength={20000} onChange={(event) => setGuidelineDraft((current) => ({ ...current, stage1Prompt: event.target.value }))} /></section><section><span>STAGE 2 · 챕터 작성</span><label htmlFor="type-stage2-prompt">본문 공통 프롬프트</label><textarea id="type-stage2-prompt" value={guidelineDraft.stage2Prompt} maxLength={30000} onChange={(event) => setGuidelineDraft((current) => ({ ...current, stage2Prompt: event.target.value }))} /></section></div>
+        <div className="notice-box">이 지침은 목차 AI와 모든 챕터 작성·Gemini 문장개선에 공통 적용됩니다. 실제 사건 근거보다 우선하지 않으며, 관리자만 새 버전을 저장할 수 있습니다.</div>
+        <div className="action-row"><Button onClick={() => void saveTypeGuideline()} disabled={saving || guidelineDraft.targetWork.trim().length < 10 || guidelineDraft.tocBlueprint.trim().length < 20 || guidelineDraft.stage1Prompt.trim().length < 50 || guidelineDraft.stage2Prompt.trim().length < 50}>{saving ? '저장 중…' : '유형별 지침 새 버전 저장'}</Button><span className="muted">이전 버전은 D1 append-only 이력으로 보존됩니다.</span></div>
+      </div> : <div className="error-box">CF33 유형별 작성 지침 마이그레이션이 필요합니다.</div>}
+    </Card>
+    <Card title="챕터별 역할·작성 지침">
       <div className="report-ai-admin__settings"><Select label="보고서 유형" value={selectedType} onChange={(event) => changeType(event.target.value)} options={payload.promptSets.map((entry) => ({ value: entry.claimType, label: `${entry.claimType} · ${entry.name}` }))} /><Select label="챕터" value={selectedChapter} disabled={!promptSet?.chapters.length} onChange={(event) => setSelectedChapter(event.target.value)} options={(promptSet?.chapters ?? []).map((entry) => ({ value: entry.id, label: `${entry.chapterCode} · ${entry.title}` }))} /></div>
-      {promptSet?.status === 'TEMPLATE_NOT_FOUND' ? <div className="error-box">TYPE-05는 폴더에서 확인된 전용 원본 템플릿이 없어 자동 생성을 시작하지 않습니다.</div> : chapter ? <div className="form-stack report-ai-admin__editor"><div className="notice-box"><strong>{chapter.agentCode} · {chapter.chapterCode} {chapter.title}</strong><br />프롬프트 v{chapter.version} · {chapter.updatedBy}</div><div className="report-ai-admin__source-basis"><strong>원본 분석 근거 · v{chapter.sourceAnalysisVersion || 1}</strong><span>{chapter.sourceCategoryCodes.length ? chapter.sourceCategoryCodes.join(' · ') : '원본 근거 미지정'}</span><p>{chapter.sourceAnalysisNote || '이 챕터와 연결된 원본 분석 메모가 없습니다.'}</p></div><label htmlFor="chapter-role-prompt">챕터 작성자 역할</label><textarea id="chapter-role-prompt" value={rolePrompt} maxLength={5000} onChange={(event) => setRolePrompt(event.target.value)} /><label htmlFor="chapter-instruction-prompt">챕터 작성 지시</label><textarea id="chapter-instruction-prompt" value={instructionPrompt} maxLength={10000} onChange={(event) => setInstructionPrompt(event.target.value)} /><div className="action-row"><Button onClick={() => void savePrompt()} disabled={saving || rolePrompt.trim().length < 20 || instructionPrompt.trim().length < 20}>{saving ? '저장 중…' : '새 프롬프트 버전 저장'}</Button><span className="muted">변경 이력은 D1에 append-only로 보존됩니다.</span></div></div> : <p className="empty-box">편집할 챕터가 없습니다.</p>}
+      {chapter ? <div className="form-stack report-ai-admin__editor"><div className="notice-box"><strong>{chapter.agentCode} · {chapter.chapterCode} {chapter.title}</strong><br />프롬프트 v{chapter.version} · {chapter.updatedBy}</div><div className="report-ai-admin__source-basis"><strong>원본 분석 근거 · 관리자 지침 연계 · v{chapter.sourceAnalysisVersion || 1}</strong><span>{chapter.sourceCategoryCodes.length ? chapter.sourceCategoryCodes.join(' · ') : `${typeGuideline?.sourceFileName ?? '관리자 지침'} 기반`}</span><p>{chapter.sourceAnalysisNote || '관리자가 승인한 유형별 작성 지침과 현재 프로젝트 근거만 사용합니다.'}</p></div><label htmlFor="chapter-role-prompt">챕터 작성자 역할</label><textarea id="chapter-role-prompt" value={rolePrompt} maxLength={5000} onChange={(event) => setRolePrompt(event.target.value)} /><label htmlFor="chapter-instruction-prompt">챕터 작성 지시</label><textarea id="chapter-instruction-prompt" value={instructionPrompt} maxLength={10000} onChange={(event) => setInstructionPrompt(event.target.value)} /><div className="action-row"><Button onClick={() => void savePrompt()} disabled={saving || rolePrompt.trim().length < 20 || instructionPrompt.trim().length < 20}>{saving ? '저장 중…' : '챕터 지침 새 버전 저장'}</Button><span className="muted">변경 이력은 D1에 append-only로 보존됩니다.</span></div></div> : <p className="empty-box">편집할 챕터가 없습니다.</p>}
       {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error}</p>}
     </Card>
     <Card title="원본 보고서 템플릿 라이브러리 · 회사 Google Drive">

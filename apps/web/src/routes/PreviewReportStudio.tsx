@@ -23,7 +23,8 @@ interface SourceGroup { code: 'PROJECT' | 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY'
 interface ReportTemplatePreview { claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }
 interface TemplateLibraryFile { id: string; originalName: string; fileExtension: string; byteSize: number; sha256: string; uploadedAt: string; uploadedByName: string; viewMode: 'INLINE' | 'DOWNLOAD'; contentUrl: string }
 interface TemplateLibraryCategory { id: string; categoryCode: string; displayName: string; primaryClaimType: string; secondaryClaimTypes: string[]; matchesCurrentType: boolean; expectedSourceCount: number; uploadedSourceCount: number; analysisSummary: string; outline: string[]; analysisVersion: number; files: TemplateLibraryFile[] }
-interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; credentialSource: 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT' | 'NONE'; providerLabel: string; modelLabel: string; assistantConnected: boolean; assistantCredentialSource: 'PERSONAL' | 'NONE'; assistantProviderLabel: 'GEMINI'; assistantModelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[]; templates: ReportTemplatePreview[]; templateLibrary: TemplateLibraryCategory[] }
+interface TypeGuidelineSummary { claimType: string; typeName: string; targetWork: string; tocBlueprint: string; version: number; sourceFileName: string; sourceSha256: string }
+interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; credentialSource: 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT' | 'NONE'; providerLabel: string; modelLabel: string; outlineAiConnected: boolean; outlineProviderLabel: string; outlineModelLabel: string; assistantConnected: boolean; assistantCredentialSource: 'PERSONAL' | 'NONE'; assistantProviderLabel: 'GEMINI'; assistantModelLabel: string; chapters: AuthoringChapter[]; typeGuideline: TypeGuidelineSummary | null; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[]; templates: ReportTemplatePreview[]; templateLibrary: TemplateLibraryCategory[] }
 type MemoryScope = 'GLOBAL' | 'REPORT_TYPE' | 'CLAIM_TYPE' | 'CHAPTER' | 'USER_FEEDBACK';
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
@@ -83,6 +84,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [submittingMemory, setSubmittingMemory] = useState(false);
   const memoryRequestKey = useRef(crypto.randomUUID());
   const [savingOutline, setSavingOutline] = useState(false);
+  const [generatingOutline, setGeneratingOutline] = useState(false);
   const [outlineStatus, setOutlineStatus] = useState<'DRAFT' | 'CONFIRMED'>('DRAFT');
   const [outlineVersion, setOutlineVersion] = useState(0);
   const [outlineNotes, setOutlineNotes] = useState<Record<string, string>>({});
@@ -234,6 +236,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     } catch (reason) {
       if (selectedCaseRef.current === requestCaseId) setError(reason instanceof ApiError && reason.status === 409 ? '목차 또는 관리자 템플릿이 변경되었습니다. 최신본을 다시 불러와 목차를 확인해 주세요.' : reason instanceof Error ? reason.message : String(reason));
     } finally { if (selectedCaseRef.current === requestCaseId) setSavingOutline(false); }
+  };
+
+  const generateOutline = async () => {
+    if (!editable || !authoring?.available || !authoring.outlineAiConnected || generatingOutline || savingOutline || loadedCaseId !== selectedCaseId) return;
+    const requestCaseId = selectedCaseId;
+    setGeneratingOutline(true); setError('');
+    try {
+      const result = await apiRequest<{ suggestions: Array<{ chapterId: string; chapterCode: string; planningNote: string }>; guidelineVersion: number }>('/api/report-authoring/outline/generate', { method: 'POST', body: JSON.stringify({ caseId: requestCaseId }) });
+      if (selectedCaseRef.current !== requestCaseId) return;
+      setOutlineNotes(Object.fromEntries(result.suggestions.map((item) => [item.chapterId, item.planningNote])));
+      setOutlineDirty(true);
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setGeneratingOutline(false); }
   };
 
   const generateChapter = async () => {
@@ -466,9 +481,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <Card title="TABLE OF CONTENTS · 2단계 목차 기획" className="report-step-card report-step-card--2">
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 목차 템플릿이 없습니다.'}</div> : <div className="report-outline-planner">
             <header><div><span>{authoring.claimType} · APPROVED OUTLINE · PLAN v{outlineVersion || 'NEW'}</span><h3>보고서를 쓰기 전에 챕터별 작성 방향을 확정하세요.</h3><p>관리자가 승인한 목차는 빠뜨리거나 바꿀 수 없습니다. 각 챕터를 눌러 이번 프로젝트에서 다룰 쟁점과 검토 방향을 메모한 뒤 목차 기획을 확정합니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
+            {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.claimType} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
+            <div className="notice-box"><strong>쉬운 시작:</strong> 아래 “AI로 목차 작성계획 만들기”를 누르면 현재 프로젝트 자료를 읽고 각 챕터에 무엇을 쓸지 자동으로 채웁니다. 내용을 확인한 뒤 “목차 기획 확정”을 누르세요.</div>
             <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => setSelectedChapterId(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {chapter.title}</strong><small>{chapter.agentCode} · prompt v{chapter.promptVersion}</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
             {selectedChapter && <div className="report-outline-note"><label htmlFor="report-outline-note"><span>{selectedChapter.chapterCode}</span> 이번 챕터 작성 방향</label><textarea id="report-outline-note" maxLength={2000} value={outlineNotes[selectedChapter.id] ?? ''} disabled={!editable || savingOutline} onChange={(event) => { setOutlineNotes((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} placeholder="예: 현장조사 사진과 실측 수량의 차이를 표로 비교하고, 계약도면 기준과 실제 시공상태를 구분해 작성" /><small>{(outlineNotes[selectedChapter.id] ?? '').length}/2,000 · 빈 메모도 허용되지만 핵심 쟁점을 적으면 챕터 작성 지시에 함께 반영됩니다.</small></div>}
-            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 기획 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 기획 대기'}</span><Button variant="secondary" disabled={!editable || savingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '목차 메모 저장'}</Button><Button disabled={!editable || savingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 기획 확정'}</Button></div>
+            <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 기획 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 기획 대기'}</span><Button variant="secondary" disabled={!editable || !authoring.outlineAiConnected || generatingOutline || savingOutline} onClick={() => void generateOutline()}>{generatingOutline ? '프로젝트 근거 분석 중…' : 'AI로 목차 작성계획 만들기'}</Button><Button variant="secondary" disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '목차 메모 저장'}</Button><Button disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 기획 확정'}</Button></div>
+            {!authoring.outlineAiConnected && <div className="error-box">관리자 설정에서 목차 기획용 {authoring.outlineProviderLabel} API 키를 연결하면 AI 목차 계획 버튼이 열립니다.</div>}
             {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장용 D1 마이그레이션이 아직 적용되지 않았습니다. 배포 상태를 확인해 주세요.</div>}
           </div>}
         </Card>
