@@ -225,7 +225,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     <section className="settings-access-strip" aria-label="현재 계정 설정 권한"><div><span>현재 로그인 역할</span><strong>{roles.map((role) => role.toUpperCase()).join(' · ') || 'USER'}</strong></div><p>{section === 'PERSONAL' ? '현재 화면의 API 키는 내 계정에만 적용됩니다.' : '조직 전체에 적용되는 관리자 전용 화면입니다.'}</p></section>
 
     {section === 'PERSONAL' && <>
-      {renderCredentials('USER', '개인 Gemini 연결 설정', '초안 문장 개선과 AI 글쓰기 도우미에서만 사용하는 개인 Gemini API 키입니다. 관리자도 원문을 볼 수 없습니다.')}
+      {renderCredentials('USER', '개인 Gemini 연결 설정', '한 번 저장하면 내 계정에 암호화 등록되어 다시 로그인해도 자동으로 사용합니다. 무료 할당량을 모두 쓰면 새 키를 발급받아 “새 키로 교체”만 해주세요.')}
       <Card title="로컬 AI 설정 가이드"><div className="local-ai-guide"><div><span>01</span><strong>로컬 모델 실행</strong><p>Ollama, LM Studio 또는 OpenAI Compatible 서버에서 모델을 실행합니다.</p><code>http://localhost:11434</code></div><div><span>02</span><strong>회사 서버 Bridge</strong><p>Cloudflare는 개인 PC localhost에 접근할 수 없어 추후 공유 서버의 HTTPS Bridge가 필요합니다.</p><code>HTTPS · VPN · 접근제어 필수</code></div><div><span>03</span><strong>관리자 활성화</strong><p>관리자 설정에서 PRIVATE_SERVER_BRIDGE와 Hermes 정책을 승인합니다.</p><code>현재 직접 호출 비활성</code></div></div></Card>
     </>}
 

@@ -2057,7 +2057,7 @@ function safeGeminiProviderError(payload: unknown, httpStatus: number): { code: 
     };
   }
   if (httpStatus === 429 || providerReason === 'RESOURCE_EXHAUSTED') {
-    return { code: 'GEMINI_QUOTA_EXHAUSTED', error: 'Gemini 무료 사용 한도 또는 프로젝트 할당량을 초과했습니다. 잠시 후 다시 시도해 주세요.', providerReason };
+    return { code: 'GEMINI_QUOTA_EXHAUSTED', error: 'Gemini 무료 할당량을 모두 사용했습니다. 할당량 초기화를 기다리거나 설정에서 새 Gemini API 키로 교체해 주세요.', providerReason };
   }
   if (httpStatus === 403 || providerReason === 'PERMISSION_DENIED') {
     return { code: 'GEMINI_PERMISSION_DENIED', error: 'Gemini API 또는 선택 모델 사용 권한이 없습니다. Google AI Studio 프로젝트 설정을 확인해 주세요.', providerReason };
