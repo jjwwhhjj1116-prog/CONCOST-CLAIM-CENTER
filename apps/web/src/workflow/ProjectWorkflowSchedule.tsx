@@ -31,14 +31,16 @@ const awardLabel = (status: WorkflowProject['awardStatus']) => ({
   WON: '수주 확정', PENDING: '회신 대기', LOST: '미수주'
 }[status]);
 
-const actionForStage = (stageId: WorkflowStageId, caseId: string) => {
+const actionForStage = (stageId: WorkflowStageId, project: WorkflowProject) => {
+  const projectId = encodeURIComponent(project.id);
+  const caseId = encodeURIComponent(project.caseId);
   switch (stageId) {
-    case 1: return { label: '제안서 작성 열기', path: '/proposals/editor' };
-    case 2: return { label: '프로젝트 접수 목록', path: '/cases' };
-    case 3: return { label: '착수회의·회의록 열기', path: `/meetings?caseId=${encodeURIComponent(caseId)}` };
-    case 4: return { label: '현장자료 업로드 열기', path: `/cases/files?caseId=${encodeURIComponent(caseId)}` };
+    case 1: return { label: '제안서 작성 열기', path: `/proposals/editor?projectId=${projectId}` };
+    case 2: return { label: '프로젝트 접수 목록', path: `/cases?projectId=${projectId}` };
+    case 3: return { label: '착수회의·회의록 열기', path: `/meetings?caseId=${caseId}&projectId=${projectId}` };
+    case 4: return { label: '현장자료 업로드 열기', path: `/cases/files?caseId=${caseId}&projectId=${projectId}` };
     case 5: return { label: '팀 배정표로 이동', path: '#workforce-panel' };
-    case 6: return { label: 'AI 보고서 스튜디오 열기', path: `/reports/studio?caseId=${encodeURIComponent(caseId)}` };
+    case 6: return { label: 'AI 보고서 스튜디오 열기', path: `/reports/studio?caseId=${caseId}&projectId=${projectId}` };
   }
 };
 
@@ -56,9 +58,10 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
     [requestedProjectId]
   );
   const showOverview = routeId === 'PROJ-01';
+  const focusedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
 
   const navigateAction = (stageId: WorkflowStageId) => {
-    const action = actionForStage(stageId, selectedProject.caseId);
+    const action = actionForStage(stageId, selectedProject);
     if (action.path.startsWith('#')) {
       document.querySelector(action.path)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
@@ -68,6 +71,16 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
 
   return (
     <section className="workflow-page" aria-labelledby="workflow-page-title">
+      {!showOverview && <nav className="project-context-strip" aria-label="현재 프로젝트 경로">
+        <button type="button" onClick={() => onNavigate('/projects/schedule')}>프로젝트 워크</button>
+        <span aria-hidden="true">›</span>
+        <button type="button" onClick={() => onNavigate('/projects/schedule')}>프로젝트 일정표</button>
+        <span aria-hidden="true">›</span>
+        <div><strong>{selectedProject.code}</strong><b>{selectedProject.name}</b></div>
+        <em>{focusedStage ? `${focusedStage.id}단계 · ${focusedStage.name}` : '전체 단계 워크플로우'}</em>
+        <i aria-label={`전체 공정률 ${selectedProject.progress}%`}><span style={{ width: `${selectedProject.progress}%` }} /></i>
+        <small>{selectedProject.progress}%</small>
+      </nav>}
       <header className="workflow-hero">
         <div>
           <span className="workflow-kicker">CLAIM DELIVERY WORKFLOW</span>
@@ -200,7 +213,7 @@ const ProjectDetail: React.FC<{
           <span>{selectedStage.eyebrow}</span>
           <h3>{selectedStage.id}. {selectedStage.name}</h3>
           <p>{selectedStage.description}</p>
-          <Button onClick={() => onAction(selectedStage.id)}>{actionForStage(selectedStage.id, project.caseId).label}</Button>
+          <Button onClick={() => onAction(selectedStage.id)}>{actionForStage(selectedStage.id, project).label}</Button>
         </article>
       )}
 
@@ -264,7 +277,7 @@ const ProjectDetail: React.FC<{
       <section className="report-author-panel" aria-labelledby="report-author-title">
         <div><span>REPORT AUTHORING CELL</span><h3 id="report-author-title">보고서 작성 전담 5인</h3><p>유형별 목차와 1~5단계 근거를 장별 역할로 나눠 작성합니다.</p></div>
         <ul>{REPORT_AUTHOR_NAMES.map((name, index) => <li key={name}><span>{String(index + 1).padStart(2, '0')}</span><strong>{name}</strong></li>)}</ul>
-        <Button onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(project.caseId)}`)}>AI 보고서 스튜디오</Button>
+        <Button onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(project.caseId)}&projectId=${encodeURIComponent(project.id)}`)}>AI 보고서 스튜디오</Button>
       </section>
     </>
   );

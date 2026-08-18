@@ -2,6 +2,7 @@ import { Button, Card, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiDownload, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
+import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
 import type { UserRole } from './Router';
 import type { PreviewReportReview } from './PreviewApprovalInbox';
 
@@ -27,6 +28,20 @@ interface Finalization {
 }
 
 const EDIT_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm', 'staff'];
+type ReportWizardStep = 1 | 2 | 3 | 4 | 5;
+const REPORT_WIZARD_STEPS: readonly {
+  id: ReportWizardStep;
+  title: string;
+  shortHelp: string;
+  tasks: readonly string[];
+  doneText: string;
+}[] = [
+  { id: 1, title: '프로젝트·템플릿 확인', shortHelp: '어떤 프로젝트의 보고서를 만들지 먼저 고릅니다.', tasks: ['프로젝트 이름 확인', '클레임 유형 확인', 'AI가 참고할 자료 준비도 확인'], doneText: '프로젝트와 승인 템플릿이 연결되면 완료' },
+  { id: 2, title: '목차 기획', shortHelp: '보고서에 들어갈 챕터와 작성 방향을 먼저 정합니다.', tasks: ['챕터를 하나씩 눌러보기', '이번 사건에서 다룰 내용을 짧게 메모하기', '목차 기획 확정 누르기'], doneText: '목차 기획 확정 표시가 나오면 완료' },
+  { id: 3, title: '챕터별 AI 작성', shortHelp: '한 번에 한 챕터씩 AI 초안을 만듭니다.', tasks: ['작성할 챕터 선택', '참고 자료가 맞는지 확인', '자동 작성 후 다음 챕터 반복'], doneText: '모든 챕터에 초안 있음이 표시되면 완료' },
+  { id: 4, title: '사람 검토·수정', shortHelp: 'AI가 쓴 글의 숫자와 근거를 사람이 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', 'D1 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
+  { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', 'DOCX 또는 PDF 생성'], doneText: '승인본 파일을 생성하면 보고서 작업 완료' }
+] as const;
 const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
   'AGENT-01': ['PROJECT', 'PROPOSAL', 'KICKOFF'],
   'AGENT-02': ['PROJECT', 'PROPOSAL', 'LITIGATION'],
@@ -62,12 +77,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [outlineNotes, setOutlineNotes] = useState<Record<string, string>>({});
   const [outlineDirty, setOutlineDirty] = useState(false);
   const [showGuide, setShowGuide] = useState(true);
+  const [activeStep, setActiveStep] = useState<ReportWizardStep>(1);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
   const contentRef = useRef('');
   const editable = roles.some((role) => EDIT_ROLES.includes(role));
   const selectedCase = useMemo(() => cases.find((record) => record.id === selectedCaseId) ?? null, [cases, selectedCaseId]);
+  const selectedWorkflowProject = useMemo(() => WORKFLOW_PROJECTS.find((project) => project.caseId === selectedCaseId) ?? null, [selectedCaseId]);
   const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
   const selectedChapterSources = useMemo(() => {
     const codes = selectedChapter ? CHAPTER_SOURCE_CODES[selectedChapter.agentCode] ?? ['PROJECT'] : [];
@@ -167,7 +184,18 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     loadSequence.current += 1;
     selectedCaseRef.current = caseId;
     titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setOutlineStatus('DRAFT'); setOutlineVersion(0); setOutlineNotes({}); setOutlineDirty(false); setReviewNote(''); setSavedAt(null); setDirty(false); setError('');
+    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setOutlineStatus('DRAFT'); setOutlineVersion(0); setOutlineNotes({}); setOutlineDirty(false); setReviewNote(''); setSavedAt(null); setDirty(false); setError(''); setActiveStep(1);
+    const project = WORKFLOW_PROJECTS.find((candidate) => candidate.caseId === caseId);
+    const projectQuery = project ? `&projectId=${encodeURIComponent(project.id)}` : '';
+    onNavigate(`/reports/studio?caseId=${encodeURIComponent(caseId)}${projectQuery}`);
+  };
+
+  const withProjectContext = (route: string) => {
+    if (!selectedWorkflowProject) return route;
+    const target = new URL(route, window.location.origin);
+    target.searchParams.set('projectId', selectedWorkflowProject.id);
+    target.searchParams.set('caseId', selectedWorkflowProject.caseId);
+    return `${target.pathname}${target.search}`;
   };
 
   const saveOutline = async (status: 'DRAFT' | 'CONFIRMED') => {
@@ -270,25 +298,76 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
+  const projectStepComplete = Boolean(selectedCaseId && loadedCaseId === selectedCaseId && authoring?.available);
+  const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty;
+  const chapterStepComplete = Boolean(outlineStepComplete && authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length);
+  const editingStepComplete = Boolean(chapterStepComplete && version > 0 && content.trim() && !dirty && !saving);
+  const outputStepComplete = Boolean(editingStepComplete && currentFinalization?.outputs.length);
+  const stepComplete: Record<ReportWizardStep, boolean> = {
+    1: projectStepComplete,
+    2: outlineStepComplete,
+    3: chapterStepComplete,
+    4: editingStepComplete,
+    5: outputStepComplete
+  };
+  const stepUnlocked: Record<ReportWizardStep, boolean> = {
+    1: true,
+    2: stepComplete[1],
+    3: stepComplete[1] && stepComplete[2],
+    4: stepComplete[1] && stepComplete[2] && stepComplete[3],
+    5: stepComplete[1] && stepComplete[2] && stepComplete[3] && stepComplete[4]
+  };
+  const activeStepGuide = REPORT_WIZARD_STEPS.find((step) => step.id === activeStep) ?? REPORT_WIZARD_STEPS[0];
+  const nextStep = activeStep < 5 ? (activeStep + 1) as ReportWizardStep : null;
+  const previousStep = activeStep > 1 ? (activeStep - 1) as ReportWizardStep : null;
+  const nextBlockedReason = activeStep === 1
+    ? '프로젝트와 승인 템플릿을 확인하면 다음 단계가 열립니다.'
+    : activeStep === 2
+      ? '각 챕터의 작성 방향을 확인하고 목차 기획을 확정해 주세요.'
+      : activeStep === 3
+        ? '모든 챕터를 한 번씩 자동 작성하면 편집 단계가 열립니다.'
+        : activeStep === 4
+          ? '본문을 저장해 D1 저장 완료 표시를 확인해 주세요.'
+          : '';
+
   if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
 
   return (
-    <div className="content-stack report-authoring-studio" aria-label="D1 보고서 자동 저장 스튜디오">
+    <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
         <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
       </section>
 
-      {showGuide && <section className="report-authoring-guide" aria-label="처음 사용자 보고서 작성 가이드">
-        <header><div><span>START HERE · 초등학생도 따라가는 순서</span><h3>처음이라면 아래 5단계만 차례대로 진행하세요.</h3></div><button type="button" onClick={() => setShowGuide(false)} aria-label="사용 가이드 닫기">×</button></header>
-        <ol>
-          <li><b>1</b><span><strong>프로젝트 선택</strong><small>작성할 프로젝트를 고릅니다.</small></span></li>
-          <li><b>2</b><span><strong>유형·템플릿 확인</strong><small>등록된 클레임 유형에 맞는 승인 템플릿을 확인합니다.</small></span></li>
-          <li><b>3</b><span><strong>목차 기획</strong><small>필요한 챕터와 순서를 먼저 검토합니다.</small></span></li>
-          <li><b>4</b><span><strong>챕터별 자동 작성</strong><small>근거를 분석해 한 장씩 초안을 만듭니다.</small></span></li>
-          <li><b>5</b><span><strong>사람 검토·납품</strong><small>내용을 고친 뒤 승인과 출력으로 보냅니다.</small></span></li>
-        </ol>
-        <p><strong>도움말:</strong> AI 결과는 확정본이 아닙니다. 출처와 수치를 사람이 확인한 뒤 저장하고 검토 요청을 보내세요.</p>
+      <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계">
+        <div className="report-wizard-navigation__heading">
+          <span>REPORT WIZARD</span>
+          <strong>지금은 {activeStep}단계입니다.</strong>
+          <small>앞 단계가 끝나면 다음 단계 버튼이 열립니다.</small>
+        </div>
+        <ol>{REPORT_WIZARD_STEPS.map((step) => {
+          const current = step.id === activeStep;
+          const complete = stepComplete[step.id];
+          const unlocked = stepUnlocked[step.id];
+          return <li key={step.id}>
+            <button type="button" className={current ? 'is-current' : complete ? 'is-complete' : ''} disabled={!unlocked} aria-current={current ? 'step' : undefined} onClick={() => setActiveStep(step.id)}>
+              <b>{complete ? '✓' : step.id}</b>
+              <span><strong>{step.title}</strong><small>{current ? '지금 진행 중' : complete ? '완료' : unlocked ? '열림' : '앞 단계 완료 후 열림'}</small></span>
+            </button>
+          </li>;
+        })}</ol>
+        <span className="report-wizard-navigation__progress"><i style={{ width: `${(activeStep / 5) * 100}%` }} /></span>
+      </nav>
+
+      {showGuide && <section className="report-active-guide" aria-labelledby="report-active-guide-title">
+        <div className="report-active-guide__number" aria-hidden="true">{String(activeStep).padStart(2, '0')}</div>
+        <div>
+          <span>이번 단계에서 할 일</span>
+          <h3 id="report-active-guide-title">{activeStepGuide.title}</h3>
+          <p>{activeStepGuide.shortHelp}</p>
+          <ul>{activeStepGuide.tasks.map((task) => <li key={task}>{task}</li>)}</ul>
+        </div>
+        <aside><strong>완료 기준</strong><p>{activeStepGuide.doneText}</p><small>모르는 내용은 임의로 쓰지 말고 담당자에게 확인하세요.</small></aside>
       </section>}
 
       <Card title="PROJECT & TEMPLATE · 1단계" className="report-step-card report-step-card--1">
@@ -313,7 +392,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <Card title="SOURCE READINESS · 워크플로우 1~5 근거 준비도" className="report-step-card report-step-card--source">
           <div className="report-source-readiness">
             <header><div><span>PROJECT EVIDENCE MAP</span><h3>AI가 참고할 프로젝트 자료를 먼저 확인하세요.</h3><p>제안서부터 착수회의·현장조사·물량산출·자료실·법원자료까지 현재 프로젝트에 연결된 기록만 표시합니다.</p></div><strong>{authoring?.sourceGroups.filter((group) => group.status === 'READY').length ?? 0}/{authoring?.sourceGroups.length ?? 0}<small>READY</small></strong></header>
-            <div className="report-source-grid">{authoring?.sourceGroups.map((group) => <button key={group.code} type="button" data-source-state={group.status} onClick={() => onNavigate(group.route)}><span aria-hidden="true">{group.status === 'READY' ? '✓' : group.status === 'PARTIAL' ? '!' : '+'}</span><div><strong>{group.label}</strong><small>{group.detail}</small></div><em>{group.status === 'READY' ? '준비됨' : group.status === 'PARTIAL' ? '일부 준비' : '자료 연결'}</em></button>)}</div>
+            <div className="report-source-grid">{authoring?.sourceGroups.map((group) => <button key={group.code} type="button" data-source-state={group.status} onClick={() => onNavigate(withProjectContext(group.route))}><span aria-hidden="true">{group.status === 'READY' ? '✓' : group.status === 'PARTIAL' ? '!' : '+'}</span><div><strong>{group.label}</strong><small>{group.detail}</small></div><em>{group.status === 'READY' ? '준비됨' : group.status === 'PARTIAL' ? '일부 준비' : '자료 연결'}</em></button>)}</div>
             <p className="report-source-policy"><strong>근거 사용 원칙</strong> 파일명·업로더·업로드 시각·SHA-256은 파일 존재를 확인하는 정보입니다. PDF·HWP·도면의 본문을 아직 추출하지 않은 경우 AI가 내용을 추측하지 않고 <b>[확인 필요]</b>로 남깁니다.</p>
           </div>
         </Card>
@@ -378,6 +457,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           </div>}
         </Card>
       </>}
+      <footer className="report-wizard-footer" aria-label="보고서 단계 이동">
+        <Button variant="secondary" disabled={!previousStep} onClick={() => previousStep && setActiveStep(previousStep)}>← 이전 단계</Button>
+        <div>
+          <strong>{activeStep} / 5 · {activeStepGuide.title}</strong>
+          <small>{stepComplete[activeStep] ? `✓ ${activeStepGuide.doneText}` : nextBlockedReason || activeStepGuide.doneText}</small>
+        </div>
+        {nextStep
+          ? <Button disabled={!stepComplete[activeStep]} onClick={() => setActiveStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
+          : <Button onClick={() => onNavigate('/approval')}>검토·승인함 열기 →</Button>}
+      </footer>
     </div>
   );
 }

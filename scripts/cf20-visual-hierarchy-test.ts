@@ -65,3 +65,36 @@ test('CF22 applies the pastel overlay system and project-specific work tags', ()
     assert.match(scheduleCss, new RegExp(`data-tone='${tone}'`));
   }
 });
+
+test('CF23 keeps the selected project and current workflow stage visible across screens', () => {
+  const app = read('apps/web/src/App.tsx');
+  const shell = read('apps/web/src/layout/AppShell.tsx');
+  const schedule = read('apps/web/src/workflow/ProjectWorkflowSchedule.tsx');
+  const scheduleCss = read('apps/web/src/workflow/ProjectWorkflowSchedule.css');
+
+  assert.match(app, /currentBrowserLocation/u);
+  assert.match(app, /currentSearch=\{currentSearch\}/u);
+  assert.match(shell, /'PROJ-01', 'PROJ-02'/u);
+  assert.match(shell, /sidebar-project-context/u);
+  assert.match(shell, /CURRENT PROJECT/u);
+  assert.match(shell, /selectedStage \? `\$\{selectedStage\.id\}단계/u);
+  assert.match(schedule, /project-context-strip/u);
+  assert.match(schedule, /전체 단계 워크플로우/u);
+  assert.match(schedule, /projectId=\$\{projectId\}/u);
+  assert.match(scheduleCss, /\.project-context-strip \{/u);
+});
+
+test('CF24 renders report authoring as a gated one-step-at-a-time wizard', () => {
+  const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const css = read('apps/web/src/routes/PreviewReportStudio.css');
+
+  assert.match(studio, /type ReportWizardStep = 1 \| 2 \| 3 \| 4 \| 5/u);
+  assert.match(studio, /REPORT_WIZARD_STEPS/u);
+  assert.match(studio, /이번 단계에서 할 일/u);
+  assert.match(studio, /완료 기준/u);
+  assert.match(studio, /이 단계 완료 · 다음 단계/u);
+  assert.match(studio, /stepUnlocked/u);
+  assert.match(css, /data-wizard-step='1'.*report-step-card--1/u);
+  assert.match(css, /data-wizard-step='5'.*report-step-card--final/u);
+  assert.match(css, /\.report-wizard-footer/u);
+});

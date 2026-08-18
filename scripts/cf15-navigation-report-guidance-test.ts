@@ -11,7 +11,7 @@ test('CF15 sidebar follows the five requested business categories without duplic
     assert.match(shell, new RegExp(label, 'u'));
   }
   assert.match(shell, /routeIds: \['CASE-02', 'PROP-02', 'WF-02'\]/u);
-  assert.match(shell, /routeIds: \['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'\]/u);
+  assert.match(shell, /routeIds: \['PROJ-01', 'PROJ-02', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'\]/u);
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
   assert.match(shell, /icon: 'proposal'/u);
   assert.match(shell, /icon: 'library'/u);
@@ -26,7 +26,8 @@ test('CF15 sidebar follows the five requested business categories without duplic
 test('CF15 report writing menu opens the real studio with template, outline, tutorial and admin prompt boundaries', () => {
   assert.match(router, /REPO-02'.*'보고서 작성'/u);
   assert.match(router, /previewMode && currentRoute\.id === 'REPO-02'.*PreviewReportStudio/u);
-  assert.match(studio, /처음이라면 아래 5단계만 차례대로 진행하세요/u);
+  assert.match(studio, /지금은 \{activeStep\}단계입니다/u);
+  assert.match(studio, /이 단계 완료 · 다음 단계/u);
   assert.match(studio, /TABLE OF CONTENTS · 2단계 목차 기획/u);
   assert.match(studio, /authoring\.chapters\.map/u);
   assert.match(studio, /프롬프트 원문은 관리자만 열람·수정/u);

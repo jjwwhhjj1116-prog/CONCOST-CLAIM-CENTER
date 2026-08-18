@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Drawer, SkipLink } from '@claim-studio/ui';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
+import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 
 const NAVIGATION_GROUPS: readonly {
   label: string;
@@ -11,7 +12,7 @@ const NAVIGATION_GROUPS: readonly {
 }[] = [
   { label: 'CLAIM CENTER HOME', eyebrow: 'HOME', icon: 'home', routeIds: ['DASH-01'] },
   { label: '프로젝트 제안 및 수주', eyebrow: 'PROPOSAL & AWARD', icon: 'proposal', routeIds: ['CASE-02', 'PROP-02', 'WF-02'] },
-  { label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work', routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'] },
+  { label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work', routeIds: ['PROJ-01', 'PROJ-02', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'] },
   { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
   { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품·품질관리', eyebrow: 'QUALITY & DELIVERY', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
@@ -33,6 +34,7 @@ const NavigationGroupIcon: React.FC<{ name: (typeof NAVIGATION_GROUPS)[number]['
 
 export interface AppShellProps {
   currentPath: string;
+  currentSearch: string;
   roles: UserRole[];
   userName: string;
   onNavigate: (path: string) => void;
@@ -50,6 +52,7 @@ const readInitialTheme = (): ThemeMode => {
 
 export const AppShell: React.FC<AppShellProps> = ({
   currentPath,
+  currentSearch,
   roles,
   userName,
   onNavigate,
@@ -63,6 +66,15 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
   const activeGroup = NAVIGATION_GROUPS.find((group) => group.routeIds.some((id) => ROUTES.find((route) => route.id === id)?.path === currentPath));
+  const locationParams = new URLSearchParams(currentSearch);
+  const contextProjectId = locationParams.get('projectId');
+  const contextCaseId = locationParams.get('caseId');
+  const selectedProject = WORKFLOW_PROJECTS.find((project) => project.id === contextProjectId || project.caseId === contextCaseId);
+  const currentRouteId = ROUTES.find((route) => route.path === currentPath)?.id;
+  const selectedStage = WORKFLOW_STAGES.find((stage) => stage.routeId === currentRouteId)
+    ?? (currentRouteId === 'REPO-02' ? WORKFLOW_STAGES.find((stage) => stage.id === 6) : undefined)
+    ?? (currentRouteId === 'MEET-01' ? WORKFLOW_STAGES.find((stage) => stage.id === 3) : undefined)
+    ?? (currentRouteId === 'CASE-06' ? WORKFLOW_STAGES.find((stage) => stage.id === 4) : undefined);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -85,8 +97,34 @@ export const AppShell: React.FC<AppShellProps> = ({
     closeDrawer();
   };
 
+  const routeWithProjectContext = (routeId: string, path: string) => {
+    if (!selectedProject) return path;
+    const projectId = encodeURIComponent(selectedProject.id);
+    const caseId = encodeURIComponent(selectedProject.caseId);
+    if (routeId === 'PROJ-02') return `/projects/workflow?projectId=${projectId}`;
+    if (routeId === 'REPO-02') return `/reports/studio?caseId=${caseId}&projectId=${projectId}`;
+    if (routeId === 'CASE-06') return `/cases/files?caseId=${caseId}&projectId=${projectId}`;
+    if (routeId === 'MEET-01') return `/meetings?caseId=${caseId}&projectId=${projectId}`;
+    if (routeId.startsWith('WF-')) return `${path}?projectId=${projectId}`;
+    return path;
+  };
+
   const navigation = (
     <nav className="navigation-list" aria-label="주요 화면">
+      {selectedProject && <section className="sidebar-project-context" aria-label="현재 선택 프로젝트">
+        <button type="button" onClick={() => go(`/projects/workflow?projectId=${encodeURIComponent(selectedProject.id)}`)}>
+          <span className="sidebar-project-context__eyebrow">CURRENT PROJECT</span>
+          <strong>{selectedProject.code}</strong>
+          <b>{selectedProject.name}</b>
+          <small>{selectedStage ? `${selectedStage.id}단계 · ${selectedStage.name}` : '전체 단계 워크플로우'}</small>
+          <i><em style={{ width: `${selectedProject.progress}%` }} /></i>
+          <span className="sidebar-project-context__progress">전체 공정률 {selectedProject.progress}%</span>
+        </button>
+        <div>
+          <button type="button" onClick={() => go('/projects/schedule')}>일정표</button>
+          <button type="button" onClick={() => go(`/projects/workflow?projectId=${encodeURIComponent(selectedProject.id)}`)}>프로젝트 개요</button>
+        </div>
+      </section>}
       {NAVIGATION_GROUPS.filter((group) => !group.allowedRoles || group.allowedRoles.some((role) => roles.includes(role))).map((group) => {
         const routes = group.routeIds
           .map((id) => ROUTES.find((route) => route.id === id))
@@ -102,12 +140,12 @@ export const AppShell: React.FC<AppShellProps> = ({
             <button
               type="button"
               key={route.id}
-              onClick={() => go(route.path)}
+              onClick={() => go(routeWithProjectContext(route.id, route.path))}
               aria-current={currentPath === route.path ? 'page' : undefined}
               className="navigation-link"
             >
               <span className="navigation-dot" aria-hidden="true" />
-              <span className="text-ellipsis">{route.name}</span>
+              <span className="text-ellipsis">{route.id === 'PROJ-02' && selectedProject ? `${selectedProject.code} 워크플로우` : route.name}</span>
             </button>
           ))}
         </section>;

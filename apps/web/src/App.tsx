@@ -24,10 +24,13 @@ const isSessionUser = (value: unknown): value is SessionUser => {
 };
 
 
-const currentBrowserPath = () => window.location.pathname;
+const currentBrowserLocation = () => `${window.location.pathname}${window.location.search}`;
 
 export const App: React.FC = () => {
-  const [currentPath, setCurrentPath] = useState(currentBrowserPath);
+  const [currentLocation, setCurrentLocation] = useState(currentBrowserLocation);
+  const currentUrl = new URL(currentLocation, window.location.origin);
+  const currentPath = currentUrl.pathname;
+  const currentSearch = currentUrl.search;
   const [session, setSession] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [loginId, setLoginId] = useState('');
@@ -41,10 +44,10 @@ export const App: React.FC = () => {
     const url = new URL(path, window.location.origin);
     if (replace) window.history.replaceState(null, '', `${url.pathname}${url.search}`);
     else window.history.pushState(null, '', `${url.pathname}${url.search}`);
-    setCurrentPath(url.pathname);
+    setCurrentLocation(`${url.pathname}${url.search}`);
   }, []);
   useEffect(() => {
-    const restoreFromHistory = () => setCurrentPath(currentBrowserPath());
+    const restoreFromHistory = () => setCurrentLocation(currentBrowserLocation());
     window.addEventListener('popstate', restoreFromHistory);
     return () => window.removeEventListener('popstate', restoreFromHistory);
   }, []);
@@ -148,7 +151,7 @@ export const App: React.FC = () => {
   }
 
   return (
-    <AppShell currentPath={currentPath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
+    <AppShell currentPath={currentPath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
       <RouterView currentPath={currentPath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} />
     </AppShell>
   );
