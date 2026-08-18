@@ -55,11 +55,11 @@ test('CF27 live D1 cases are visible in the project schedule instead of static s
 test('CF27 settings explains API-key activation and separates personal from admin controls', () => {
   const settings = read('apps/web/src/routes/PreviewSettings.tsx');
   const shell = read('apps/web/src/layout/AppShell.tsx');
-  assert.match(shell, /aria-label="내 AI 및 연결 설정 열기"/u);
+  assert.match(shell, /aria-label="개인 및 관리자 설정 열기"/u);
   assert.match(settings, /API 키를 입력하면 암호화 저장 버튼이 활성화됩니다/u);
   assert.match(settings, /현재 로그인 역할/u);
-  assert.match(settings, /조직 공용 API 키·Google Drive 회사 연결은 ADMIN 계정에서만 표시됩니다/u);
-  assert.match(settings, /roles\.includes\('admin'\) && <PreviewGoogleDriveSetup/u);
+  assert.match(settings, /회사 Drive·공용 AI·Hermes 정책은 관리자 설정에서 관리합니다/u);
+  assert.match(settings, /section === 'ADMIN' && isAdmin[\s\S]*<PreviewGoogleDriveSetup/u);
 });
 
 test('CF27 D1 create remains atomic and assigns the creator so the record is immediately listable', () => {

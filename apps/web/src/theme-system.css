@@ -1,3 +1,15 @@
+:root { --user-font-scale: 1; }
+:root[data-font-family='pretendard'] body { font-family: Pretendard, 'Noto Sans KR', system-ui, sans-serif; }
+:root[data-font-family='noto_sans_kr'] body { font-family: 'Noto Sans KR', Pretendard, system-ui, sans-serif; }
+:root[data-font-family='system'] body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+:root body { font-size: calc(16px * var(--user-font-scale)); }
+:root[data-density='compact'] .main-content { padding-top: 14px; padding-bottom: 14px; }
+:root[data-density='compact'] .content-stack { gap: 12px; }
+:root[data-density='compact'] .ui-card { padding-top: 14px; padding-bottom: 14px; }
+:root[data-reduce-motion='true'] *,
+:root[data-reduce-motion='true'] *::before,
+:root[data-reduce-motion='true'] *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+
 :root {
   --page-bg: #060914;
   --surface-card: rgba(15, 23, 42, .9);

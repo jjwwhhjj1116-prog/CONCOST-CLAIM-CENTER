@@ -21,6 +21,7 @@ interface OutlineItem { chapterId: string; chapterCode: string; promptVersion: n
 interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
 interface SourceGroup { code: 'PROJECT' | 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY' | 'QUANTITY' | 'EVIDENCE' | 'LITIGATION'; label: string; status: 'READY' | 'PARTIAL' | 'EMPTY'; itemCount: number; detail: string; route: string }
 interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; credentialSource: 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT' | 'NONE'; providerLabel: string; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
+type MemoryScope = 'GLOBAL' | 'REPORT_TYPE' | 'CLAIM_TYPE' | 'CHAPTER' | 'USER_FEEDBACK';
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
   id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
@@ -73,6 +74,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [generating, setGenerating] = useState(false);
   const [improving, setImproving] = useState(false);
   const [improvementInstruction, setImprovementInstruction] = useState('사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬어 주세요.');
+  const [memoryFeedback, setMemoryFeedback] = useState('');
+  const [memoryScope, setMemoryScope] = useState<MemoryScope>('CHAPTER');
+  const [memoryNotice, setMemoryNotice] = useState('');
+  const [submittingMemory, setSubmittingMemory] = useState(false);
+  const memoryRequestKey = useRef(crypto.randomUUID());
   const [savingOutline, setSavingOutline] = useState(false);
   const [outlineStatus, setOutlineStatus] = useState<'DRAFT' | 'CONFIRMED'>('DRAFT');
   const [outlineVersion, setOutlineVersion] = useState(0);
@@ -186,7 +192,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     loadSequence.current += 1;
     selectedCaseRef.current = caseId;
     titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setOutlineStatus('DRAFT'); setOutlineVersion(0); setOutlineNotes({}); setOutlineDirty(false); setReviewNote(''); setSavedAt(null); setDirty(false); setError(''); setActiveStep(1);
+    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setOutlineStatus('DRAFT'); setOutlineVersion(0); setOutlineNotes({}); setOutlineDirty(false); setReviewNote(''); setMemoryFeedback(''); setMemoryNotice(''); memoryRequestKey.current=crypto.randomUUID(); setSavedAt(null); setDirty(false); setError(''); setActiveStep(1);
     const project = WORKFLOW_PROJECTS.find((candidate) => candidate.caseId === caseId);
     const projectQuery = project ? `&projectId=${encodeURIComponent(project.id)}` : '';
     onNavigate(`/reports/studio?caseId=${encodeURIComponent(caseId)}${projectQuery}`);
@@ -261,6 +267,23 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       contentRef.current = result.content; setContent(result.content); setDirty(true);
     } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (selectedCaseRef.current === requestCaseId) setImproving(false); }
+  };
+
+  const submitMemoryFeedback = async () => {
+    if (!editable || !selectedChapter || !memoryFeedback.trim() || dirty || saving || submittingMemory || loadedCaseId !== selectedCaseId) return;
+    const requestCaseId = selectedCaseId;
+    setSubmittingMemory(true); setError(''); setMemoryNotice('');
+    try {
+      const result = await apiRequest<{ candidate: { ruleText: string; confidence: number }; replayed: boolean }>('/api/report-memory/feedback', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': memoryRequestKey.current },
+        body: JSON.stringify({ caseId: requestCaseId, chapterId: selectedChapter.id, feedback: memoryFeedback.trim(), scope: memoryScope })
+      });
+      if (selectedCaseRef.current !== requestCaseId) return;
+      setMemoryNotice(`학습 후보 등록 완료 · 신뢰도 ${result.candidate.confidence}% · “${result.candidate.ruleText}” · 관리자 승인 후 다음 보고서부터 반영됩니다.`);
+      setMemoryFeedback(''); memoryRequestKey.current=crypto.randomUUID();
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setSubmittingMemory(false); }
   };
 
   const currentReview = reviews.find((review) => review.reportVersion === version) ?? null;
@@ -440,6 +463,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <label htmlFor="preview-report-body">보고서 본문</label>
             <textarea id="preview-report-body" className="report-editor" value={content} maxLength={500000} readOnly={!editable} aria-readonly={!editable} onChange={(event) => { contentRef.current = event.target.value; setContent(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
             {editable && <section className="report-writing-assistant" aria-label="AI 글쓰기 개선 도우미"><div><span>AI WRITING ASSISTANT</span><strong>저장된 현재 본문을 안전하게 다듬습니다.</strong><small>새 사실을 만들지 않고 문장·구조·전문 용어만 개선합니다. 개인키가 있으면 자동 우선 사용합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="action-row"><Button variant="secondary" onClick={() => onNavigate('/settings')}>내 AI 설정</Button><Button onClick={() => void improveWriting()} disabled={!authoring?.aiConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>{improving ? '문장 개선 중…' : `${authoring?.providerLabel ?? 'AI'}로 글 개선`}</Button></div>{dirty && <small>현재 변경 내용을 먼저 D1에 저장하면 개선 버튼이 열립니다.</small>}</section>}
+            {editable && selectedChapter && <section className="report-memory-feedback" aria-label="AI 학습 피드백"><header><div><span>FEEDBACK → MEMORY CANDIDATE</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>짧은 피드백과 AI 초안↔저장된 수정본 차이를 구조화합니다. 바로 학습하지 않고 관리자 승인 후에만 장기기억으로 사용합니다.</small></div><em>HERMES COMPATIBLE</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</section>}
             <p className="muted">{editable ? '입력 후 0.9초가 지나면 자동 저장됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
           </div>

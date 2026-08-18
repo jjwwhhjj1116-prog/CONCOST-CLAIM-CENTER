@@ -19,6 +19,7 @@ import {
   type GoogleFetch
 } from './google-drive';
 import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
+import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -2182,6 +2183,148 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
   return json({ ...(await previewAiCredentialMetadata(env, user)), canManageOrganization: user.roles.includes('admin'), phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
 }
 
+interface PreviewUserPreferenceRow {
+  theme: string;
+  fontFamily: string;
+  fontScale: number;
+  density: string;
+  reduceMotion: number;
+  version: number;
+  updatedAt: string;
+}
+
+interface PreviewWorkspaceSettingRow {
+  organizationName: string;
+  localAiMode: string;
+  memoryProvider: string;
+  memoryApprovalMode: string;
+  shortTermMemoryEnabled: number;
+  longTermMemoryEnabled: number;
+  version: number;
+  updatedAt: string;
+}
+
+interface PreviewPreferenceProjection {
+  theme: string; fontFamily: string; fontScale: number; density: string; reduceMotion: boolean; version: number; updatedAt: string | null;
+}
+interface PreviewWorkspaceSettingProjection {
+  organizationName: string; localAiMode: string; memoryProvider: string; memoryApprovalMode: string;
+  shortTermMemoryEnabled: boolean; longTermMemoryEnabled: boolean; version: number; updatedAt: string | null;
+}
+
+const defaultPreviewPreferences = (): PreviewPreferenceProjection => ({
+  theme: 'LIGHT', fontFamily: 'PRETENDARD', fontScale: 100, density: 'COMFORTABLE', reduceMotion: false, version: 0, updatedAt: null
+});
+
+const defaultPreviewWorkspaceSettings = (): PreviewWorkspaceSettingProjection => ({
+  organizationName: '클레임센터 스튜디오', localAiMode: 'DISABLED', memoryProvider: 'NONE', memoryApprovalMode: 'ADMIN_REVIEW',
+  shortTermMemoryEnabled: false, longTermMemoryEnabled: false, version: 0, updatedAt: null
+});
+
+async function previewUserPreferences(env: CloudflareEnv, userId: string): Promise<ReturnType<typeof defaultPreviewPreferences>> {
+  if (!env.DB) return defaultPreviewPreferences();
+  const row = await env.DB.prepare(
+    'SELECT theme,font_family AS fontFamily,font_scale AS fontScale,density,reduce_motion AS reduceMotion,version,updated_at AS updatedAt FROM preview_user_preferences WHERE user_id=?'
+  ).bind(userId).first<PreviewUserPreferenceRow>();
+  return row ? { theme: row.theme, fontFamily: row.fontFamily, fontScale: Number(row.fontScale), density: row.density, reduceMotion: Boolean(row.reduceMotion), version: Number(row.version), updatedAt: row.updatedAt } : defaultPreviewPreferences();
+}
+
+async function previewWorkspaceSettings(env: CloudflareEnv): Promise<ReturnType<typeof defaultPreviewWorkspaceSettings>> {
+  if (!env.DB) return defaultPreviewWorkspaceSettings();
+  const row = await env.DB.prepare(
+    'SELECT organization_name AS organizationName,local_ai_mode AS localAiMode,memory_provider AS memoryProvider,memory_approval_mode AS memoryApprovalMode,short_term_memory_enabled AS shortTermMemoryEnabled,long_term_memory_enabled AS longTermMemoryEnabled,version,updated_at AS updatedAt FROM preview_workspace_settings WHERE organization_id=?'
+  ).bind(PREVIEW_ORGANIZATION_ID).first<PreviewWorkspaceSettingRow>();
+  return row ? {
+    organizationName: row.organizationName, localAiMode: row.localAiMode, memoryProvider: row.memoryProvider, memoryApprovalMode: row.memoryApprovalMode,
+    shortTermMemoryEnabled: Boolean(row.shortTermMemoryEnabled), longTermMemoryEnabled: Boolean(row.longTermMemoryEnabled), version: Number(row.version), updatedAt: row.updatedAt
+  } : defaultPreviewWorkspaceSettings();
+}
+
+async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+  if (url.pathname === '/api/settings/preferences') {
+    if (request.method === 'GET') {
+      try { return json({ preferences: await previewUserPreferences(env, user.id), phase: 'CF28_WORKSPACE_SETTINGS' }); }
+      catch { return json({ error: 'Personal preference migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
+    }
+    if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['theme','fontFamily','fontScale','density','reduceMotion','expectedVersion'])
+      || !['LIGHT','DARK'].includes(String(body.theme)) || !['PRETENDARD','NOTO_SANS_KR','SYSTEM'].includes(String(body.fontFamily))
+      || !Number.isInteger(body.fontScale) || Number(body.fontScale) < 90 || Number(body.fontScale) > 130
+      || !['COMFORTABLE','COMPACT'].includes(String(body.density)) || typeof body.reduceMotion !== 'boolean' || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Personal preference payload is invalid', code: 'INVALID_PREFERENCE_PAYLOAD' }, 400);
+    }
+    const current = await previewUserPreferences(env, user.id);
+    if (current.version !== Number(body.expectedVersion)) return json({ error: 'Personal settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
+    const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const nextVersion = current.version + 1;
+    const snapshot = JSON.stringify({ theme: body.theme, fontFamily: body.fontFamily, fontScale: body.fontScale, density: body.density, reduceMotion: body.reduceMotion });
+    const write = current.version === 0
+      ? env.DB.prepare('INSERT INTO preview_user_preferences (user_id,theme,font_family,font_scale,density,reduce_motion,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,1,?,?,? WHERE ?=0')
+        .bind(user.id, body.theme, body.fontFamily, body.fontScale, body.density, body.reduceMotion ? 1 : 0, user.id, now, now, body.expectedVersion)
+      : env.DB.prepare('UPDATE preview_user_preferences SET theme=?,font_family=?,font_scale=?,density=?,reduce_motion=?,version=version+1,updated_by=?,updated_at=? WHERE user_id=? AND version=?')
+        .bind(body.theme, body.fontFamily, body.fontScale, body.density, body.reduceMotion ? 1 : 0, user.id, now, user.id, body.expectedVersion);
+    try {
+      const results = await env.DB.batch([write, env.DB.prepare('INSERT INTO preview_settings_history (id,setting_scope,owner_id,snapshot_json,version,changed_by,changed_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(),'USER_PREFERENCES',user.id,snapshot,nextVersion,user.id,now)]) as Array<{meta?:{changes?:number}}>;
+      if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Personal settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
+      return json({ preferences: await previewUserPreferences(env, user.id), phase: 'CF28_WORKSPACE_SETTINGS' });
+    } catch {
+      const latest = await previewUserPreferences(env, user.id).catch(() => null);
+      if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Personal settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);
+      return json({ error: 'Personal settings were not saved', code: 'PREFERENCE_WRITE_FAILED' }, 503);
+    }
+  }
+
+  if (url.pathname !== '/api/settings/admin-workspace') return json({ error: 'Settings route was not found', code: 'SETTINGS_ROUTE_NOT_FOUND' }, 404);
+  if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
+  if (request.method === 'GET') {
+    try {
+      const settings = await previewWorkspaceSettings(env);
+      return json({ settings, runtime: {
+        localAi: settings.localAiMode === 'PRIVATE_SERVER_BRIDGE' ? 'SERVER_BRIDGE_REQUIRED' : 'DISABLED',
+        hermes: settings.memoryProvider === 'HERMES_AGENT' ? 'EXTERNAL_RUNTIME_NOT_CONNECTED' : 'DISABLED',
+        memoryLearning: settings.memoryProvider === 'HERMES_AGENT' && settings.memoryApprovalMode === 'ADMIN_REVIEW' && (settings.shortTermMemoryEnabled || settings.longTermMemoryEnabled) ? 'FEEDBACK_APPROVAL_RETRIEVAL_ACTIVE' : 'DISABLED', supportedLocalProviders: ['OLLAMA','LM_STUDIO','OPENAI_COMPATIBLE']
+      }, phase: 'CF28_WORKSPACE_SETTINGS' });
+    } catch { return json({ error: 'Admin settings migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
+  }
+  if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !exactObjectKeys(body,['organizationName','localAiMode','memoryProvider','memoryApprovalMode','shortTermMemoryEnabled','longTermMemoryEnabled','expectedVersion'])
+    || typeof body.organizationName !== 'string' || body.organizationName.trim().length < 2 || body.organizationName.trim().length > 80
+    || !['DISABLED','PRIVATE_SERVER_BRIDGE'].includes(String(body.localAiMode)) || !['NONE','HERMES_AGENT'].includes(String(body.memoryProvider))
+    || !['ADMIN_REVIEW','DISABLED'].includes(String(body.memoryApprovalMode)) || typeof body.shortTermMemoryEnabled !== 'boolean'
+    || typeof body.longTermMemoryEnabled !== 'boolean' || !Number.isInteger(body.expectedVersion)) {
+    return json({ error: 'Admin workspace payload is invalid', code: 'INVALID_WORKSPACE_PAYLOAD' }, 400);
+  }
+  if ((body.shortTermMemoryEnabled || body.longTermMemoryEnabled) && body.memoryProvider !== 'HERMES_AGENT') return json({ error: 'Select Hermes Agent before enabling memory policy', code: 'MEMORY_PROVIDER_REQUIRED' }, 400);
+  if ((body.shortTermMemoryEnabled || body.longTermMemoryEnabled) && body.memoryApprovalMode !== 'ADMIN_REVIEW') return json({ error: 'Admin review is required before enabling memory learning', code: 'MEMORY_APPROVAL_REQUIRED' }, 400);
+  const current = await previewWorkspaceSettings(env);
+  if (current.version !== Number(body.expectedVersion)) return json({ error: 'Admin settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
+  const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt ?? '1970-01-01') + 1)).toISOString();
+  const nextVersion = current.version + 1;
+  const organizationName = body.organizationName.trim();
+  const snapshot = JSON.stringify({ organizationName, localAiMode: body.localAiMode, memoryProvider: body.memoryProvider, memoryApprovalMode: body.memoryApprovalMode, shortTermMemoryEnabled: body.shortTermMemoryEnabled, longTermMemoryEnabled: body.longTermMemoryEnabled });
+  const write = current.version === 0
+    ? env.DB.prepare('INSERT INTO preview_workspace_settings (organization_id,organization_name,local_ai_mode,memory_provider,memory_approval_mode,short_term_memory_enabled,long_term_memory_enabled,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,1,?,?,? WHERE ?=0')
+      .bind(PREVIEW_ORGANIZATION_ID,organizationName,body.localAiMode,body.memoryProvider,body.memoryApprovalMode,body.shortTermMemoryEnabled?1:0,body.longTermMemoryEnabled?1:0,user.id,now,now,body.expectedVersion)
+    : env.DB.prepare('UPDATE preview_workspace_settings SET organization_name=?,local_ai_mode=?,memory_provider=?,memory_approval_mode=?,short_term_memory_enabled=?,long_term_memory_enabled=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND version=?')
+      .bind(organizationName,body.localAiMode,body.memoryProvider,body.memoryApprovalMode,body.shortTermMemoryEnabled?1:0,body.longTermMemoryEnabled?1:0,user.id,now,PREVIEW_ORGANIZATION_ID,body.expectedVersion);
+  try {
+    const results = await env.DB.batch([write, env.DB.prepare('INSERT INTO preview_settings_history (id,setting_scope,owner_id,snapshot_json,version,changed_by,changed_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(),'WORKSPACE_POLICY',PREVIEW_ORGANIZATION_ID,snapshot,nextVersion,user.id,now)]) as Array<{meta?:{changes?:number}}>;
+    if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Admin settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json({ settings: await previewWorkspaceSettings(env), runtime: { localAi: body.localAiMode==='PRIVATE_SERVER_BRIDGE'?'SERVER_BRIDGE_REQUIRED':'DISABLED', hermes: body.memoryProvider==='HERMES_AGENT'?'EXTERNAL_RUNTIME_NOT_CONNECTED':'DISABLED', memoryLearning:body.memoryProvider==='HERMES_AGENT'&&body.memoryApprovalMode==='ADMIN_REVIEW'&&(body.shortTermMemoryEnabled||body.longTermMemoryEnabled)?'FEEDBACK_APPROVAL_RETRIEVAL_ACTIVE':'DISABLED', supportedLocalProviders:['OLLAMA','LM_STUDIO','OPENAI_COMPATIBLE'] }, phase: 'CF29_REPORT_MEMORY_LEARNING' });
+  } catch {
+    const latest = await previewWorkspaceSettings(env).catch(() => null);
+    if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Admin settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);
+    return json({ error: 'Admin workspace settings were not saved', code: 'WORKSPACE_WRITE_FAILED' }, 503);
+  }
+}
+
 async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Record<string, unknown>> {
   if (!env.DB) return {};
   let verifiedLitigation: Record<string, unknown>[] = [];
@@ -2244,6 +2387,138 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
     evidenceCatalog,
     sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Proposal facts require VERIFIED document URL plus SHA-256. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Evidence catalog rows prove file identity, category, uploader, time, size and SHA-256 only; binary file contents must not be inferred unless separately extracted. Missing or conflicting fields must be marked [확인 필요].'
   };
+}
+
+interface PreviewMemoryRuleRow {
+  id: string;
+  memoryScope: MemoryScope;
+  scopeKey: string;
+  ruleText: string;
+  confidence: number;
+  reviewedAt: string | null;
+}
+
+async function previewReportMemoryContext(
+  env: CloudflareEnv,
+  caseRow: PreviewCaseRow,
+  chapterCode: string
+): Promise<{ enabled: boolean; shortTerm: Record<string, unknown>; longTermRules: PreviewMemoryRuleRow[] }> {
+  const policy = await previewWorkspaceSettings(env).catch(() => defaultPreviewWorkspaceSettings());
+  if (policy.memoryProvider !== 'HERMES_AGENT' || policy.memoryApprovalMode !== 'ADMIN_REVIEW' || (!policy.shortTermMemoryEnabled && !policy.longTermMemoryEnabled)) {
+    return { enabled: false, shortTerm: {}, longTermRules: [] };
+  }
+  let shortTerm: Record<string, unknown> = {};
+  if (policy.shortTermMemoryEnabled && env.DB) {
+    const [draft, feedback] = await Promise.all([
+      env.DB.prepare('SELECT title,content,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
+        .bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; version: number; updatedAt: string }>(),
+      env.DB.prepare(
+        'SELECT m.rule_text AS ruleText,m.status,f.chapter_code AS chapterCode,f.created_at AS createdAt FROM preview_memory_candidates m ' +
+        'JOIN preview_report_feedback f ON f.id=m.feedback_id WHERE f.case_id=? AND f.organization_id=? ORDER BY f.created_at DESC LIMIT 6'
+      ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<{ ruleText: string; status: string; chapterCode: string; createdAt: string }>().catch(() => ({ results: [] }))
+    ]);
+    shortTerm = {
+      currentDraft: draft ? { title: draft.title, version: Number(draft.version), updatedAt: draft.updatedAt, recentText: draft.content.slice(-12_000) } : null,
+      projectFeedbackRules: feedback.results.map((row) => ({ chapterCode: row.chapterCode, rule: row.ruleText, status: row.status, createdAt: row.createdAt }))
+    };
+  }
+  let longTermRules: PreviewMemoryRuleRow[] = [];
+  if (policy.longTermMemoryEnabled && env.DB) {
+    const rows = await env.DB.prepare(
+      "SELECT id,memory_scope AS memoryScope,scope_key AS scopeKey,rule_text AS ruleText,confidence,reviewed_at AS reviewedAt FROM preview_memory_candidates " +
+      "WHERE organization_id=? AND status='ACTIVE' AND ((memory_scope='GLOBAL' AND scope_key=?) OR (memory_scope='REPORT_TYPE' AND scope_key=?) " +
+      "OR (memory_scope='CLAIM_TYPE' AND scope_key=?) OR (memory_scope='CHAPTER' AND scope_key=?)) ORDER BY confidence DESC,reviewed_at DESC LIMIT 8"
+    ).bind(PREVIEW_ORGANIZATION_ID, PREVIEW_ORGANIZATION_ID, `${caseRow.claimType}:REPORT`, caseRow.claimType, `${caseRow.claimType}:${chapterCode}`).all<PreviewMemoryRuleRow>().catch(() => ({ results: [] }));
+    longTermRules = rows.results.map((row) => ({ ...row, confidence: Number(row.confidence) }));
+  }
+  return { enabled: true, shortTerm, longTermRules };
+}
+
+async function previewMemoryCandidates(env: CloudflareEnv): Promise<Array<Record<string, unknown>>> {
+  if (!env.DB) return [];
+  const rows = await env.DB.prepare(
+    'SELECT m.id,m.memory_scope AS memoryScope,m.scope_key AS scopeKey,m.problem_text AS problemText,m.rule_text AS ruleText,m.tags_json AS tagsJson,' +
+    'm.analyzer_code AS analyzerCode,m.confidence,m.status,m.version,m.created_at AS createdAt,m.reviewed_at AS reviewedAt,m.review_note AS reviewNote,' +
+    'f.chapter_code AS chapterCode,f.feedback_text AS feedbackText,c.case_number AS caseNumber,c.title AS caseTitle,u.display_name AS createdByName ' +
+    'FROM preview_memory_candidates m JOIN preview_report_feedback f ON f.id=m.feedback_id JOIN preview_cases c ON c.id=f.case_id ' +
+    'JOIN preview_users u ON u.id=m.created_by WHERE m.organization_id=? ORDER BY CASE m.status WHEN \'PENDING\' THEN 0 ELSE 1 END,m.created_at DESC LIMIT 100'
+  ).bind(PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>();
+  return rows.results.map((row) => ({ ...row, confidence: Number(row.confidence), version: Number(row.version), tags: JSON.parse(String(row.tagsJson)), tagsJson: undefined }));
+}
+
+async function handlePreviewReportMemory(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+  if (url.pathname === '/api/report-memory/feedback') {
+    if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot submit report feedback', code: 'FORBIDDEN' }, 403);
+    const key = request.headers.get('Idempotency-Key')?.trim() ?? '';
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    const scopes: MemoryScope[] = ['GLOBAL','REPORT_TYPE','CLAIM_TYPE','CHAPTER','USER_FEEDBACK'];
+    if (!/^[A-Za-z0-9._:-]{8,128}$/u.test(key) || !body || !exactObjectKeys(body,['caseId','chapterId','feedback','scope'])
+      || typeof body.caseId !== 'string' || typeof body.chapterId !== 'string' || typeof body.feedback !== 'string'
+      || body.feedback.trim().length < 3 || body.feedback.length > 2000 || !scopes.includes(body.scope as MemoryScope)) {
+      return json({ error: 'Feedback payload is invalid', code: 'INVALID_MEMORY_FEEDBACK' }, 400);
+    }
+    const caseRow = await accessiblePreviewCase(env, user, body.caseId);
+    if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const policy = await previewWorkspaceSettings(env).catch(() => defaultPreviewWorkspaceSettings());
+    if (policy.memoryProvider !== 'HERMES_AGENT' || policy.memoryApprovalMode !== 'ADMIN_REVIEW' || (!policy.shortTermMemoryEnabled && !policy.longTermMemoryEnabled)) return json({ error: 'Admin must enable the Hermes memory policy first', code: 'MEMORY_POLICY_DISABLED' }, 409);
+    const existing = await env.DB.prepare('SELECT m.id FROM preview_report_feedback f JOIN preview_memory_candidates m ON m.feedback_id=f.id WHERE f.organization_id=? AND f.case_id=? AND f.request_key=?')
+      .bind(PREVIEW_ORGANIZATION_ID, caseRow.id, key).first<{ id: string }>();
+    if (existing) return json({ candidate: (await previewMemoryCandidates(env)).find((row) => row.id === existing.id), replayed: true, phase: 'CF29_REPORT_MEMORY_LEARNING' });
+    const prompt = await env.DB.prepare(
+      'SELECT p.id,p.chapter_code AS chapterCode FROM preview_report_chapter_prompts p JOIN preview_report_prompt_sets s ON s.id=p.prompt_set_id WHERE p.id=? AND s.organization_id=? AND s.claim_type=?'
+    ).bind(body.chapterId, PREVIEW_ORGANIZATION_ID, caseRow.claimType).first<{ id: string; chapterCode: string }>();
+    if (!prompt) return json({ error: 'Chapter prompt was not found', code: 'PROMPT_NOT_AVAILABLE' }, 409);
+    const snapshot = await env.DB.prepare(
+      'SELECT generation_id AS generationId,output_text AS outputText,output_sha256 AS outputSha256 FROM preview_report_generation_snapshots WHERE case_id=? AND organization_id=? AND prompt_id=? ORDER BY created_at DESC LIMIT 1'
+    ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID, prompt.id).first<{ generationId: string; outputText: string; outputSha256: string }>();
+    const draft = await env.DB.prepare('SELECT content FROM preview_report_drafts WHERE case_id=? AND organization_id=?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ content: string }>();
+    const editedChapter = draft ? extractGeneratedChapter(draft.content, prompt.chapterCode) : null;
+    if (!snapshot || !editedChapter) return json({ error: 'Save an AI-generated chapter before submitting learning feedback', code: 'MEMORY_SOURCE_NOT_READY' }, 409);
+    const scope = body.scope as MemoryScope;
+    const scopeKey = scope === 'GLOBAL' ? PREVIEW_ORGANIZATION_ID : scope === 'REPORT_TYPE' ? `${caseRow.claimType}:REPORT` : scope === 'CLAIM_TYPE' ? caseRow.claimType : scope === 'CHAPTER' ? `${caseRow.claimType}:${prompt.chapterCode}` : user.id;
+    const analysis = defaultMemoryAgent.analyzeFeedback({ feedback: body.feedback.trim(), scope, scopeKey, chapterCode: prompt.chapterCode, beforeText: snapshot.outputText, afterText: editedChapter });
+    const now = new Date().toISOString();
+    const feedbackId = crypto.randomUUID(); const candidateId = crypto.randomUUID();
+    const humanTextSha256 = await sha256Hex(editedChapter);
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_report_feedback (id,organization_id,case_id,generation_id,prompt_id,chapter_code,feedback_text,ai_output_sha256,human_text_sha256,diff_json,request_key,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(feedbackId,PREVIEW_ORGANIZATION_ID,caseRow.id,snapshot.generationId,prompt.id,prompt.chapterCode,body.feedback.trim(),snapshot.outputSha256,humanTextSha256,JSON.stringify(analysis.diff),key,user.id,now),
+        env.DB.prepare('INSERT INTO preview_memory_candidates (id,organization_id,feedback_id,memory_scope,scope_key,problem_text,rule_text,tags_json,analyzer_code,confidence,status,version,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,\'PENDING\',1,?,?)')
+          .bind(candidateId,PREVIEW_ORGANIZATION_ID,feedbackId,scope,scopeKey,analysis.problem,analysis.rule,JSON.stringify(analysis.tags),analysis.analyzer,analysis.confidence,user.id,now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)')
+          .bind(crypto.randomUUID(),caseRow.id,user.id,'REPORT_MEMORY_CANDIDATE_CREATED',`AI Memory 후보 · ${prompt.chapterCode}`,`${scope} · 신뢰도 ${analysis.confidence}`,now)
+      ]);
+    } catch {
+      const canonical = await env.DB.prepare('SELECT m.id FROM preview_report_feedback f JOIN preview_memory_candidates m ON m.feedback_id=f.id WHERE f.organization_id=? AND f.case_id=? AND f.request_key=?').bind(PREVIEW_ORGANIZATION_ID,caseRow.id,key).first<{ id: string }>();
+      if (canonical) return json({ candidate: (await previewMemoryCandidates(env)).find((row) => row.id === canonical.id), replayed: true, phase: 'CF29_REPORT_MEMORY_LEARNING' });
+      return json({ error: 'Feedback learning candidate was not saved', code: 'MEMORY_WRITE_FAILED' }, 503);
+    }
+    return json({ candidate: (await previewMemoryCandidates(env)).find((row) => row.id === candidateId), replayed: false, phase: 'CF29_REPORT_MEMORY_LEARNING' }, 201);
+  }
+
+  if (url.pathname === '/api/admin/report-memory' && request.method === 'GET') {
+    if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
+    return json({ candidates: await previewMemoryCandidates(env), phase: 'CF29_REPORT_MEMORY_LEARNING' });
+  }
+  const match = url.pathname.match(/^\/api\/admin\/report-memory\/([^/]+)$/u);
+  if (!match || request.method !== 'PUT') return json({ error: 'Memory route was not found', code: 'MEMORY_ROUTE_NOT_FOUND' }, 404);
+  if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !exactObjectKeys(body,['action','expectedVersion','note']) || !['APPROVE','REJECT','DISABLE'].includes(String(body.action))
+    || !Number.isInteger(body.expectedVersion) || typeof body.note !== 'string' || body.note.length > 1000) return json({ error: 'Memory decision payload is invalid', code: 'INVALID_MEMORY_DECISION' }, 400);
+  const nextStatus = body.action === 'APPROVE' ? 'ACTIVE' : body.action === 'REJECT' ? 'REJECTED' : 'DISABLED';
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare('UPDATE preview_memory_candidates SET status=?,version=version+1,reviewed_by=?,reviewed_at=?,review_note=? WHERE id=? AND organization_id=? AND version=?')
+    .bind(nextStatus,user.id,now,body.note.trim()||null,match[1],PREVIEW_ORGANIZATION_ID,body.expectedVersion).run().catch(() => ({ meta: { changes: 0 } }));
+  if (result.meta?.changes !== 1) return json({ error: 'Memory candidate changed or transition is not allowed', code: 'VERSION_CONFLICT' }, 409);
+  return json({ candidates: await previewMemoryCandidates(env), phase: 'CF29_REPORT_MEMORY_LEARNING' });
 }
 
 async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -2346,14 +2621,17 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
     if (!settings || !previewModelAllowed(settings.providerKind as PreviewAiProvider, settings.modelCode)) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
     const context = await previewReportAuthoringContext(env, caseRow);
+    const memoryContext = await previewReportMemoryContext(env, caseRow, prompt.chapterCode);
     const chapterPlanningNote = outlinePlan.items.find((item) => item.chapterId === prompt.id)?.planningNote ?? '';
     context.outlinePlanning = { chapterCode: prompt.chapterCode, planningNote: chapterPlanningNote, outlineVersion: outlinePlan.version, outlineStatus: outlinePlan.status };
+    context.shortTermMemory = memoryContext.shortTerm;
+    context.longTermMemory = memoryContext.longTermRules.map((row) => ({ id: row.id, scope: row.memoryScope, rule: row.ruleText, confidence: row.confidence }));
     const contextJson = JSON.stringify(context).slice(0, 80_000);
     const inputSha256 = await sha256Hex(contextJson);
     const generated = await generatePreviewAiText(
       env,
       settings,
-      `${prompt.systemPrompt}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}`,
+      `${prompt.systemPrompt}\n\n[장별 역할]\n${prompt.rolePrompt}\n\n[장별 작성 지시]\n${prompt.instructionPrompt}${defaultMemoryAgent.composePrompt(memoryContext.longTermRules.map((row) => row.ruleText))}`,
       `다음 JSON은 현재 사건의 승인된 내부 작업 데이터입니다. ${prompt.chapterCode} ${prompt.title} 장만 작성하십시오.\n${contextJson}`,
       user.id
     );
@@ -2361,28 +2639,37 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const content = generated.content as string;
     const outputSha256 = await sha256Hex(content);
     const now = new Date().toISOString();
+    const generationId = crypto.randomUUID();
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind, credential_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING', generated.credentialSource ?? 'ENVIRONMENT'),
+        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind, credential_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(generationId, PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING', generated.credentialSource ?? 'ENVIRONMENT'),
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${settings.providerKind} · ${settings.modelCode} · prompt v${prompt.version}`, now)
       ]);
     } catch {
       try {
         // CF19 fixtures have provider/task columns but not the additive CF26 source column.
         await env.DB.batch([
-          env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING'),
+          env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(generationId, PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING'),
           env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${settings.providerKind} · ${settings.modelCode} · prompt v${prompt.version}`, now)
         ]);
       } catch {
         // Backward compatibility for the CF12 isolated migration fixture.
         await env.DB.batch([
-          env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
+          env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(generationId, PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
           env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${prompt.title} · prompt v${prompt.version}`, now)
         ]);
       }
     }
-    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: generated.credentialSource ?? 'ENVIRONMENT', generatedAt: now }, phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
+    try {
+      await env.DB.prepare('INSERT INTO preview_report_generation_snapshots (generation_id,organization_id,case_id,prompt_id,chapter_code,output_text,output_sha256,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+        .bind(generationId,PREVIEW_ORGANIZATION_ID,caseRow.id,prompt.id,prompt.chapterCode,content,outputSha256,user.id,now).run();
+      if (memoryContext.longTermRules.length) await env.DB.batch(memoryContext.longTermRules.map((row) => env.DB!.prepare('INSERT INTO preview_memory_usage (id,generation_id,memory_id,used_at) VALUES (?,?,?,?)').bind(crypto.randomUUID(),generationId,row.id,now)));
+    } catch {
+      // Historical isolated fixtures intentionally stop before CF29. The
+      // production migration makes snapshot/usage persistence mandatory.
+    }
+    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: generated.credentialSource ?? 'ENVIRONMENT', generatedAt: now, memoryRulesUsed: memoryContext.longTermRules.length }, phase: 'CF29_REPORT_MEMORY_LEARNING' });
   }
 
   if (url.pathname === '/api/report-authoring/improve' && request.method === 'POST') {
@@ -3138,6 +3425,14 @@ const worker = {
 
     if (url.pathname === '/api/settings/ai-credentials' || url.pathname.startsWith('/api/settings/ai-credentials/')) {
       return handlePreviewAiCredentials(request, env, url);
+    }
+
+    if (url.pathname === '/api/settings/preferences' || url.pathname === '/api/settings/admin-workspace') {
+      return handlePreviewWorkspaceSettings(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-memory/feedback' || url.pathname === '/api/admin/report-memory' || url.pathname.startsWith('/api/admin/report-memory/')) {
+      return handlePreviewReportMemory(request, env, url);
     }
 
     if (url.pathname === '/api/litigation-records' || url.pathname.startsWith('/api/litigation-records/')) {

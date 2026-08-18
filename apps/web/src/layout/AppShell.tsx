@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Drawer, SkipLink } from '@claim-studio/ui';
+import { apiRequest } from '../api';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
+import { applyWorkspacePreferences, readCachedWorkspacePreferences, WORKSPACE_PREFERENCE_EVENT, type WorkspacePreferences } from '../settings/workspace-preferences';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 
 const NAVIGATION_GROUPS: readonly {
@@ -48,6 +50,8 @@ export interface AppShellProps {
 type ThemeMode = 'light' | 'dark';
 
 const readInitialTheme = (): ThemeMode => {
+  const cached = readCachedWorkspacePreferences().theme.toLowerCase();
+  if (cached === 'dark' || cached === 'light') return cached;
   const stored = window.localStorage.getItem('claim-center-theme');
   return stored === 'dark' || stored === 'light' ? stored : 'light';
 };
@@ -83,6 +87,22 @@ export const AppShell: React.FC<AppShellProps> = ({
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem('claim-center-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!previewMode) return;
+    let active = true;
+    void apiRequest<{ preferences: WorkspacePreferences }>('/api/settings/preferences').then(({ preferences }) => {
+      if (!active) return;
+      applyWorkspacePreferences(preferences);
+      setTheme(preferences.theme.toLowerCase() as ThemeMode);
+    }).catch(() => applyWorkspacePreferences(readCachedWorkspacePreferences()));
+    const handlePreferences = (event: Event) => {
+      const preferences = (event as CustomEvent<WorkspacePreferences>).detail;
+      if (preferences) setTheme(preferences.theme.toLowerCase() as ThemeMode);
+    };
+    window.addEventListener(WORKSPACE_PREFERENCE_EVENT, handlePreferences);
+    return () => { active = false; window.removeEventListener(WORKSPACE_PREFERENCE_EVENT, handlePreferences); };
+  }, [previewMode]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -175,7 +195,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
             <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
           </button>
-          <button type="button" className="theme-toggle" aria-label="내 AI 및 연결 설정 열기" onClick={() => go('/settings')}>
+          <button type="button" className="theme-toggle" aria-label="개인 및 관리자 설정 열기" onClick={() => go('/settings')}>
             <span aria-hidden="true">⚙</span><strong>설정</strong>
           </button>
           <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
