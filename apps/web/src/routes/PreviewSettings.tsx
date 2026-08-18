@@ -2,6 +2,7 @@ import { Button, Card, StatusBadge } from '@claim-studio/ui';
 import { useEffect, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
+import { PreviewGoogleDriveSetup } from './PreviewEvidenceHub';
 import type { UserRole } from './Router';
 
 type ProviderKind = 'OPENAI' | 'ANTHROPIC' | 'GEMINI';
@@ -85,8 +86,8 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     {renderScope('USER', '내 AI 설정', '내 계정에서만 사용하는 개인 API 키입니다. 다른 사용자와 관리자에게도 원문이 보이지 않습니다.')}
     {payload.canManageOrganization && renderScope('ORGANIZATION', '관리자 · 조직 공용 AI 설정', '회사 공용으로 사용할 API 키입니다. Admin만 교체하거나 비활성화할 수 있습니다.')}
     {roles.includes('admin') && <Card title="관리자 연결 센터"><div className="settings-admin-links"><button type="button" onClick={() => onNavigate('/ai-config')}><strong>챕터 프롬프트·모델</strong><small>목차·본문·사실확인 모델과 역할 프롬프트 설정</small></button><button type="button" onClick={() => onNavigate('/integrations/google')}><strong>Google Drive</strong><small>회사 계정 OAuth 연결·재연결·해제</small></button><button type="button" onClick={() => onNavigate('/users')}><strong>사용자·권한</strong><small>회원 계정과 역할 관리</small></button></div></Card>}
+    {roles.includes('admin') && <PreviewGoogleDriveSetup onNavigate={onNavigate} />}
     <p className="notice-box"><strong>실행 우선순위</strong> 내 키 → 조직 공용 암호화 키 → Cloudflare 서버 Secret. 내 키를 비활성화하면 자동으로 조직 공용 설정을 사용합니다.</p>
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error}</p>}
   </div>;
 }
-

@@ -30,6 +30,7 @@
 .settings-admin-links strong,.settings-admin-links small { display:block; }
 .settings-admin-links strong { color:#172033; margin-bottom:5px; }
 .settings-admin-links small { color:#64748b; line-height:1.5; }
+.preview-settings .preview-drive-setup { margin:0; padding:22px; border:1px solid #dbe5f0; border-radius:16px; background:#fff; box-shadow:0 8px 22px rgba(15,23,42,.06); }
 @media (max-width:1024px) { .credential-provider-grid { grid-template-columns:1fr; } }
 @media (max-width:640px) { .preview-settings-hero { flex-direction:column; padding:22px; } .preview-settings-hero > div:last-child { min-width:0; } .settings-admin-links { grid-template-columns:1fr; } }
 :root[data-theme='dark'] .preview-settings-hero { border-color:#334155; background:linear-gradient(120deg,#111827,#172554 55%,#2e1065); }
