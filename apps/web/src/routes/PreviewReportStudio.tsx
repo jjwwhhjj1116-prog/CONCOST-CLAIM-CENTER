@@ -1,4 +1,4 @@
-import { Button, Card, Input, Select } from '@claim-studio/ui';
+import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiDownload, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
@@ -20,7 +20,8 @@ interface AuthoringChapter { id: string; chapterCode: string; title: string; age
 interface OutlineItem { chapterId: string; chapterCode: string; promptVersion: number; planningNote: string }
 interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
 interface SourceGroup { code: 'PROJECT' | 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY' | 'QUANTITY' | 'EVIDENCE' | 'LITIGATION'; label: string; status: 'READY' | 'PARTIAL' | 'EMPTY'; itemCount: number; detail: string; route: string }
-interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; credentialSource: 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT' | 'NONE'; providerLabel: string; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
+interface ReportTemplatePreview { claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }
+interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; credentialSource: 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT' | 'NONE'; providerLabel: string; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[]; templates: ReportTemplatePreview[] }
 type MemoryScope = 'GLOBAL' | 'REPORT_TYPE' | 'CLAIM_TYPE' | 'CHAPTER' | 'USER_FEEDBACK';
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
@@ -85,6 +86,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [outlineNotes, setOutlineNotes] = useState<Record<string, string>>({});
   const [outlineDirty, setOutlineDirty] = useState(false);
   const [showGuide, setShowGuide] = useState(true);
+  const [showTemplatePreview, setShowTemplatePreview] = useState(false);
+  const [previewTemplateType, setPreviewTemplateType] = useState('');
   const [activeStep, setActiveStep] = useState<ReportWizardStep>(1);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
@@ -94,6 +97,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const selectedCase = useMemo(() => cases.find((record) => record.id === selectedCaseId) ?? null, [cases, selectedCaseId]);
   const selectedWorkflowProject = useMemo(() => WORKFLOW_PROJECTS.find((project) => project.caseId === selectedCaseId) ?? null, [selectedCaseId]);
   const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
+  const selectedTemplatePreview = useMemo(() => authoring?.templates.find((template) => template.claimType === previewTemplateType) ?? authoring?.templates.find((template) => template.claimType === authoring.claimType) ?? null, [authoring, previewTemplateType]);
   const selectedChapterSources = useMemo(() => {
     const codes = selectedChapter ? CHAPTER_SOURCE_CODES[selectedChapter.agentCode] ?? ['PROJECT'] : [];
     return authoring?.sourceGroups.filter((group) => codes.includes(group.code)) ?? [];
@@ -124,6 +128,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setReviews(reviewResult.reviews);
       setFinalizations(finalizationResult.finalizations);
       setAuthoring(authoringResult);
+      setPreviewTemplateType(authoringResult.templates.some((template) => template.claimType === authoringResult.claimType) ? authoringResult.claimType : authoringResult.templates[0]?.claimType ?? '');
       setOutlineStatus(authoringResult.outlinePlan.status);
       setOutlineVersion(authoringResult.outlinePlan.version);
       setOutlineNotes(Object.fromEntries(authoringResult.outlinePlan.items.map((item) => [item.chapterId, item.planningNote])));
@@ -375,7 +380,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
-        <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
+        <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
       </section>
 
       <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계">
@@ -424,7 +429,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           <div><span>AUTOSAVE</span><strong>D1 VERSION {version || 'NEW'}</strong><small>본문·목차 진행·수정 이력 자동 저장</small></div>
           {roles.includes('admin') && <Button variant="secondary" onClick={() => onNavigate('/templates')}>유형별 템플릿 관리</Button>}
         </div>
-        <p className="muted">보고서 유형은 프로젝트 의뢰에서 선택한 클레임 유형을 따르며, 다른 유형 템플릿을 임의로 대체하지 않습니다. Google Drive 파일 연결은 현재 보류 중입니다.</p>
+        <div className="report-template-viewer-control">
+          <label htmlFor="report-template-preview-type"><span>보고서 템플릿 선택·열람</span><select id="report-template-preview-type" value={previewTemplateType} onChange={(event) => setPreviewTemplateType(event.target.value)}>{authoring?.templates.map((template) => <option key={template.claimType} value={template.claimType}>{template.claimType} · {template.templateName}</option>)}</select></label>
+          <Button disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>선택 템플릿 완제품 보기</Button>
+          <small>현재 프로젝트에는 {authoring?.claimType ?? selectedCase?.claimType} 템플릿이 적용됩니다. 다른 유형은 참고 열람만 가능합니다.</small>
+        </div>
+        <p className="muted">보고서 유형은 프로젝트 의뢰에서 선택한 클레임 유형을 따르며, 완제품 예시는 처음 작성할 때와 초안 수정 중 언제든 다시 열람할 수 있습니다.</p>
       </Card>
 
       {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="프로젝트별 보고서 최신본을 불러오고 있습니다." /> : <>
@@ -453,7 +463,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>목차 기획 메모</strong> {outlineNotes[selectedChapter.id]?.trim() || '별도 메모 없음 · 승인된 기본 챕터 지시를 사용합니다.'}</p></div>}
             <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? 'Cloudflare 서버 Secret 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
-            {!authoring.aiConnected && <div className="error-box">내 설정 또는 관리자 설정에서 {authoring.providerLabel} API 키를 연결해야 자동 작성 버튼이 열립니다.</div>}
+            {!authoring.aiConnected && <div className="error-box">설정의 개인 설정 또는 관리자 설정에서 {authoring.providerLabel} API 키를 연결해야 자동 작성 버튼이 열립니다.</div>}
             {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
           </div>}
         </Card>
@@ -462,7 +472,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <Input label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
             <label htmlFor="preview-report-body">보고서 본문</label>
             <textarea id="preview-report-body" className="report-editor" value={content} maxLength={500000} readOnly={!editable} aria-readonly={!editable} onChange={(event) => { contentRef.current = event.target.value; setContent(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
-            {editable && <section className="report-writing-assistant" aria-label="AI 글쓰기 개선 도우미"><div><span>AI WRITING ASSISTANT</span><strong>저장된 현재 본문을 안전하게 다듬습니다.</strong><small>새 사실을 만들지 않고 문장·구조·전문 용어만 개선합니다. 개인키가 있으면 자동 우선 사용합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="action-row"><Button variant="secondary" onClick={() => onNavigate('/settings')}>내 AI 설정</Button><Button onClick={() => void improveWriting()} disabled={!authoring?.aiConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>{improving ? '문장 개선 중…' : `${authoring?.providerLabel ?? 'AI'}로 글 개선`}</Button></div>{dirty && <small>현재 변경 내용을 먼저 D1에 저장하면 개선 버튼이 열립니다.</small>}</section>}
+            {editable && <section className="report-writing-assistant" aria-label="AI 글쓰기 개선 도우미"><div><span>AI WRITING ASSISTANT</span><strong>저장된 현재 본문을 안전하게 다듬습니다.</strong><small>새 사실을 만들지 않고 문장·구조·전문 용어만 개선합니다. 개인키가 있으면 자동 우선 사용합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="action-row"><Button variant="secondary" onClick={() => onNavigate('/settings')}>설정 열기</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>템플릿 다시 보기</Button><Button onClick={() => void improveWriting()} disabled={!authoring?.aiConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>{improving ? '문장 개선 중…' : `${authoring?.providerLabel ?? 'AI'}로 글 개선`}</Button></div>{dirty && <small>현재 변경 내용을 먼저 D1에 저장하면 개선 버튼이 열립니다.</small>}</section>}
             {editable && selectedChapter && <section className="report-memory-feedback" aria-label="AI 학습 피드백"><header><div><span>FEEDBACK → MEMORY CANDIDATE</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>짧은 피드백과 AI 초안↔저장된 수정본 차이를 구조화합니다. 바로 학습하지 않고 관리자 승인 후에만 장기기억으로 사용합니다.</small></div><em>HERMES COMPATIBLE</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</section>}
             <p className="muted">{editable ? '입력 후 0.9초가 지나면 자동 저장됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
@@ -508,6 +518,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           ? <Button disabled={!stepComplete[activeStep]} onClick={() => setActiveStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
           : <Button onClick={() => onNavigate('/approval')}>검토·승인함 열기 →</Button>}
       </footer>
+      <Dialog isOpen={showTemplatePreview && Boolean(selectedTemplatePreview)} title={selectedTemplatePreview ? `${selectedTemplatePreview.claimType} · ${selectedTemplatePreview.templateName}` : '보고서 완제품 템플릿'} onClose={() => setShowTemplatePreview(false)}>
+        {selectedTemplatePreview && <div className="report-template-preview-dialog"><header><span>FINISHED REPORT REFERENCE · v{selectedTemplatePreview.version}</span><p>{selectedTemplatePreview.purposeText}</p>{selectedTemplatePreview.claimType !== authoring?.claimType && <strong>참고 열람 전용 · 현재 프로젝트 유형은 {authoring?.claimType}입니다.</strong>}</header><pre>{selectedTemplatePreview.finishedExample}</pre></div>}
+      </Dialog>
     </div>
   );
 }

@@ -75,7 +75,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'INTEG-01', path: '/integrations/google', name: 'Google Drive 연결', allowedRoles: ADMIN_ONLY },
   { id: 'TPL-01', path: '/templates', name: '유형별 보고서 템플릿', allowedRoles: ADMIN_ONLY },
   { id: 'AI-01', path: '/ai-config', name: '챕터 프롬프트·AI 설정', allowedRoles: ADMIN_ONLY },
-  { id: 'MY-01', path: '/settings', name: '내 AI·연결 설정' },
+  { id: 'MY-01', path: '/settings', name: '설정' },
   { id: 'USER-01', path: '/users', name: '사용자와 권한', allowedRoles: ADMIN_ONLY },
   { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: ADMIN_ONLY },
   { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }

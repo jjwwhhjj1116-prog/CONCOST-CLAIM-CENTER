@@ -10,7 +10,7 @@ interface CaseEvidenceFile {
   mimeType: string;
   byteSize: number;
   sha256: string;
-  storageProvider: 'D1_TEMPORARY';
+  storageProvider: 'D1_TEMPORARY' | 'GOOGLE_DRIVE';
   uploadedBy: string;
   uploadedAt: string;
   downloadUrl: string;
@@ -32,6 +32,8 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const [category, setCategory] = useState<CaseEvidenceCategory>(defaultCategory);
   const [files, setFiles] = useState<CaseEvidenceFile[]>([]);
   const [loading, setLoading] = useState(false);
+  const [storagePolicy, setStoragePolicy] = useState<'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'>('D1_TEST_FALLBACK');
+  const [googleDriveConnected, setGoogleDriveConnected] = useState(false);
   const [uploading, setUploading] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState('');
@@ -48,20 +50,23 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     setLoading(true); setError('');
     try {
       const response = await fetch(`/api/cases/${encodeURIComponent(requestCaseId)}/evidence`, { headers: { Accept: 'application/json' } });
-      const payload = await response.json() as { files?: CaseEvidenceFile[]; error?: string };
+      const payload = await response.json() as { files?: CaseEvidenceFile[]; error?: string; storagePolicy?: 'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'; googleDriveConnected?: boolean };
       if (!response.ok) throw new Error(payload.error ?? '프로젝트 자료를 불러오지 못했습니다.');
       if (sequence !== loadSequenceRef.current || caseIdRef.current !== requestCaseId) return;
       setFiles(payload.files ?? []);
+      setStoragePolicy(payload.storagePolicy ?? 'D1_TEST_FALLBACK');
+      setGoogleDriveConnected(Boolean(payload.googleDriveConnected));
     } catch (reason) { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : '프로젝트 자료를 불러오지 못했습니다.'); }
     finally { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setLoading(false); }
   }, [caseId]);
 
-  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(defaultCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); }, [caseId, defaultCategory]);
+  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(defaultCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setGoogleDriveConnected(false); }, [caseId, defaultCategory]);
   useEffect(() => { void load(); }, [load]);
 
   const upload = async (incoming: FileList | File[]) => {
     const selected = Array.from(incoming);
     if (!caseId || !selected.length) return;
+    if (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected) { setError('관리자 설정에서 회사 Google Drive 계정을 먼저 연결해 주세요.'); return; }
     const targetCaseId = caseId;
     const targetCategory = category;
     setUploading(selected.length); setError(''); setNotice('');
@@ -98,18 +103,19 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
 
   const categoryFiles = files.filter((file) => file.category === category);
   const visibleFiles = compact ? categoryFiles.slice(0, 6) : categoryFiles;
+  const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
   return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 산출·내역 자료실">
     <div className="case-evidence-categories" role="tablist" aria-label="자료 구분">
       {(Object.keys(categoryCopy) as CaseEvidenceCategory[]).map((value) => <button key={value} type="button" role="tab" aria-selected={category === value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}><b aria-hidden="true">{categoryCopy[value].icon}</b><span><strong>{categoryCopy[value].title}</strong><small>{categoryCopy[value].description}</small></span><em>{files.filter((file) => file.category === value).length}</em></button>)}
     </div>
-    <div className={`case-evidence-dropzone${dragging ? ' is-dragging' : ''}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); if (event.dataTransfer.files) void upload(event.dataTransfer.files); }}>
-      <input ref={inputRef} type="file" multiple accept={ACCEPT} onChange={(event) => event.target.files && void upload(event.target.files)} />
-      <span aria-hidden="true">⇧</span><div><strong>{uploading ? `${uploading}개 파일 저장 중…` : `${categoryCopy[category].title}를 끌어다 놓으세요`}</strong><small>최대 10MB · XLSX, PDF, HWPX, DOCX, 이미지 · 업로더와 시간이 자동 기록됩니다.</small></div><Button disabled={Boolean(uploading)} onClick={() => inputRef.current?.click()}>파일 선택</Button>
+    <div className={`case-evidence-dropzone${dragging ? ' is-dragging' : ''}${uploadDisabled ? ' is-disabled' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragOver={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); if (!uploadDisabled && event.dataTransfer.files) void upload(event.dataTransfer.files); }}>
+      <input ref={inputRef} type="file" multiple accept={ACCEPT} disabled={uploadDisabled} onChange={(event) => event.target.files && void upload(event.target.files)} />
+      <span aria-hidden="true">⇧</span><div><strong>{uploading ? `${uploading}개 파일 저장 중…` : uploadDisabled ? '회사 Google Drive 연결이 필요합니다' : `${categoryCopy[category].title}를 끌어다 놓으세요`}</strong><small>최대 10MB · 업로더·업로드 시각·SHA-256을 기록하고 프로젝트/자료종류/월 폴더에 저장합니다.</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
     </div>
-    <p className="case-evidence-storage-note"><strong>CLOUDFLARE PREVIEW STORAGE</strong> 현재 검증 단계에서는 파일을 D1에 분할 보존합니다. 회사 Google Drive 연결 후 프로젝트 폴더로 이관할 수 있습니다.</p>
+    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? 'COMPANY GOOGLE DRIVE STORAGE' : 'LOCAL TEST FALLBACK'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 Drive 연결 완료 · 새 파일은 프로젝트/산출·내역/월 폴더에 직접 저장됩니다.' : '업로드가 잠겨 있습니다. 설정의 관리자 설정에서 회사 계정을 연결하세요.' : '자동화 테스트 환경에서만 D1 임시 보존을 사용합니다.'} {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>Google Drive 설정 열기</button>}</p>
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error} <button type="button" onClick={() => void load()}>다시 확인</button></p>}
     <div className="case-evidence-list"><header><div><span>PROJECT EVIDENCE</span><h3>{categoryCopy[category].title} 목록</h3></div><div><em>{categoryFiles.length} FILES</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
-      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map((file) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>{categoryCopy[file.category].title} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small></div><span>D1 TEMP</span><Button size="sm" variant="secondary" onClick={() => void download(file)}>다운로드</Button></li>)}</ul> : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
+      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map((file) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>{categoryCopy[file.category].title} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small></div><span>{file.storageProvider === 'GOOGLE_DRIVE' ? 'GOOGLE DRIVE' : 'D1 LEGACY'}</span><Button size="sm" variant="secondary" onClick={() => void download(file)}>다운로드</Button></li>)}</ul> : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
     </div>
   </section>;
 }

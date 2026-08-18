@@ -129,12 +129,12 @@ test('CF07 Reviewer can read an assigned report but cannot save, and D1 history 
   sql.close();
 });
 
-test('CF07 Report Studio exposes case selection, debounce autosave, manual save, and deferred Drive notice', () => {
+test('CF07 Report Studio exposes case selection, debounce autosave, manual save, and finished template access', () => {
   const component = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewReportStudio.tsx'), 'utf8');
   const router = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'Router.tsx'), 'utf8');
   assert.match(component, /window\.setTimeout\(\(\) => \{ void saveNow\(\); \}, 900\)/u);
   assert.match(component, /지금 저장/u);
-  assert.match(component, /Google Drive 파일 연결은 현재 보류 중/u);
+  assert.match(component, /완제품 템플릿 열람/u);
   assert.match(component, /beforeunload/u);
   assert.match(router, /currentRoute\.id === 'REPO-02'.*PreviewReportStudio/u);
 });

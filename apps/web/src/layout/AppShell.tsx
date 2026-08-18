@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Drawer, SkipLink } from '@claim-studio/ui';
-import { apiRequest } from '../api';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
-import { applyWorkspacePreferences, readCachedWorkspacePreferences, WORKSPACE_PREFERENCE_EVENT, type WorkspacePreferences } from '../settings/workspace-preferences';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 
 const NAVIGATION_GROUPS: readonly {
@@ -18,8 +16,7 @@ const NAVIGATION_GROUPS: readonly {
   { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
   { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품·품질관리', eyebrow: 'QUALITY & DELIVERY', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
-  { label: '내 설정', eyebrow: 'MY WORKSPACE', icon: 'settings', routeIds: ['MY-01'] },
-  { label: '관리자 설정', eyebrow: 'ADMIN ONLY', icon: 'admin', routeIds: ['TPL-01', 'AI-01', 'INTEG-01', 'USER-01', 'AUD-01'], allowedRoles: ['admin'] }
+  { label: '설정', eyebrow: 'SETTINGS', icon: 'settings', routeIds: ['MY-01'] }
 ];
 
 const NavigationGroupIcon: React.FC<{ name: (typeof NAVIGATION_GROUPS)[number]['icon'] }> = ({ name }) => {
@@ -50,8 +47,6 @@ export interface AppShellProps {
 type ThemeMode = 'light' | 'dark';
 
 const readInitialTheme = (): ThemeMode => {
-  const cached = readCachedWorkspacePreferences().theme.toLowerCase();
-  if (cached === 'dark' || cached === 'light') return cached;
   const stored = window.localStorage.getItem('claim-center-theme');
   return stored === 'dark' || stored === 'light' ? stored : 'light';
 };
@@ -87,22 +82,6 @@ export const AppShell: React.FC<AppShellProps> = ({
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem('claim-center-theme', theme);
   }, [theme]);
-
-  useEffect(() => {
-    if (!previewMode) return;
-    let active = true;
-    void apiRequest<{ preferences: WorkspacePreferences }>('/api/settings/preferences').then(({ preferences }) => {
-      if (!active) return;
-      applyWorkspacePreferences(preferences);
-      setTheme(preferences.theme.toLowerCase() as ThemeMode);
-    }).catch(() => applyWorkspacePreferences(readCachedWorkspacePreferences()));
-    const handlePreferences = (event: Event) => {
-      const preferences = (event as CustomEvent<WorkspacePreferences>).detail;
-      if (preferences) setTheme(preferences.theme.toLowerCase() as ThemeMode);
-    };
-    window.addEventListener(WORKSPACE_PREFERENCE_EVENT, handlePreferences);
-    return () => { active = false; window.removeEventListener(WORKSPACE_PREFERENCE_EVENT, handlePreferences); };
-  }, [previewMode]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -152,6 +131,16 @@ export const AppShell: React.FC<AppShellProps> = ({
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;
         const isCurrentGroup = group === activeGroup;
+        if (group.icon === 'settings') {
+          const route = routes[0];
+          if (!route) return null;
+          return <section className={`navigation-group navigation-group--single${isCurrentGroup ? ' is-current' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
+            <button type="button" className="navigation-single-action" onClick={() => go(route.path)} aria-current={currentPath === route.path ? 'page' : undefined}>
+              <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
+              <span><small>{group.eyebrow}</small><strong>{group.label}</strong></span>
+            </button>
+          </section>;
+        }
         return <section className={`navigation-group${isCurrentGroup ? ' is-current' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
           <header>
             <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>

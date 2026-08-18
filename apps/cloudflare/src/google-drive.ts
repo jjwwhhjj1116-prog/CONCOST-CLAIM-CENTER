@@ -259,15 +259,78 @@ export async function verifyDriveFolder(fetcher: GoogleFetch, accessToken: strin
   return { id: folderId, name: payload.name };
 }
 
+const CLAIM_CENTER_FOLDER_KINDS = new Set(['PROJECT_ROOT', 'TAKEOFF_SOURCE', 'COST_BREAKDOWN', 'MONTH']);
+
+function driveQueryValue(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+}
+
+export async function ensureClaimCenterFolder(
+  fetcher: GoogleFetch,
+  input: { accessToken: string; caseId: string; kind: 'PROJECT_ROOT' | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'MONTH'; period: string; name: string; parentId?: string }
+): Promise<{ id: string; name: string; created: boolean }> {
+  if (!/^[0-9a-f-]{36}$/iu.test(input.caseId) || !CLAIM_CENTER_FOLDER_KINDS.has(input.kind) || !/^(?:|\d{4}-\d{2})$/u.test(input.period)) {
+    throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder context is invalid');
+  }
+  const name = input.name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/gu, '-').replace(/\s+/gu, ' ').slice(0, 180);
+  if (!name || (input.parentId && !GOOGLE_ID.test(input.parentId))) throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder name or parent is invalid');
+  const q = [
+    "trashed = false",
+    "mimeType = 'application/vnd.google-apps.folder'",
+    `appProperties has { key='claimCenterCaseId' and value='${driveQueryValue(input.caseId)}' }`,
+    `appProperties has { key='claimCenterFolderKind' and value='${driveQueryValue(input.kind)}' }`,
+    `appProperties has { key='claimCenterPeriod' and value='${driveQueryValue(input.period)}' }`
+  ];
+  if (input.parentId) q.push(`'${driveQueryValue(input.parentId)}' in parents`);
+  const listUrl = new URL(`${GOOGLE_DRIVE_API}/files`);
+  listUrl.searchParams.set('q', q.join(' and '));
+  listUrl.searchParams.set('spaces', 'drive');
+  listUrl.searchParams.set('pageSize', '10');
+  listUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed,parents,appProperties)');
+  const listed = await fetchWithTimeout(fetcher, listUrl.toString(), { headers: { Authorization: `Bearer ${input.accessToken}` } });
+  if (!listed.ok) throw providerFailure(listed, 'Google Drive project folder lookup');
+  const listing = await safeJson(listed);
+  if (!Array.isArray(listing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid folder list');
+  const candidates = listing.files.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
+    .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  if (candidates[0]) return { id: String(candidates[0].id), name: typeof candidates[0].name === 'string' ? candidates[0].name : name, created: false };
+
+  const metadata = {
+    name,
+    mimeType: 'application/vnd.google-apps.folder',
+    ...(input.parentId ? { parents: [input.parentId] } : {}),
+    appProperties: { claimCenterCaseId: input.caseId, claimCenterFolderKind: input.kind, claimCenterPeriod: input.period }
+  };
+  const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata)
+  });
+  if (!created.ok) throw providerFailure(created, 'Google Drive project folder creation', true);
+  const result = await safeJson(created);
+  if (typeof result.id !== 'string' || !GOOGLE_ID.test(result.id) || result.name !== name || result.mimeType !== 'application/vnd.google-apps.folder' || result.trashed === true) {
+    throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid project folder metadata', true);
+  }
+  return { id: result.id, name, created: true };
+}
+
 export async function uploadEvidenceToDrive(
   fetcher: GoogleFetch,
-  input: { accessToken: string; folderId: string; evidenceId: string; fileName: string; mimeType: string; sha256: string; bytes: Uint8Array }
+  input: { accessToken: string; folderId: string; evidenceId: string; fileName: string; mimeType: string; sha256: string; bytes: Uint8Array; caseId?: string; category?: string; uploadedById?: string; uploadedAt?: string }
 ): Promise<{ fileId: string; name: string; webViewLink: string | null }> {
   const boundary = `claim-center-${crypto.randomUUID()}`;
   const metadata = JSON.stringify({
     name: input.fileName,
     parents: [input.folderId],
-    appProperties: { claimCenterEvidenceId: input.evidenceId, sha256: input.sha256 }
+    appProperties: {
+      claimCenterEvidenceId: input.evidenceId,
+      sha256: input.sha256,
+      ...(input.caseId ? { claimCenterCaseId: input.caseId } : {}),
+      ...(input.category ? { claimCenterCategory: input.category } : {}),
+      ...(input.uploadedById ? { claimCenterUploadedBy: input.uploadedById } : {}),
+      ...(input.uploadedAt ? { claimCenterUploadedAt: input.uploadedAt } : {})
+    }
   });
   const body = new Blob([
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,

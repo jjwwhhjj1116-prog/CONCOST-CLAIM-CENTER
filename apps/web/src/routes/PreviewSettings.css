@@ -69,6 +69,14 @@
 .credential-provider-grid input { width:100%; box-sizing:border-box; min-height:42px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#172033; }
 .credential-input-help { display:block; margin-top:6px; color:#64748b; line-height:1.45; }
 .credential-provider-grid .action-row { margin-top:12px; }
+.credential-key-actions { display:grid; gap:10px; }
+.credential-key-actions .action-row { align-items:center; flex-wrap:wrap; }
+.credential-key-actions .action-row > a { display:inline-flex; align-items:center; min-height:38px; box-sizing:border-box; padding:0 13px; border:1px solid #93c5fd; border-radius:9px; background:#eff6ff; color:#1d4ed8; font-size:.73rem; font-weight:850; text-decoration:none; }
+.credential-key-actions .action-row > a:hover { border-color:#3b82f6; background:#dbeafe; }
+.credential-issue-guide { border:1px solid #dbe5f0; border-radius:10px; background:#f8fafc; }
+.credential-issue-guide summary { padding:10px 12px; color:#475569; font-size:.72rem; font-weight:850; cursor:pointer; }
+.credential-issue-guide ol { margin:0; padding:0 18px 4px 34px; color:#64748b; font-size:.72rem; line-height:1.65; }
+.credential-issue-guide > a { display:inline-block; margin:2px 12px 12px; color:#2563eb; font-size:.72rem; font-weight:800; }
 .settings-admin-links { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
 .settings-admin-links button { text-align:left; padding:16px; border:1px solid #dbe5f0; border-radius:13px; background:#f8fafc; cursor:pointer; }
 .settings-admin-links button:hover { border-color:#818cf8; background:#eef2ff; }
@@ -83,6 +91,9 @@
 :root[data-theme='dark'] .credential-provider-grid > section { border-color:#334155; background:#111827; }
 :root[data-theme='dark'] .credential-state,:root[data-theme='dark'] .settings-admin-links button { border-color:#334155; background:#1e293b; color:#cbd5e1; }
 :root[data-theme='dark'] .credential-provider-grid input { border-color:#475569; background:#0f172a; color:#f8fafc; }
+:root[data-theme='dark'] .credential-key-actions .action-row > a { border-color:#1d4ed8; background:#172554; color:#bfdbfe; }
+:root[data-theme='dark'] .credential-issue-guide { border-color:#334155; background:#1e293b; }
+:root[data-theme='dark'] .credential-issue-guide summary,:root[data-theme='dark'] .credential-issue-guide ol { color:#cbd5e1; }
 :root[data-theme='dark'] .settings-access-strip { border-color:#4338ca; background:#1e1b4b; }
 :root[data-theme='dark'] .settings-access-strip strong { color:#e0e7ff; }
 :root[data-theme='dark'] .settings-access-strip p { color:#cbd5e1; }

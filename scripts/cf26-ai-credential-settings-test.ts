@@ -84,6 +84,5 @@ test('CF26 UI exposes a settings route but never reads stored raw keys back', ()
   const router=readFileSync(join(process.cwd(),'apps','web','src','routes','Router.tsx'),'utf8');
   const shell=readFileSync(join(process.cwd(),'apps','web','src','layout','AppShell.tsx'),'utf8');
   const settings=readFileSync(join(process.cwd(),'apps','web','src','routes','PreviewSettings.tsx'),'utf8');
-  assert.match(router,/path: '\/settings'/u); assert.match(shell,/내 설정|내 AI 및 연결 설정/u); assert.match(settings,/type="password"/u); assert.match(settings,/개인키가 있으면 조직 공용키보다 먼저/u); assert.doesNotMatch(settings,/setKeys\([^)]*apiKey/u);
+  assert.match(router,/path: '\/settings'/u); assert.match(shell,/label: '설정'/u); assert.doesNotMatch(shell,/내 설정|내 AI 및 연결 설정/u); assert.match(settings,/type="password"/u); assert.match(settings,/개인키가 있으면 조직 공용키보다 먼저/u); assert.doesNotMatch(settings,/setKeys\([^)]*apiKey/u);
 });
-

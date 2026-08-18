@@ -6,6 +6,7 @@ import {
   createPkce,
   decryptSecret,
   downloadEvidenceFromDrive,
+  ensureClaimCenterFolder,
   encryptSecret,
   exchangeAuthorizationCode,
   getDriveAccount,
@@ -2539,6 +2540,15 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       previewOutlinePlan(env, caseRow.id, prompts),
       previewReportSourceGroups(env, caseRow)
     ]);
+    let templates: Array<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }> = [];
+    try {
+      const result = await env.DB.prepare(
+        'SELECT claim_type AS claimType, template_name AS templateName, purpose_text AS purposeText, version, finished_example_markdown AS finishedExample FROM preview_report_template_previews ORDER BY claim_type'
+      ).all<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }>();
+      templates = result.results ?? [];
+    } catch {
+      templates = [];
+    }
     const writingCredential = writingRoute ? await resolvePreviewAiCredential(env, user.id, writingRoute.providerKind as PreviewAiProvider) : null;
     return json({
       claimType: caseRow.claimType,
@@ -2551,7 +2561,8 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
       outlinePlan,
       sourceGroups,
-      phase: 'CF12_WRITER_REPORT_AUTHORING'
+      templates,
+      phase: 'CF30_SETTINGS_TEMPLATE_PREVIEW'
     });
   }
 
@@ -3279,6 +3290,8 @@ interface CaseEvidenceRow {
   uploadedBy: string;
   uploadedAt: string;
   requestFingerprint?: string;
+  googleFileId?: string;
+  googleFolderId?: string;
 }
 
 function caseEvidenceProjection(row: CaseEvidenceRow): Record<string, unknown> {
@@ -3292,6 +3305,8 @@ function caseEvidenceProjection(row: CaseEvidenceRow): Record<string, unknown> {
     storageProvider: row.storageProvider,
     uploadedBy: row.uploadedBy,
     uploadedAt: row.uploadedAt,
+    googleFileId: row.googleFileId ?? null,
+    googleFolderId: row.googleFolderId ?? null,
     downloadUrl: `/api/cases/evidence/${row.id}/download`
   };
 }
@@ -3304,6 +3319,21 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
 
   const downloadMatch = url.pathname.match(/^\/api\/cases\/evidence\/([0-9a-f-]{36})\/download$/iu);
   if (downloadMatch && request.method === 'GET') {
+    let googleEvidence: { id: string; caseId: string; originalName: string; mimeType: string; googleFileId: string } | null = null;
+    try {
+      googleEvidence = await db.prepare(
+        'SELECT id,case_id AS caseId,original_name AS originalName,mime_type AS mimeType,google_file_id AS googleFileId FROM preview_google_case_evidence WHERE id=? AND organization_id=?'
+      ).bind(downloadMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; originalName: string; mimeType: string; googleFileId: string }>();
+    } catch {
+      googleEvidence = null;
+    }
+    if (googleEvidence) {
+      if (!await accessiblePreviewCase(env, user, googleEvidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+      try {
+        const providerResponse = await downloadEvidenceFromDrive(googleFetch(env), await accessToken(env), googleEvidence.googleFileId);
+        return new Response(providerResponse.body, { headers: { 'Cache-Control': 'private, no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(googleEvidence.originalName)}`, 'Content-Type': googleEvidence.mimeType, 'X-Content-Type-Options': 'nosniff' } });
+      } catch (reason) { return googleFailure(reason); }
+    }
     const evidence = await db.prepare(
       'SELECT e.id,e.case_id AS caseId,e.original_name AS originalName,e.mime_type AS mimeType,e.byte_size AS byteSize,e.sha256,e.chunk_count AS chunkCount ' +
       'FROM preview_case_evidence e WHERE e.id=? AND e.organization_id=?'
@@ -3326,16 +3356,27 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   const collectionMatch = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/evidence$/iu);
   if (!collectionMatch) return json({ error: 'Case evidence route was not found', code: 'EVIDENCE_ROUTE_NOT_FOUND' }, 404);
   const caseId = collectionMatch[1];
-  if (!await accessiblePreviewCase(env, user, caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
 
   if (request.method === 'GET') {
     const category = url.searchParams.get('category') ?? '';
     if (category && !CASE_EVIDENCE_CATEGORIES.has(category)) return json({ error: 'Evidence category is invalid', code: 'INVALID_EVIDENCE_CATEGORY' }, 400);
-    const rows = await db.prepare(
+    const legacyRows = await db.prepare(
       'SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt ' +
       'FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND (?=\'\' OR category=?) ORDER BY uploaded_at DESC LIMIT 100'
     ).bind(caseId, PREVIEW_ORGANIZATION_ID, category, category).all<CaseEvidenceRow>();
-    return json({ files: rows.results.map(caseEvidenceProjection), temporaryStorage: true, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF15_CASE_EVIDENCE_LIBRARY' });
+    let googleRows: CaseEvidenceRow[] = [];
+    try {
+      const result = await db.prepare(
+        "SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE case_id=? AND organization_id=? AND (?='' OR category=?) ORDER BY uploaded_at DESC LIMIT 100"
+      ).bind(caseId, PREVIEW_ORGANIZATION_ID, category, category).all<CaseEvidenceRow>();
+      googleRows = result.results;
+    } catch { googleRows = []; }
+    const configured = Boolean(googleConfig(env));
+    const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
+    const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 100);
+    return json({ files: files.map(caseEvidenceProjection), googleDriveConfigured: configured, googleDriveConnected: connected, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);
@@ -3349,6 +3390,63 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   try {
     const validated = await validateEvidenceFile(file);
     const fingerprint = await sha256Hex(`${caseId}:${category}:${file.name}:${validated.mimeType}:${file.size}:${validated.sha256}`);
+    const config = googleConfig(env);
+    if (config) {
+      const credential = await getGoogleDriveCredential(env);
+      if (!credential) return json({ error: '관리자 설정에서 회사 Google Drive 계정을 먼저 연결해 주세요.', code: 'GOOGLE_DRIVE_NOT_CONNECTED', settingsUrl: '/settings?section=admin' }, 503);
+      const existingOperation = await db.prepare(
+        'SELECT id,status,request_fingerprint AS requestFingerprint FROM preview_google_case_operations WHERE organization_id=? AND case_id=? AND idempotency_key=?'
+      ).bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<{ id: string; status: string; requestFingerprint: string }>();
+      if (existingOperation) {
+        if (existingOperation.requestFingerprint !== fingerprint) return json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+        if (existingOperation.status !== 'SUCCEEDED') return json({ error: '이 업로드는 외부 저장 결과 확인이 필요합니다. 관리자에게 알려 주세요.', code: existingOperation.status === 'RECONCILIATION_REQUIRED' ? 'RECONCILIATION_REQUIRED' : 'UPLOAD_IN_PROGRESS_OR_FAILED' }, 409);
+        const replay = await db.prepare(
+          "SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?"
+        ).bind(existingOperation.id).first<CaseEvidenceRow>();
+        return replay ? json({ file: caseEvidenceProjection(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }) : json({ error: 'Google Drive upload metadata requires reconciliation', code: 'RECONCILIATION_REQUIRED' }, 409);
+      }
+
+      const operationId = crypto.randomUUID();
+      const evidenceId = crypto.randomUUID();
+      const reservedAt = new Date().toISOString();
+      const reservation = await db.prepare(
+        'INSERT OR IGNORE INTO preview_google_case_operations (id,organization_id,case_id,category,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,\'PENDING\',NULL,NULL,?,?,?)'
+      ).bind(operationId, PREVIEW_ORGANIZATION_ID, caseId, category, idempotencyKey, fingerprint, user.id, reservedAt, reservedAt).run();
+      if (reservation.meta?.changes !== 1) {
+        const conflict = await db.prepare('SELECT id,status,request_fingerprint AS requestFingerprint FROM preview_google_case_operations WHERE organization_id=? AND case_id=? AND idempotency_key=?').bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<{ id: string; status: string; requestFingerprint: string }>();
+        if (conflict?.requestFingerprint === fingerprint && conflict.status === 'SUCCEEDED') {
+          const replay = await db.prepare("SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?").bind(conflict.id).first<CaseEvidenceRow>();
+          if (replay) return json({ file: caseEvidenceProjection(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
+        }
+        return json({ error: '동일 파일 업로드가 진행 중이거나 확인 대기 중입니다.', code: 'UPLOAD_CONFLICT' }, 409);
+      }
+
+      const uploadedAt = new Date().toISOString();
+      try {
+        const token = await accessToken(env);
+        const root = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: 'PROJECT_ROOT', period: '', name: `${caseRow.caseNumber} ${caseRow.title}` });
+        const categoryName = category === 'TAKEOFF_SOURCE' ? '산출자료' : '내역자료';
+        const categoryFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: category as 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN', period: '', name: categoryName, parentId: root.id });
+        const period = uploadedAt.slice(0, 7);
+        const monthFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: 'MONTH', period, name: period, parentId: categoryFolder.id });
+        const uploaded = await uploadEvidenceToDrive(googleFetch(env), { accessToken: token, folderId: monthFolder.id, evidenceId, fileName: file.name, mimeType: validated.mimeType, sha256: validated.sha256, bytes: validated.bytes, caseId, category, uploadedById: user.id, uploadedAt });
+        if (!db.batch) throw new GoogleDriveError('D1_BATCH_REQUIRED', 503, 'D1 batch is unavailable', true);
+        const completedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();
+        const results = await db.batch([
+          db.prepare('INSERT INTO preview_google_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+            .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, category, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, monthFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId),
+          db.prepare("UPDATE preview_google_case_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId, completedAt, operationId),
+          db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED_TO_GOOGLE_DRIVE', `${categoryName} 업로드`, `${file.name} · ${period} · ${user.displayName}`, uploadedAt)
+        ]) as Array<{ meta?: { changes?: number } }>;
+        if (results.some((result) => result.meta?.changes !== 1)) throw new GoogleDriveError('GOOGLE_METADATA_COMMIT_FAILED', 503, 'Google upload metadata did not commit atomically', true);
+        return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, googleFileId: uploaded.fileId, googleFolderId: monthFolder.id }), replay: false, folderPath: `${caseRow.caseNumber}/${categoryName}/${period}`, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }, 201);
+      } catch (reason) {
+        const uncertain = reason instanceof GoogleDriveError && reason.uncertain;
+        const failedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();
+        await db.prepare('UPDATE preview_google_case_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status=\'PENDING\'').bind(uncertain ? 'RECONCILIATION_REQUIRED' : 'FAILED', reason instanceof GoogleDriveError ? reason.code : 'GOOGLE_OPERATION_FAILED', failedAt, operationId).run().catch(() => undefined);
+        return googleFailure(reason);
+      }
+    }
     const existing = await db.prepare(
       'SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,request_fingerprint AS requestFingerprint ' +
       'FROM preview_case_evidence WHERE organization_id=? AND case_id=? AND idempotency_key=?'

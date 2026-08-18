@@ -56,10 +56,11 @@ test('CF27 settings explains API-key activation and separates personal from admi
   const settings = read('apps/web/src/routes/PreviewSettings.tsx');
   const shell = read('apps/web/src/layout/AppShell.tsx');
   assert.match(shell, /aria-label="개인 및 관리자 설정 열기"/u);
-  assert.match(settings, /API 키를 입력하면 암호화 저장 버튼이 활성화됩니다/u);
+  assert.match(settings, /API KEY 발급방법/u);
   assert.match(settings, /현재 로그인 역할/u);
-  assert.match(settings, /회사 Drive·공용 AI·Hermes 정책은 관리자 설정에서 관리합니다/u);
-  assert.match(settings, /section === 'ADMIN' && isAdmin[\s\S]*<PreviewGoogleDriveSetup/u);
+  assert.match(settings, /회사 Drive·공용 AI·Memory 정책/u);
+  assert.match(settings, /section === 'ADMIN' && isAdmin && workspace[\s\S]*<PreviewGoogleDriveSetup/u);
+  assert.doesNotMatch(settings, /내 화면 맞춤 설정/u);
 });
 
 test('CF27 D1 create remains atomic and assigns the creator so the record is immediately listable', () => {

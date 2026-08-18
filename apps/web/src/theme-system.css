@@ -143,6 +143,7 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .navigation-group[data-nav-group='court'] { --group-accent: #ae7e3f; --group-rgb: 174, 126, 63; }
 .navigation-group[data-nav-group='quality'] { --group-accent: #4b967f; --group-rgb: 75, 150, 127; }
 .navigation-group[data-nav-group='admin'] { --group-accent: #9b6895; --group-rgb: 155, 104, 149; }
+.navigation-group[data-nav-group='settings'] { --group-accent: #5d73b8; --group-rgb: 93, 115, 184; }
 .sidebar { width: 256px; flex-basis: 256px; padding: 17px 13px 28px; }
 .navigation-list { gap: 20px; }
 .sidebar-project-context { overflow: hidden; border: 1px solid rgba(74, 134, 197, .34); border-radius: 14px; background: linear-gradient(145deg, rgba(74, 134, 197, .15), rgba(118, 107, 181, .1)); box-shadow: var(--panel-shadow); }
@@ -170,6 +171,13 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .navigation-group .navigation-link[aria-current='page'] { border-color: #c9ddec; background: #e5f0f8; color: #193756; font-weight: 700; box-shadow: inset 3px 0 #4a86c5; }
 .navigation-group .navigation-link[aria-current='page'] .navigation-dot { background: #4a86c5; box-shadow: 0 0 0 3px rgba(74, 134, 197, .13); }
 .navigation-group .navigation-link:hover:not([aria-current='page']) { color: var(--group-accent); background: rgba(var(--group-rgb), .08); }
+.navigation-group--single { display: block; }
+.navigation-single-action { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #4b5b70; text-align: left; cursor: pointer; }
+.navigation-single-action > span:last-child { display: grid; gap: 2px; }
+.navigation-single-action small { color: #8693a6; font: 500 .52rem 'Space Grotesk', sans-serif; letter-spacing: .12em; }
+.navigation-single-action strong { color: inherit; font-size: .8rem; font-weight: 800; }
+.navigation-single-action:hover { color: var(--group-accent); background: rgba(var(--group-rgb), .08); }
+.navigation-single-action[aria-current='page'] { border-color: #c9ddec; background: #e5f0f8; color: #193756; box-shadow: inset 3px 0 #4a86c5; }
 
 .case-create-hero { border-color: rgba(var(--section-accent-rgb), .36); }
 .case-create-hero h3 { font-size: clamp(1.8rem, 4vw, 3rem); }
