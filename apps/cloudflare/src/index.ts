@@ -2575,7 +2575,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
       const settings = await previewWorkspaceSettings(env);
       return json({ settings, runtime: {
         localAi: settings.localAiMode === 'PRIVATE_SERVER_BRIDGE' ? 'SERVER_BRIDGE_REQUIRED' : 'DISABLED',
-        hermes: settings.memoryProvider === 'HERMES_AGENT' ? 'EXTERNAL_RUNTIME_NOT_CONNECTED' : 'DISABLED',
+        hermes: settings.memoryProvider === 'HERMES_AGENT' ? 'D1_HERMES_COMPATIBLE_V2' : 'DISABLED',
         memoryLearning: settings.memoryProvider === 'HERMES_AGENT' && settings.memoryApprovalMode === 'ADMIN_REVIEW' && (settings.shortTermMemoryEnabled || settings.longTermMemoryEnabled) ? 'FEEDBACK_APPROVAL_RETRIEVAL_ACTIVE' : 'DISABLED', supportedLocalProviders: ['OLLAMA','LM_STUDIO','OPENAI_COMPATIBLE']
       }, phase: 'CF28_WORKSPACE_SETTINGS' });
     } catch { return json({ error: 'Admin settings migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
@@ -2605,7 +2605,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
   try {
     const results = await env.DB.batch([write, env.DB.prepare('INSERT INTO preview_settings_history (id,setting_scope,owner_id,snapshot_json,version,changed_by,changed_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(),'WORKSPACE_POLICY',PREVIEW_ORGANIZATION_ID,snapshot,nextVersion,user.id,now)]) as Array<{meta?:{changes?:number}}>;
     if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Admin settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
-    return json({ settings: await previewWorkspaceSettings(env), runtime: { localAi: body.localAiMode==='PRIVATE_SERVER_BRIDGE'?'SERVER_BRIDGE_REQUIRED':'DISABLED', hermes: body.memoryProvider==='HERMES_AGENT'?'EXTERNAL_RUNTIME_NOT_CONNECTED':'DISABLED', memoryLearning:body.memoryProvider==='HERMES_AGENT'&&body.memoryApprovalMode==='ADMIN_REVIEW'&&(body.shortTermMemoryEnabled||body.longTermMemoryEnabled)?'FEEDBACK_APPROVAL_RETRIEVAL_ACTIVE':'DISABLED', supportedLocalProviders:['OLLAMA','LM_STUDIO','OPENAI_COMPATIBLE'] }, phase: 'CF29_REPORT_MEMORY_LEARNING' });
+    return json({ settings: await previewWorkspaceSettings(env), runtime: { localAi: body.localAiMode==='PRIVATE_SERVER_BRIDGE'?'SERVER_BRIDGE_REQUIRED':'DISABLED', hermes: body.memoryProvider==='HERMES_AGENT'?'D1_HERMES_COMPATIBLE_V2':'DISABLED', memoryLearning:body.memoryProvider==='HERMES_AGENT'&&body.memoryApprovalMode==='ADMIN_REVIEW'&&(body.shortTermMemoryEnabled||body.longTermMemoryEnabled)?'FEEDBACK_APPROVAL_RETRIEVAL_ACTIVE':'DISABLED', supportedLocalProviders:['OLLAMA','LM_STUDIO','OPENAI_COMPATIBLE'] }, phase: 'CF34_HERMES_MEMORY_ARCHITECTURE' });
   } catch {
     const latest = await previewWorkspaceSettings(env).catch(() => null);
     if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Admin settings changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);
@@ -2689,25 +2689,24 @@ interface PreviewMemoryRuleRow {
 async function previewReportMemoryContext(
   env: CloudflareEnv,
   caseRow: PreviewCaseRow,
-  chapterCode: string
-): Promise<{ enabled: boolean; shortTerm: Record<string, unknown>; longTermRules: PreviewMemoryRuleRow[] }> {
+  chapterCode: string,
+  userId: string
+): Promise<{ enabled: boolean; engineCode: 'D1_HERMES_COMPATIBLE_V2'; shortTerm: Record<string, unknown>; shortTermItems: number; longTermRules: PreviewMemoryRuleRow[] }> {
   const policy = await previewWorkspaceSettings(env).catch(() => defaultPreviewWorkspaceSettings());
   if (policy.memoryProvider !== 'HERMES_AGENT' || policy.memoryApprovalMode !== 'ADMIN_REVIEW' || (!policy.shortTermMemoryEnabled && !policy.longTermMemoryEnabled)) {
-    return { enabled: false, shortTerm: {}, longTermRules: [] };
+    return { enabled: false, engineCode: 'D1_HERMES_COMPATIBLE_V2', shortTerm: {}, shortTermItems: 0, longTermRules: [] };
   }
   let shortTerm: Record<string, unknown> = {};
+  let shortTermItems = 0;
   if (policy.shortTermMemoryEnabled && env.DB) {
-    const [draft, feedback] = await Promise.all([
-      env.DB.prepare('SELECT title,content,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
-        .bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; version: number; updatedAt: string }>(),
-      env.DB.prepare(
-        'SELECT m.rule_text AS ruleText,m.status,f.chapter_code AS chapterCode,f.created_at AS createdAt FROM preview_memory_candidates m ' +
-        'JOIN preview_report_feedback f ON f.id=m.feedback_id WHERE f.case_id=? AND f.organization_id=? ORDER BY f.created_at DESC LIMIT 6'
-      ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<{ ruleText: string; status: string; chapterCode: string; createdAt: string }>().catch(() => ({ results: [] }))
-    ]);
+    const draft = await env.DB.prepare('SELECT title,content,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
+      .bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; version: number; updatedAt: string }>();
+    const currentChapterText = draft ? (extractGeneratedChapter(draft.content, chapterCode) ?? '') : '';
+    shortTermItems = currentChapterText ? 1 : 0;
     shortTerm = {
-      currentDraft: draft ? { title: draft.title, version: Number(draft.version), updatedAt: draft.updatedAt, recentText: draft.content.slice(-12_000) } : null,
-      projectFeedbackRules: feedback.results.map((row) => ({ chapterCode: row.chapterCode, rule: row.ruleText, status: row.status, createdAt: row.createdAt }))
+      boundary: 'CURRENT_PROJECT_AND_CURRENT_USER_ONLY',
+      ownerUserId: userId,
+      currentChapter: draft ? { title: draft.title, chapterCode, version: Number(draft.version), updatedAt: draft.updatedAt, text: currentChapterText.slice(-12_000) } : null
     };
   }
   let longTermRules: PreviewMemoryRuleRow[] = [];
@@ -2715,11 +2714,12 @@ async function previewReportMemoryContext(
     const rows = await env.DB.prepare(
       "SELECT id,memory_scope AS memoryScope,scope_key AS scopeKey,rule_text AS ruleText,confidence,reviewed_at AS reviewedAt FROM preview_memory_candidates " +
       "WHERE organization_id=? AND status='ACTIVE' AND ((memory_scope='GLOBAL' AND scope_key=?) OR (memory_scope='REPORT_TYPE' AND scope_key=?) " +
-      "OR (memory_scope='CLAIM_TYPE' AND scope_key=?) OR (memory_scope='CHAPTER' AND scope_key=?)) ORDER BY confidence DESC,reviewed_at DESC LIMIT 8"
-    ).bind(PREVIEW_ORGANIZATION_ID, PREVIEW_ORGANIZATION_ID, `${caseRow.claimType}:REPORT`, caseRow.claimType, `${caseRow.claimType}:${chapterCode}`).all<PreviewMemoryRuleRow>().catch(() => ({ results: [] }));
+      "OR (memory_scope='CLAIM_TYPE' AND scope_key=?) OR (memory_scope='CHAPTER' AND scope_key=?) OR (memory_scope='USER_FEEDBACK' AND scope_key=?)) " +
+      "ORDER BY CASE memory_scope WHEN 'CHAPTER' THEN 0 WHEN 'CLAIM_TYPE' THEN 1 WHEN 'REPORT_TYPE' THEN 2 WHEN 'USER_FEEDBACK' THEN 3 ELSE 4 END,confidence DESC,reviewed_at DESC LIMIT 8"
+    ).bind(PREVIEW_ORGANIZATION_ID, PREVIEW_ORGANIZATION_ID, `${caseRow.claimType}:REPORT`, caseRow.claimType, `${caseRow.claimType}:${chapterCode}`, userId).all<PreviewMemoryRuleRow>().catch(() => ({ results: [] }));
     longTermRules = rows.results.map((row) => ({ ...row, confidence: Number(row.confidence) }));
   }
-  return { enabled: true, shortTerm, longTermRules };
+  return { enabled: true, engineCode: 'D1_HERMES_COMPATIBLE_V2', shortTerm, shortTermItems, longTermRules };
 }
 
 async function previewMemoryCandidates(env: CloudflareEnv): Promise<Array<Record<string, unknown>>> {
@@ -2984,7 +2984,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
     if (!settings || !previewModelAllowed(settings.providerKind as PreviewAiProvider, settings.modelCode)) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
     const context = await previewReportAuthoringContext(env, caseRow);
-    const memoryContext = await previewReportMemoryContext(env, caseRow, prompt.chapterCode);
+    const memoryContext = await previewReportMemoryContext(env, caseRow, prompt.chapterCode, user.id);
     const chapterPlanningNote = outlinePlan.items.find((item) => item.chapterId === prompt.id)?.planningNote ?? '';
     context.outlinePlanning = { chapterCode: prompt.chapterCode, planningNote: chapterPlanningNote, outlineVersion: outlinePlan.version, outlineStatus: outlinePlan.status };
     context.shortTermMemory = memoryContext.shortTerm;
@@ -3027,12 +3027,19 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     try {
       await env.DB.prepare('INSERT INTO preview_report_generation_snapshots (generation_id,organization_id,case_id,prompt_id,chapter_code,output_text,output_sha256,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
         .bind(generationId,PREVIEW_ORGANIZATION_ID,caseRow.id,prompt.id,prompt.chapterCode,content,outputSha256,user.id,now).run();
-      if (memoryContext.longTermRules.length) await env.DB.batch(memoryContext.longTermRules.map((row) => env.DB!.prepare('INSERT INTO preview_memory_usage (id,generation_id,memory_id,used_at) VALUES (?,?,?,?)').bind(crypto.randomUUID(),generationId,row.id,now)));
+      const memoryScopes = [...new Set(memoryContext.longTermRules.map((row) => row.memoryScope))];
+      const retrievalStatements = [
+        env.DB.prepare('INSERT INTO preview_memory_retrieval_runs (generation_id,organization_id,case_id,chapter_code,actor_id,engine_code,short_term_sha256,short_term_items,long_term_items,scopes_json,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(generationId,PREVIEW_ORGANIZATION_ID,caseRow.id,prompt.chapterCode,user.id,memoryContext.engineCode,await sha256Hex(JSON.stringify(memoryContext.shortTerm)),memoryContext.shortTermItems,memoryContext.longTermRules.length,JSON.stringify(memoryScopes),now),
+        ...memoryContext.longTermRules.map((row) => env.DB!.prepare('INSERT INTO preview_memory_usage (id,generation_id,memory_id,used_at) VALUES (?,?,?,?)').bind(crypto.randomUUID(),generationId,row.id,now))
+      ];
+      await env.DB.batch(retrievalStatements);
     } catch {
       // Historical isolated fixtures intentionally stop before CF29. The
       // production migration makes snapshot/usage persistence mandatory.
     }
-    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: generated.credentialSource ?? 'ENVIRONMENT', generatedAt: now, memoryRulesUsed: memoryContext.longTermRules.length }, phase: 'CF29_REPORT_MEMORY_LEARNING' });
+    const personalRules = memoryContext.longTermRules.filter((row) => row.memoryScope === 'USER_FEEDBACK').length;
+    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: generated.credentialSource ?? 'ENVIRONMENT', generatedAt: now, memoryRulesUsed: memoryContext.longTermRules.length, memory: { engine: memoryContext.engineCode, shortTermItems: memoryContext.shortTermItems, approvedLongTermRules: memoryContext.longTermRules.length, personalRules, organizationRules: memoryContext.longTermRules.length-personalRules } }, phase: 'CF34_HERMES_MEMORY_ARCHITECTURE' });
   }
 
   if (url.pathname === '/api/report-authoring/improve' && request.method === 'POST') {
