@@ -6,9 +6,10 @@ export interface DialogProps {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
+  hideDefaultAction?: boolean;
 }
 
-export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose }) => {
+export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose, hideDefaultAction = false }) => {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -36,7 +37,7 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose
       >
         <h2 id={titleId}>{title}</h2>
         <div>{children}</div>
-        <div className="dialog-actions"><Button onClick={onClose}>확인</Button></div>
+        {!hideDefaultAction && <div className="dialog-actions"><Button onClick={onClose}>확인</Button></div>}
       </div>
     </div>
   );

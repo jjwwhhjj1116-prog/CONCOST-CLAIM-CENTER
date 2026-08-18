@@ -2499,6 +2499,12 @@ interface PreviewWorkspaceSettingProjection {
   organizationName: string; localAiMode: string; memoryProvider: string; memoryApprovalMode: string;
   shortTermMemoryEnabled: boolean; longTermMemoryEnabled: boolean; version: number; updatedAt: string | null;
 }
+interface PreviewTutorialStateRow {
+  completedTutorialVersion: string; completedAt: string; version: number; updatedAt: string;
+}
+interface PreviewTutorialStateProjection {
+  completedTutorialVersion: string | null; completedAt: string | null; version: number; updatedAt: string | null;
+}
 
 const defaultPreviewPreferences = (): PreviewPreferenceProjection => ({
   theme: 'LIGHT', fontFamily: 'PRETENDARD', fontScale: 100, density: 'COMFORTABLE', reduceMotion: false, version: 0, updatedAt: null
@@ -2507,6 +2513,10 @@ const defaultPreviewPreferences = (): PreviewPreferenceProjection => ({
 const defaultPreviewWorkspaceSettings = (): PreviewWorkspaceSettingProjection => ({
   organizationName: '클레임센터 스튜디오', localAiMode: 'DISABLED', memoryProvider: 'NONE', memoryApprovalMode: 'ADMIN_REVIEW',
   shortTermMemoryEnabled: false, longTermMemoryEnabled: false, version: 0, updatedAt: null
+});
+
+const defaultPreviewTutorialState = (): PreviewTutorialStateProjection => ({
+  completedTutorialVersion: null, completedAt: null, version: 0, updatedAt: null
 });
 
 async function previewUserPreferences(env: CloudflareEnv, userId: string): Promise<ReturnType<typeof defaultPreviewPreferences>> {
@@ -2528,11 +2538,61 @@ async function previewWorkspaceSettings(env: CloudflareEnv): Promise<ReturnType<
   } : defaultPreviewWorkspaceSettings();
 }
 
+async function previewUserTutorialState(env: CloudflareEnv, userId: string): Promise<PreviewTutorialStateProjection> {
+  if (!env.DB) return defaultPreviewTutorialState();
+  const row = await env.DB.prepare(
+    'SELECT completed_tutorial_version AS completedTutorialVersion,completed_at AS completedAt,version,updated_at AS updatedAt FROM preview_user_tutorial_state WHERE user_id=?'
+  ).bind(userId).first<PreviewTutorialStateRow>();
+  return row ? {
+    completedTutorialVersion: row.completedTutorialVersion,
+    completedAt: row.completedAt,
+    version: Number(row.version),
+    updatedAt: row.updatedAt
+  } : defaultPreviewTutorialState();
+}
+
 async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+  if (url.pathname === '/api/settings/tutorial') {
+    if (request.method === 'GET') {
+      try { return json({ tutorial: await previewUserTutorialState(env, user.id), currentTutorialVersion: 'CF35_V1', phase: 'CF35_GUIDED_WORKSPACE' }); }
+      catch { return json({ error: 'Tutorial state migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
+    }
+    if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['tutorialVersion','expectedVersion'])
+      || typeof body.tutorialVersion !== 'string' || !/^CF\d{2}_V\d+$/u.test(body.tutorialVersion)
+      || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Tutorial completion payload is invalid', code: 'INVALID_TUTORIAL_PAYLOAD' }, 400);
+    }
+    const current = await previewUserTutorialState(env, user.id);
+    if (current.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
+    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: current, currentTutorialVersion: 'CF35_V1', phase: 'CF35_GUIDED_WORKSPACE' });
+    const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const nextVersion = current.version + 1;
+    const write = current.version === 0
+      ? env.DB.prepare('INSERT INTO preview_user_tutorial_state (user_id,completed_tutorial_version,completed_at,version,updated_by,created_at,updated_at) SELECT ?,?,?,1,?,?,? WHERE ?=0')
+        .bind(user.id, body.tutorialVersion, now, user.id, now, now, body.expectedVersion)
+      : env.DB.prepare('UPDATE preview_user_tutorial_state SET completed_tutorial_version=?,completed_at=?,version=version+1,updated_by=?,updated_at=? WHERE user_id=? AND version=?')
+        .bind(body.tutorialVersion, now, user.id, now, user.id, body.expectedVersion);
+    try {
+      const results = await env.DB.batch([
+        write,
+        env.DB.prepare('INSERT INTO preview_user_tutorial_history (id,user_id,tutorial_version,state_version,completed_by,completed_at) VALUES (?,?,?,?,?,?)')
+          .bind(crypto.randomUUID(), user.id, body.tutorialVersion, nextVersion, user.id, now)
+      ]) as Array<{meta?:{changes?:number}}>;
+      if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT' }, 409);
+      return json({ tutorial: await previewUserTutorialState(env, user.id), currentTutorialVersion: 'CF35_V1', phase: 'CF35_GUIDED_WORKSPACE' });
+    } catch {
+      const latest = await previewUserTutorialState(env, user.id).catch(() => null);
+      if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);
+      return json({ error: 'Tutorial completion was not saved', code: 'TUTORIAL_WRITE_FAILED' }, 503);
+    }
+  }
 
   if (url.pathname === '/api/settings/preferences') {
     if (request.method === 'GET') {
@@ -3988,7 +4048,7 @@ const worker = {
       return handlePreviewAiCredentials(request, env, url);
     }
 
-    if (url.pathname === '/api/settings/preferences' || url.pathname === '/api/settings/admin-workspace') {
+    if (url.pathname === '/api/settings/preferences' || url.pathname === '/api/settings/admin-workspace' || url.pathname === '/api/settings/tutorial') {
       return handlePreviewWorkspaceSettings(request, env, url);
     }
 

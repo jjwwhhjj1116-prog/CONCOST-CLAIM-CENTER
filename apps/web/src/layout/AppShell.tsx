@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Drawer, SkipLink } from '@claim-studio/ui';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
+import { WorkspaceHelpCenter } from './WorkspaceHelpCenter';
 
 const NAVIGATION_GROUPS: readonly {
   label: string;
@@ -184,6 +185,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
             <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
           </button>
+          <WorkspaceHelpCenter category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} onNavigate={go} />
           <button type="button" className="theme-toggle" aria-label="개인 및 관리자 설정 열기" onClick={() => go('/settings')}>
             <span aria-hidden="true">⚙</span><strong>설정</strong>
           </button>

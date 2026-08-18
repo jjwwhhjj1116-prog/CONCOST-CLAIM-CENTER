@@ -1,0 +1,49 @@
+.workspace-help-trigger span { width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 50%; background: #e0f2fe; color: #0369a1; font-weight: 900; }
+.workspace-tutorial { display: grid; gap: 15px; min-width: min(720px, calc(100vw - 80px)); }
+.workspace-tutorial > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.workspace-tutorial > header span { color: #4a86c5; font: 850 .68rem 'DM Mono', monospace; letter-spacing: .11em; }
+.workspace-tutorial > header strong { color: var(--text-muted); font-size: .76rem; }
+.workspace-tutorial__progress { height: 7px; overflow: hidden; border-radius: 99px; background: #e7eef5; }
+.workspace-tutorial__progress i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #4a86c5, #766bb5, #4b967f); transition: width .2s ease; }
+.workspace-tutorial > section { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 22px; align-items: start; border: 1px solid #dbe5ef; border-radius: 18px; padding: 22px; background: linear-gradient(135deg, #fff, #f4f8fb); }
+.workspace-tutorial__number { color: #d8e9f4; font: 900 4rem/1 Manrope, sans-serif; letter-spacing: -.08em; }
+.workspace-tutorial h3 { margin: 0; color: var(--text-primary); font-size: 1.3rem; }
+.workspace-tutorial section p { color: var(--text-secondary); line-height: 1.65; }
+.workspace-tutorial section ol { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; counter-reset: tutorial-task; list-style: none; }
+.workspace-tutorial section li { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 9px; color: var(--text-primary); font-weight: 750; }
+.workspace-tutorial section li::before { counter-increment: tutorial-task; content: counter(tutorial-task); width: 23px; height: 23px; display: grid; place-items: center; border-radius: 8px; background: #e5f0f8; color: #315f87; font-size: .68rem; }
+.workspace-tutorial > aside { border-left: 4px solid #4b967f; border-radius: 12px; padding: 12px 15px; background: #edf8f3; }
+.workspace-tutorial aside strong { color: #30715e; font-size: .72rem; }
+.workspace-tutorial aside p { margin: 5px 0 0; color: #234e43; font-weight: 800; }
+.workspace-tutorial > footer, .workspace-help-center > footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.workspace-tutorial > small { color: var(--text-muted); line-height: 1.5; }
+.workspace-help-center { display: grid; gap: 16px; min-width: min(780px, calc(100vw - 80px)); }
+.workspace-help-center > header { border-left: 5px solid #4a86c5; padding: 4px 0 4px 14px; }
+.workspace-help-center > header span, .workspace-help-center__route > span { color: #4a86c5; font: 850 .65rem 'DM Mono', monospace; letter-spacing: .11em; }
+.workspace-help-center h3 { margin: 5px 0; color: var(--text-primary); }
+.workspace-help-center p { margin: 0; color: var(--text-secondary); line-height: 1.6; }
+.workspace-help-center__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.workspace-help-center__grid section { border: 1px solid #dce6ef; border-radius: 14px; padding: 15px; background: #f8fbfd; }
+.workspace-help-center__grid section:nth-child(1) { border-top: 4px solid #4a86c5; }
+.workspace-help-center__grid section:nth-child(2) { border-top: 4px solid #766bb5; }
+.workspace-help-center__grid section:nth-child(3) { border-top: 4px solid #4b967f; }
+.workspace-help-center__grid section.is-caution { border-top: 4px solid #c8794d; background: #fff8f3; }
+.workspace-help-center__grid strong { color: var(--text-primary); }
+.workspace-help-center__grid ul, .workspace-help-center__grid ol { display: grid; gap: 6px; margin: 10px 0 0; padding-left: 1.25rem; color: var(--text-secondary); line-height: 1.45; }
+.workspace-help-center__route { border: 1px solid #c7d2fe; border-radius: 15px; padding: 16px; background: linear-gradient(110deg, #eef2ff, #f0fdfa); }
+.workspace-help-center__route ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin: 12px 0; padding: 0; counter-reset: route-step; list-style: none; }
+.workspace-help-center__route li { min-width: 0; border-radius: 10px; padding: 10px; background: #fff; color: #334155; font-size: .72rem; font-weight: 750; }
+.workspace-help-center__route li::before { counter-increment: route-step; content: counter(route-step); display: block; margin-bottom: 5px; color: #4f46e5; font: 850 .67rem 'DM Mono', monospace; }
+:root[data-theme='dark'] .workspace-tutorial > section, :root[data-theme='dark'] .workspace-help-center__grid section { border-color: #334155; background: #111c30; }
+:root[data-theme='dark'] .workspace-tutorial > aside { background: #12352d; }
+:root[data-theme='dark'] .workspace-tutorial aside strong, :root[data-theme='dark'] .workspace-tutorial aside p { color: #a7f3d0; }
+:root[data-theme='dark'] .workspace-help-center__route { border-color: #4338ca; background: linear-gradient(110deg, #1e1b4b, #132b2b); }
+:root[data-theme='dark'] .workspace-help-center__route li { background: #0f172a; color: #e2e8f0; }
+@media (max-width: 720px) {
+  .workspace-tutorial, .workspace-help-center { min-width: 0; }
+  .workspace-tutorial > section { grid-template-columns: 1fr; }
+  .workspace-tutorial__number { font-size: 2.8rem; }
+  .workspace-help-center__grid { grid-template-columns: 1fr; }
+  .workspace-help-center__route ol { grid-template-columns: 1fr; }
+  .workspace-tutorial > footer, .workspace-help-center > footer { align-items: stretch; flex-direction: column; }
+}

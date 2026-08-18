@@ -5,6 +5,7 @@ import './reports/ReportStudio.css';
 import './fees/FeeSuccessCompensation.css';
 import './integrations/GoogleWorkspaceCaseTools.css';
 import './layout/StatusFeedbackState.css';
+import './layout/WorkspaceHelpCenter.css';
 import './workflow/ProjectWorkflowSchedule.css';
 import './workflow/ProposalAwardWorkflow.css';
 import './workflow/WorkflowOperations.css';

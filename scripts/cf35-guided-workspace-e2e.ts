@@ -1,0 +1,99 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import path from 'node:path';
+import { chromium, type Browser } from 'playwright-core';
+
+const root = path.resolve(__dirname, '..');
+const distRoot = path.join(root, 'apps', 'web', 'dist');
+
+function browserExecutable(): string {
+  const candidates = [process.env.CHROME_PATH ?? '', 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', '/usr/bin/google-chrome', '/usr/bin/chromium'];
+  const found = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+  if (!found) throw new Error('Chrome/Edge executable not found. Set CHROME_PATH for CF35 browser E2E.');
+  return found;
+}
+
+function staticServer(origin: string): Server {
+  const types: Record<string,string> = { '.css':'text/css; charset=utf-8','.html':'text/html; charset=utf-8','.js':'text/javascript','.json':'application/json','.svg':'image/svg+xml' };
+  return createServer((request,response)=>{
+    const pathname=decodeURIComponent(new URL(request.url??'/',origin).pathname);
+    const requested=pathname==='/'?'index.html':pathname.replace(/^\/+/, '');
+    const candidate=path.resolve(distRoot,requested);
+    const safe=candidate.startsWith(path.resolve(distRoot)+path.sep);
+    const filePath=safe&&fs.existsSync(candidate)&&fs.statSync(candidate).isFile()?candidate:path.join(distRoot,'index.html');
+    response.writeHead(200,{'Cache-Control':'no-store','Content-Type':types[path.extname(filePath)]??'application/octet-stream'});
+    fs.createReadStream(filePath).pipe(response);
+  });
+}
+
+async function listen(server:Server):Promise<number>{await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});return (server.address()as{port:number}).port;}
+
+async function main():Promise<void>{
+  if(!fs.existsSync(path.join(distRoot,'index.html')))throw new Error('Run cf:build before CF35 E2E.');
+  const server=staticServer('http://127.0.0.1');
+  const port=await listen(server);
+  const origin=`http://127.0.0.1:${port}`;
+  let browser:Browser|undefined;
+  let tutorialVersion:string|null=null;
+  let stateVersion=0;
+  let completionWrites=0;
+  try{
+    browser=await chromium.launch({executablePath:browserExecutable(),headless:true});
+    const context=await browser.newContext({viewport:{width:1440,height:900}});
+    const page=await context.newPage();
+    await page.route('**/auth/session',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({id:'00000000-0000-4000-8000-000000000002',email:'guide@example.invalid',name:'신규 사용자',organizationId:'concost',roles:['staff'],previewMode:true})}));
+    await page.route('**/api/settings/tutorial',async route=>{
+      if(route.request().method()==='PUT'){
+        const body=route.request().postDataJSON()as{tutorialVersion:string;expectedVersion:number};
+        assert.equal(body.expectedVersion,stateVersion);
+        tutorialVersion=body.tutorialVersion;stateVersion+=1;completionWrites+=1;
+      }
+      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tutorial:{completedTutorialVersion:tutorialVersion,completedAt:tutorialVersion?new Date().toISOString():null,version:stateVersion,updatedAt:tutorialVersion?new Date().toISOString():null},currentTutorialVersion:'CF35_V1',phase:'CF35_GUIDED_WORKSPACE'})});
+    });
+    await page.route('**/api/preview/draft',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{title:'가이드 검증 초안',content:'검증용 합성 메모',updatedAt:null}})}));
+    await page.route('**/api/cases?**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({cases:[],total:0,page:1,limit:100})}));
+
+    await page.goto(`${origin}/dashboard`,{waitUntil:'domcontentloaded'});
+    const dialog=page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'});
+    await dialog.waitFor({state:'visible',timeout:10_000});
+    assert.match(await dialog.innerText(),/먼저 오늘 해야 할 프로젝트/u);
+    for(const title of ['새 의뢰를 등록하고 제안서를 연결합니다.','일정표에서 프로젝트의 현재 위치를 확인합니다.','모든 근거 자료는 프로젝트 자료실에 모읍니다.','보고서는 한 단계씩 완료하고 다음으로 이동합니다.','검토·납품 후 법원 일정과 수정 이력을 관리합니다.','설정은 개인용과 관리자용을 구분합니다.']){
+      await dialog.getByRole('button',{name:'다음 설명 →'}).click();
+      assert.match(await dialog.innerText(),new RegExp(title.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'u'));
+    }
+    await dialog.getByRole('button',{name:'튜토리얼 완료'}).click();
+    await dialog.waitFor({state:'hidden'});
+    assert.equal(completionWrites,1);
+    console.log('  1/4 first-run tutorial advances through all seven steps and persists completion PASS');
+
+    await page.getByRole('button',{name:'현재 화면 도움말 열기'}).click();
+    const help=page.getByRole('dialog',{name:'도움말 · CLAIM CENTER HOME'});
+    await help.waitFor({state:'visible'});
+    for(const label of ['먼저 준비할 것','이 화면에서 하는 일','완료되면 남는 것','실수 방지'])assert.match(await help.innerText(),new RegExp(label));
+    await help.getByRole('button',{name:'현재 화면에서 계속하기'}).click();
+    console.log('  2/4 category help exposes input, action, output and caution guidance PASS');
+
+    await page.goto(`${origin}/reports/studio`,{waitUntil:'domcontentloaded'});
+    await page.getByRole('button',{name:'현재 화면 도움말 열기'}).click();
+    const reportHelp=page.getByRole('dialog',{name:'도움말 · 프로젝트 워크'});
+    await reportHelp.waitFor({state:'visible'});
+    const reportText=await reportHelp.innerText();
+    for(const label of ['프로젝트·템플릿 확인','목차 기획 확정','챕터별 AI 작성','사람 검토·수정','검토·승인·출력'])assert.match(reportText,new RegExp(label));
+    console.log('  3/4 report help keeps the exact five-step authoring order PASS');
+
+    await page.reload({waitUntil:'domcontentloaded'});
+    assert.equal(await page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).count(),0);
+    await page.setViewportSize({width:640,height:900});
+    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth);
+    assert.equal(overflow,false);
+    console.log('  4/4 completed tutorial stays closed and 640px help UI has no horizontal overflow PASS');
+    await context.close();
+    console.log('✅ CF35 guided workspace browser E2E PASS (4 flows)');
+  }finally{
+    await browser?.close();
+    await new Promise<void>(resolve=>server.close(()=>resolve()));
+  }
+}
+
+void main().catch((error)=>{console.error(error);process.exitCode=1;});
