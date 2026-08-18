@@ -43,6 +43,7 @@ export interface CloudflareEnv {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY?: string;
+  AI_CREDENTIAL_MASTER_KEY?: string;
   GOOGLE_OAUTH_REDIRECT_ORIGIN?: string;
   GOOGLE_ALLOWED_DOMAIN?: string;
   ALLOW_TEST_GOOGLE_MODES?: string;
@@ -1508,6 +1509,115 @@ function previewProviderConfigured(env: CloudflareEnv, provider: PreviewAiProvid
   return Boolean(env.GEMINI_API_KEY);
 }
 
+type PreviewAiCredentialScope = 'ORGANIZATION' | 'USER';
+type PreviewAiCredentialSource = 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT';
+interface PreviewAiCredentialRow {
+  ownerScope: PreviewAiCredentialScope;
+  ownerId: string;
+  providerKind: PreviewAiProvider;
+  ciphertextHex: string;
+  ivHex: string;
+  keyFingerprint: string;
+  status: 'ACTIVE' | 'DISABLED';
+  version: number;
+  updatedAt: string;
+}
+interface ResolvedPreviewAiCredential {
+  apiKey: string;
+  source: PreviewAiCredentialSource;
+  fingerprint: string | null;
+}
+
+function previewAiMasterKey(env: CloudflareEnv): string | null {
+  const key = env.AI_CREDENTIAL_MASTER_KEY ?? env.GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY ?? '';
+  return /^[0-9a-f]{64}$/iu.test(key) ? key.toLowerCase() : null;
+}
+
+function previewAiCredentialAad(scope: PreviewAiCredentialScope, ownerId: string, provider: PreviewAiProvider): string {
+  return `claim-center:ai-credential:v1:${PREVIEW_ORGANIZATION_ID}:${scope}:${ownerId}:${provider}`;
+}
+
+function previewEnvironmentApiKey(env: CloudflareEnv, provider: PreviewAiProvider): string | null {
+  const value = provider === 'OPENAI' ? env.OPENAI_API_KEY : provider === 'ANTHROPIC' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY;
+  return value?.trim() || null;
+}
+
+function validPreviewApiKey(provider: PreviewAiProvider, value: string): boolean {
+  if (value.length < 20 || value.length > 512 || /[\s\u0000-\u001f\u007f]/u.test(value)) return false;
+  if (provider === 'OPENAI') return /^(?:sk-|sess-|[A-Za-z0-9_-]{20})/u.test(value);
+  if (provider === 'ANTHROPIC') return /^(?:sk-ant-|[A-Za-z0-9_.-]{20})/u.test(value);
+  return /^(?:AIza|AQ\.|[A-Za-z0-9_.-]{20})/u.test(value);
+}
+
+async function previewStoredAiCredential(
+  env: CloudflareEnv,
+  provider: PreviewAiProvider,
+  scope: PreviewAiCredentialScope,
+  ownerId: string
+): Promise<ResolvedPreviewAiCredential | null> {
+  const masterKey = previewAiMasterKey(env);
+  if (!env.DB || !masterKey) return null;
+  try {
+    const row = await env.DB.prepare(
+      'SELECT owner_scope AS ownerScope, owner_id AS ownerId, provider_kind AS providerKind, ciphertext_hex AS ciphertextHex, iv_hex AS ivHex, key_fingerprint AS keyFingerprint, status, version, updated_at AS updatedAt ' +
+      'FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=?'
+    ).bind(PREVIEW_ORGANIZATION_ID, scope, ownerId, provider).first<PreviewAiCredentialRow>();
+    if (!row || row.status !== 'ACTIVE') return null;
+    const apiKey = await decryptSecret(row.ciphertextHex, row.ivHex, masterKey, previewAiCredentialAad(scope, ownerId, provider));
+    if (!apiKey || !validPreviewApiKey(provider, apiKey)) return null;
+    return { apiKey, source: scope === 'USER' ? 'PERSONAL' : 'ORGANIZATION', fingerprint: row.keyFingerprint };
+  } catch {
+    return null;
+  }
+}
+
+async function resolvePreviewAiCredential(env: CloudflareEnv, actorId: string, provider: PreviewAiProvider): Promise<ResolvedPreviewAiCredential | null> {
+  const personal = actorId ? await previewStoredAiCredential(env, provider, 'USER', actorId) : null;
+  if (personal) return personal;
+  const organization = await previewStoredAiCredential(env, provider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID);
+  if (organization) return organization;
+  const apiKey = previewEnvironmentApiKey(env, provider);
+  return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) } : null;
+}
+
+async function previewAiCredentialMetadata(env: CloudflareEnv, user: SessionUser): Promise<Record<string, unknown>> {
+  const providers = ['OPENAI', 'ANTHROPIC', 'GEMINI'] as PreviewAiProvider[];
+  const rows: PreviewAiCredentialRow[] = [];
+  if (env.DB) {
+    try {
+      const result = await env.DB.prepare(
+        'SELECT owner_scope AS ownerScope, owner_id AS ownerId, provider_kind AS providerKind, ciphertext_hex AS ciphertextHex, iv_hex AS ivHex, key_fingerprint AS keyFingerprint, status, version, updated_at AS updatedAt ' +
+        'FROM preview_ai_credentials WHERE organization_id=? AND ((owner_scope=\'USER\' AND owner_id=?) OR (owner_scope=\'ORGANIZATION\' AND owner_id=?))'
+      ).bind(PREVIEW_ORGANIZATION_ID, user.id, PREVIEW_ORGANIZATION_ID).all<PreviewAiCredentialRow>();
+      rows.push(...result.results);
+    } catch {
+      // The additive credential migration may not exist in older isolated fixtures.
+    }
+  }
+  const state = (provider: PreviewAiProvider, scope: PreviewAiCredentialScope) => {
+    const ownerId = scope === 'USER' ? user.id : PREVIEW_ORGANIZATION_ID;
+    const row = rows.find((item) => item.providerKind === provider && item.ownerScope === scope && item.ownerId === ownerId);
+    const environment = scope === 'ORGANIZATION' && previewProviderConfigured(env, provider);
+    return {
+      configured: row?.status === 'ACTIVE' || environment,
+      storage: row?.status === 'ACTIVE' ? 'ENCRYPTED_D1' : environment ? 'CLOUDFLARE_SECRET' : 'NONE',
+      version: Number(row?.version ?? 0),
+      updatedAt: row?.updatedAt ?? null,
+      fingerprint: row?.status === 'ACTIVE' ? row.keyFingerprint.slice(0, 12) : null
+    };
+  };
+  return {
+    personalPriority: true,
+    masterKeyReady: Boolean(previewAiMasterKey(env)),
+    providers: providers.map((providerKind) => ({
+      providerKind,
+      label: providerKind === 'OPENAI' ? 'OpenAI · ChatGPT' : providerKind === 'ANTHROPIC' ? 'Anthropic · Claude' : 'Google · Gemini',
+      personal: state(providerKind, 'USER'),
+      organization: state(providerKind, 'ORGANIZATION')
+    }))
+  };
+}
+
 function previewProviderSecretName(provider: PreviewAiProvider): PreviewAiRouteRow['secretName'] {
   if (provider === 'OPENAI') return 'OPENAI_API_KEY';
   if (provider === 'ANTHROPIC') return 'ANTHROPIC_API_KEY';
@@ -1535,17 +1645,17 @@ async function previewAiRoutes(env: CloudflareEnv): Promise<PreviewAiRouteRow[]>
   }
 }
 
-function previewAiPublicConfiguration(env: CloudflareEnv, routes: PreviewAiRouteRow[]): Record<string, unknown> {
-  const providers = (['OPENAI', 'ANTHROPIC', 'GEMINI'] as PreviewAiProvider[]).map((providerKind) => ({
+async function previewAiPublicConfiguration(env: CloudflareEnv, routes: PreviewAiRouteRow[]): Promise<Record<string, unknown>> {
+  const providers = await Promise.all((['OPENAI', 'ANTHROPIC', 'GEMINI'] as PreviewAiProvider[]).map(async (providerKind) => ({
     providerKind,
     label: providerKind === 'OPENAI' ? 'OpenAI · ChatGPT' : providerKind === 'ANTHROPIC' ? 'Anthropic · Claude' : 'Google · Gemini',
     secretName: previewProviderSecretName(providerKind),
-    connected: previewProviderConfigured(env, providerKind),
+    connected: Boolean(await previewStoredAiCredential(env, providerKind, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID)) || previewProviderConfigured(env, providerKind),
     models: PREVIEW_AI_MODELS[providerKind]
-  }));
+  })));
   return {
     providers,
-    routes: routes.map((route) => ({ ...route, providerKind: route.providerKind, version: Number(route.version), connected: previewProviderConfigured(env, route.providerKind as PreviewAiProvider) }))
+    routes: routes.map((route) => ({ ...route, providerKind: route.providerKind, version: Number(route.version), connected: providers.find((provider) => provider.providerKind === route.providerKind)?.connected ?? false }))
   };
 }
 
@@ -1576,8 +1686,8 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
       if (row.id) typeMap.get(row.claimType)?.chapters.push({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, rolePrompt: row.rolePrompt, instructionPrompt: row.instructionPrompt, ordinal: Number(row.ordinal), version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName });
     }
     return json({
-      settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null,
-      aiConfig: previewAiPublicConfiguration(env, routes),
+      settings: settings ? { ...settings, version: Number(settings.version), apiKeyConfigured: Boolean(await previewStoredAiCredential(env, settings.providerKind as PreviewAiProvider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID)) || previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null,
+      aiConfig: await previewAiPublicConfiguration(env, routes),
       promptSets: [...typeMap.values()],
       phase: 'CF19_MULTI_PROVIDER_AI'
     });
@@ -1613,7 +1723,7 @@ async function handlePreviewPromptAdmin(request: Request, env: CloudflareEnv, ur
       if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'AI settings changed in another session', code: 'VERSION_CONFLICT' }, 409);
       const nextRoutes = await previewAiRoutes(env);
       const settings = nextRoutes.find((route) => route.taskKind === taskKind) ?? null;
-      return json({ settings: settings ? { ...settings, apiKeyConfigured: previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null, aiConfig: previewAiPublicConfiguration(env, nextRoutes), phase: 'CF19_MULTI_PROVIDER_AI' });
+      return json({ settings: settings ? { ...settings, apiKeyConfigured: Boolean(await previewStoredAiCredential(env, settings.providerKind as PreviewAiProvider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID)) || previewProviderConfigured(env, settings.providerKind as PreviewAiProvider) } : null, aiConfig: await previewAiPublicConfiguration(env, nextRoutes), phase: 'CF19_MULTI_PROVIDER_AI' });
     } catch {
       // Legacy CF12 fixture compatibility.
       if (!isLegacyPayload || providerKind !== 'OPENAI') return json({ error: 'Multi-provider AI migration is not available', code: 'AI_ROUTE_STORAGE_NOT_READY' }, 503);
@@ -1805,10 +1915,18 @@ function safeGeminiProviderError(payload: unknown, httpStatus: number): { code: 
   return { code: 'GEMINI_REQUEST_FAILED', error: 'Gemini가 요청을 처리하지 못했습니다. 관리자 연결 상태와 사용 한도를 확인해 주세요.', providerReason };
 }
 
-async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRow, system: string, input: string, actorId: string): Promise<{ content?: string; response?: Response }> {
+async function generatePreviewAiText(
+  env: CloudflareEnv,
+  route: PreviewAiRouteRow,
+  system: string,
+  input: string,
+  actorId: string,
+  credentialOverride?: ResolvedPreviewAiCredential
+): Promise<{ content?: string; credentialSource?: PreviewAiCredentialSource; response?: Response }> {
   const provider = route.providerKind as PreviewAiProvider;
-  const apiKey = provider === 'OPENAI' ? env.OPENAI_API_KEY : provider === 'ANTHROPIC' ? env.ANTHROPIC_API_KEY : env.GEMINI_API_KEY;
-  if (!apiKey) return { response: json({ error: `관리자가 Cloudflare 서버 Secret에 ${previewProviderSecretName(provider)}를 연결해야 합니다.`, code: `${provider}_NOT_CONFIGURED` }, 503) };
+  const credential = credentialOverride ?? await resolvePreviewAiCredential(env, actorId, provider);
+  const apiKey = credential?.apiKey;
+  if (!apiKey) return { response: json({ error: `내 설정 또는 관리자 설정에서 ${provider} API 키를 연결해 주세요.`, code: `${provider}_NOT_CONFIGURED` }, 503) };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
   let endpoint = '';
@@ -1852,7 +1970,81 @@ async function generatePreviewAiText(env: CloudflareEnv, route: PreviewAiRouteRo
   const payload = await response.json().catch(() => null);
   const content = provider === 'OPENAI' ? extractOpenAiText(payload) : provider === 'GEMINI' ? extractGeminiText(payload) : extractAnthropicText(payload);
   if (!content || content.length > 200_000) return { response: json({ error: 'AI 공급자 응답 형식이 올바르지 않습니다.', code: `${provider}_MALFORMED_RESPONSE` }, 502) };
-  return { content };
+  return { content, credentialSource: credential.source };
+}
+
+async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  if (url.pathname === '/api/settings/ai-credentials' && request.method === 'GET') {
+    return json({ ...(await previewAiCredentialMetadata(env, user)), canManageOrganization: user.roles.includes('admin'), phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
+  }
+
+  const match = url.pathname.match(/^\/api\/settings\/ai-credentials\/(OPENAI|ANTHROPIC|GEMINI)(?:\/test)?$/u);
+  if (!match) return json({ error: 'AI credential route was not found', code: 'AI_CREDENTIAL_ROUTE_NOT_FOUND' }, 404);
+  const provider = match[1] as PreviewAiProvider;
+  const isTest = url.pathname.endsWith('/test');
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  const scope = body?.scope;
+  if (!body || !['USER', 'ORGANIZATION'].includes(String(scope))) return json({ error: 'Credential scope is invalid', code: 'INVALID_CREDENTIAL_SCOPE' }, 400);
+  if (scope === 'ORGANIZATION' && !user.roles.includes('admin')) return json({ error: 'Only Admin can manage organization credentials', code: 'FORBIDDEN' }, 403);
+  const ownerScope = scope as PreviewAiCredentialScope;
+  const ownerId = ownerScope === 'USER' ? user.id : PREVIEW_ORGANIZATION_ID;
+
+  if (isTest && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['scope'])) return json({ error: 'Credential test payload is invalid', code: 'INVALID_CREDENTIAL_PAYLOAD' }, 400);
+    let credential = await previewStoredAiCredential(env, provider, ownerScope, ownerId);
+    if (!credential && ownerScope === 'ORGANIZATION') {
+      const apiKey = previewEnvironmentApiKey(env, provider);
+      if (apiKey) credential = { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) };
+    }
+    if (!credential) return json({ error: '저장된 API 키가 없습니다.', code: `${provider}_NOT_CONFIGURED` }, 409);
+    const modelCode = PREVIEW_AI_MODELS[provider][0]?.code ?? '';
+    const route = {
+      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: 'minimal',
+      secretName: previewProviderSecretName(provider), version: 1, updatedAt: new Date().toISOString(), updatedByName: user.displayName
+    } as PreviewAiRouteRow;
+    const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential);
+    if (tested.response) return tested.response;
+    return json({ ok: true, providerKind: provider, source: credential.source, checkedAt: new Date().toISOString(), phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
+  }
+
+  if (!['PUT', 'DELETE'].includes(request.method)) return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const expectedKeys = request.method === 'PUT' ? ['scope', 'apiKey', 'expectedVersion'] : ['scope', 'expectedVersion'];
+  if (!exactObjectKeys(body, expectedKeys) || !Number.isInteger(body.expectedVersion)) return json({ error: 'Credential payload is invalid', code: 'INVALID_CREDENTIAL_PAYLOAD' }, 400);
+  const masterKey = previewAiMasterKey(env);
+  if (!masterKey) return json({ error: '암호화용 Cloudflare Secret이 준비되지 않았습니다.', code: 'AI_MASTER_KEY_NOT_CONFIGURED' }, 503);
+  const current = await env.DB.prepare(
+    'SELECT owner_scope AS ownerScope, owner_id AS ownerId, provider_kind AS providerKind, ciphertext_hex AS ciphertextHex, iv_hex AS ivHex, key_fingerprint AS keyFingerprint, status, version, updated_at AS updatedAt FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=?'
+  ).bind(PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider).first<PreviewAiCredentialRow>();
+  const expectedVersion = Number(body.expectedVersion);
+  if (Number(current?.version ?? 0) !== expectedVersion) return json({ error: 'AI 키 설정이 다른 화면에서 변경되었습니다.', code: 'VERSION_CONFLICT', currentVersion: Number(current?.version ?? 0) }, 409);
+  const rawKey = request.method === 'PUT' && typeof body.apiKey === 'string' ? body.apiKey.trim() : `disabled:${crypto.randomUUID()}`;
+  if (request.method === 'PUT' && !validPreviewApiKey(provider, rawKey)) return json({ error: 'API 키 형식 또는 길이가 올바르지 않습니다.', code: 'INVALID_API_KEY_FORMAT' }, 400);
+  const fingerprint = await sha256Hex(rawKey);
+  const encrypted = await encryptSecret(rawKey, masterKey, previewAiCredentialAad(ownerScope, ownerId, provider));
+  const now = new Date(Math.max(Date.now(), Date.parse(current?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+  const nextVersion = expectedVersion + 1;
+  const nextStatus = request.method === 'PUT' ? 'ACTIVE' : 'DISABLED';
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+  const write = current
+    ? env.DB.prepare('UPDATE preview_ai_credentials SET ciphertext_hex=?, iv_hex=?, key_fingerprint=?, status=?, version=version+1, updated_by=?, updated_at=? WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=?')
+      .bind(encrypted.ciphertextHex, encrypted.ivHex, fingerprint, nextStatus, user.id, now, PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, expectedVersion)
+    : env.DB.prepare('INSERT INTO preview_ai_credentials (organization_id,owner_scope,owner_id,provider_kind,ciphertext_hex,iv_hex,key_fingerprint,status,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE ?=0')
+      .bind(PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, encrypted.ciphertextHex, encrypted.ivHex, fingerprint, nextStatus, 1, user.id, now, now, expectedVersion);
+  try {
+    const results = await env.DB.batch([
+      write,
+      env.DB.prepare('INSERT INTO preview_ai_credential_history (id,organization_id,owner_scope,owner_id,provider_kind,key_fingerprint,status,version,changed_by,changed_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_ai_credentials WHERE organization_id=? AND owner_scope=? AND owner_id=? AND provider_kind=? AND version=? AND key_fingerprint=?)')
+        .bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, fingerprint, nextStatus, nextVersion, user.id, now, PREVIEW_ORGANIZATION_ID, ownerScope, ownerId, provider, nextVersion, fingerprint)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'AI 키 설정이 다른 화면에서 변경되었습니다.', code: 'VERSION_CONFLICT' }, 409);
+  } catch {
+    return json({ error: '암호화된 AI 키를 저장하지 못했습니다.', code: 'AI_CREDENTIAL_WRITE_FAILED' }, 503);
+  }
+  return json({ ...(await previewAiCredentialMetadata(env, user)), canManageOrganization: user.roles.includes('admin'), phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
 }
 
 async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Record<string, unknown>> {
@@ -1937,11 +2129,13 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       previewOutlinePlan(env, caseRow.id, prompts),
       previewReportSourceGroups(env, caseRow)
     ]);
+    const writingCredential = writingRoute ? await resolvePreviewAiCredential(env, user.id, writingRoute.providerKind as PreviewAiProvider) : null;
     return json({
       claimType: caseRow.claimType,
       available: !unavailable,
       unavailableReason: unavailable ? '승인된 유형별 보고서 템플릿과 챕터 프롬프트가 필요합니다.' : null,
-      aiConnected: writingRoute ? previewProviderConfigured(env, writingRoute.providerKind as PreviewAiProvider) : false,
+      aiConnected: Boolean(writingCredential),
+      credentialSource: writingCredential?.source ?? 'NONE',
       providerLabel: writingRoute?.providerKind ?? 'OPENAI',
       modelLabel: writingRoute?.modelCode ?? 'gpt-5.6',
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
@@ -2035,17 +2229,48 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING'),
+        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind, credential_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING', generated.credentialSource ?? 'ENVIRONMENT'),
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${settings.providerKind} · ${settings.modelCode} · prompt v${prompt.version}`, now)
       ]);
     } catch {
-      // Backward compatibility for the CF12 isolated migration fixture.
-      await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
-        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${prompt.title} · prompt v${prompt.version}`, now)
-      ]);
+      try {
+        // CF19 fixtures have provider/task columns but not the additive CF26 source column.
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at, provider_kind, task_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now, settings.providerKind, 'CHAPTER_WRITING'),
+          env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${settings.providerKind} · ${settings.modelCode} · prompt v${prompt.version}`, now)
+        ]);
+      } catch {
+        // Backward compatibility for the CF12 isolated migration fixture.
+        await env.DB.batch([
+          env.DB.prepare('INSERT INTO preview_report_ai_generations (id, organization_id, case_id, prompt_id, prompt_version, model_code, actor_id, input_sha256, output_sha256, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, caseRow.id, prompt.id, prompt.version, settings.modelCode, user.id, inputSha256, outputSha256, now),
+          env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseRow.id, user.id, 'REPORT_CHAPTER_AI_DRAFTED', `AI 장 초안 · ${prompt.chapterCode}`, `${prompt.title} · prompt v${prompt.version}`, now)
+        ]);
+      }
     }
-    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, generatedAt: now }, phase: 'CF19_MULTI_PROVIDER_AI' });
+    return json({ chapter: { chapterCode: prompt.chapterCode, title: prompt.title, content, promptVersion: Number(prompt.version), providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: generated.credentialSource ?? 'ENVIRONMENT', generatedAt: now }, phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
+  }
+
+  if (url.pathname === '/api/report-authoring/improve' && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot improve report text', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['caseId','content','instruction','expectedDraftVersion']) || typeof body.caseId !== 'string' || typeof body.content !== 'string' || typeof body.instruction !== 'string' || !Number.isInteger(body.expectedDraftVersion)) return json({ error: 'Writing improvement payload is invalid', code: 'INVALID_IMPROVEMENT_PAYLOAD' }, 400);
+    if (!body.content.trim() || body.content.length > 500_000 || body.instruction.trim().length < 3 || body.instruction.length > 2_000) return json({ error: 'Writing improvement input is outside allowed limits', code: 'INVALID_IMPROVEMENT_PAYLOAD' }, 400);
+    const caseRow = await accessiblePreviewCase(env, user, body.caseId);
+    if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id=? AND organization_id=?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
+    if (Number(draft?.version ?? 0) !== Number(body.expectedDraftVersion)) return json({ error: 'Report draft changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(draft?.version ?? 0) }, 409);
+    const routes = await previewAiRoutes(env);
+    const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
+    if (!settings) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
+    const improved = await generatePreviewAiText(
+      env,
+      settings,
+      '당신은 건설 클레임 보고서 편집자입니다. 사용자가 준 사실·숫자·날짜·인용·근거 식별자를 추가하거나 삭제하지 마십시오. 문장 명료성, 구조, 전문 용어의 일관성만 개선하고 결과 본문만 반환하십시오.',
+      `개선 요청: ${body.instruction.trim()}\n\n수정할 보고서 본문:\n${body.content}`,
+      user.id
+    );
+    if (improved.response) return improved.response;
+    return json({ content: improved.content, providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: improved.credentialSource ?? 'ENVIRONMENT', phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
   }
 
   return json({ error: 'Report authoring route was not found', code: 'AUTHORING_ROUTE_NOT_FOUND' }, 404);
@@ -2776,6 +3001,10 @@ const worker = {
       return handlePreviewPromptAdmin(request, env, url);
     }
 
+    if (url.pathname === '/api/settings/ai-credentials' || url.pathname.startsWith('/api/settings/ai-credentials/')) {
+      return handlePreviewAiCredentials(request, env, url);
+    }
+
     if (url.pathname === '/api/litigation-records' || url.pathname.startsWith('/api/litigation-records/')) {
       return handlePreviewLitigation(request, env, url);
     }
@@ -2796,7 +3025,7 @@ const worker = {
       return handlePreviewReportDraft(request, env, url);
     }
 
-    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate' || url.pathname === '/api/report-authoring/outline') {
+    if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate' || url.pathname === '/api/report-authoring/improve' || url.pathname === '/api/report-authoring/outline') {
       return handlePreviewReportAuthoring(request, env, url);
     }
 

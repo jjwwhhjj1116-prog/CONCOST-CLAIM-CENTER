@@ -21,6 +21,7 @@ import { ProposalAwardWorkflow } from '../workflow/ProposalAwardWorkflow';
 import { WorkflowOperations } from '../workflow/WorkflowOperations';
 import { PreviewAiAdmin } from './PreviewAiAdmin';
 import { PreviewLitigationCenter } from './PreviewLitigationCenter';
+import { PreviewSettings } from './PreviewSettings';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -74,6 +75,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'INTEG-01', path: '/integrations/google', name: 'Google Drive 연결', allowedRoles: ADMIN_ONLY },
   { id: 'TPL-01', path: '/templates', name: '유형별 보고서 템플릿', allowedRoles: ADMIN_ONLY },
   { id: 'AI-01', path: '/ai-config', name: '챕터 프롬프트·AI 설정', allowedRoles: ADMIN_ONLY },
+  { id: 'MY-01', path: '/settings', name: '내 AI·연결 설정' },
   { id: 'USER-01', path: '/users', name: '사용자와 권한', allowedRoles: ADMIN_ONLY },
   { id: 'AUD-01', path: '/audit-logs', name: '감사로그', allowedRoles: ADMIN_ONLY },
   { id: 'RESP-01', path: '/tablet-responsive', name: '태블릿·컴포넌트 카탈로그' }
@@ -199,6 +201,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;
   if (previewMode && currentRoute.id === 'AI-01') return <PreviewAiAdmin />;
+  if (previewMode && currentRoute.id === 'MY-01') return <PreviewSettings roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'POST-01') return <PreviewLitigationCenter roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'FEE-01') return <StatusFeedbackState type="empty" title="운영 메뉴에서 제외된 기능입니다" message="성공보수 기능은 현재 클레임센터 스튜디오 업무 범위에서 사용하지 않습니다." actionLabel="업무 홈으로 이동" onAction={() => onNavigate('/dashboard')} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;

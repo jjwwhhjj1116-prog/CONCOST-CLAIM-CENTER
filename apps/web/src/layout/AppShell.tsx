@@ -6,7 +6,7 @@ import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 const NAVIGATION_GROUPS: readonly {
   label: string;
   eyebrow: string;
-  icon: 'home' | 'proposal' | 'work' | 'library' | 'court' | 'quality' | 'admin';
+  icon: 'home' | 'proposal' | 'work' | 'library' | 'court' | 'quality' | 'settings' | 'admin';
   routeIds: readonly string[];
   allowedRoles?: readonly UserRole[];
 }[] = [
@@ -16,6 +16,7 @@ const NAVIGATION_GROUPS: readonly {
   { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
   { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품·품질관리', eyebrow: 'QUALITY & DELIVERY', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
+  { label: '내 설정', eyebrow: 'MY WORKSPACE', icon: 'settings', routeIds: ['MY-01'] },
   { label: '관리자 설정', eyebrow: 'ADMIN ONLY', icon: 'admin', routeIds: ['TPL-01', 'AI-01', 'INTEG-01', 'USER-01', 'AUD-01'], allowedRoles: ['admin'] }
 ];
 
@@ -27,6 +28,7 @@ const NavigationGroupIcon: React.FC<{ name: (typeof NAVIGATION_GROUPS)[number]['
     library: <><path d="M4 5.5 12 3l8 2.5V19l-8 2-8-2z" /><path d="M12 3v18M4 9l8 2 8-2M4 14l8 2 8-2" /></>,
     court: <><path d="M3 9h18M5 9v9m4-9v9m6-9v9m4-9v9M2 21h20M12 3l9 4H3z" /></>,
     quality: <><path d="M12 3 5 6v5c0 4.7 2.8 8.2 7 10 4.2-1.8 7-5.3 7-10V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z" /></>,
     admin: <><circle cx="12" cy="8" r="4" /><path d="M4.5 21a7.5 7.5 0 0 1 15 0M18 4l1-1m-1 9 1 1M6 4 5 3M6 12l-1 1" /></>
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
@@ -172,6 +174,9 @@ export const AppShell: React.FC<AppShellProps> = ({
           >
             <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
             <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
+          </button>
+          <button type="button" className="theme-toggle" aria-label="내 AI 및 연결 설정 열기" onClick={() => go('/settings')}>
+            <span aria-hidden="true">⚙</span><strong>설정</strong>
           </button>
           <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
           <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>

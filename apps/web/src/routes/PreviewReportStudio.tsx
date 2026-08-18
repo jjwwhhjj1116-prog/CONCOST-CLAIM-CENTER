@@ -20,7 +20,7 @@ interface AuthoringChapter { id: string; chapterCode: string; title: string; age
 interface OutlineItem { chapterId: string; chapterCode: string; promptVersion: number; planningNote: string }
 interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
 interface SourceGroup { code: 'PROJECT' | 'PROPOSAL' | 'KICKOFF' | 'SITE_SURVEY' | 'QUANTITY' | 'EVIDENCE' | 'LITIGATION'; label: string; status: 'READY' | 'PARTIAL' | 'EMPTY'; itemCount: number; detail: string; route: string }
-interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; providerLabel: string; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
+interface AuthoringConfig { claimType: string; available: boolean; unavailableReason: string | null; aiConnected: boolean; credentialSource: 'PERSONAL' | 'ORGANIZATION' | 'ENVIRONMENT' | 'NONE'; providerLabel: string; modelLabel: string; chapters: AuthoringChapter[]; outlinePlan: OutlinePlan; sourceGroups: SourceGroup[] }
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
 interface Finalization {
   id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
@@ -71,6 +71,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [authoring, setAuthoring] = useState<AuthoringConfig | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [improving, setImproving] = useState(false);
+  const [improvementInstruction, setImprovementInstruction] = useState('사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬어 주세요.');
   const [savingOutline, setSavingOutline] = useState(false);
   const [outlineStatus, setOutlineStatus] = useState<'DRAFT' | 'CONFIRMED'>('DRAFT');
   const [outlineVersion, setOutlineVersion] = useState(0);
@@ -247,6 +249,20 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     finally { if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
   };
 
+  const improveWriting = async () => {
+    if (!editable || !authoring?.aiConnected || !content.trim() || dirty || saving || improving || loadedCaseId !== selectedCaseId) return;
+    const requestCaseId = selectedCaseId;
+    setImproving(true); setError('');
+    try {
+      const result = await apiRequest<{ content: string; credentialSource: string; providerKind: string; modelCode: string }>('/api/report-authoring/improve', {
+        method: 'POST', body: JSON.stringify({ caseId: requestCaseId, content, instruction: improvementInstruction.trim(), expectedDraftVersion: version })
+      });
+      if (selectedCaseRef.current !== requestCaseId) return;
+      contentRef.current = result.content; setContent(result.content); setDirty(true);
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setImproving(false); }
+  };
+
   const currentReview = reviews.find((review) => review.reportVersion === version) ?? null;
   const currentFinalization = currentReview ? finalizations.find((entry) => entry.reviewId === currentReview.id) ?? null : null;
   const pendingReview = reviews.find((review) => review.status === 'PENDING') ?? null;
@@ -412,9 +428,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
             </div>
             {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>목차 기획 메모</strong> {outlineNotes[selectedChapter.id]?.trim() || '별도 메모 없음 · 승인된 기본 챕터 지시를 사용합니다.'}</p></div>}
-            <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다. 작성된 내용은 DRAFT로 삽입된 뒤 D1 자동 저장과 사람 검토를 거칩니다.</p>
+            <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? 'Cloudflare 서버 Secret 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
-            {!authoring.aiConnected && <div className="error-box">관리자가 선택한 {authoring.providerLabel} 공급자의 서버 Secret을 연결하기 전에는 자동 작성 버튼이 비활성화됩니다.</div>}
+            {!authoring.aiConnected && <div className="error-box">내 설정 또는 관리자 설정에서 {authoring.providerLabel} API 키를 연결해야 자동 작성 버튼이 열립니다.</div>}
             {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
           </div>}
         </Card>
@@ -423,6 +439,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <Input label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
             <label htmlFor="preview-report-body">보고서 본문</label>
             <textarea id="preview-report-body" className="report-editor" value={content} maxLength={500000} readOnly={!editable} aria-readonly={!editable} onChange={(event) => { contentRef.current = event.target.value; setContent(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
+            {editable && <section className="report-writing-assistant" aria-label="AI 글쓰기 개선 도우미"><div><span>AI WRITING ASSISTANT</span><strong>저장된 현재 본문을 안전하게 다듬습니다.</strong><small>새 사실을 만들지 않고 문장·구조·전문 용어만 개선합니다. 개인키가 있으면 자동 우선 사용합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="action-row"><Button variant="secondary" onClick={() => onNavigate('/settings')}>내 AI 설정</Button><Button onClick={() => void improveWriting()} disabled={!authoring?.aiConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>{improving ? '문장 개선 중…' : `${authoring?.providerLabel ?? 'AI'}로 글 개선`}</Button></div>{dirty && <small>현재 변경 내용을 먼저 D1에 저장하면 개선 버튼이 열립니다.</small>}</section>}
             <p className="muted">{editable ? '입력 후 0.9초가 지나면 자동 저장됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
           </div>

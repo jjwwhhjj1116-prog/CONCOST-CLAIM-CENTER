@@ -85,7 +85,7 @@ export function PreviewAiAdmin(): React.ReactElement {
 
   return <div className="content-stack report-ai-admin" aria-label="관리자 전용 보고서 AI 설정">
     <Card title="REPORT AI · MULTI-MODEL ROUTER">
-      <div className="report-ai-admin__header"><div><p className="eyebrow">ADMIN CONTROL PLANE</p><h2>업무별 AI 모델 라우팅</h2><p className="muted">목차 기획·본문 작성·사실확인을 각각 다른 공급자와 모델로 운영합니다. API Key 원문은 Cloudflare Secret에만 저장됩니다.</p></div><StatusBadge status={connectedCount ? 'approved' : 'review'} /></div>
+      <div className="report-ai-admin__header"><div><p className="eyebrow">ADMIN CONTROL PLANE</p><h2>업무별 AI 모델 라우팅</h2><p className="muted">목차 기획·본문 작성·사실확인을 각각 다른 공급자와 모델로 운영합니다. 공용 키는 내 설정에서 AES-256-GCM 암호화 저장하며 원문은 다시 표시되지 않습니다.</p></div><StatusBadge status={connectedCount ? 'approved' : 'review'} /></div>
       <div className="report-ai-admin__providers">{payload.aiConfig.providers.map((item) => <div key={item.providerKind} data-connected={item.connected}><strong>{item.label}</strong><span>{item.connected ? 'CONNECTED' : 'SECRET REQUIRED'}</span><small>{item.secretName} · 키 값 비공개</small></div>)}</div>
       <div className="report-ai-admin__routes">{(['OUTLINE_PLANNING','CHAPTER_WRITING','FACT_CHECK'] as TaskKind[]).map((task) => {
         const route = routeDrafts[task]; if (!route) return null;
