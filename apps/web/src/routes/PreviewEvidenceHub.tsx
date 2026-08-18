@@ -39,19 +39,47 @@ interface GoogleDriveStatus {
   allowedDomain: string | null;
 }
 
+interface GoogleOAuthAppState {
+  configured: boolean;
+  source: 'CLOUDFLARE_SECRET' | 'ENCRYPTED_D1' | 'NONE';
+  clientIdHint: string | null;
+  redirectUri: string;
+  allowedDomain: string;
+  version: number;
+  updatedAt: string | null;
+}
+
 export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: string) => void }): React.ReactElement {
   const [status, setStatus] = useState<GoogleDriveStatus | null>(null);
+  const [oauthApp, setOauthApp] = useState<GoogleOAuthAppState | null>(null);
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const load = useCallback(async () => {
     try {
-      const response = await fetch('/api/google/status', { headers: { Accept: 'application/json' } });
-      const payload = await response.json() as GoogleDriveStatus & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? 'Google Drive 상태를 확인하지 못했습니다.');
-      setStatus(payload); setError('');
+      const [drive, app] = await Promise.all([
+        apiRequest<GoogleDriveStatus>('/api/google/status'),
+        apiRequest<GoogleOAuthAppState>('/api/google/oauth-app')
+      ]);
+      setStatus(drive); setOauthApp(app); setError('');
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Google Drive 상태를 확인하지 못했습니다.'); }
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  const saveOAuthApp = async () => {
+    if (!oauthApp || !clientId.trim() || !clientSecret.trim()) return;
+    setBusy(true); setError('');
+    try {
+      const saved = await apiRequest<GoogleOAuthAppState>('/api/google/oauth-app', {
+        method: 'PUT',
+        body: JSON.stringify({ clientId: clientId.trim(), clientSecret: clientSecret.trim(), expectedVersion: oauthApp.version })
+      });
+      setOauthApp(saved); setClientId(''); setClientSecret('');
+      await load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Google OAuth 앱 설정을 저장하지 못했습니다.'); }
+    finally { setBusy(false); }
+  };
 
   const connect = async () => {
     setBusy(true); setError('');
@@ -78,7 +106,15 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
 
   return <section className="route-view preview-drive-setup" aria-labelledby="preview-drive-title">
     <div><span className="workspace-eyebrow">COMPANY GOOGLE DRIVE ACCOUNT</span><h2 id="preview-drive-title">회사 Google Drive 연결·계정 교체</h2><p>Admin이 클레임 전용 회사 계정을 연결합니다. 연결된 계정은 아래에서 확인하고 언제든 다른 회사 계정으로 교체하거나 연결을 해제할 수 있습니다.</p></div>
-    <div className="preview-drive-status" role="status"><span className={status?.connected ? 'is-connected' : ''}>{status?.connected ? 'CONNECTED' : 'DISCONNECTED'}</span><strong>{status?.connected ? `현재 회사 Drive 계정 · ${status.accountEmail ?? '계정 확인 필요'}` : status?.configured ? '회사 Google 계정 연결 대기' : 'Cloudflare Google OAuth Secret 설정 필요'}</strong></div>
+    <div className="preview-drive-status" role="status"><span className={status?.connected ? 'is-connected' : ''}>{status?.connected ? 'CONNECTED' : 'DISCONNECTED'}</span><strong>{status?.connected ? `현재 회사 Drive 계정 · ${status.accountEmail ?? '계정 확인 필요'}` : status?.configured ? '준비 완료 · 아래 회사 Google 계정 연결 버튼을 누르세요' : 'Google OAuth 앱 최초 등록이 필요합니다'}</strong></div>
+    {oauthApp && !oauthApp.configured && <section className="preview-drive-config-card" aria-labelledby="google-oauth-app-title">
+      <header><div><span>ONE-TIME SETUP</span><h3 id="google-oauth-app-title">Google OAuth 앱을 한 번만 등록하세요</h3><p>이 값은 Google Drive 계정이 아니라 연결 버튼을 작동시키는 회사 OAuth 앱 정보입니다. Client Secret은 브라우저에 다시 표시하지 않고 AES-256-GCM으로 암호화해 D1에 저장합니다.</p></div><a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Google Cloud 사용자 인증 정보 열기 ↗</a></header>
+      <ol><li>Google Cloud에서 <b>Google Drive API</b>를 사용 설정합니다.</li><li><b>OAuth 클라이언트 ID · 웹 애플리케이션</b>을 만듭니다.</li><li>아래 주소를 <b>승인된 리디렉션 URI</b>에 정확히 등록합니다.</li><li>발급된 Client ID와 Client Secret을 아래에 저장합니다.</li></ol>
+      <div className="preview-drive-redirect"><span>승인된 리디렉션 URI</span><code>{oauthApp.redirectUri}</code></div>
+      <div className="preview-drive-config-fields"><label>Google OAuth Client ID<input value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder="000000000000-….apps.googleusercontent.com" autoComplete="off" /></label><label>Google OAuth Client Secret<input type="password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} placeholder="Google OAuth Client Secret" autoComplete="new-password" /></label></div>
+      <div className="preview-drive-config-actions"><button type="button" onClick={() => void saveOAuthApp()} disabled={busy || !clientId.trim() || !clientSecret.trim()}>{busy ? '암호화 저장 중…' : 'OAuth 앱 설정 암호화 저장'}</button><a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noreferrer">Google Drive API 사용 설정 ↗</a></div>
+    </section>}
+    {oauthApp?.configured && <details className="preview-drive-app-summary"><summary>OAuth 앱 설정 · {oauthApp.source === 'ENCRYPTED_D1' ? '관리자 암호화 저장' : 'Cloudflare Secret'} · {oauthApp.clientIdHint}</summary><p>허용 회사 도메인 <strong>{oauthApp.allowedDomain}</strong> · Redirect <code>{oauthApp.redirectUri}</code></p></details>}
     <div className="preview-drive-steps"><article><span>01</span><strong>회사 계정 연결</strong><p>관리자가 클레임 전용 회사 Google 계정을 연결합니다.</p></article><article><span>02</span><strong>프로젝트 폴더 자동 생성</strong><p>업로드 시 프로젝트/산출·내역/YYYY-MM 폴더를 자동 생성합니다.</p></article><article><span>03</span><strong>업로더·시간·무결성 기록</strong><p>D1에는 파일 ID, 사용자, 업로드 시각과 SHA-256 메타데이터만 기록합니다.</p></article></div>
     {error && <p className="error-box" role="alert">{error}</p>}
     <div className="preview-drive-actions"><div><button type="button" disabled={busy || !status?.configured} onClick={() => void connect()}>{busy ? '처리 중…' : status?.connected ? '연결 계정 변경' : '회사 Google 계정 연결'}</button>{status?.connected && <button type="button" disabled={busy} onClick={() => void disconnect()}>연결 해제</button>}<Button variant="secondary" onClick={() => onNavigate('/cases/files')}>현재 자료실 보기</Button></div><span>원본 저장소 · 회사 Google Drive · R2 미사용</span></div>

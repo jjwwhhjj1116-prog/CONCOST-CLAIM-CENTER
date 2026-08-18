@@ -2997,6 +2997,14 @@ interface GoogleCredentialRow {
   scope: string;
 }
 
+interface GoogleOAuthAppSettingsRow {
+  clientId: string;
+  encryptedClientSecret: string;
+  iv: string;
+  version: number;
+  updatedAt: string;
+}
+
 interface PreviewEvidenceRow {
   id: string;
   originalName: string;
@@ -3017,17 +3025,53 @@ function googleFetch(env: CloudflareEnv): GoogleFetch {
   return fetch;
 }
 
-function googleConfig(env: CloudflareEnv): { clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string; allowedDomain: string } | null {
-  const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin, GOOGLE_ALLOWED_DOMAIN: allowedDomainRaw } = env;
+function googleOAuthAppAad(): string {
+  return `${PREVIEW_ORGANIZATION_ID}:google-oauth-client:v1`;
+}
+
+function validGoogleOAuthClientId(value: string): boolean {
+  return value.length >= 20 && value.length <= 256 && /^[0-9A-Za-z._-]+\.apps\.googleusercontent\.com$/u.test(value);
+}
+
+function validGoogleOAuthClientSecret(value: string): boolean {
+  return value.length >= 16 && value.length <= 512 && !/[\s\u0000-\u001f\u007f]/u.test(value);
+}
+
+async function storedGoogleOAuthAppSettings(env: CloudflareEnv): Promise<GoogleOAuthAppSettingsRow | null> {
+  if (!env.DB) return null;
+  try {
+    return await env.DB.prepare(
+      'SELECT client_id AS clientId, encrypted_client_secret AS encryptedClientSecret, iv, version, updated_at AS updatedAt FROM preview_google_oauth_app_settings WHERE organization_id=?'
+    ).bind(PREVIEW_ORGANIZATION_ID).first<GoogleOAuthAppSettingsRow>();
+  } catch {
+    return null;
+  }
+}
+
+async function googleConfig(env: CloudflareEnv): Promise<{ clientId: string; clientSecret: string; masterKey: string; redirectOrigin: string; allowedDomain: string; source: 'CLOUDFLARE_SECRET' | 'ENCRYPTED_D1' } | null> {
+  const { GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: masterKey, GOOGLE_OAUTH_REDIRECT_ORIGIN: redirectOrigin, GOOGLE_ALLOWED_DOMAIN: allowedDomainRaw } = env;
   const allowedDomain = allowedDomainRaw?.trim().toLowerCase();
-  if (!clientId || !clientSecret || !masterKey || !redirectOrigin || !allowedDomain || !/^[a-z0-9.-]+\.[a-z]{2,}$/u.test(allowedDomain)) return null;
+  if (!masterKey || !/^[0-9a-f]{64}$/iu.test(masterKey) || !redirectOrigin || !allowedDomain || !/^[a-z0-9.-]+\.[a-z]{2,}$/u.test(allowedDomain)) return null;
   try {
     const origin = new URL(redirectOrigin);
     if (origin.protocol !== 'https:' || origin.origin !== redirectOrigin || origin.pathname !== '/') return null;
   } catch {
     return null;
   }
-  return { clientId, clientSecret, masterKey, redirectOrigin, allowedDomain };
+  const environmentClientId = env.GOOGLE_CLIENT_ID?.trim() ?? '';
+  const environmentClientSecret = env.GOOGLE_CLIENT_SECRET?.trim() ?? '';
+  if (validGoogleOAuthClientId(environmentClientId) && validGoogleOAuthClientSecret(environmentClientSecret)) {
+    return { clientId: environmentClientId, clientSecret: environmentClientSecret, masterKey, redirectOrigin, allowedDomain, source: 'CLOUDFLARE_SECRET' };
+  }
+  const stored = await storedGoogleOAuthAppSettings(env);
+  if (!stored || !validGoogleOAuthClientId(stored.clientId)) return null;
+  try {
+    const clientSecret = await decryptSecret(stored.encryptedClientSecret, stored.iv, masterKey, googleOAuthAppAad());
+    if (!clientSecret || !validGoogleOAuthClientSecret(clientSecret)) return null;
+    return { clientId: stored.clientId, clientSecret, masterKey, redirectOrigin, allowedDomain, source: 'ENCRYPTED_D1' };
+  } catch {
+    return null;
+  }
 }
 
 function googleFailure(reason: unknown): Response {
@@ -3039,7 +3083,7 @@ function googleFailure(reason: unknown): Response {
 
 async function getGoogleDriveCredential(env: CloudflareEnv): Promise<{ refreshToken: string; scope: string } | null> {
   if (!env.DB) return null;
-  const config = googleConfig(env);
+  const config = await googleConfig(env);
   if (!config) return null;
   try {
     const row = await env.DB.prepare(
@@ -3054,7 +3098,7 @@ async function getGoogleDriveCredential(env: CloudflareEnv): Promise<{ refreshTo
 }
 
 async function accessToken(env: CloudflareEnv): Promise<string> {
-  const config = googleConfig(env);
+  const config = await googleConfig(env);
   const credential = await getGoogleDriveCredential(env);
   if (!config || !credential) throw new GoogleDriveError('GOOGLE_DRIVE_NOT_CONNECTED', 503, 'Connect Google Drive before using file storage');
   return refreshAccessToken(googleFetch(env), { clientId: config.clientId, clientSecret: config.clientSecret, refreshToken: credential.refreshToken });
@@ -3066,8 +3110,59 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
   if (!sessionUser) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   const isAdmin = sessionUser.roles.includes('admin');
 
+  if (url.pathname === '/api/google/oauth-app' && (request.method === 'GET' || request.method === 'PUT')) {
+    if (!isAdmin) return json({ error: 'Admin role is required to manage the Google OAuth application', code: 'FORBIDDEN' }, 403);
+    const masterKey = env.GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY ?? '';
+    const redirectOrigin = env.GOOGLE_OAUTH_REDIRECT_ORIGIN ?? '';
+    const allowedDomain = env.GOOGLE_ALLOWED_DOMAIN?.trim().toLowerCase() ?? '';
+    if (!/^[0-9a-f]{64}$/iu.test(masterKey) || !redirectOrigin || !allowedDomain) {
+      return json({ error: 'Google credential encryption and redirect policy are not configured', code: 'GOOGLE_OAUTH_POLICY_NOT_CONFIGURED' }, 503);
+    }
+    const redirectUri = `${redirectOrigin}/api/google/oauth/callback`;
+    const existing = await storedGoogleOAuthAppSettings(env);
+    const environmentConfigured = validGoogleOAuthClientId(env.GOOGLE_CLIENT_ID?.trim() ?? '') && validGoogleOAuthClientSecret(env.GOOGLE_CLIENT_SECRET?.trim() ?? '');
+    if (request.method === 'GET') {
+      const config = await googleConfig(env);
+      const clientId = environmentConfigured ? env.GOOGLE_CLIENT_ID?.trim() ?? '' : existing?.clientId ?? '';
+      return json({
+        configured: Boolean(config),
+        source: config?.source ?? 'NONE',
+        clientIdHint: clientId ? `${clientId.slice(0, 12)}…${clientId.slice(-24)}` : null,
+        redirectUri,
+        allowedDomain,
+        version: environmentConfigured ? 0 : Number(existing?.version ?? 0),
+        updatedAt: environmentConfigured ? null : existing?.updatedAt ?? null,
+        phase: 'CF31_GOOGLE_OAUTH_APP_SETTINGS'
+      });
+    }
+    if (environmentConfigured) {
+      return json({ error: 'Google OAuth app is managed by Cloudflare Secret and cannot be overwritten in the browser', code: 'GOOGLE_OAUTH_APP_SECRET_MANAGED' }, 409);
+    }
+    const body = await request.json().catch(() => null) as { clientId?: unknown; clientSecret?: unknown; expectedVersion?: unknown } | null;
+    if (!body || Object.keys(body).some((key) => !['clientId', 'clientSecret', 'expectedVersion'].includes(key)) ||
+      typeof body.clientId !== 'string' || !validGoogleOAuthClientId(body.clientId.trim()) ||
+      typeof body.clientSecret !== 'string' || !validGoogleOAuthClientSecret(body.clientSecret.trim()) ||
+      !Number.isInteger(body.expectedVersion) || Number(body.expectedVersion) < 0) {
+      return json({ error: 'A valid Google Web OAuth client ID, client secret, and expectedVersion are required', code: 'INVALID_GOOGLE_OAUTH_APP_PAYLOAD' }, 400);
+    }
+    const expectedVersion = Number(body.expectedVersion);
+    if (Number(existing?.version ?? 0) !== expectedVersion) return json({ error: 'Google OAuth app settings changed in another tab', code: 'VERSION_CONFLICT' }, 409);
+    const now = new Date().toISOString();
+    const encrypted = await encryptSecret(body.clientSecret.trim(), masterKey, googleOAuthAppAad());
+    const write = existing
+      ? await env.DB.prepare(
+        'UPDATE preview_google_oauth_app_settings SET client_id=?,encrypted_client_secret=?,iv=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND version=?'
+      ).bind(body.clientId.trim(), encrypted.ciphertextHex, encrypted.ivHex, sessionUser.id, now, PREVIEW_ORGANIZATION_ID, expectedVersion).run()
+      : await env.DB.prepare(
+        'INSERT INTO preview_google_oauth_app_settings (organization_id,client_id,encrypted_client_secret,iv,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,? WHERE ?=0'
+      ).bind(PREVIEW_ORGANIZATION_ID, body.clientId.trim(), encrypted.ciphertextHex, encrypted.ivHex, 1, sessionUser.id, now, now, expectedVersion).run();
+    if (write.meta?.changes !== 1) return json({ error: 'Google OAuth app settings could not be saved', code: 'GOOGLE_OAUTH_APP_WRITE_FAILED' }, 409);
+    const saved = await storedGoogleOAuthAppSettings(env);
+    return json({ configured: true, source: 'ENCRYPTED_D1', clientIdHint: `${body.clientId.trim().slice(0, 12)}…${body.clientId.trim().slice(-24)}`, redirectUri, allowedDomain, version: Number(saved?.version ?? expectedVersion + 1), updatedAt: saved?.updatedAt ?? now, phase: 'CF31_GOOGLE_OAUTH_APP_SETTINGS' });
+  }
+
   if (url.pathname === '/api/google/status' && request.method === 'GET') {
-    const config = googleConfig(env);
+    const config = await googleConfig(env);
     const credential = await getGoogleDriveCredential(env);
     let accountEmail: string | null = null;
     if (config && credential && isAdmin) {
@@ -3083,7 +3178,7 @@ async function handleGoogleOAuth(request: Request, env: CloudflareEnv, url: URL)
   }
 
   if (!isAdmin) return json({ error: 'Admin role is required to manage Google Drive', code: 'FORBIDDEN' }, 403);
-  const config = googleConfig(env);
+  const config = await googleConfig(env);
   if (!config) return json({ error: 'Google OAuth secrets and exact redirect origin are not configured', code: 'GOOGLE_OAUTH_NOT_CONFIGURED' }, 503);
   if (url.origin !== config.redirectOrigin) return json({ error: 'OAuth request origin is not allowed', code: 'GOOGLE_REDIRECT_ORIGIN_MISMATCH' }, 400);
   const redirectUri = `${config.redirectOrigin}/api/google/oauth/callback`;
@@ -3373,7 +3468,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       ).bind(caseId, PREVIEW_ORGANIZATION_ID, category, category).all<CaseEvidenceRow>();
       googleRows = result.results;
     } catch { googleRows = []; }
-    const configured = Boolean(googleConfig(env));
+    const configured = Boolean(await googleConfig(env));
     const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
     const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 100);
     return json({ files: files.map(caseEvidenceProjection), googleDriveConfigured: configured, googleDriveConnected: connected, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
@@ -3390,7 +3485,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   try {
     const validated = await validateEvidenceFile(file);
     const fingerprint = await sha256Hex(`${caseId}:${category}:${file.name}:${validated.mimeType}:${file.size}:${validated.sha256}`);
-    const config = googleConfig(env);
+    const config = await googleConfig(env);
     if (config) {
       const credential = await getGoogleDriveCredential(env);
       if (!credential) return json({ error: '관리자 설정에서 회사 Google Drive 계정을 먼저 연결해 주세요.', code: 'GOOGLE_DRIVE_NOT_CONNECTED', settingsUrl: '/settings?section=admin' }, 503);

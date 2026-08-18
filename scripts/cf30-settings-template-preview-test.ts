@@ -80,3 +80,34 @@ test('CF30 report studio opens a finished type template before writing and durin
   assert.match(studio, /FINISHED REPORT REFERENCE/u);
   assert.match(studio, /참고 열람 전용/u);
 });
+
+test('CF31 lets only an active Admin persist encrypted Google OAuth app settings', async () => {
+  const SQL = await initSqlJs();
+  const db = new SQL.Database();
+  db.run('PRAGMA foreign_keys=ON');
+  db.exec(migration('0003_cf04_preview_auth.sql'));
+  const now = new Date().toISOString();
+  db.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)', ['00000000-0000-4000-8000-000000000090', 'admin@con-cost.com', '1'.repeat(32), '2'.repeat(64), 100000, 'Admin', 'adm', '["admin"]', now]);
+  db.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)', ['00000000-0000-4000-8000-000000000091', 'staff@con-cost.com', '1'.repeat(32), '2'.repeat(64), 100000, 'Staff', 'stf', '["staff"]', now]);
+  db.exec(migration('0023_cf31_google_oauth_app_settings.sql'));
+  const values = ['concost', '1234567890-claimcenter.apps.googleusercontent.com', 'a'.repeat(64), 'b'.repeat(24), 1, '00000000-0000-4000-8000-000000000090', now, now];
+  db.run('INSERT INTO preview_google_oauth_app_settings VALUES (?,?,?,?,?,?,?,?)', values);
+  assert.equal(db.exec('SELECT version,length(encrypted_client_secret) FROM preview_google_oauth_app_settings')[0].values[0][0], 1);
+  assert.throws(() => db.run('UPDATE preview_google_oauth_app_settings SET version=3 WHERE organization_id="concost"'), /version must increment/u);
+  assert.throws(() => db.run('UPDATE preview_google_oauth_app_settings SET version=2,updated_by="00000000-0000-4000-8000-000000000091" WHERE organization_id="concost"'), /active Admin/u);
+  assert.throws(() => db.run('DELETE FROM preview_google_oauth_app_settings'), /cannot be deleted/u);
+  db.close();
+});
+
+test('CF31 exposes OAuth app onboarding and high-contrast light Drive controls', () => {
+  const worker = read('apps/cloudflare/src/index.ts');
+  const drive = read('apps/web/src/routes/PreviewEvidenceHub.tsx');
+  const theme = read('apps/web/src/preview-theme.css');
+  assert.match(worker, /\/api\/google\/oauth-app/u);
+  assert.match(worker, /encryptSecret\(body\.clientSecret\.trim\(\)/u);
+  assert.match(drive, /Google OAuth 앱을 한 번만 등록하세요/u);
+  assert.match(drive, /console\.cloud\.google\.com\/apis\/credentials/u);
+  assert.match(drive, /승인된 리디렉션 URI/u);
+  assert.match(theme, /:root:not\(\[data-theme='dark'\]\) \.preview-drive-card strong \{ color: #0f172a/u);
+  assert.match(theme, /\.preview-drive-status strong \{ color: #881337/u);
+});
