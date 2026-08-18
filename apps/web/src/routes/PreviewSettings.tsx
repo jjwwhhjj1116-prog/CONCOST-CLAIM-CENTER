@@ -187,11 +187,11 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
 
   const renderCredentials = (scope: CredentialScope, title: string, detail: string) => <Card title={title} className="credential-settings-card">
     <header className="credential-settings-card__intro">
-      <div><p>{detail}</p><small>{scope === 'USER' ? '개인키가 있으면 조직 공용키보다 먼저 사용합니다.' : '개인키가 없는 사용자에게만 공용키가 사용됩니다.'}</small></div>
+      <div><p>{detail}</p><small>{scope === 'USER' ? '개인 Gemini 키는 초안 개선과 AI 어시스턴트에만 사용합니다.' : '개인 Gemini 키가 없는 사용자에게 필요한 작업은 공용키가 사용됩니다.'}</small></div>
       <StatusBadge status={scope === 'USER' ? 'review' : 'approved'} />
     </header>
-    <div className="credential-provider-grid">
-      {payload.providers.map((provider) => {
+    <div className="credential-provider-grid" data-scope={scope}>
+      {(scope === 'USER' ? payload.providers.filter((provider) => provider.providerKind === 'GEMINI') : payload.providers).map((provider) => {
         const state = stateFor(provider, scope);
         const field = inputKey(provider.providerKind, scope);
         const copy = PROVIDER_COPY[provider.providerKind];
@@ -217,15 +217,15 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   </Card>;
 
   return <div className="content-stack preview-settings" aria-label="설정">
-    <section className="preview-settings-hero"><div><span>WORKSPACE CONTROL CENTER</span><h2>설정</h2><p>개인 API 키와 관리자 전용 회사 Drive·공용 AI·Memory 정책을 한곳에서 관리합니다.</p></div><div><strong>{payload.masterKeyReady ? '암호화 저장 준비됨' : '서버 암호화키 필요'}</strong><small>키 원문은 브라우저와 API 응답에 다시 표시하지 않습니다.</small></div></section>
+    <section className="preview-settings-hero"><div><span>WORKSPACE CONTROL CENTER</span><h2>설정</h2><p>개인 Gemini API 키와 관리자 전용 회사 Drive·공용 AI·Memory 정책을 한곳에서 관리합니다.</p></div><div><strong>{payload.masterKeyReady ? '암호화 저장 준비됨' : '서버 암호화키 필요'}</strong><small>키 원문은 브라우저와 API 응답에 다시 표시하지 않습니다.</small></div></section>
     <nav className="settings-section-tabs" aria-label="설정 종류">
-      <button type="button" className={section === 'PERSONAL' ? 'is-active' : ''} aria-current={section === 'PERSONAL' ? 'page' : undefined} onClick={() => changeSection('PERSONAL')}><span>PERSONAL</span><strong>개인 설정</strong><small>내 AI API 키·로컬 AI 안내</small></button>
+      <button type="button" className={section === 'PERSONAL' ? 'is-active' : ''} aria-current={section === 'PERSONAL' ? 'page' : undefined} onClick={() => changeSection('PERSONAL')}><span>PERSONAL</span><strong>개인 설정</strong><small>Gemini 개인 키·로컬 AI 안내</small></button>
       {isAdmin && <button type="button" className={section === 'ADMIN' ? 'is-active' : ''} aria-current={section === 'ADMIN' ? 'page' : undefined} onClick={() => changeSection('ADMIN')}><span>ADMIN ONLY</span><strong>관리자 설정</strong><small>회사 Drive·공용 AI·Hermes·사용자</small></button>}
     </nav>
     <section className="settings-access-strip" aria-label="현재 계정 설정 권한"><div><span>현재 로그인 역할</span><strong>{roles.map((role) => role.toUpperCase()).join(' · ') || 'USER'}</strong></div><p>{section === 'PERSONAL' ? '현재 화면의 API 키는 내 계정에만 적용됩니다.' : '조직 전체에 적용되는 관리자 전용 화면입니다.'}</p></section>
 
     {section === 'PERSONAL' && <>
-      {renderCredentials('USER', '개인 AI 연결 설정', '내 계정에서만 사용하는 개인 API 키입니다. 관리자도 원문을 볼 수 없습니다.')}
+      {renderCredentials('USER', '개인 Gemini 연결 설정', '초안 문장 개선과 AI 글쓰기 도우미에서만 사용하는 개인 Gemini API 키입니다. 관리자도 원문을 볼 수 없습니다.')}
       <Card title="로컬 AI 설정 가이드"><div className="local-ai-guide"><div><span>01</span><strong>로컬 모델 실행</strong><p>Ollama, LM Studio 또는 OpenAI Compatible 서버에서 모델을 실행합니다.</p><code>http://localhost:11434</code></div><div><span>02</span><strong>회사 서버 Bridge</strong><p>Cloudflare는 개인 PC localhost에 접근할 수 없어 추후 공유 서버의 HTTPS Bridge가 필요합니다.</p><code>HTTPS · VPN · 접근제어 필수</code></div><div><span>03</span><strong>관리자 활성화</strong><p>관리자 설정에서 PRIVATE_SERVER_BRIDGE와 Hermes 정책을 승인합니다.</p><code>현재 직접 호출 비활성</code></div></div></Card>
     </>}
 

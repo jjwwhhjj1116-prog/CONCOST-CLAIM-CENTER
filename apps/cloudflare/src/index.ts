@@ -1710,7 +1710,7 @@ async function previewStoredAiCredential(
 }
 
 async function resolvePreviewAiCredential(env: CloudflareEnv, actorId: string, provider: PreviewAiProvider): Promise<ResolvedPreviewAiCredential | null> {
-  const personal = actorId ? await previewStoredAiCredential(env, provider, 'USER', actorId) : null;
+  const personal = actorId && provider === 'GEMINI' ? await previewStoredAiCredential(env, provider, 'USER', actorId) : null;
   if (personal) return personal;
   const organization = await previewStoredAiCredential(env, provider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID);
   if (organization) return organization;
@@ -1781,6 +1781,21 @@ async function previewAiRoutes(env: CloudflareEnv): Promise<PreviewAiRouteRow[]>
     const legacy = await previewAiSettings(env);
     return legacy ? [{ ...legacy, taskKind: 'CHAPTER_WRITING', secretName: 'OPENAI_API_KEY' }] : [];
   }
+}
+
+function previewPersonalGeminiAssistantRoute(routes: PreviewAiRouteRow[]): PreviewAiRouteRow {
+  return routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'CHAPTER_WRITING')
+    ?? routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'FACT_CHECK')
+    ?? {
+      taskKind: 'FACT_CHECK',
+      providerKind: 'GEMINI',
+      modelCode: 'gemini-3.5-flash-lite',
+      reasoningEffort: 'minimal',
+      secretName: 'GEMINI_API_KEY',
+      version: 0,
+      updatedAt: '',
+      updatedByName: 'SYSTEM'
+    };
 }
 
 async function previewAiPublicConfiguration(env: CloudflareEnv, routes: PreviewAiRouteRow[]): Promise<Record<string, unknown>> {
@@ -2128,6 +2143,7 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
   const scope = body?.scope;
   if (!body || !['USER', 'ORGANIZATION'].includes(String(scope))) return json({ error: 'Credential scope is invalid', code: 'INVALID_CREDENTIAL_SCOPE' }, 400);
   if (scope === 'ORGANIZATION' && !user.roles.includes('admin')) return json({ error: 'Only Admin can manage organization credentials', code: 'FORBIDDEN' }, 403);
+  if (scope === 'USER' && provider !== 'GEMINI') return json({ error: '개인 AI 연결은 Gemini만 지원합니다.', code: 'PERSONAL_PROVIDER_NOT_ALLOWED' }, 400);
   const ownerScope = scope as PreviewAiCredentialScope;
   const ownerId = ownerScope === 'USER' ? user.id : PREVIEW_ORGANIZATION_ID;
 
@@ -2550,7 +2566,11 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     } catch {
       templates = [];
     }
-    const writingCredential = writingRoute ? await resolvePreviewAiCredential(env, user.id, writingRoute.providerKind as PreviewAiProvider) : null;
+    const assistantRoute = previewPersonalGeminiAssistantRoute(routes);
+    const [writingCredential, personalGeminiCredential] = await Promise.all([
+      writingRoute ? resolvePreviewAiCredential(env, user.id, writingRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
+      previewStoredAiCredential(env, 'GEMINI', 'USER', user.id)
+    ]);
     return json({
       claimType: caseRow.claimType,
       available: !unavailable,
@@ -2559,6 +2579,10 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       credentialSource: writingCredential?.source ?? 'NONE',
       providerLabel: writingRoute?.providerKind ?? 'OPENAI',
       modelLabel: writingRoute?.modelCode ?? 'gpt-5.6',
+      assistantConnected: Boolean(personalGeminiCredential),
+      assistantCredentialSource: personalGeminiCredential ? 'PERSONAL' : 'NONE',
+      assistantProviderLabel: 'GEMINI',
+      assistantModelLabel: assistantRoute.modelCode,
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
       outlinePlan,
       sourceGroups,
@@ -2694,17 +2718,19 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id=? AND organization_id=?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
     if (Number(draft?.version ?? 0) !== Number(body.expectedDraftVersion)) return json({ error: 'Report draft changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(draft?.version ?? 0) }, 409);
     const routes = await previewAiRoutes(env);
-    const settings = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
-    if (!settings) return json({ error: 'Admin AI model setting is unavailable', code: 'AI_SETTINGS_NOT_READY' }, 503);
+    const settings = previewPersonalGeminiAssistantRoute(routes);
+    const personalGeminiCredential = await previewStoredAiCredential(env, 'GEMINI', 'USER', user.id);
+    if (!personalGeminiCredential) return json({ error: '설정에서 개인 Gemini API 키를 연결한 뒤 다시 시도해 주세요.', code: 'PERSONAL_GEMINI_NOT_CONFIGURED' }, 503);
     const improved = await generatePreviewAiText(
       env,
       settings,
       '당신은 건설 클레임 보고서 편집자입니다. 사용자가 준 사실·숫자·날짜·인용·근거 식별자를 추가하거나 삭제하지 마십시오. 문장 명료성, 구조, 전문 용어의 일관성만 개선하고 결과 본문만 반환하십시오.',
       `개선 요청: ${body.instruction.trim()}\n\n수정할 보고서 본문:\n${body.content}`,
-      user.id
+      user.id,
+      personalGeminiCredential
     );
     if (improved.response) return improved.response;
-    return json({ content: improved.content, providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: improved.credentialSource ?? 'ENVIRONMENT', phase: 'CF26_ENCRYPTED_AI_CREDENTIALS' });
+    return json({ content: improved.content, providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: 'PERSONAL', phase: 'CF26_PERSONAL_GEMINI_ASSISTANT' });
   }
 
   return json({ error: 'Report authoring route was not found', code: 'AUTHORING_ROUTE_NOT_FOUND' }, 404);

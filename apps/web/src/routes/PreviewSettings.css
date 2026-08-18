@@ -53,6 +53,7 @@
 .credential-settings-card__intro p { margin:0 0 4px; color:var(--text-primary,#172033); font-weight:700; }
 .credential-settings-card__intro small { color:var(--text-secondary,#64748b); }
 .credential-provider-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.credential-provider-grid[data-scope='USER'] { grid-template-columns:minmax(0,680px); }
 .credential-provider-grid > section { padding:18px; border:1px solid #d9e2ee; border-top:4px solid #94a3b8; border-radius:16px; background:#fff; box-shadow:0 8px 22px rgba(15,23,42,.06); }
 .credential-provider-grid > section[data-provider='OPENAI'] { border-top-color:#10b981; }
 .credential-provider-grid > section[data-provider='ANTHROPIC'] { border-top-color:#f59e0b; }

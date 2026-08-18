@@ -60,7 +60,8 @@ test('CF30 exposes one Settings entry with nested Admin Drive controls and no sc
   assert.match(shell, /navigation-single-action/u);
   assert.doesNotMatch(shell, /label:'내 설정'/u);
   assert.doesNotMatch(settings, /내 화면 맞춤 설정/u);
-  assert.match(settings, /개인 AI 연결 설정/u);
+  assert.match(settings, /개인 Gemini 연결 설정/u);
+  assert.match(settings, /provider\.providerKind === 'GEMINI'/u);
   assert.match(settings, /관리자 설정/u);
   assert.match(settings, /<PreviewGoogleDriveSetup/u);
   assert.match(drive, /연결 계정 변경/u);
