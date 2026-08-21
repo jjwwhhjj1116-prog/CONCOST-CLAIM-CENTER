@@ -10,7 +10,6 @@ import {
   type WorkflowStageId
 } from './workflow-model';
 
-const DAYS = Array.from({ length: 31 }, (_, index) => index + 1);
 const DAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 
 const clampDay = (value: number) => Math.max(1, Math.min(31, value));
@@ -20,6 +19,20 @@ const barStyle = (start: number, end: number): React.CSSProperties => {
   return {
     left: `${((safeStart - 1) / 31) * 100}%`,
     width: `${((safeEnd - safeStart + 1) / 31) * 100}%`
+  };
+};
+
+const isoDate = (year: number, monthIndex: number, day: number) => `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+const monthBarStyle = (startDate: string | null | undefined, endDate: string | null | undefined, year: number, monthIndex: number, dayCount: number): React.CSSProperties | undefined => {
+  if (!startDate || !endDate) return undefined;
+  const monthStart = isoDate(year, monthIndex, 1);
+  const monthEnd = isoDate(year, monthIndex, dayCount);
+  if (endDate < monthStart || startDate > monthEnd) return undefined;
+  const visibleStart = Math.max(1, Number((startDate < monthStart ? monthStart : startDate).slice(8, 10)));
+  const visibleEnd = Math.min(dayCount, Number((endDate > monthEnd ? monthEnd : endDate).slice(8, 10)));
+  return {
+    left: `${((visibleStart - 1) / dayCount) * 100}%`,
+    width: `${((visibleEnd - visibleStart + 1) / dayCount) * 100}%`
   };
 };
 
@@ -51,6 +64,7 @@ interface ProjectWorkflowScheduleProps {
 
 export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = ({ routeId, onNavigate }) => {
   const [viewMode, setViewMode] = useState<'month' | '30days'>('month');
+  const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [projects, setProjects] = useState<WorkflowProject[]>([]);
   const [liveError, setLiveError] = useState('');
   const focusedStageId = workflowStageFromRoute(routeId);
@@ -62,6 +76,14 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
   const showOverview = routeId === 'PROJ-01';
   const focusedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
   const isProjectDialogOpen = showOverview && Boolean(requestedProjectId);
+  const calendarYear = monthCursor.getFullYear();
+  const calendarMonthIndex = monthCursor.getMonth();
+  const calendarDays = useMemo(
+    () => Array.from({ length: new Date(calendarYear, calendarMonthIndex + 1, 0).getDate() }, (_, index) => index + 1),
+    [calendarMonthIndex, calendarYear]
+  );
+  const now = new Date();
+  const todayDay = now.getFullYear() === calendarYear && now.getMonth() === calendarMonthIndex ? now.getDate() : undefined;
 
   const loadProjects = async () => {
     try {
@@ -150,13 +172,13 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
           </div>
 
           <div className="schedule-toolbar" aria-label="일정표 보기 설정">
-            <div><strong>2026년 8월</strong><span>프로젝트별 진행 구간</span></div>
+            <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
             <div className="schedule-toolbar-actions">
               <Button size="sm" variant={viewMode === '30days' ? 'primary' : 'secondary'} onClick={() => setViewMode('30days')}>30일</Button>
               <Button size="sm" variant={viewMode === 'month' ? 'primary' : 'secondary'} onClick={() => setViewMode('month')}>월별 보기</Button>
-              <Button size="sm" variant="secondary">‹ 이전</Button>
-              <Button size="sm" variant="secondary">오늘</Button>
-              <Button size="sm" variant="secondary">다음 ›</Button>
+              <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹ 이전</Button>
+              <Button size="sm" variant="secondary" onClick={() => setMonthCursor(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>오늘</Button>
+              <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>다음 ›</Button>
             </div>
           </div>
 
@@ -186,9 +208,9 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             <div className="schedule-board-header" role="row">
               <div className="schedule-left-heading" role="columnheader">프로젝트 정보 <span>공정률</span></div>
               <div className="schedule-days" role="row">
-                {DAYS.map((day) => {
-                  const weekday = DAY_LABELS[new Date(Date.UTC(2026, 7, day)).getUTCDay()];
-                  return <div key={day} className={`schedule-day ${weekday === '토' || weekday === '일' ? 'is-weekend' : ''} ${day === 13 ? 'is-today' : ''}`} role="columnheader" aria-label={`2026-08-${String(day).padStart(2, '0')} ${weekday}요일`}><strong>{day}</strong><small>{weekday}</small></div>;
+                {calendarDays.map((day) => {
+                  const weekday = DAY_LABELS[new Date(calendarYear, calendarMonthIndex, day).getDay()];
+                  return <div key={day} className={`schedule-day ${weekday === '토' || weekday === '일' ? 'is-weekend' : ''} ${day === todayDay ? 'is-today' : ''}`} role="columnheader" aria-label={`${isoDate(calendarYear, calendarMonthIndex, day)} ${weekday}요일`}><strong>{day}</strong><small>{weekday}</small></div>;
                 })}
               </div>
             </div>
@@ -200,16 +222,22 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
                 </button>
                 <div className="schedule-track" role="cell" aria-label={`${project.name} ${project.start}부터 ${project.end}까지`}>
-                  {DAYS.map((day) => <span key={day} className={`schedule-grid-cell ${day === 13 ? 'is-today' : ''}`} />)}
-                  {project.stages.some((stage) => stage.scheduleExplicit) ? <button
+                  {calendarDays.map((day) => <span key={day} className={`schedule-grid-cell ${day === todayDay ? 'is-today' : ''}`} />)}
+                  {(() => {
+                    const explicitStages = project.stages.filter((stage) => stage.scheduleExplicit && stage.startDate && stage.endDate);
+                    const startDate = explicitStages.map((stage) => stage.startDate as string).sort()[0];
+                    const endDate = explicitStages.map((stage) => stage.endDate as string).sort().at(-1);
+                    const style = monthBarStyle(startDate, endDate, calendarYear, calendarMonthIndex, calendarDays.length);
+                    return style ? <button
                     className="project-range-bar"
-                    style={barStyle(Math.min(...project.stages.filter((stage) => stage.scheduleExplicit).map((stage) => stage.startDay)), Math.max(...project.stages.filter((stage) => stage.scheduleExplicit).map((stage) => stage.endDay)))}
+                    style={style}
                     onClick={() => openProjectDialog(project)}
                     aria-label={`${project.name} 프로젝트 상세 팝업 열기`}
                     aria-haspopup="dialog"
                   >
                     <span>{project.name}</span><b>{project.progress}%</b>
-                  </button> : <span className="schedule-unscheduled">PM 일정 입력 필요</span>}
+                  </button> : <span className="schedule-unscheduled">{explicitStages.length ? '이 달 일정 없음' : 'PM 일정 입력 필요'}</span>;
+                  })()}
                 </div>
               </div>
             ))}
@@ -257,6 +285,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                     onNavigate={onNavigate}
                     onAction={navigateAction}
                     onReload={loadProjects}
+                    calendar={{ year: calendarYear, monthIndex: calendarMonthIndex, days: calendarDays, todayDay }}
                   />
                 </div>
               </section>
@@ -270,6 +299,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
           onNavigate={onNavigate}
           onAction={navigateAction}
           onReload={loadProjects}
+          calendar={{ year: calendarYear, monthIndex: calendarMonthIndex, days: calendarDays, todayDay }}
         />
       )}
     </section>
@@ -282,7 +312,8 @@ const ProjectDetail: React.FC<{
   onNavigate: (path: string) => void;
   onAction: (stageId: WorkflowStageId) => void;
   onReload: () => Promise<void>;
-}> = ({ project, focusedStageId, onNavigate, onAction, onReload }) => {
+  calendar: { year: number; monthIndex: number; days: number[]; todayDay?: number };
+}> = ({ project, focusedStageId, onNavigate, onAction, onReload, calendar }) => {
   const selectedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
   const koreanUnits = WORKFORCE_UNITS.filter((unit) => unit.organization === 'CONCOST' && unit.discipline !== '클레임');
   const vietnamUnits = WORKFORCE_UNITS.filter((unit) => unit.organization === 'VIETQS');
@@ -401,7 +432,7 @@ const ProjectDetail: React.FC<{
         <div className="detail-schedule-header" role="row">
           <div role="columnheader">1~6단계 업무 · 담당</div>
           <div className="schedule-days" role="row">
-            {DAYS.map((day) => <div key={day} className={`schedule-day ${day === 13 ? 'is-today' : ''}`} role="columnheader"><strong>{day}</strong></div>)}
+            {calendar.days.map((day) => <div key={day} className={`schedule-day ${day === calendar.todayDay ? 'is-today' : ''}`} role="columnheader"><strong>{day}</strong></div>)}
           </div>
         </div>
         {WORKFLOW_STAGES.map((stage) => {
@@ -415,15 +446,15 @@ const ProjectDetail: React.FC<{
                 <b className={`stage-status status-${item.status.toLowerCase()}`}>{statusLabel(item.status)}</b>
               </button>
               <div className="schedule-track" role="cell">
-                {DAYS.map((day) => <span key={day} className={`schedule-grid-cell ${day === 13 ? 'is-today' : ''}`} />)}
-                {item.scheduleExplicit ? <button
+                {calendar.days.map((day) => <span key={day} className={`schedule-grid-cell ${day === calendar.todayDay ? 'is-today' : ''}`} />)}
+                {item.scheduleExplicit && monthBarStyle(item.startDate, item.endDate, calendar.year, calendar.monthIndex, calendar.days.length) ? <button
                   className={`stage-range-bar status-${item.status.toLowerCase()}`}
-                  style={{ ...barStyle(item.startDay, item.endDay), backgroundColor: stage.color }}
+                  style={{ ...monthBarStyle(item.startDate, item.endDate, calendar.year, calendar.monthIndex, calendar.days.length), backgroundColor: stage.color }}
                   onClick={() => onNavigate(`${stage.path}?projectId=${encodeURIComponent(project.id)}`)}
                 >
                   <span>{item.startDate ?? `${item.startDay}일`} ~ {item.endDate ?? `${item.endDay}일`}</span>
                 </button>
-                : <span className="schedule-unscheduled">일정 미입력</span>}
+                : <span className="schedule-unscheduled">{item.scheduleExplicit ? '이 달 일정 없음' : '일정 미입력'}</span>}
               </div>
             </div>
           );
