@@ -102,7 +102,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
   const [exclusions, setExclusions] = useState<string>('');
   const [sourceDocumentVersionIds, setSourceDocumentVersionIds] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('GEMINI');
-  const [modelId, setModelId] = useState<string>('gemini-3.6-flash');
+  const [modelId, setModelId] = useState<string>('gemini-3.7-flash');
 
   const [reviewComment, setReviewComment] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -444,7 +444,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
 
                   <div className="action-row" style={{ marginTop: '1rem' }}>
                     <Select label="AI 공급자" value={providerId} onChange={(event) => setProviderId(event.target.value)} options={[{ value: 'GEMINI', label: 'Google · Gemini (서버 보안 연결)' }]} />
-                    <Select label="AI 모델" value={modelId} onChange={(event) => setModelId(event.target.value)} options={[{ value: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash · 관리자 조직 키' }]} />
+                    <Select label="AI 모델" value={modelId} onChange={(event) => setModelId(event.target.value)} options={[{ value: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash · 관리자 조직 키' }]} />
                     <Button variant="secondary" onClick={() => handleSaveVersion('MANUAL')} disabled={isSubmitting || !canEdit}>
                       수동 버전 저장
                     </Button>

@@ -117,7 +117,7 @@ test('CF39 kickoff notes use the Admin organization Gemini route and persist a s
   const kickoff = sql.exec('SELECT summary_text,timeline_json FROM preview_workflow_kickoffs WHERE case_id=?', [CASE_ID])[0].values[0];
   assert.match(String(kickoff[0]), /현장 범위/u);
   assert.equal(JSON.parse(String(kickoff[1])).length, 2);
-  assert.match(String(sql.exec("SELECT detail_json FROM preview_workflow_events WHERE event_type='KICKOFF_DRAFT_GENERATED' ORDER BY created_at DESC LIMIT 1")[0].values[0][0]), /GEMINI:gemini-3\.6-flash:ORGANIZATION/u);
+  assert.match(String(sql.exec("SELECT detail_json FROM preview_workflow_events WHERE event_type='KICKOFF_DRAFT_GENERATED' ORDER BY created_at DESC LIMIT 1")[0].values[0][0]), /GEMINI:gemini-3\.7-flash:ORGANIZATION/u);
   sql.close();
 });
 
@@ -140,7 +140,7 @@ test('CF39 proposal AI preserves the approved template and uses only the Admin o
   assert.equal(generated.status, 200);
   const version = (await generated.json() as any).proposal.versions[0];
   assert.equal(version.providerId, 'GEMINI');
-  assert.equal(version.modelId, 'gemini-3.6-flash');
+  assert.equal(version.modelId, 'gemini-3.7-flash');
   assert.equal(providerBodies.length, 1);
   assert.match(String(providerBodies[0].system_instruction), /승인된 제안서 템플릿 구조/u);
   assert.match(String(providerBodies[0].input), /approvedTemplate/u);

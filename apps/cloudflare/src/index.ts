@@ -731,7 +731,7 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     let generator = 'LOCAL_STRUCTURED_FALLBACK';
     const organizationGemini = await resolveOrganizationAiCredential(env, 'GEMINI');
     if (organizationGemini) {
-      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.6-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: now, updatedByName: 'ORGANIZATION_ADMIN' };
+      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: now, updatedByName: 'ORGANIZATION_ADMIN' };
       const generated = await generatePreviewAiText(
         env,
         route,
@@ -1405,7 +1405,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const intakeSummary = await env.DB.prepare(
         'SELECT summary_text AS summaryText,client_legal_position AS clientLegalPosition,created_at AS createdAt FROM preview_intake_audio_summaries WHERE case_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1'
       ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ summaryText: string; clientLegalPosition: string; createdAt: string }>().catch(() => null);
-      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.6-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'ORGANIZATION_ADMIN' };
+      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'ORGANIZATION_ADMIN' };
       const generated = await generatePreviewAiText(
         env,
         route,
@@ -1463,8 +1463,8 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 async function summarizeIntakeAudio(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,mimeType: string): Promise<{summary?:string;modelCode:string;response?:Response}> {
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
-  if(!credential) return {modelCode:'gemini-3.6-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
-  const modelCode='gemini-3.6-flash';
+  if(!credential) return {modelCode:'gemini-3.7-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
+  const modelCode='gemini-3.7-flash';
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
   let response:Response;
   try{
@@ -2774,7 +2774,7 @@ async function generatePreviewAiText(
       reasoning: { effort: route.reasoningEffort }, text: { verbosity: 'high' }, instructions: system, input
     };
   } else if (provider === 'GEMINI') {
-    endpoint = 'https://generativelanguage.googleapis.com/v1/interactions';
+    endpoint = 'https://generativelanguage.googleapis.com/v1beta/interactions';
     headers = { ...headers, 'x-goog-api-key': apiKey };
     providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
     body = { model: route.modelCode, system_instruction: system, input };
