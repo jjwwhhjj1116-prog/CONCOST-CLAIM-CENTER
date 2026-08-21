@@ -10,7 +10,9 @@ const read = (path: string): string => readFileSync(join(process.cwd(), path), '
 test('CF41 proposal sidebar separates authoring, sent projects and admin database ledger', () => {
   const shell = read('apps/web/src/layout/AppShell.tsx');
   const router = read('apps/web/src/routes/Router.tsx');
-  assert.match(shell, /label: '프로젝트 제안서'.*routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\]/u);
+  assert.match(shell, /label: '프로젝트 제안 및 수주'/u);
+  assert.match(shell, /routeIds: \['CASE-02', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'\]/u);
+  assert.match(shell, /nestedGroups: \[\{ label: '프로젝트 제안서'.*routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\]/u);
   assert.match(router, /PROP-02'.*'제안서 작성'/u);
   assert.match(router, /PROP-03'.*'프로젝트별 제안서 목록'/u);
   assert.match(router, /PROP-04'.*'제안서 DB관리'.*ADMIN_ONLY/u);

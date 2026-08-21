@@ -2,25 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button } from '@claim-studio/ui';
 import { apiRequest } from '../api';
 import {
-  REPORT_AUTHOR_NAMES,
   WORKFLOW_STAGES,
-  WORKFORCE_UNITS,
   workflowStageFromRoute,
   type WorkflowProject,
   type WorkflowStageId
 } from './workflow-model';
 
 const DAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
-
-const clampDay = (value: number) => Math.max(1, Math.min(31, value));
-const barStyle = (start: number, end: number): React.CSSProperties => {
-  const safeStart = clampDay(start);
-  const safeEnd = Math.max(safeStart, clampDay(end));
-  return {
-    left: `${((safeStart - 1) / 31) * 100}%`,
-    width: `${((safeEnd - safeStart + 1) / 31) * 100}%`
-  };
-};
 
 const isoDate = (year: number, monthIndex: number, day: number) => `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 const monthBarStyle = (startDate: string | null | undefined, endDate: string | null | undefined, year: number, monthIndex: number, dayCount: number): React.CSSProperties | undefined => {
@@ -52,7 +40,7 @@ const actionForStage = (stageId: WorkflowStageId, project: WorkflowProject) => {
     case 2: return { label: '프로젝트 접수 열기', path: `/workflow/award?caseId=${caseId}&projectId=${projectId}` };
     case 3: return { label: '착수회의·회의록 열기', path: `/meetings?caseId=${caseId}&projectId=${projectId}` };
     case 4: return { label: '현장자료 업로드 열기', path: `/cases/files?caseId=${caseId}&projectId=${projectId}` };
-    case 5: return { label: '팀 배정표로 이동', path: '#workforce-panel' };
+    case 5: return { label: '수량산출·내역 화면 열기', path: `/workflow/quantity?projectId=${projectId}` };
     case 6: return { label: 'AI 보고서 스튜디오 열기', path: `/reports/studio?caseId=${caseId}&projectId=${projectId}` };
   }
 };
@@ -320,8 +308,6 @@ const ProjectDetail: React.FC<{
   calendar: { year: number; monthIndex: number; days: number[]; todayDay?: number };
 }> = ({ project, focusedStageId, onNavigate, onAction, onReload, calendar }) => {
   const selectedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
-  const koreanUnits = WORKFORCE_UNITS.filter((unit) => unit.organization === 'CONCOST' && unit.discipline !== '클레임');
-  const vietnamUnits = WORKFORCE_UNITS.filter((unit) => unit.organization === 'VIETQS');
   const [pmOptions, setPmOptions] = useState<Array<{ id: string; displayName: string; email: string }>>([]);
   const [pmId, setPmId] = useState(project.responsiblePm?.id ?? '');
   const [scheduleBusy, setScheduleBusy] = useState('');
@@ -466,36 +452,6 @@ const ProjectDetail: React.FC<{
         })}
       </div>
 
-      <section id="workforce-panel" className="workforce-panel" tabIndex={-1} aria-labelledby="workforce-title">
-        <header>
-          <div><span>WORKFORCE ALLOCATION</span><h3 id="workforce-title">수량산출·내역작성 투입 현황</h3></div>
-          <p>한국 본사는 인원별, VIETQS는 팀별 일정으로 표시합니다.</p>
-        </header>
-        <div className="workforce-columns">
-          <article>
-            <h4>CONCOST · 한국 본사</h4>
-            {koreanUnits.map((unit, index) => <div className="workforce-row" key={unit.unit}>
-              <div><strong>{unit.unit}</strong><small>{unit.size}명 · 인원별 배정</small></div>
-              <div className="mini-track"><i style={barStyle(16 + index * 2, 25 + index)} /></div>
-              <span title={unit.members?.join(', ')}>{unit.members?.slice(0, 3).join(' · ')}{unit.size > 3 ? ` 외 ${unit.size - 3}명` : ''}</span>
-            </div>)}
-          </article>
-          <article>
-            <h4>VIETQS · 베트남 지사</h4>
-            {vietnamUnits.map((unit, index) => <div className="workforce-row" key={unit.unit}>
-              <div><strong>{unit.unit}</strong><small>{unit.size}명 · 팀 단위 배정</small></div>
-              <div className="mini-track"><i style={barStyle(16 + (index % 5), 23 + (index % 7))} /></div>
-              <span>{unit.discipline}</span>
-            </div>)}
-          </article>
-        </div>
-      </section>
-
-      <section className="report-author-panel" aria-labelledby="report-author-title">
-        <div><span>REPORT AUTHORING CELL</span><h3 id="report-author-title">보고서 작성 전담 5인</h3><p>유형별 목차와 1~5단계 근거를 장별 역할로 나눠 작성합니다.</p></div>
-        <ul>{REPORT_AUTHOR_NAMES.map((name, index) => <li key={name}><span>{String(index + 1).padStart(2, '0')}</span><strong>{name}</strong></li>)}</ul>
-        <Button onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(project.caseId)}&projectId=${encodeURIComponent(project.id)}`)}>AI 보고서 스튜디오</Button>
-      </section>
     </>
   );
 };

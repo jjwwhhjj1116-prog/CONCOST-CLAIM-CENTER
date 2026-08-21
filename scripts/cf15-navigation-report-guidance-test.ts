@@ -5,13 +5,14 @@ import test from 'node:test';
 const shell = readFileSync('apps/web/src/layout/AppShell.tsx', 'utf8');
 const router = readFileSync('apps/web/src/routes/Router.tsx', 'utf8');
 const studio = readFileSync('apps/web/src/routes/PreviewReportStudio.tsx', 'utf8');
+const schedule = readFileSync('apps/web/src/workflow/ProjectWorkflowSchedule.tsx', 'utf8');
 
-test('CF15 sidebar follows the five requested business categories without duplicate intake links', () => {
+test('CF15 sidebar follows the requested workflow with proposal authoring nested between intake and award', () => {
   for (const label of ['CLAIM CENTER HOME', '프로젝트 제안 및 수주', '프로젝트 제안서', '프로젝트 워크', '클레임센터 자료실', '법원 자료', '검토·납품·품질관리']) {
     assert.match(shell, new RegExp(label, 'u'));
   }
-  assert.match(shell, /routeIds: \['CASE-02', 'WF-02'\]/u);
-  assert.match(shell, /routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\]/u);
+  assert.match(shell, /routeIds: \['CASE-02', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'\]/u);
+  assert.match(shell, /nestedGroups: \[\{ label: '프로젝트 제안서'.*routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\]/u);
   assert.match(shell, /routeIds: \['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'\]/u);
   assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
@@ -25,6 +26,10 @@ test('CF15 sidebar follows the five requested business categories without duplic
   assert.match(router, /WF-02'.*'프로젝트 접수'/u);
   assert.match(shell, /<button\s+type="button"\s+key=\{route\.id\}/u);
   assert.doesNotMatch(shell, /<a\s+key=\{route\.id\}/u);
+  assert.match(schedule, /담당 PM과 단계별 기준 일정/u);
+  assert.match(schedule, /detail-schedule-board/u);
+  assert.doesNotMatch(schedule, /수량산출·내역작성 투입 현황/u);
+  assert.doesNotMatch(schedule, /보고서 작성 전담 5인/u);
 });
 
 test('CF15 report writing menu opens the real studio with template, outline, tutorial and admin prompt boundaries', () => {

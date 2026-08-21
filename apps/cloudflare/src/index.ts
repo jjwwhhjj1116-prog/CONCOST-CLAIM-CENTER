@@ -140,6 +140,7 @@ function hexToBytes(value: string): Uint8Array | null {
 const PREVIEW_SESSION_COOKIE = 'claim_center_session';
 const PREVIEW_SESSION_SECONDS = 12 * 60 * 60;
 const PREVIEW_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
+const RESPONSIBLE_PM_NAMES = ['현동명', '이원희', '이경훈', '최영배', '장범선'] as const;
 
 interface PreviewUserRow {
   id: string;
@@ -592,6 +593,42 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
     return json({ error: 'The last active Admin account cannot be deactivated', code: 'LAST_ADMIN_REQUIRED' }, 409);
   }
   return json({ ok: true, version: expectedVersion + 1, active: body.action === 'ACTIVATE' ? true : body.action === 'DEACTIVATE' ? false : target.active === 1, phase: 'CF38_ADMIN_ACCOUNTS' });
+}
+
+async function handlePreviewPasswordChange(request: Request, env: CloudflareEnv): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !exactObjectKeys(body, ['currentPassword', 'newPassword']) || typeof body.currentPassword !== 'string' || typeof body.newPassword !== 'string') {
+    return json({ error: 'Current and new passwords are required', code: 'INVALID_PASSWORD_CHANGE' }, 400);
+  }
+  if (body.currentPassword.length < 1 || body.currentPassword.length > 128 || body.newPassword.length < 4 || body.newPassword.length > 128 || body.currentPassword === body.newPassword) {
+    return json({ error: '새 비밀번호는 현재 비밀번호와 달라야 하며 4~128자로 입력해야 합니다.', code: 'INVALID_NEW_PASSWORD' }, 400);
+  }
+  const target = await env.DB.prepare(
+    'SELECT password_salt AS passwordSalt,password_hash AS passwordHash,password_iterations AS passwordIterations,version FROM preview_users WHERE id=? AND is_active=1'
+  ).bind(user.id).first<{ passwordSalt: string; passwordHash: string; passwordIterations: number; version: number }>();
+  if (!target) return json({ error: 'Active account was not found', code: 'ACCOUNT_NOT_FOUND' }, 404);
+  const currentHash = await derivePreviewPassword(body.currentPassword, target.passwordSalt, Number(target.passwordIterations));
+  if (!constantTimeHexEqual(currentHash, target.passwordHash)) return json({ error: '현재 비밀번호가 일치하지 않습니다.', code: 'CURRENT_PASSWORD_MISMATCH' }, 403);
+  const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const iterations = 310_000;
+  const passwordHash = await derivePreviewPassword(body.newPassword, salt, iterations);
+  if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
+  const cookieToken = parseCookies(request.headers.get('Cookie'))[PREVIEW_SESSION_COOKIE];
+  const headerToken = request.headers.get('X-Session-Token');
+  const activeTokenHash = await sha256Hex(cookieToken || headerToken || 'missing-session-token');
+  const now = new Date().toISOString();
+  const results = await env.DB.batch([
+    env.DB.prepare('UPDATE preview_users SET password_salt=?,password_hash=?,password_iterations=?,version=version+1 WHERE id=? AND version=? AND is_active=1').bind(salt, passwordHash, iterations, user.id, Number(target.version)),
+    env.DB.prepare('DELETE FROM preview_sessions WHERE user_id=? AND id_hash<>?').bind(user.id, activeTokenHash),
+    env.DB.prepare("INSERT INTO preview_user_admin_events (id,actor_id,target_user_id,action,detail_json,created_at) SELECT ?,?,?, 'PASSWORD_RESET',?,? WHERE EXISTS (SELECT 1 FROM preview_users WHERE id=? AND version=?)").bind(crypto.randomUUID(), user.id, user.id, JSON.stringify({ selfService: true }), now, user.id, Number(target.version) + 1)
+  ]) as Array<{ meta?: { changes?: number } }>;
+  if (results[0]?.meta?.changes !== 1 || results[2]?.meta?.changes !== 1) return json({ error: 'Account changed in another session', code: 'VERSION_CONFLICT' }, 409);
+  return json({ ok: true, version: Number(target.version) + 1, otherSessionsSignedOut: true, phase: 'CF43_SELF_PASSWORD' });
 }
 
 interface PreviewKickoffRow {
@@ -1229,10 +1266,16 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
       env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'AWARD_DECIDED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id=? AND version=? AND updated_at=?)')
         .bind(crypto.randomUUID(),current.caseId,user.id,decision === 'WON' ? '수주 확정' : '미수주 결정',decisionNote,now,current.caseId,expectedCaseVersion+1,now)
     ];
-    if (scheduleReady && responsiblePm && !existingProfile) awardStatements.push(
-      env.DB.prepare('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?)')
-        .bind(current.caseId,PREVIEW_ORGANIZATION_ID,responsiblePm.id,user.id,now,now)
-    );
+    if (scheduleReady && responsiblePm) {
+      awardStatements.push(
+        env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) VALUES (?,?,?,?)')
+          .bind(current.caseId,responsiblePm.id,user.id,now)
+      );
+      if (!existingProfile) awardStatements.push(
+        env.DB.prepare('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?)')
+          .bind(current.caseId,PREVIEW_ORGANIZATION_ID,responsiblePm.id,user.id,now,now)
+      );
+    }
     await env.DB.batch(awardStatements);
     const canonical = await env.DB.prepare('SELECT award_status AS awardStatus,version FROM preview_proposal_links WHERE id=?').bind(current.id).first<{awardStatus:string;version:number}>();
     const canonicalCase = await env.DB.prepare('SELECT version FROM preview_cases WHERE id=?').bind(current.caseId).first<{version:number}>();
@@ -2084,13 +2127,15 @@ async function projectScheduleSchema(env: CloudflareEnv): Promise<boolean> {
   catch { return false; }
 }
 
-async function projectPmCandidate(env: CloudflareEnv, caseId: string, preferredId = ''): Promise<{ id: string; displayName: string } | null> {
+async function projectPmCandidate(env: CloudflareEnv, _caseId: string, preferredId = ''): Promise<{ id: string; displayName: string } | null> {
   if (!env.DB) return null;
   return env.DB.prepare(
-    `SELECT u.id,u.display_name AS displayName FROM preview_case_assignments a JOIN preview_users u ON u.id=a.user_id AND u.is_active=1
-     WHERE a.case_id=? AND (?='' OR u.id=?) AND EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value) IN ('pm','admin'))
+    `SELECT u.id,u.display_name AS displayName FROM preview_users u
+     WHERE u.is_active=1 AND (?='' OR u.id=?)
+       AND u.display_name IN (?,?,?,?,?)
+       AND NOT EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value)='admin')
      ORDER BY CASE WHEN u.id=? THEN 0 ELSE 1 END,u.display_name LIMIT 1`
-  ).bind(caseId,preferredId,preferredId,preferredId).first<{ id: string; displayName: string }>();
+  ).bind(preferredId,preferredId,...RESPONSIBLE_PM_NAMES,preferredId).first<{ id: string; displayName: string }>();
 }
 
 async function handleProjectWorkflowManagement(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -2108,9 +2153,11 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     const caseRow = PREVIEW_DRAFT_KEY.test(caseId) ? await accessiblePreviewCase(env,user,caseId) : null;
     if (!caseRow) return json({ error: 'Project was not found or is outside your assignment', code: 'CASE_NOT_FOUND' }, 404);
     const rows = await env.DB.prepare(
-      `SELECT u.id,u.display_name AS displayName,u.email FROM preview_case_assignments a JOIN preview_users u ON u.id=a.user_id AND u.is_active=1
-       WHERE a.case_id=? AND EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value) IN ('pm','admin')) ORDER BY u.display_name`
-    ).bind(caseId).all<Record<string, unknown>>();
+      `SELECT u.id,u.display_name AS displayName,u.email FROM preview_users u
+       WHERE u.is_active=1 AND u.display_name IN (?,?,?,?,?)
+         AND NOT EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value)='admin')
+       ORDER BY CASE u.display_name WHEN '현동명' THEN 1 WHEN '이원희' THEN 2 WHEN '이경훈' THEN 3 WHEN '최영배' THEN 4 ELSE 5 END`
+    ).bind(...RESPONSIBLE_PM_NAMES).all<Record<string, unknown>>();
     return json({ users: rows.results, phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
   }
 
@@ -2124,17 +2171,19 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
 
   if (profileMatch && request.method === 'PUT') {
     if (!user.roles.some((role) => ['admin','ceo','director','pm'].includes(role))) return json({ error: 'Role cannot assign a responsible PM', code: 'FORBIDDEN' }, 403);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || !exactObjectKeys(body,['responsiblePmId','expectedProfileVersion']) || typeof body.responsiblePmId !== 'string' || !Number.isInteger(body.expectedProfileVersion)) return json({ error: 'PM profile payload is invalid', code: 'INVALID_SCHEDULE_PROFILE' }, 400);
     const existing = await profileFor(caseId);
     if (Number(existing?.version ?? 0) !== Number(body.expectedProfileVersion) || (existing && !canManage(existing))) return json({ error: 'PM assignment changed or requires the current PM/Admin', code: 'VERSION_CONFLICT', currentVersion: Number(existing?.version ?? 0) }, 409);
     const candidate = await projectPmCandidate(env,caseId,body.responsiblePmId);
-    if (!candidate || candidate.id !== body.responsiblePmId) return json({ error: 'Select an active PM assigned to this project', code: 'INVALID_RESPONSIBLE_PM' }, 400);
+    if (!candidate || candidate.id !== body.responsiblePmId) return json({ error: '현동명·이원희·이경훈·최영배·장범선 중 활성 계정을 선택하세요.', code: 'INVALID_RESPONSIBLE_PM' }, 400);
     const now = new Date(Math.max(Date.now(),Date.parse(existing?.updatedAt ?? '1970-01-01')+1)).toISOString();
-    const result = await env.DB.prepare(
-      'INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?) ON CONFLICT(case_id) DO UPDATE SET responsible_pm_id=excluded.responsible_pm_id,version=preview_project_schedule_profiles.version+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE preview_project_schedule_profiles.version=?'
-    ).bind(caseId,PREVIEW_ORGANIZATION_ID,candidate.id,user.id,now,now,Number(body.expectedProfileVersion)).run();
-    if (result.meta?.changes !== 1) return json({ error: 'PM assignment changed. Reload and retry.', code: 'VERSION_CONFLICT' }, 409);
+    const results = await env.DB.batch([
+      env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) VALUES (?,?,?,?)').bind(caseId,candidate.id,user.id,now),
+      env.DB.prepare('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?) ON CONFLICT(case_id) DO UPDATE SET responsible_pm_id=excluded.responsible_pm_id,version=preview_project_schedule_profiles.version+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE preview_project_schedule_profiles.version=?').bind(caseId,PREVIEW_ORGANIZATION_ID,candidate.id,user.id,now,now,Number(body.expectedProfileVersion))
+    ]) as Array<{meta?:{changes?:number}}>;
+    if (results[1]?.meta?.changes !== 1) return json({ error: 'PM assignment changed. Reload and retry.', code: 'VERSION_CONFLICT' }, 409);
     return json({ profile: await profileFor(caseId), phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
   }
 
@@ -5248,6 +5297,10 @@ const worker = {
 
     if (url.pathname === '/api/settings/ai-governance') {
       return handlePreviewAiGovernance(request, env);
+    }
+
+    if (url.pathname === '/api/settings/password') {
+      return handlePreviewPasswordChange(request, env);
     }
 
     if (url.pathname === '/api/settings/preferences' || url.pathname === '/api/settings/admin-workspace' || url.pathname === '/api/settings/tutorial') {

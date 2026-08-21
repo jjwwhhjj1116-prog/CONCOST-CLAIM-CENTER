@@ -14,6 +14,15 @@ const ADMIN_TOKEN = 'cf39-admin-session-token';
 const PM_TOKEN = 'cf39-pm-session-token';
 const REVIEWER_TOKEN = 'cf39-reviewer-session-token';
 const STAFF_TOKEN = 'cf39-staff-session-token';
+const ADMIN_CURRENT_PASSWORD = 'Synthetic-Current-A7!';
+const ADMIN_NEXT_PASSWORD = 'Synthetic-Next-B8!';
+const PM_ROSTER = [
+  [PM_ID, 'pm', '이경훈'],
+  ['00000000-0000-4000-8000-000000000051', 'pm-hdm', '현동명'],
+  ['00000000-0000-4000-8000-000000000052', 'pm-lwh', '이원희'],
+  ['00000000-0000-4000-8000-000000000053', 'pm-cyb', '최영배'],
+  ['00000000-0000-4000-8000-000000000054', 'pm-jbs', '장범선']
+] as const;
 
 const migrations = [
   '0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql',
@@ -22,12 +31,19 @@ const migrations = [
   '0016_cf18_report_outline_evidence.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0019_cf27_proposal_authoring.sql','0020_cf28_workspace_settings.sql',
   '0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql',
   '0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0029_cf37_report_workspace_resume.sql',
-  '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql'
+  '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql','0035_cf43_navigation_pm_password.sql'
 ];
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function passwordHash(password: string, saltHex: string, iterations: number): Promise<string> {
+  const salt = new Uint8Array(saltHex.match(/.{2}/g)!.map((entry) => Number.parseInt(entry, 16)));
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, material, 256);
+  return [...new Uint8Array(bits)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 class SqlStatement {
@@ -64,15 +80,17 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
   const sql = new SQL.Database();
   sql.run('PRAGMA foreign_keys=ON');
   const now = '2026-08-21T00:00:00.000Z';
+  const adminSalt = 'a1'.repeat(16);
+  const adminPasswordHash = await passwordHash(ADMIN_CURRENT_PASSWORD, adminSalt, 310000);
   for (const name of migrations) {
     sql.exec(migration(name));
     if (name === '0009_cf09_output_actor_scope.sql') {
-      const add = (id: string, login: string, label: string, roles: string) => sql.run(
+      const add = (id: string, login: string, label: string, roles: string, salt = '1'.repeat(32), hash = '2'.repeat(64), iterations = 100000) => sql.run(
         'INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)',
-        [id, login, '1'.repeat(32), '2'.repeat(64), 100000, label, `${login}@example.invalid`, roles, now]
+        [id, login, salt, hash, iterations, label, login.includes('@') ? login : `${login}@example.invalid`, roles, now]
       );
-      add(ADMIN_ID, 'admin', '관리자', '["admin"]');
-      add(PM_ID, 'pm', '프로젝트 PM', '["pm"]');
+      add(ADMIN_ID, 'yjw@con-cost.com', '관리자', '["admin"]', adminSalt, adminPasswordHash, 310000);
+      for (const [id, login, label] of PM_ROSTER) add(id, login, label, '["pm"]');
       add(REVIEWER_ID, 'reviewer', '검토자', '["reviewer"]');
       add(STAFF_ID, 'staff-cf39', '프로젝트 Staff', '["staff"]');
     }
@@ -87,6 +105,42 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: 'AQ.SYNTHETIC_CF39_ORGANIZATION_KEY', GEMINI_TEST_FETCH: geminiFetch } };
 }
+
+test('CF43 PM choices are exactly the five approved non-Admin members and assignment is automatic', async () => {
+  const { sql, env } = await setup();
+  const options = await worker.fetch(request(`/api/project-workflow/pm-options?caseId=${CASE_ID}`, ADMIN_TOKEN), env);
+  assert.equal(options.status, 200);
+  const names = (await options.json() as any).users.map((entry: any) => entry.displayName);
+  assert.deepEqual(names, ['현동명', '이원희', '이경훈', '최영배', '장범선']);
+  assert.equal(names.includes('관리자'), false);
+  const targetId = PM_ROSTER[1][0];
+  sql.run('DELETE FROM preview_case_assignments WHERE case_id=? AND user_id=?', [CASE_ID,targetId]);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_case_assignments WHERE case_id=? AND user_id=?', [CASE_ID,targetId])[0].values[0][0], 0);
+  const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:targetId,expectedProfileVersion:0 }) }), env);
+  assert.equal(assigned.status, 200);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_case_assignments WHERE case_id=? AND user_id=?', [CASE_ID,targetId])[0].values[0][0], 1);
+  const adminDenied = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:ADMIN_ID,expectedProfileVersion:1 }) }), env);
+  assert.equal(adminDenied.status, 400);
+  sql.close();
+});
+
+test('CF43 each signed-in member can persistently change their own password without exposing a plaintext value', async () => {
+  const { sql, env } = await setup();
+  const mismatch = await worker.fetch(request('/api/settings/password', ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ currentPassword:'wrong-current',newPassword:ADMIN_NEXT_PASSWORD }) }), env);
+  assert.equal(mismatch.status, 403);
+  const changed = await worker.fetch(request('/api/settings/password', ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ currentPassword:ADMIN_CURRENT_PASSWORD,newPassword:ADMIN_NEXT_PASSWORD }) }), env);
+  assert.equal(changed.status, 200);
+  const oldLogin = await worker.fetch(new Request('https://preview.example/api/auth/login', { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ loginId:'yjw@con-cost.com',password:ADMIN_CURRENT_PASSWORD }) }), env);
+  assert.equal(oldLogin.status, 401);
+  const newLogin = await worker.fetch(new Request('https://preview.example/api/auth/login', { method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ loginId:'yjw@con-cost.com',password:ADMIN_NEXT_PASSWORD }) }), env);
+  assert.equal(newLogin.status, 200);
+  assert.equal(sql.exec("SELECT COUNT(*) FROM preview_user_admin_events WHERE actor_id=target_user_id AND action='PASSWORD_RESET'")[0].values[0][0], 1);
+  const settingsSource = readFileSync(join(process.cwd(),'apps','web','src','routes','PreviewSettings.tsx'),'utf8');
+  assert.match(settingsSource, /로그인 비밀번호 변경/u);
+  assert.match(settingsSource, /autoComplete="current-password"/u);
+  assert.doesNotMatch(settingsSource, /1147/u);
+  sql.close();
+});
 
 test('CF39 all assigned login roles upload project-wide evidence categories and immutable attribution survives listing', async () => {
   const { sql, env } = await setup();

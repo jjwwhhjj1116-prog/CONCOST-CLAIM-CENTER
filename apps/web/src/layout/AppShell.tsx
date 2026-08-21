@@ -9,11 +9,15 @@ const NAVIGATION_GROUPS: readonly {
   eyebrow: string;
   icon: 'home' | 'proposal' | 'work' | 'library' | 'court' | 'quality' | 'settings' | 'admin';
   routeIds: readonly string[];
+  nestedGroups?: readonly { label: string; eyebrow: string; routeIds: readonly string[] }[];
   allowedRoles?: readonly UserRole[];
 }[] = [
   { label: 'CLAIM CENTER HOME', eyebrow: 'HOME', icon: 'home', routeIds: ['DASH-01'] },
-  { label: '프로젝트 제안 및 수주', eyebrow: 'PROJECT INTAKE & AWARD', icon: 'proposal', routeIds: ['CASE-02', 'WF-02'] },
-  { label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', icon: 'proposal', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] },
+  {
+    label: '프로젝트 제안 및 수주', eyebrow: 'PROJECT INTAKE & AWARD', icon: 'proposal',
+    routeIds: ['CASE-02', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'],
+    nestedGroups: [{ label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }]
+  },
   { label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work', routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'] },
   { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
   { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },
@@ -148,8 +152,31 @@ export const AppShell: React.FC<AppShellProps> = ({
             <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
             <div><span>{group.eyebrow}</span><h2>{group.label}</h2></div>
           </header>
-          {routes.map((route) => route && (
-            <button
+          {group.routeIds.map((routeId) => {
+            const nested = group.nestedGroups?.find((candidate) => candidate.routeIds.includes(routeId));
+            if (nested) {
+              if (nested.routeIds[0] !== routeId) return null;
+              const nestedRoutes = nested.routeIds
+                .map((id) => routes.find((route) => route?.id === id))
+                .filter(Boolean);
+              if (!nestedRoutes.length) return null;
+              return <section className="navigation-subgroup" key={nested.label} aria-label={nested.label}>
+                <div className="navigation-subgroup__title"><span aria-hidden="true">▱</span><div><small>{nested.eyebrow}</small><strong>{nested.label}</strong></div></div>
+                {nestedRoutes.map((route) => route && <button
+                  type="button"
+                  key={route.id}
+                  onClick={() => go(routeWithProjectContext(route.id, route.path))}
+                  aria-current={currentPath === route.path ? 'page' : undefined}
+                  className="navigation-link navigation-link--nested"
+                >
+                  <span className="navigation-dot" aria-hidden="true" />
+                  <span className="text-ellipsis">{route.name}</span>
+                </button>)}
+              </section>;
+            }
+            const route = routes.find((candidate) => candidate?.id === routeId);
+            if (!route) return null;
+            return <button
               type="button"
               key={route.id}
               onClick={() => go(routeWithProjectContext(route.id, route.path))}
@@ -158,8 +185,8 @@ export const AppShell: React.FC<AppShellProps> = ({
             >
               <span className="navigation-dot" aria-hidden="true" />
               <span className="text-ellipsis">{route.name}</span>
-            </button>
-          ))}
+            </button>;
+          })}
         </section>;
       })}
     </nav>

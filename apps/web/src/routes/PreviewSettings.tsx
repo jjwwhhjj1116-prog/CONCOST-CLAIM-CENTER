@@ -76,6 +76,9 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [aiGovernance, setAiGovernance] = useState<AiGovernance | null>(null);
   const [aiGovernanceAck, setAiGovernanceAck] = useState('');
   const [keys, setKeys] = useState<Record<string, string>>({});
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -189,6 +192,18 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     finally { setBusy(''); }
   };
 
+  const changePassword = async () => {
+    if (newPassword !== confirmPassword) { setError('새 비밀번호 확인이 일치하지 않습니다.'); return; }
+    setBusy('password'); setError(''); setNotice('');
+    try {
+      await apiRequest('/api/settings/password', { method: 'PUT', body: JSON.stringify({ currentPassword, newPassword }) });
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+      setNotice('비밀번호를 변경했습니다. 이 브라우저의 작업은 유지되고 다른 기기의 로그인 세션은 종료되었습니다.');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally { setBusy(''); }
+  };
+
   const decideMemory = async (candidate: MemoryCandidate, action: 'APPROVE' | 'REJECT' | 'DISABLE') => {
     setBusy(`memory:${candidate.id}`); setError(''); setNotice('');
     try {
@@ -248,6 +263,15 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     <section className="settings-access-strip" aria-label="현재 계정 설정 권한"><div><span>현재 로그인 역할</span><strong>{roles.map((role) => role.toUpperCase()).join(' · ') || 'USER'}</strong></div><p>{section === 'PERSONAL' ? '현재 화면의 API 키는 내 계정에만 적용됩니다.' : '조직 전체에 적용되는 관리자 전용 화면입니다.'}</p></section>
 
     {section === 'PERSONAL' && <>
+      <Card title="로그인 비밀번호 변경" className="password-settings-card">
+        <p>내 계정의 비밀번호는 D1에 PBKDF2 해시로 저장됩니다. 변경 후 현재 브라우저는 유지되고 다른 기기의 기존 로그인은 종료됩니다.</p>
+        <div className="password-change-grid">
+          <label>현재 비밀번호<input type="password" autoComplete="current-password" value={currentPassword} maxLength={128} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+          <label>새 비밀번호<input type="password" autoComplete="new-password" value={newPassword} minLength={4} maxLength={128} onChange={(event) => setNewPassword(event.target.value)} /></label>
+          <label>새 비밀번호 확인<input type="password" autoComplete="new-password" value={confirmPassword} minLength={4} maxLength={128} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+          <Button onClick={() => void changePassword()} disabled={busy === 'password' || !currentPassword || newPassword.length < 4 || newPassword !== confirmPassword}>{busy === 'password' ? '변경 중…' : '내 비밀번호 저장'}</Button>
+        </div>
+      </Card>
       {renderCredentials('USER', '개인 Gemini 연결 설정', '한 번 저장하면 내 계정에 암호화 등록되어 다시 로그인해도 자동으로 사용합니다. 무료 할당량을 모두 쓰면 새 키를 발급받아 “새 키로 교체”만 해주세요.')}
       <Card title="로컬 AI 설정 가이드"><div className="local-ai-guide"><div><span>01</span><strong>로컬 모델 실행</strong><p>Ollama, LM Studio 또는 OpenAI Compatible 서버에서 모델을 실행합니다.</p><code>http://localhost:11434</code></div><div><span>02</span><strong>회사 서버 Bridge</strong><p>Cloudflare는 개인 PC localhost에 접근할 수 없어 추후 공유 서버의 HTTPS Bridge가 필요합니다.</p><code>HTTPS · VPN · 접근제어 필수</code></div><div><span>03</span><strong>관리자 활성화</strong><p>관리자 설정에서 PRIVATE_SERVER_BRIDGE와 Hermes 정책을 승인합니다.</p><code>현재 직접 호출 비활성</code></div></div></Card>
     </>}

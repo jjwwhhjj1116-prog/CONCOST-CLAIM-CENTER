@@ -171,6 +171,13 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .navigation-group .navigation-link[aria-current='page'] { border-color: #c9ddec; background: #e5f0f8; color: #193756; font-weight: 700; box-shadow: inset 3px 0 #4a86c5; }
 .navigation-group .navigation-link[aria-current='page'] .navigation-dot { background: #4a86c5; box-shadow: 0 0 0 3px rgba(74, 134, 197, .13); }
 .navigation-group .navigation-link:hover:not([aria-current='page']) { color: var(--group-accent); background: rgba(var(--group-rgb), .08); }
+.navigation-subgroup { margin: 2px 6px 5px 10px; padding: 8px 5px 6px; border: 1px solid rgba(var(--group-rgb), .22); border-radius: 11px; background: rgba(var(--group-rgb), .055); }
+.navigation-subgroup__title { display: flex; align-items: center; gap: 8px; padding: 0 8px 7px; color: var(--group-accent); }
+.navigation-subgroup__title > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 7px; background: rgba(var(--group-rgb), .13); font-size: .9rem; font-weight: 900; }
+.navigation-subgroup__title div { display: grid; min-width: 0; }
+.navigation-subgroup__title small { font: 650 .47rem 'Space Grotesk', sans-serif; letter-spacing: .1em; opacity: .72; }
+.navigation-subgroup__title strong { color: #26384d; font-size: .76rem; line-height: 1.25; }
+.navigation-group .navigation-link--nested { min-height: 36px; padding-top: 7px; padding-bottom: 7px; padding-left: 12px; font-size: .75rem; }
 .navigation-group--single { display: block; }
 .navigation-single-action { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: #4b5b70; text-align: left; cursor: pointer; }
 .navigation-single-action > span:last-child { display: grid; gap: 2px; }
@@ -307,6 +314,7 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .navigation-dot { background: #c8d2dd; }
 :root[data-theme='light'] .navigation-group.is-current header h2 { color: #193756; }
 :root[data-theme='light'] .navigation-group .navigation-link[aria-current='page'] { color: #193756; background: #e5f0f8; }
+:root[data-theme='dark'] .navigation-subgroup__title strong { color: #e2e8f0; }
 :root[data-theme='light'] .sidebar-project-context { background: linear-gradient(145deg, #f0f7fc, #f5f2fb); }
 :root[data-theme='light'] .sidebar-project-context > div button { background: rgba(255, 255, 255, .72); }
 :root[data-theme='light'] .drawer-panel,
