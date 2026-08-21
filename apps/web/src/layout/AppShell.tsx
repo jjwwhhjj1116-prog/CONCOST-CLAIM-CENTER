@@ -52,6 +52,17 @@ export interface AppShellProps {
 
 type ThemeMode = 'light' | 'dark';
 
+const SIDEBAR_MIN_WIDTH = 300;
+const SIDEBAR_MAX_WIDTH = 480;
+const SIDEBAR_DEFAULT_WIDTH = 352;
+
+const clampSidebarWidth = (value: number): number => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
+
+const readInitialSidebarWidth = (): number => {
+  const stored = Number(window.localStorage.getItem('claim-center-sidebar-width'));
+  return Number.isFinite(stored) ? clampSidebarWidth(stored) : SIDEBAR_DEFAULT_WIDTH;
+};
+
 const readInitialTheme = (): ThemeMode => {
   const stored = window.localStorage.getItem('claim-center-theme');
   return stored === 'dark' || stored === 'light' ? stored : 'light';
@@ -71,6 +82,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
+  const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
   const activeGroup = NAVIGATION_GROUPS.find((group) => group.routeIds.some((id) => ROUTES.find((route) => route.id === id)?.path === currentPath));
   const locationParams = new URLSearchParams(currentSearch);
@@ -88,6 +100,10 @@ export const AppShell: React.FC<AppShellProps> = ({
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem('claim-center-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem('claim-center-sidebar-width', String(sidebarWidth));
+  }, [sidebarWidth]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -224,7 +240,40 @@ export const AppShell: React.FC<AppShellProps> = ({
       </header>
 
       <div className="shell-body">
-        {!isTablet && <aside className="sidebar" aria-label="주요 내비게이션 사이드바">{navigation}</aside>}
+        {!isTablet && <aside className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
+          {navigation}
+          <div
+            className="sidebar-resize-handle"
+            role="separator"
+            aria-label="좌측 메뉴 폭 조절"
+            aria-orientation="vertical"
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onDoubleClick={() => setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
+              event.preventDefault();
+              if (event.key === 'Home') setSidebarWidth(SIDEBAR_MIN_WIDTH);
+              else if (event.key === 'End') setSidebarWidth(SIDEBAR_MAX_WIDTH);
+              else setSidebarWidth((current) => clampSidebarWidth(current + (event.key === 'ArrowRight' ? 16 : -16)));
+            }}
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              document.documentElement.classList.add('is-resizing-sidebar');
+            }}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+              setSidebarWidth(clampSidebarWidth(event.clientX));
+            }}
+            onPointerUp={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+              document.documentElement.classList.remove('is-resizing-sidebar');
+            }}
+            onPointerCancel={() => document.documentElement.classList.remove('is-resizing-sidebar')}
+          ><span aria-hidden="true" /></div>
+        </aside>}
         <Drawer isOpen={isDrawerOpen} onClose={closeDrawer} title="전체 내비게이션 메뉴">{navigation}</Drawer>
         <main id="main-content" className="main-content" tabIndex={-1}>{children}</main>
       </div>

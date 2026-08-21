@@ -24,7 +24,7 @@ import {
 } from './google-drive';
 import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
 import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
-import { generateProposalDocx, generateProposalMarkdown, type ProposalExportChapter } from './proposal-docx';
+import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportChapter } from './proposal-docx';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -1571,6 +1571,28 @@ interface ProposalCompanyModule {
   updatedAt: string;
 }
 
+interface ProposalTemplateSource {
+  id: string;
+  sourceName: string;
+  sourceFormat: string;
+  sourceDate: string | null;
+  isDefault: boolean;
+  analysisStatus: string;
+  chapterMapJson: string;
+  version: number;
+}
+
+const FALLBACK_PROPOSAL_SOURCE: ProposalTemplateSource = {
+  id:'CF42-SRC-260728',
+  sourceName:'260728 평택 세교1구역 리츠 HUG 대응 전력 용역제안서.hwp',
+  sourceFormat:'HWP',
+  sourceDate:'2026-07-28',
+  isDefault:true,
+  analysisStatus:'ANALYZED',
+  chapterMapJson:'[1,2,3,4,5,6,7,8,9,10,11,12]',
+  version:1
+};
+
 interface ProposalStudioInputs {
   clientName: string;
   projectTitle: string;
@@ -1582,6 +1604,8 @@ interface ProposalStudioInputs {
   exclusions: string;
   chapters: ProposalStudioChapter[];
   includedModuleCodes: string[];
+  templateSourceId?: string;
+  templateSourceName?: string;
   sanitizationCount: number;
 }
 
@@ -1627,6 +1651,15 @@ async function proposalCompanyModules(env: CloudflareEnv): Promise<ProposalCompa
   }
 }
 
+async function proposalTemplateSources(env: CloudflareEnv): Promise<ProposalTemplateSource[]> {
+  if (!env.DB) return [FALLBACK_PROPOSAL_SOURCE];
+  return env.DB.prepare('SELECT id,source_name AS sourceName,source_format AS sourceFormat,source_date AS sourceDate,is_default AS isDefault,analysis_status AS analysisStatus,chapter_map_json AS chapterMapJson,version FROM preview_proposal_template_sources ORDER BY is_default DESC,source_date DESC,source_name')
+    .all<{id:string;sourceName:string;sourceFormat:string;sourceDate:string|null;isDefault:number;analysisStatus:string;chapterMapJson:string;version:number}>()
+    .then((result) => result.results.map((source) => ({ ...source, isDefault:source.isDefault === 1, version:Number(source.version) })))
+    .then((sources) => sources.length ? sources : [FALLBACK_PROPOSAL_SOURCE])
+    .catch(() => [FALLBACK_PROPOSAL_SOURCE]);
+}
+
 function defaultProposalChapters(caseRow: PreviewCaseRow, modules: ProposalCompanyModule[]): ProposalStudioChapter[] {
   const fixed = new Map(modules.filter((module) => module.isActive).map((module) => [module.chapterNumber, module]));
   return PROPOSAL_CHAPTER_TITLES.map((title, index) => {
@@ -1659,6 +1692,8 @@ function parseProposalInputs(value: string, fallbackChapters: ProposalStudioChap
         subtitle:proposalStudioText(parsed.subtitle,300,'건설 클레임 전문용역 제안'), submissionDate:proposalStudioText(parsed.submissionDate,30,kstDateKey(new Date())),
         keyIssues:proposalStudioText(parsed.keyIssues,10000), objective:proposalStudioText(parsed.objective,10000), planNotes:proposalStudioText(parsed.planNotes,10000), exclusions:proposalStudioText(parsed.exclusions,10000,'해당 없음'),
         chapters:parsed.chapters, includedModuleCodes:Array.isArray(parsed.includedModuleCodes) ? parsed.includedModuleCodes.filter((item):item is string => typeof item==='string') : fallbackChapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),
+        ...(typeof parsed.templateSourceId === 'string' ? {templateSourceId:proposalStudioText(parsed.templateSourceId,100)} : {}),
+        ...(typeof parsed.templateSourceName === 'string' ? {templateSourceName:proposalStudioText(parsed.templateSourceName,500)} : {}),
         sanitizationCount:Number(parsed.sanitizationCount ?? 0)
       };
     }
@@ -1695,7 +1730,9 @@ function previewProposalProjection(row: PreviewProposalRow): Record<string, unkn
   return {
     id: row.id, caseId: row.caseId, templateId: row.templateId, title: row.title, status: row.status,
     currentVersionId: row.currentVersionId, approvedVersionId: row.approvedVersionId, version: Number(row.version),
-    template: template ?? { id: row.templateId, name: row.templateName, claimType: 'UNKNOWN', description: '저장된 템플릿 스냅샷', bodyTemplate: row.templateBody, placeholdersJson: '[]' },
+    template: template
+      ? { ...template, name:row.templateName, bodyTemplate:row.templateBody }
+      : { id: row.templateId, name: row.templateName, claimType: 'UNKNOWN', description: '저장된 템플릿 스냅샷', bodyTemplate: row.templateBody, placeholdersJson: '[]' },
     createdAt: row.createdAt, updatedAt: row.updatedAt
   };
 }
@@ -1723,7 +1760,7 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
   const isAdmin = user.roles.includes('admin');
   if (url.pathname === '/api/proposal-studio/config' && request.method === 'GET') {
     const modules = await proposalCompanyModules(env);
-    const sources = await env.DB.prepare('SELECT id,source_name AS sourceName,source_format AS sourceFormat,source_date AS sourceDate,is_default AS isDefault,analysis_status AS analysisStatus,chapter_map_json AS chapterMapJson,version FROM preview_proposal_template_sources ORDER BY is_default DESC,source_date DESC').all<Record<string,unknown>>().then((result)=>result.results.map((source)=>({...source,isDefault:Boolean(source.isDefault)}))).catch(()=>[]);
+    const sources = await proposalTemplateSources(env);
     return json({ modules,sources,chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF42_PROPOSAL_STUDIO' });
   }
   const moduleMatch = url.pathname.match(/^\/api\/proposal-studio\/modules\/(CH(?:0[4-9]|1[01])_[A-Z_]+)$/u);
@@ -1768,25 +1805,28 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
   if (!proposalId && request.method === 'POST') {
     if (!canEdit) return json({ error: 'Role cannot create proposals', code: 'FORBIDDEN' }, 403);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['templateId']) || typeof body.templateId !== 'string') return json({ error: 'Template selection is invalid', code: 'INVALID_TEMPLATE' }, 400);
+    if (!body || !(exactObjectKeys(body, ['templateId']) || exactObjectKeys(body, ['templateId','sourceId'])) || typeof body.templateId !== 'string' || (body.sourceId !== undefined && typeof body.sourceId !== 'string')) return json({ error: 'Template selection is invalid', code: 'INVALID_TEMPLATE' }, 400);
     const template = PREVIEW_PROPOSAL_TEMPLATES.find((item) => item.id === body.templateId && item.claimType === caseRow.claimType);
     if (!template) return json({ error: 'Template does not match the project claim type', code: 'TEMPLATE_MISMATCH' }, 400);
+    const sources = await proposalTemplateSources(env);
+    const source = sources.find((item) => item.id === body.sourceId) ?? (body.sourceId === undefined ? sources.find((item) => item.isDefault) ?? sources[0] : undefined);
+    if (!source) return json({ error:'Selected proposal source template was not found',code:'PROPOSAL_TEMPLATE_SOURCE_NOT_FOUND' },400);
     const now = new Date().toISOString(); const id = crypto.randomUUID(); const versionId = crypto.randomUUID();
     const modules = await proposalCompanyModules(env);
     const chapters = defaultProposalChapters(caseRow,modules);
     const initialInputs: ProposalStudioInputs = {
       clientName:'[클라이언트명 입력]',projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),
       keyIssues:chapters[1].body,objective:chapters[0].body,planNotes:chapters[2].body,exclusions:'해당 없음',chapters,
-      includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),sanitizationCount:0
+      includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),templateSourceId:source.id,templateSourceName:source.sourceName,sanitizationCount:0
     };
     const structured = JSON.stringify(initialInputs);
     const initialBody = proposalBodyFromChapters(chapters);
     const inputSha = await sha256Hex(structured); const bodySha = await sha256Hex(initialBody);
     try {
       await env.DB.batch?.([
-        env.DB.prepare('INSERT INTO preview_proposals (id,organization_id,case_id,template_id,template_name_snapshot,template_body_snapshot,title,status,current_version_id,approved_version_id,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'DRAFT\',?,NULL,1,?,?,?)').bind(id, PREVIEW_ORGANIZATION_ID, caseId, template.id, template.name, template.bodyTemplate, `${caseRow.title} 기술제안서`, versionId, user.id, now, now),
+        env.DB.prepare('INSERT INTO preview_proposals (id,organization_id,case_id,template_id,template_name_snapshot,template_body_snapshot,title,status,current_version_id,approved_version_id,version,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'DRAFT\',?,NULL,1,?,?,?)').bind(id, PREVIEW_ORGANIZATION_ID, caseId, template.id, `${template.name} · ${source.sourceName}`, template.bodyTemplate, `${caseRow.title} 기술제안서`, versionId, user.id, now, now),
         env.DB.prepare('INSERT INTO preview_proposal_versions (id,proposal_id,case_id,version_number,body_text,structured_inputs_json,generation_mode,provider_id,model_id,input_sha256,source_document_version_ids_json,missing_fields_json,sha256,is_approved,created_by,created_at) VALUES (?,?,?,1,?,?,\'MANUAL\',NULL,NULL,?,\'[]\',?, ?,0,?,?)').bind(versionId, id, caseId, initialBody, structured, inputSha, JSON.stringify(['clientName','keyIssues']), bodySha, user.id, now),
-        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'PROPOSAL_CREATED', '제안서 작성 시작', template.name, now)
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'PROPOSAL_CREATED', '제안서 작성 시작', `${template.name} · ${source.sourceName}`, now)
       ]);
       const detail = await previewDraftProposalDetail(env, id, caseId); const detailBody = await detail.json() as Record<string, unknown>;
       return json({ ...detailBody, versionId }, 201);
@@ -1808,6 +1848,10 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     if (Number(body.version) !== Number(current.version)) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current.version) }, 409);
     if (!body.sourceDocumentVersionIds.every((item) => typeof item === 'string')) return json({ error:'Source document list is invalid',code:'INVALID_PROPOSAL_VERSION' },400);
     const modules = await proposalCompanyModules(env);
+    const sources = await proposalTemplateSources(env);
+    const requestedSourceId = typeof body.templateSourceId === 'string' ? body.templateSourceId : undefined;
+    const selectedSource = sources.find((source) => source.id === requestedSourceId) ?? (requestedSourceId === undefined ? sources.find((source) => source.isDefault) ?? sources[0] : undefined);
+    if (!selectedSource) return json({error:'Selected proposal source template was not found',code:'PROPOSAL_TEMPLATE_SOURCE_NOT_FOUND'},400);
     const moduleByCode = new Map(modules.map((module)=>[module.code,module]));
     let sanitizationCount = 0;
     const sanitizeInput = (value:unknown,maxLength=10000) => { const result=sanitizeProposalCostData(proposalStudioText(value,maxLength)); sanitizationCount+=result.count; return result.value; };
@@ -1817,7 +1861,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       chapters[0].body=`${sanitizeInput(body.background)}\n\n${sanitizeInput(body.objective)}`.trim();
       chapters[2].body=sanitizeInput(body.method);
       chapters[11].body=`${sanitizeInput(body.expectedOutcome)}\n\n제외사항: ${sanitizeInput(body.exclusions)}`;
-      inputs={clientName:'[클라이언트명 입력]',projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),keyIssues:chapters[1].body,objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.method),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),sanitizationCount};
+      inputs={clientName:'[클라이언트명 입력]',projectTitle:`${caseRow.title} 기술용역 제안서`,subtitle:'건설 클레임 전문용역 제안',submissionDate:kstDateKey(new Date()),keyIssues:chapters[1].body,objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.method),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:chapters.flatMap((chapter)=>chapter.moduleCode?[chapter.moduleCode]:[]),templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
     } else {
       const requestedModules=new Set((body.includedModuleCodes as unknown[]).filter((item):item is string=>typeof item==='string'&&moduleByCode.has(item)));
       const submitted=body.chapters as ProposalStudioChapter[];
@@ -1830,7 +1874,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         }
         return{number:chapter.number,title:PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000)};
       });
-      inputs={clientName:sanitizeInput(body.clientName,200),projectTitle:sanitizeInput(body.projectTitle,300),subtitle:sanitizeInput(body.subtitle,300),submissionDate:proposalStudioText(body.submissionDate,30),keyIssues:sanitizeInput(body.keyIssues),objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.planNotes),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:[...requestedModules],sanitizationCount};
+      inputs={clientName:sanitizeInput(body.clientName,200),projectTitle:sanitizeInput(body.projectTitle,300),subtitle:sanitizeInput(body.subtitle,300),submissionDate:proposalStudioText(body.submissionDate,30),keyIssues:sanitizeInput(body.keyIssues),objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.planNotes),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:[...requestedModules],templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
     }
     let bodyText=proposalBodyFromChapters(inputs.chapters);
     let providerId: string | null = null; let modelId: string | null = null;
@@ -1845,7 +1889,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         env,
         route,
         '당신은 컨코스트 건설 클레임 제안서 전담 작성자입니다. 승인된 제안서 템플릿 구조를 절대 훼손하지 마세요. 사실만 사용하고 금액은 모두 [비공개 협의금액]으로 표기하세요. 클라이언트의 관점과 상대방 주장을 구분하고, 근거 없는 계약조건·판례·수치·일정을 만들지 마세요. 확인할 수 없는 내용은 [확인 필요]로 표시하세요. 오직 JSON 객체 하나만 출력하세요. 형식: {"chapter1":"목적 본문","chapter2":"3~5대 쟁점 본문","chapter3":"Fact Finding→법리·원가 검증→협상 지원→총회·의결 4단계 본문","chapter12":"신뢰를 주는 맺음말"}. 마크다운 코드펜스를 사용하지 마세요.',
-        JSON.stringify({ approvedTemplate: current.templateBody, project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, clientPositionDetail:caseRow.clientPositionDetail, description: caseRow.description }, writerInputs: {clientName:inputs.clientName,projectTitle:inputs.projectTitle,keyIssues:inputs.keyIssues,objective:inputs.objective,planNotes:inputs.planNotes,exclusions:inputs.exclusions}, latestIntakeAudioSummary: intakeSummary ?? null }),
+        JSON.stringify({ approvedTemplate: current.templateBody, templateSource:{id:selectedSource.id,name:selectedSource.sourceName,format:selectedSource.sourceFormat,chapterMap:selectedSource.chapterMapJson}, project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, clientPositionDetail:caseRow.clientPositionDetail, description: caseRow.description }, writerInputs: {clientName:inputs.clientName,projectTitle:inputs.projectTitle,keyIssues:inputs.keyIssues,objective:inputs.objective,planNotes:inputs.planNotes,exclusions:inputs.exclusions}, latestIntakeAudioSummary: intakeSummary ?? null }),
         user.id,
         organizationGemini
       );
@@ -1901,7 +1945,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
 
   if (action === 'render' && request.method === 'POST') {
     const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
-    if(!body||!exactObjectKeys(body,['format','versionId','version'])||!['docx','md'].includes(String(body.format))||typeof body.versionId!=='string'||!Number.isInteger(body.version))return json({error:'Proposal export payload is invalid',code:'INVALID_PROPOSAL_EXPORT'},400);
+    if(!body||!exactObjectKeys(body,['format','versionId','version'])||!['docx','pdf','md'].includes(String(body.format))||typeof body.versionId!=='string'||!Number.isInteger(body.version))return json({error:'Proposal export payload is invalid',code:'INVALID_PROPOSAL_EXPORT'},400);
     if(current.status!=='APPROVED'||body.versionId!==current.currentVersionId||body.versionId!==await env.DB.prepare('SELECT approved_version_id FROM preview_proposals WHERE id=?').bind(proposalId).first<{approved_version_id:string}>().then((row)=>row?.approved_version_id??null)||Number(body.version)!==Number(current.version))return json({error:'Only the current approved proposal version can be exported',code:'PROPOSAL_NOT_APPROVED'},409);
     const version=await env.DB.prepare('SELECT v.id,v.version_number AS versionNumber,v.structured_inputs_json AS structuredInputsJson,v.sha256,u.display_name AS preparedBy FROM preview_proposal_versions v JOIN preview_users u ON u.id=v.created_by WHERE v.id=? AND v.proposal_id=? AND v.case_id=?').bind(body.versionId,proposalId,caseId).first<{id:string;versionNumber:number;structuredInputsJson:string;sha256:string;preparedBy:string}>();
     if(!version)return json({error:'Approved proposal version was not found',code:'PROPOSAL_VERSION_NOT_FOUND'},404);
@@ -1909,11 +1953,13 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     let sanitizationCount=Number(inputs.sanitizationCount||0);
     const chapters:ProposalExportChapter[]=inputs.chapters.sort((a,b)=>a.number-b.number).map((chapter)=>{const safe=sanitizeProposalCostData(chapter.body);sanitizationCount+=safe.count;return{number:chapter.number,title:chapter.title,body:safe.value};});
     const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters};
-    const format=String(body.format); const output=format==='docx'?generateProposalDocx(doc):new TextEncoder().encode(generateProposalMarkdown(doc)); const outputSha=await sha256Hex(output);
-    const safeCase=caseRow.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu,'_'); const fileName=`${safeCase}_컨코스트_제안서_v${version.versionNumber}.${format==='docx'?'docx':'md'}`; const now=new Date().toISOString();
-    try{await env.DB.prepare('INSERT INTO preview_proposal_exports (id,organization_id,proposal_id,case_id,version_id,export_format,file_name,content_sha256,sanitization_count,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,proposalId,caseId,version.id,format==='docx'?'DOCX':'MARKDOWN',fileName,outputSha,sanitizationCount,user.id,now).run();}catch{return json({error:'Proposal export history could not be recorded',code:'PROPOSAL_EXPORT_COMMIT_FAILED'},409);}
+    const format=String(body.format); const output=format==='docx'?generateProposalDocx(doc):format==='pdf'?generateProposalPdf(doc):new TextEncoder().encode(generateProposalMarkdown(doc)); const outputSha=await sha256Hex(output);
+    const safeCase=caseRow.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu,'_'); const extension=format==='docx'?'docx':format==='pdf'?'pdf':'md'; const fileName=`${safeCase}_컨코스트_제안서_v${version.versionNumber}.${extension}`; const now=new Date().toISOString();
+    const exportFormat=format==='docx'?'DOCX':format==='pdf'?'PDF':'MARKDOWN';
+    try{await env.DB.prepare('INSERT INTO preview_proposal_exports (id,organization_id,proposal_id,case_id,version_id,export_format,file_name,content_sha256,sanitization_count,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,proposalId,caseId,version.id,exportFormat,fileName,outputSha,sanitizationCount,user.id,now).run();}catch{return json({error:'Proposal export history could not be recorded',code:'PROPOSAL_EXPORT_COMMIT_FAILED'},409);}
     const bytes=output.buffer.slice(output.byteOffset,output.byteOffset+output.byteLength) as ArrayBuffer;
-    return new Response(bytes,{status:200,headers:{'Content-Type':format==='docx'?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'text/markdown; charset=utf-8','Content-Disposition':`attachment; filename="proposal.${format==='docx'?'docx':'md'}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,'X-Content-SHA256':outputSha,'X-Proposal-Version':String(version.versionNumber),'Cache-Control':'private, no-store'}});
+    const contentType=format==='docx'?'application/vnd.openxmlformats-officedocument.wordprocessingml.document':format==='pdf'?'application/pdf':'text/markdown; charset=utf-8';
+    return new Response(bytes,{status:200,headers:{'Content-Type':contentType,'Content-Disposition':`attachment; filename="proposal.${extension}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,'X-Content-SHA256':outputSha,'X-Proposal-Version':String(version.versionNumber),'Cache-Control':'private, no-store'}});
   }
   return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
 }

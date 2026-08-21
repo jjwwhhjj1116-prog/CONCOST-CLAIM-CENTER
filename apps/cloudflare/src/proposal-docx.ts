@@ -127,6 +127,62 @@ export function generateProposalMarkdown(input: ProposalExportDocument): string 
   return `${heading}${body}\n---\n\n문서 무결성: ${input.contentSha256}\n제안서 ID: ${input.proposalId} · 버전 ID: ${input.versionId}\n`;
 }
 
+const proposalPdfHex = (value: string): string => Array.from(value)
+  .map((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0xffff) return codePoint.toString(16).padStart(4, '0');
+    const adjusted = codePoint - 0x10000;
+    const high = 0xd800 + (adjusted >> 10);
+    const low = 0xdc00 + (adjusted & 0x3ff);
+    return `${high.toString(16).padStart(4, '0')}${low.toString(16).padStart(4, '0')}`;
+  })
+  .join('')
+  .toUpperCase();
+
+const proposalPdfLines = (input: ProposalExportDocument): string[] => {
+  const raw = [
+    'CONCOST CLAIM CENTER · APPROVED PROPOSAL',
+    input.projectTitle,
+    input.subtitle,
+    `클라이언트 ${input.clientName} · 제출일 ${input.submissionDate}`,
+    `프로젝트 ${input.caseNumber} · ${input.claimType} · v${input.versionNumber}`,
+    '',
+    ...generateProposalMarkdown(input).split(/\r?\n/u)
+  ];
+  return raw.flatMap((line) => line.length > 42
+    ? Array.from({ length: Math.ceil(line.length / 42) }, (_, index) => line.slice(index * 42, (index + 1) * 42))
+    : [line]);
+};
+
+export function generateProposalPdf(input: ProposalExportDocument): Uint8Array {
+  const lines = proposalPdfLines(input);
+  const pages = Array.from({ length: Math.max(1, Math.ceil(lines.length / 42)) }, (_, index) => lines.slice(index * 42, (index + 1) * 42));
+  const objects = new Map<number, string>();
+  const pageIds = pages.map((_, index) => 5 + index * 2);
+  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objects.set(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
+  objects.set(3, '<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>');
+  objects.set(4, '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYSMyeongJo-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 2 >> >>');
+  pages.forEach((pageLines, index) => {
+    const pageId = pageIds[index];
+    const contentId = pageId + 1;
+    const commands = ['BT', '/F1 10 Tf', '45 794 Td', '16 TL', ...pageLines.flatMap((line, lineIndex) => [`<${proposalPdfHex(line)}> Tj`, lineIndex === pageLines.length - 1 ? '' : 'T*']).filter(Boolean), 'ET'].join('\n');
+    objects.set(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objects.set(contentId, `<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
+  });
+  let output = '%PDF-1.7\n%CONCOST-PROPOSAL\n';
+  const offsets: number[] = [0];
+  for (let id = 1; id <= objects.size; id += 1) {
+    offsets[id] = encoder.encode(output).length;
+    output += `${id} 0 obj\n${objects.get(id)}\nendobj\n`;
+  }
+  const xref = encoder.encode(output).length;
+  output += `xref\n0 ${objects.size + 1}\n0000000000 65535 f \n`;
+  for (let id = 1; id <= objects.size; id += 1) output += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
+  output += `trailer\n<< /Size ${objects.size + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return encoder.encode(output);
+}
+
 export function generateProposalDocx(input: ProposalExportDocument): Uint8Array {
   const cover = [
     paragraph('CONCOST CLAIM CENTER', 'Subtitle', '', '<w:b/><w:color w:val="E36B2C"/>'),
