@@ -1,5 +1,5 @@
 .workspace-help-trigger span { width: 18px; height: 18px; display: inline-grid; place-items: center; border-radius: 50%; background: #e0f2fe; color: #0369a1; font-weight: 900; }
-.workspace-tutorial { display: grid; gap: 15px; min-width: min(720px, calc(100vw - 80px)); }
+.workspace-tutorial { display: grid; width: 100%; min-width: 0; gap: 15px; }
 .workspace-tutorial > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .workspace-tutorial > header span { color: #4a86c5; font: 850 .68rem 'DM Mono', monospace; letter-spacing: .11em; }
 .workspace-tutorial > header strong { color: var(--text-muted); font-size: .76rem; }
@@ -24,7 +24,7 @@
 .workspace-tutorial__visit.is-visited span { color: #356b5a; }
 .workspace-tutorial > footer, .workspace-help-center > footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .workspace-tutorial > small { color: var(--text-muted); line-height: 1.5; }
-.workspace-help-center { display: grid; gap: 16px; min-width: min(780px, calc(100vw - 80px)); }
+.workspace-help-center { display: grid; width: 100%; min-width: 0; gap: 16px; }
 .workspace-help-center > header { border-left: 5px solid #4a86c5; padding: 4px 0 4px 14px; }
 .workspace-help-center > header span, .workspace-help-center__route > span { color: #4a86c5; font: 850 .65rem 'DM Mono', monospace; letter-spacing: .11em; }
 .workspace-help-center h3 { margin: 5px 0; color: var(--text-primary); }
@@ -49,9 +49,14 @@
 :root[data-theme='dark'] .workspace-help-center__route { border-color: #4338ca; background: linear-gradient(110deg, #1e1b4b, #132b2b); }
 :root[data-theme='dark'] .workspace-help-center__route li { background: #0f172a; color: #e2e8f0; }
 @media (max-width: 720px) {
-  .workspace-tutorial, .workspace-help-center { min-width: 0; }
+  .workspace-tutorial, .workspace-help-center { min-width: 0; gap: 12px; }
+  .workspace-tutorial > header { align-items: flex-start; flex-direction: column; gap: 5px; }
   .workspace-tutorial > section { grid-template-columns: 1fr; }
   .workspace-tutorial__number { font-size: 2.8rem; }
+  .workspace-tutorial > section { gap: 8px; padding: 16px; border-radius: 14px; }
+  .workspace-tutorial h3 { font-size: 1.08rem; line-height: 1.35; }
+  .workspace-tutorial section p { margin: 8px 0; font-size: .85rem; }
+  .workspace-tutorial section li { font-size: .82rem; }
   .workspace-help-center__grid { grid-template-columns: 1fr; }
   .workspace-help-center__route ol { grid-template-columns: 1fr; }
   .workspace-tutorial > footer, .workspace-help-center > footer { align-items: stretch; flex-direction: column; }

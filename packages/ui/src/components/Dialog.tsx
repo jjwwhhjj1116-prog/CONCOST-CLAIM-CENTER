@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from './Button';
 
 export interface DialogProps {
@@ -7,9 +8,10 @@ export interface DialogProps {
   children: React.ReactNode;
   onClose: () => void;
   hideDefaultAction?: boolean;
+  size?: 'default' | 'wide';
 }
 
-export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose, hideDefaultAction = false }) => {
+export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose, hideDefaultAction = false, size = 'default' }) => {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -24,7 +26,7 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
-  return (
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div
         ref={panelRef}
@@ -32,13 +34,14 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="dialog-panel"
+        className={`dialog-panel${size === 'wide' ? ' dialog-panel--wide' : ''}`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <h2 id={titleId}>{title}</h2>
         <div>{children}</div>
         {!hideDefaultAction && <div className="dialog-actions"><Button onClick={onClose}>확인</Button></div>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

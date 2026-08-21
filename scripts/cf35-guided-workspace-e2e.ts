@@ -30,6 +30,20 @@ function staticServer(origin: string): Server {
 
 async function listen(server:Server):Promise<number>{await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});return (server.address()as{port:number}).port;}
 
+async function assertDialogFitsViewport(page: import('playwright-core').Page, minimumDesktopWidth?: number):Promise<void>{
+  const metrics=await page.getByRole('dialog').evaluate((panel)=>{
+    const rect=panel.getBoundingClientRect();
+    return {left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom,width:rect.width,clientWidth:panel.clientWidth,scrollWidth:panel.scrollWidth,viewportWidth:window.innerWidth,viewportHeight:window.innerHeight,documentOverflow:document.documentElement.scrollWidth-document.documentElement.clientWidth};
+  });
+  assert.ok(metrics.left>=8,`dialog starts outside viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.top>=8,`dialog starts above viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.right<=metrics.viewportWidth-8,`dialog ends outside viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.bottom<=metrics.viewportHeight-8,`dialog ends below viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.scrollWidth<=metrics.clientWidth+1,`dialog content overflows horizontally: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.documentOverflow<=1,`document overflows horizontally: ${JSON.stringify(metrics)}`);
+  if(minimumDesktopWidth)assert.ok(metrics.width>=minimumDesktopWidth,`wide dialog is unexpectedly narrow: ${JSON.stringify(metrics)}`);
+}
+
 async function main():Promise<void>{
   if(!fs.existsSync(path.join(distRoot,'index.html')))throw new Error('Run cf:build before CF35 E2E.');
   const server=staticServer('http://127.0.0.1');
@@ -56,9 +70,12 @@ async function main():Promise<void>{
     await page.route('**/api/preview/draft',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{title:'가이드 검증 초안',content:'검증용 합성 메모',updatedAt:null}})}));
     await page.route('**/api/cases?**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({cases:[],total:0,page:1,limit:100})}));
 
-    await page.goto(`${origin}/dashboard`,{waitUntil:'domcontentloaded'});
+    await page.goto(`${origin}/`,{waitUntil:'domcontentloaded'});
+    await page.waitForURL(`${origin}/dashboard`);
+    assert.equal(await page.getByText(/페이지를 찾을 수 없습니다 \(404\)/u).count(),0);
     const dialog=page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'});
     await dialog.waitFor({state:'visible',timeout:10_000});
+    await assertDialogFitsViewport(page,800);
     for(let index=0;index<WORKSPACE_TUTORIAL_STEPS.length;index+=1){
       const expected=WORKSPACE_TUTORIAL_STEPS[index];
       assert.match(await dialog.innerText(),new RegExp(expected.title.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'u'));
@@ -91,9 +108,15 @@ async function main():Promise<void>{
     await page.reload({waitUntil:'domcontentloaded'});
     assert.equal(await page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).count(),0);
     await page.setViewportSize({width:640,height:900});
-    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>document.documentElement.clientWidth);
-    assert.equal(overflow,false);
-    console.log('  4/4 completed tutorial stays closed and 640px help UI has no horizontal overflow PASS');
+    await page.getByRole('button',{name:'현재 화면 도움말 열기'}).click();
+    await page.getByRole('button',{name:'전체 튜토리얼 다시 보기'}).click();
+    await page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).waitFor({state:'visible'});
+    await assertDialogFitsViewport(page);
+    await page.setViewportSize({width:1024,height:900});
+    await assertDialogFitsViewport(page,800);
+    await page.setViewportSize({width:1440,height:900});
+    await assertDialogFitsViewport(page,800);
+    console.log('  4/4 completed tutorial stays closed and reopened tutorial fits 640/1024/1440px without clipping PASS');
     await context.close();
     console.log('✅ CF35 guided workspace browser E2E PASS (4 flows)');
   }finally{

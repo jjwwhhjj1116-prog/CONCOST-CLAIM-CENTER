@@ -78,7 +78,7 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
     <button type="button" className="theme-toggle workspace-help-trigger" aria-label="현재 화면 도움말 열기" onClick={() => setHelpOpen(true)}>
       <span aria-hidden="true">?</span><strong>도움말</strong>
     </button>
-    <Dialog isOpen={tutorialOpen} title="처음 사용하는 분을 위한 클레임센터 업무 순서" onClose={() => setTutorialOpen(false)} hideDefaultAction>
+    <Dialog isOpen={tutorialOpen} title="처음 사용하는 분을 위한 클레임센터 업무 순서" onClose={() => setTutorialOpen(false)} hideDefaultAction size="wide">
       <div className="workspace-tutorial" data-step={tutorialStep + 1}>
         <header><span>{step.eyebrow}</span><strong>{tutorialStep + 1} / {WORKSPACE_TUTORIAL_STEPS.length}</strong></header>
         <div className="workspace-tutorial__progress" aria-label={`튜토리얼 ${progress}% 완료`}><i style={{ width: `${progress}%` }} /></div>
@@ -102,7 +102,7 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
         <small>건너뛰기는 이 계정에 1회 저장됩니다. 완료 또는 건너뛰기 후에는 상단 도움말에서 언제든 전체 튜토리얼을 다시 볼 수 있습니다.</small>
       </div>
     </Dialog>
-    <Dialog isOpen={helpOpen} title={`도움말 · ${categoryHelp.title}`} onClose={() => setHelpOpen(false)} hideDefaultAction>
+    <Dialog isOpen={helpOpen} title={`도움말 · ${categoryHelp.title}`} onClose={() => setHelpOpen(false)} hideDefaultAction size="wide">
       <div className="workspace-help-center">
         <header><span>CURRENT CATEGORY GUIDE</span><h3>{categoryHelp.title}</h3><p>{categoryHelp.purpose}</p></header>
         <div className="workspace-help-center__grid">

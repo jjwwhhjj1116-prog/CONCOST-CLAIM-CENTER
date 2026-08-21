@@ -55,13 +55,20 @@
       .action-row { flex-wrap: wrap; }
       .report-editor { width: 100%; min-height: 160px; margin: 8px 0 16px; padding: 12px; color: inherit; background: hsl(222,47%,11%); border: 1px solid hsla(215,20%,65%,.4); border-radius: 8px; resize: vertical; }
       .report-editor[readonly] { cursor: not-allowed; opacity: .75; }
-      .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: stretch; justify-content: flex-start; background: rgba(0,0,0,.72); }
+      .modal-backdrop { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; overflow: auto; padding: 20px; background: rgba(15,23,42,.62); backdrop-filter: blur(3px); }
       .drawer-panel { width: min(340px, 88vw); height: 100%; display: flex; flex-direction: column; gap: 16px; box-shadow: 12px 0 32px rgba(0,0,0,.4); }
       .drawer-header { justify-content: space-between; }
       .drawer-header h2 { margin: 0; font-size: 1.1rem; }
       .drawer-content { min-height: 0; flex: 1; overflow: auto; }
       .icon-button { min-width: 44px; min-height: 44px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
-      .dialog-panel { width: min(520px, 90vw); margin: auto; padding: 24px; border: 1px solid hsla(215,20%,65%,.35); border-radius: 12px; background: hsl(217,33%,17%); box-shadow: 0 20px 60px rgba(0,0,0,.55); }
+      .dialog-panel { box-sizing: border-box; width: min(520px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); margin: auto; overflow: auto; padding: 24px; border: 1px solid hsla(215,20%,65%,.35); border-radius: 16px; background: hsl(217,33%,17%); box-shadow: 0 20px 60px rgba(0,0,0,.38); }
+      .dialog-panel--wide { width: min(900px, calc(100vw - 40px)); }
+      .dialog-panel > h2 { margin: 0 0 20px; }
+      @media (max-width: 720px) {
+        .modal-backdrop { align-items: flex-start; padding: 10px; }
+        .dialog-panel, .dialog-panel--wide { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); padding: 18px; border-radius: 14px; }
+        .dialog-panel > h2 { margin-bottom: 14px; font-size: 1.1rem; line-height: 1.35; }
+      }
       .dialog-actions { display: flex; justify-content: flex-end; margin-top: 20px; }
       .login-page { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
       .login-page > * { width: min(480px, 100%); }

@@ -51,6 +51,9 @@ export const App: React.FC = () => {
     window.addEventListener('popstate', restoreFromHistory);
     return () => window.removeEventListener('popstate', restoreFromHistory);
   }, []);
+  useEffect(() => {
+    if (currentPath === '/' && session) navigate('/dashboard', true);
+  }, [currentPath, navigate, session]);
 
   useEffect(() => {
     void apiRequest<SessionUser>('/auth/session')
@@ -150,9 +153,10 @@ export const App: React.FC = () => {
     );
   }
 
+  const workspacePath = currentPath === '/' ? '/dashboard' : currentPath;
   return (
-    <AppShell currentPath={currentPath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
-      <RouterView currentPath={currentPath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} />
+    <AppShell currentPath={workspacePath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
+      <RouterView currentPath={workspacePath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} />
     </AppShell>
   );
 };
