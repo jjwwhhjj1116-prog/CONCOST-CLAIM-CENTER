@@ -60,8 +60,10 @@ const SIDEBAR_STORAGE_KEY = 'claim-center-sidebar-width-v2';
 const clampSidebarWidth = (value: number): number => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
 
 const readInitialSidebarWidth = (): number => {
-  const stored = Number(window.localStorage.getItem(SIDEBAR_STORAGE_KEY));
-  return Number.isFinite(stored) ? clampSidebarWidth(stored) : SIDEBAR_DEFAULT_WIDTH;
+  const stored = window.localStorage.getItem(SIDEBAR_STORAGE_KEY);
+  if (stored === null) return SIDEBAR_DEFAULT_WIDTH;
+  const parsed = Number(stored);
+  return Number.isFinite(parsed) ? clampSidebarWidth(parsed) : SIDEBAR_DEFAULT_WIDTH;
 };
 
 const readInitialTheme = (): ThemeMode => {
