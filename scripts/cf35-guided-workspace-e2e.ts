@@ -30,20 +30,6 @@ function staticServer(origin: string): Server {
 
 async function listen(server:Server):Promise<number>{await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});return (server.address()as{port:number}).port;}
 
-async function assertDialogFitsViewport(page: import('playwright-core').Page, minimumDesktopWidth?: number):Promise<void>{
-  const metrics=await page.getByRole('dialog').evaluate((panel)=>{
-    const rect=panel.getBoundingClientRect();
-    return {left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom,width:rect.width,clientWidth:panel.clientWidth,scrollWidth:panel.scrollWidth,viewportWidth:window.innerWidth,viewportHeight:window.innerHeight,documentOverflow:document.documentElement.scrollWidth-document.documentElement.clientWidth};
-  });
-  assert.ok(metrics.left>=8,`dialog starts outside viewport: ${JSON.stringify(metrics)}`);
-  assert.ok(metrics.top>=8,`dialog starts above viewport: ${JSON.stringify(metrics)}`);
-  assert.ok(metrics.right<=metrics.viewportWidth-8,`dialog ends outside viewport: ${JSON.stringify(metrics)}`);
-  assert.ok(metrics.bottom<=metrics.viewportHeight-8,`dialog ends below viewport: ${JSON.stringify(metrics)}`);
-  assert.ok(metrics.scrollWidth<=metrics.clientWidth+1,`dialog content overflows horizontally: ${JSON.stringify(metrics)}`);
-  assert.ok(metrics.documentOverflow<=1,`document overflows horizontally: ${JSON.stringify(metrics)}`);
-  if(minimumDesktopWidth)assert.ok(metrics.width>=minimumDesktopWidth,`wide dialog is unexpectedly narrow: ${JSON.stringify(metrics)}`);
-}
-
 async function assertCoachFitsViewport(page: import('playwright-core').Page):Promise<void>{
   const metrics=await page.getByRole('complementary',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).evaluate((panel)=>{
     const rect=panel.getBoundingClientRect();
