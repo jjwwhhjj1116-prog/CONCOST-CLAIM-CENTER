@@ -79,7 +79,10 @@ interface DecisionForm {
   contractAmountKrw: string;
   projectStartOn: string;
   projectEndOn: string;
+  responsiblePmId: string;
 }
+
+interface PmOption { id: string; displayName: string; email: string; }
 
 const MUTATION_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm'];
 const awardLabel: Record<AwardStatus, string> = { PENDING: '회신 대기', WON: '수주 확정', LOST: '미수주' };
@@ -98,7 +101,7 @@ function blankLink(caseId = ''): LinkForm {
 }
 
 function blankDecision(): DecisionForm {
-  return { decision: 'WON', decisionNote: '', decidedAt: localDateTime(), contractAmountKrw: '', projectStartOn: '', projectEndOn: '' };
+  return { decision: 'WON', decisionNote: '', decidedAt: localDateTime(), contractAmountKrw: '', projectStartOn: '', projectEndOn: '', responsiblePmId: '' };
 }
 
 function stableKey(store: Map<string, string>, prefix: string, payload: unknown): { fingerprint: string; key: string } {
@@ -133,6 +136,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   const [decisions, setDecisions] = useState<AwardDecision[]>([]);
   const [linkForm, setLinkForm] = useState<LinkForm>(blankLink());
   const [decisionForm, setDecisionForm] = useState<DecisionForm>(blankDecision());
+  const [pmOptions, setPmOptions] = useState<PmOption[]>([]);
   const [showLinkForm, setShowLinkForm] = useState(routeId === 'WF-01');
   const [query, setQuery] = useState('');
   const [awardFilter, setAwardFilter] = useState<AwardStatus | ''>(routeId === 'WF-02' ? 'PENDING' : '');
@@ -179,6 +183,19 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
       .catch((reason) => { if (epoch === detailEpoch.current) setError(errorMessage(reason)); });
   }, [selectedId]);
 
+  useEffect(() => {
+    if (!selected?.caseId || selected.awardStatus !== 'PENDING') { setPmOptions([]); return; }
+    let active = true;
+    void apiRequest<{ users: PmOption[] }>(`/api/project-workflow/pm-options?caseId=${encodeURIComponent(selected.caseId)}`)
+      .then((result) => {
+        if (!active) return;
+        setPmOptions(result.users);
+        setDecisionForm((current) => ({ ...current, responsiblePmId: current.responsiblePmId || result.users[0]?.id || '' }));
+      })
+      .catch(() => { if (active) setPmOptions([]); });
+    return () => { active = false; };
+  }, [selected?.caseId, selected?.awardStatus]);
+
   const summary = useMemo(() => ({
     total: proposals.length,
     pending: proposals.filter((item) => item.awardStatus === 'PENDING').length,
@@ -216,6 +233,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
       contractAmountKrw: decisionForm.decision === 'WON' ? Number(decisionForm.contractAmountKrw) : null,
       projectStartOn: decisionForm.decision === 'WON' ? decisionForm.projectStartOn : null,
       projectEndOn: decisionForm.decision === 'WON' ? decisionForm.projectEndOn : null,
+      responsiblePmId: decisionForm.decision === 'WON' ? decisionForm.responsiblePmId : null,
       expectedLinkVersion: selected.version, expectedCaseVersion: selected.caseVersion
     };
     const stable = stableKey(keysRef.current, `award-${selected.id}`, payload);
@@ -309,17 +327,17 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
 
               {selected.awardStatus === 'PENDING' ? (
                 <section className="proposal-flow-panel">
-                  <div className="proposal-flow-heading"><div><span>STEP 2 · AWARD DECISION</span><h3>수주 여부 확정</h3></div><small>한 번 확정한 결정은 변경·삭제하지 않고 이력으로 보존합니다.</small></div>
-                  <div className="proposal-decision-switch" role="group" aria-label="수주 여부"><button type="button" className={decisionForm.decision === 'WON' ? 'is-selected' : ''} onClick={() => setDecisionForm((current) => ({ ...current, decision: 'WON' }))}>수주 확정</button><button type="button" className={decisionForm.decision === 'LOST' ? 'is-selected is-lost' : ''} onClick={() => setDecisionForm((current) => ({ ...current, decision: 'LOST' }))}>미수주</button></div>
+                  <div className="proposal-flow-heading"><div><span>STEP 2 · PROJECT INTAKE</span><h3>프로젝트 접수 확정·취소</h3></div><small>접수 확정 시 담당 PM과 프로젝트 워크 일정 관리가 함께 생성됩니다.</small></div>
+                  <div className="proposal-decision-switch" role="group" aria-label="프로젝트 접수 여부"><button type="button" className={decisionForm.decision === 'WON' ? 'is-selected' : ''} onClick={() => setDecisionForm((current) => ({ ...current, decision: 'WON' }))}>프로젝트 접수 확정</button><button type="button" className={decisionForm.decision === 'LOST' ? 'is-selected is-lost' : ''} onClick={() => setDecisionForm((current) => ({ ...current, decision: 'LOST' }))}>접수 취소</button></div>
                   <div className="proposal-flow-form">
                     <label><span>결정 일시</span><input type="datetime-local" value={decisionForm.decidedAt} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, decidedAt: event.target.value }))} /></label>
-                    {decisionForm.decision === 'WON' && <><label><span>계약 금액(원)</span><input type="number" min="1" value={decisionForm.contractAmountKrw} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, contractAmountKrw: event.target.value }))} /></label><label><span>프로젝트 시작일</span><input type="date" value={decisionForm.projectStartOn} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, projectStartOn: event.target.value }))} /></label><label><span>프로젝트 종료 예정일</span><input type="date" value={decisionForm.projectEndOn} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, projectEndOn: event.target.value }))} /></label></>}
+                    {decisionForm.decision === 'WON' && <><label><span>담당 PM</span><select value={decisionForm.responsiblePmId} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, responsiblePmId: event.target.value }))}><option value="">담당 PM 선택</option>{pmOptions.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.email}</option>)}</select></label><label><span>계약 금액(원)</span><input type="number" min="1" value={decisionForm.contractAmountKrw} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, contractAmountKrw: event.target.value }))} /></label><label><span>프로젝트 시작일</span><input type="date" value={decisionForm.projectStartOn} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, projectStartOn: event.target.value }))} /></label><label><span>프로젝트 종료 예정일</span><input type="date" value={decisionForm.projectEndOn} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, projectEndOn: event.target.value }))} /></label></>}
                     <label className="span-2"><span>결정 근거·거래처 회신</span><textarea value={decisionForm.decisionNote} maxLength={5000} disabled={!canMutate || busy === 'decision'} onChange={(event) => setDecisionForm((current) => ({ ...current, decisionNote: event.target.value }))} placeholder="거래처 회신 내용, 계약 확인 근거, 미수주 사유를 기록하세요." /></label>
                   </div>
-                  <div className="proposal-flow-submit"><span>{decisionForm.decision === 'WON' ? '확정 즉시 계약 단계의 수행 프로젝트가 됩니다.' : '제안 이력은 보존되지만 수행 프로젝트로 전환되지 않습니다.'}</span><button type="button" disabled={!canMutate || busy === 'decision'} onClick={() => void submitDecision()}>{busy === 'decision' ? '확정 중…' : decisionForm.decision === 'WON' ? '수주 확정 저장' : '미수주 저장'}</button></div>
+                  <div className="proposal-flow-submit"><span>{decisionForm.decision === 'WON' ? '확정 즉시 프로젝트 워크와 일정 관리가 열립니다.' : '제안 이력은 보존되지만 수행 프로젝트로 전환되지 않습니다.'}</span><button type="button" disabled={!canMutate || busy === 'decision' || (decisionForm.decision === 'WON' && !decisionForm.responsiblePmId)} onClick={() => void submitDecision()}>{busy === 'decision' ? '확정 중…' : decisionForm.decision === 'WON' ? '접수 확정·프로젝트 워크 생성' : '접수 취소 저장'}</button></div>
                 </section>
               ) : (
-                <section className={`proposal-flow-panel proposal-result is-${selected.awardStatus.toLowerCase()}`}><span>FINAL AWARD RESULT</span><h3>{awardLabel[selected.awardStatus]}</h3><p>{selected.awardStatus === 'WON' ? `${money(selected.contractAmountKrw)} · ${selected.projectStartOn} ~ ${selected.projectEndOn}` : '수행 프로젝트 전환 없음'}</p><small>{selected.awardDecidedByName} · {dateLabel(selected.awardDecidedAt, true)}</small>{selected.awardStatus === 'WON' && <button type="button" onClick={() => onNavigate(`/workflow/kickoff?caseId=${encodeURIComponent(selected.caseId)}`)}>3. 착수회의로 이동 →</button>}</section>
+                <section className={`proposal-flow-panel proposal-result is-${selected.awardStatus.toLowerCase()}`}><span>FINAL INTAKE RESULT</span><h3>{awardLabel[selected.awardStatus]}</h3><p>{selected.awardStatus === 'WON' ? `${money(selected.contractAmountKrw)} · ${selected.projectStartOn} ~ ${selected.projectEndOn}` : '수행 프로젝트 전환 없음'}</p><small>{selected.awardDecidedByName} · {dateLabel(selected.awardDecidedAt, true)}</small>{selected.awardStatus === 'WON' && <button type="button" onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(`project-${selected.caseId}`)}`)}>프로젝트 일정 입력·수정 →</button>}</section>
               )}
 
               {decisions.length > 0 && <section className="proposal-flow-panel"><div className="proposal-flow-heading"><div><span>AUDIT TRAIL</span><h3>수주 결정 이력</h3></div></div><ol className="proposal-decision-history">{decisions.map((item) => <li key={item.id}><span className={`proposal-award is-${item.decision.toLowerCase()}`}>{awardLabel[item.decision]}</span><div><strong>{item.decisionNote}</strong><small>{item.decidedByName} · {dateLabel(item.decidedAt, true)}</small></div></li>)}</ol></section>}

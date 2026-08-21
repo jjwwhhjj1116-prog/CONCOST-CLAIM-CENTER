@@ -301,6 +301,34 @@
 .stage-range-bar span { font-size: .66rem; font-weight: 850; white-space: nowrap; }
 .stage-range-bar.status-planned { opacity: .72; }
 .workflow-stage-row.is-focused { box-shadow: inset 0 0 0 1px rgba(96, 220, 255, .6); }
+.schedule-unscheduled { position:absolute; z-index:3; top:50%; left:18px; transform:translateY(-50%); border:1px dashed #71809b; border-radius:8px; padding:7px 10px; background:#f8fafc; color:#687792; font-size:.68rem; font-weight:800; }
+
+.project-schedule-manager { display:grid; gap:14px; padding:19px; border:1px solid var(--border-soft); border-radius:16px; background:var(--surface-card); box-shadow:var(--panel-shadow); }
+.project-schedule-manager > header { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+.project-schedule-manager > header span { color:#348ca4; font:700 .63rem 'DM Mono',monospace; letter-spacing:.12em; }
+.project-schedule-manager > header h3 { margin:5px 0 4px; color:var(--text-primary); font-size:1.08rem; }
+.project-schedule-manager > header p { margin:0; color:var(--text-muted); font-size:.72rem; }
+.project-schedule-manager > header > strong { border-radius:999px; padding:8px 11px; background:#e8f5f2; color:#287863; font-size:.72rem; white-space:nowrap; }
+.project-pm-control { display:grid; grid-template-columns:minmax(250px,560px) auto; align-items:end; gap:10px; padding:13px; border-radius:12px; background:#f5f8fc; }
+.project-pm-control label,.project-stage-fields label,.project-change-request label { display:grid; gap:5px; color:#44516a; font-size:.66rem; font-weight:800; }
+.project-pm-control select,.project-stage-fields input,.project-stage-fields select,.project-change-request input { min-height:38px; border:1px solid #cbd6e4; border-radius:8px; background:#fff; color:#1f2d43; padding:0 10px; font:inherit; }
+.schedule-policy-note { margin:0; border-left:4px solid #e29a4a; padding:9px 11px; background:#fff7e9; color:#825a2a; font-size:.7rem; }
+.project-stage-editor-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.project-stage-editor-list > article { display:grid; gap:11px; border:1px solid #dbe3ed; border-top:4px solid; border-radius:12px; padding:13px; background:#fff; }
+.project-stage-editor-list > article > header { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; }
+.project-stage-editor-list > article > header strong { display:block; color:#1f2d43; font-size:.78rem; }
+.project-stage-editor-list > article > header small { color:#79879c; font-size:.62rem; }
+.project-stage-editor-list > article > header em { color:#52647a; font-size:.65rem; font-style:normal; font-weight:700; }
+.project-stage-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.project-stage-note { grid-column:1/-1; }
+.project-stage-actions { display:flex; justify-content:flex-end; }
+.project-change-request { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:8px; padding-top:8px; border-top:1px dashed #d4dde8; }
+.pending-schedule-requests { display:grid; gap:8px; padding:13px; border:1px solid #f0d49c; border-radius:12px; background:#fff9ec; }
+.pending-schedule-requests h4 { margin:0; color:#8e641d; font-size:.78rem; }
+.pending-schedule-requests > article { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; padding:10px; border-radius:9px; background:#fff; }
+.pending-schedule-requests strong,.pending-schedule-requests span { display:block; color:#35445b; font-size:.68rem; }
+.pending-schedule-requests p { margin:4px 0 0; color:#69768a; font-size:.66rem; }
+.pending-schedule-requests > article > div:last-child { display:flex; gap:6px; }
 
 .workforce-panel,
 .report-author-panel {
@@ -369,4 +397,9 @@
   .project-context-strip > button:nth-of-type(2),
   .project-context-strip > span:nth-of-type(2) { display: none; }
   .project-context-strip > div { display: grid; gap: 1px; }
+  .project-schedule-manager > header,.project-pm-control,.project-change-request { grid-template-columns:1fr; display:grid; }
+  .project-stage-editor-list { grid-template-columns:1fr; }
+  .project-stage-fields { grid-template-columns:1fr 1fr; }
+  .project-stage-note { grid-column:1/-1; }
+  .pending-schedule-requests > article { grid-template-columns:1fr; }
 }

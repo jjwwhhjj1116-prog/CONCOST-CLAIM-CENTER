@@ -22,7 +22,7 @@ const migrations = [
   '0016_cf18_report_outline_evidence.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0019_cf27_proposal_authoring.sql','0020_cf28_workspace_settings.sql',
   '0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql',
   '0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0029_cf37_report_workspace_resume.sql',
-  '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql'
+  '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql'
 ];
 
 async function sha256(value: string): Promise<string> {
@@ -166,5 +166,101 @@ test('CF39 judgment performance is derived only from recorded court events and f
   assert.match(deliverySource, /Drive에서 열기|Google Drive/u);
   const outcomeSource = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewOutcomeCenter.tsx'), 'utf8');
   assert.match(outcomeSource, /litigation-outcomes/u);
+  sql.close();
+});
+
+test('CF40 responsible PM owns explicit stage schedules and approved change requests update the calendar atomically', async () => {
+  const { sql, env } = await setup();
+  const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, {
+    method: 'PUT', body: JSON.stringify({ responsiblePmId: PM_ID, expectedProfileVersion: 0 })
+  }), env);
+  assert.equal(assigned.status, 200);
+  const saved = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/KICKOFF`, PM_TOKEN, {
+    method: 'PUT', body: JSON.stringify({ startDate: '2026-08-24', endDate: '2026-08-24', status: 'PLANNED', noteText: '발주처 참석 일정 확인', expectedVersion: 0 })
+  }), env);
+  assert.equal(saved.status, 200);
+  assert.equal((await saved.json() as any).schedule.version, 1);
+  const denied = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/KICKOFF`, STAFF_TOKEN, {
+    method: 'PUT', body: JSON.stringify({ startDate: '2026-08-25', endDate: '2026-08-25', status: 'PLANNED', noteText: '직접 변경 시도', expectedVersion: 1 })
+  }), env);
+  assert.equal(denied.status, 403);
+  const requested = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/change-requests`, STAFF_TOKEN, {
+    method: 'POST', headers: { 'Idempotency-Key': 'cf40-schedule-change-0001' }, body: JSON.stringify({ stageCode: 'KICKOFF', proposedStartDate: '2026-08-26', proposedEndDate: '2026-08-26', reasonText: '발주처 요청으로 착수회의 날짜 변경', expectedScheduleVersion: 1 })
+  }), env);
+  assert.equal(requested.status, 201);
+  const requestId = (await requested.json() as any).request.id;
+  const notificationBefore = sql.exec("SELECT notification_type,user_id FROM preview_project_notifications WHERE change_request_id=?", [requestId])[0].values[0];
+  assert.deepEqual(notificationBefore, ['SCHEDULE_CHANGE_REQUESTED', PM_ID]);
+  const approved = await worker.fetch(request(`/api/project-workflow/change-requests/${requestId}/decision`, PM_TOKEN, {
+    method: 'POST', body: JSON.stringify({ decision: 'APPROVED', reviewNote: '담당 PM 일정 변경 승인' })
+  }), env);
+  assert.equal(approved.status, 200);
+  const exact = sql.exec("SELECT start_date,end_date,version FROM preview_project_stage_schedules WHERE case_id=? AND stage_code='KICKOFF'", [CASE_ID])[0].values[0];
+  assert.deepEqual(exact, ['2026-08-26', '2026-08-26', 2]);
+  const dashboard = await worker.fetch(request('/api/dashboard/kpi', STAFF_TOKEN), env);
+  assert.equal(dashboard.status, 200);
+  const dashboardBody = await dashboard.json() as any;
+  assert.ok(dashboardBody.projectScheduleReminders.some((item: any) => item.caseId === CASE_ID && item.startDate === '2026-08-26'));
+  assert.throws(() => sql.run("UPDATE preview_project_stage_schedules SET updated_by=? WHERE case_id=?", [STAFF_ID, CASE_ID]), /schedule update|PM authority/u);
+  sql.close();
+});
+
+test('CF40 project intake confirmation requires an assigned PM and opens project-work schedule management', async () => {
+  const { sql, env } = await setup();
+  const caseVersion = Number(sql.exec('SELECT version FROM preview_cases WHERE id=?', [CASE_ID])[0].values[0][0]);
+  const proposalPayload = {
+    caseId: CASE_ID, proposalNumber: 'PROP-CF40-001', proposalTitle: 'CF40 프로젝트 접수 제안서', revisionLabel: 'V1-SENT',
+    clientName: '합성 발주처', sentAt: '2026-08-21T02:00:00.000Z', responseDueOn: '2026-08-30', proposedAmountKrw: 44000000,
+    documentUrl: 'https://preview.example/proposals/cf40.pdf', documentSha256: 'b'.repeat(64), verificationStatus: 'VERIFIED', expectedCaseVersion: caseVersion
+  };
+  const linked = await worker.fetch(request('/api/proposal-workflow/links', ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf40-proposal-link-0001' }, body: JSON.stringify(proposalPayload) }), env);
+  assert.equal(linked.status, 200);
+  const proposal = (await linked.json() as any).proposal;
+  const withoutPm = await worker.fetch(request(`/api/proposal-workflow/links/${proposal.id}/decision`, ADMIN_TOKEN, {
+    method: 'POST', headers: { 'Idempotency-Key': 'cf40-award-no-pm-0001' }, body: JSON.stringify({ decision:'WON',decisionNote:'계약서 확인',decidedAt:'2026-08-21T03:00:00.000Z',contractAmountKrw:44000000,projectStartOn:'2026-09-01',projectEndOn:'2026-12-31',responsiblePmId:null,expectedLinkVersion:proposal.version,expectedCaseVersion:proposal.caseVersion })
+  }), env);
+  assert.equal(withoutPm.status, 409);
+  const confirmed = await worker.fetch(request(`/api/proposal-workflow/links/${proposal.id}/decision`, ADMIN_TOKEN, {
+    method: 'POST', headers: { 'Idempotency-Key': 'cf40-award-with-pm-0001' }, body: JSON.stringify({ decision:'WON',decisionNote:'계약서와 발주서를 확인하고 프로젝트 접수를 확정합니다.',decidedAt:'2026-08-21T03:00:00.000Z',contractAmountKrw:44000000,projectStartOn:'2026-09-01',projectEndOn:'2026-12-31',responsiblePmId:PM_ID,expectedLinkVersion:proposal.version,expectedCaseVersion:proposal.caseVersion })
+  }), env);
+  assert.equal(confirmed.status, 200);
+  assert.deepEqual(sql.exec('SELECT responsible_pm_id,version FROM preview_project_schedule_profiles WHERE case_id=?', [CASE_ID])[0].values[0], [PM_ID, 1]);
+  const schedule = await worker.fetch(request('/api/project-workflow/schedule', PM_TOKEN), env);
+  const project = (await schedule.json() as any).projects.find((item: any) => item.caseId === CASE_ID);
+  assert.equal(project.responsiblePm.id, PM_ID); assert.equal(project.canManageSchedule, true);
+  assert.ok(project.stages.filter((item: any) => ['KICKOFF','SITE_SURVEY','TAKEOFF_COST','REPORT_WRITING'].includes(item.stageCode)).every((item: any) => item.scheduleExplicit === false));
+  sql.close();
+});
+
+test('CF40 external AI is default-deny for internal documents, then minimizes identifiers under acknowledged paid policy', async () => {
+  const { sql, env } = await setup();
+  let providerCalls = 0;
+  env.GEMINI_TEST_FETCH = async () => {
+    providerCalls += 1;
+    const result = {
+      meetingAt: '2026-08-28T01:00:00.000Z', surveyDate: null, location: '현장 회의실', agenda: '현장 범위와 제출 일정',
+      participants: ['발주처 담당자', '프로젝트 PM'], leadUnit: '클레임센터', sourceNotes: '10시 현장 범위 확인. 11시 제출일 합의.',
+      summary: '착수회의 내용을 원문 근거에 따라 정리한 검토용 초안입니다.', timeline: [{ title: '범위 확인', detail: '발주처 제공자료와 현장 범위를 확인했습니다.' }], missingFields: []
+    };
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(result) }] } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const form = () => {
+    const value = new FormData(); value.set('workflowKind', 'KICKOFF'); value.set('dataClass', 'INTERNAL');
+    value.set('file', new File(['담당 010-1234-5678, pm@example.com\n10시 현장 범위 확인'], '착수회의.csv', { type: 'text/csv' })); return value;
+  };
+  const blocked = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/ai-import`, PM_TOKEN, { method: 'POST', body: form() }), env);
+  assert.equal(blocked.status, 423); assert.equal(providerCalls, 0);
+  assert.equal(sql.exec("SELECT status FROM preview_workflow_ai_imports ORDER BY created_at DESC LIMIT 1")[0].values[0][0], 'BLOCKED_BY_POLICY');
+  const acknowledged = await worker.fetch(request('/api/settings/ai-governance', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ providerServiceTier: 'PAID_NO_PRODUCT_IMPROVEMENT', confidentialExternalAiEnabled: true, expectedVersion: 1, acknowledgement: '유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다' }) }), env);
+  assert.equal(acknowledged.status, 200);
+  const imported = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/ai-import`, PM_TOKEN, { method: 'POST', body: form() }), env);
+  assert.equal(imported.status, 200); assert.equal(providerCalls, 1);
+  const body = await imported.json() as any;
+  assert.equal(body.security.rawProviderPayloadStored, false); assert.ok(body.security.redactionCount >= 2);
+  assert.equal(body.import.location, '현장 회의실'); assert.equal(body.import.timeline.length, 1);
+  const columns = sql.exec("PRAGMA table_info('preview_workflow_ai_imports')")[0].values.map((row) => row[1]);
+  assert.equal(columns.includes('raw_payload'), false); assert.equal(columns.includes('response_text'), false);
+  const ui = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'workflow', 'WorkflowOperations.tsx'), 'utf8');
+  assert.match(ui, /끌어 놓으면/u); assert.match(ui, /Excel 양식\(\.csv\) 내보내기/u); assert.match(ui, /비학습 조건/u);
   sql.close();
 });

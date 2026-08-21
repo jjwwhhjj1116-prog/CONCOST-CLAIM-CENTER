@@ -28,6 +28,8 @@ interface Kpi {
   delayedCount: number;
   recentCases: Array<Pick<CaseRecord, 'id' | 'caseNumber' | 'title' | 'claimType' | 'status'> & { updatedAt: string }>;
   upcomingSchedules: Array<Schedule & { case: { id: string; caseNumber: string; title: string } }>;
+  projectScheduleReminders: Array<{ id:string;caseId:string;caseNumber:string;caseTitle:string;stageCode:string;stageLabel:string;startDate:string;endDate:string;status:string;noteText:string;responsiblePmName:string;overdue:boolean;dDayInfo:{dDayStr:string} }>;
+  projectNotifications: Array<{ id:string;caseId:string;caseNumber:string;notificationType:string;title:string;message:string;createdAt:string }>;
 }
 
 interface DocumentVersion {
@@ -184,6 +186,14 @@ function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }): 
             </button>
           </li>
         ))}</ul> : <p className="empty-box">예정된 일정이 없습니다.</p>}
+      </Card>
+    </div>
+    <div className="dashboard-columns">
+      <Card title="내 프로젝트 단계 일정 · PM 기준 일정">
+        {kpi.projectScheduleReminders.length ? <ul className="dashboard-work-list">{kpi.projectScheduleReminders.map((schedule) => <li key={schedule.id}><button onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(`project-${schedule.caseId}`)}`)}><span><strong>{schedule.stageLabel} · {schedule.caseTitle}</strong><small>{schedule.caseNumber} · {schedule.startDate} ~ {schedule.endDate} · PM {schedule.responsiblePmName}{schedule.noteText ? ` · ${schedule.noteText}` : ''}</small></span><span className={`dashboard-status${schedule.overdue?' is-overdue':''}`}>{schedule.overdue?'기한 경과':schedule.dDayInfo?.dDayStr}</span></button></li>)}</ul> : <p className="empty-box">PM이 저장한 단계 일정이 없습니다. 프로젝트 일정표에서 일정을 입력하세요.</p>}
+      </Card>
+      <Card title={`프로젝트 알림 · ${kpi.projectNotifications.length}건`}>
+        {kpi.projectNotifications.length ? <ul className="dashboard-work-list">{kpi.projectNotifications.map((notification) => <li key={notification.id}><button onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(`project-${notification.caseId}`)}`)}><span><strong>{notification.title}</strong><small>{notification.message}</small></span><span className="dashboard-status">확인</span></button></li>)}</ul> : <p className="empty-box">새 일정 변경 알림이 없습니다.</p>}
       </Card>
     </div>
   </div>;

@@ -74,6 +74,16 @@
 .workflow-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
 .workflow-editor-card > button { margin-top: 16px; }
 .workflow-honest-note { margin: 13px 0 0; padding: 10px 12px; border-left: 3px solid #586d9c; background: #0d1424; color: #92a0ba; font-size: 11px; line-height: 1.55; }
+.workflow-ai-importer { display:grid; gap:11px; margin-bottom:16px; padding:14px; border:1px dashed #4f6f9d; border-radius:13px; background:color-mix(in srgb,var(--surface-raised,#edf4fb) 90%,#dff7f2); transition:.15s ease; }
+.workflow-ai-importer.is-dragging { border-style:solid; border-color:#20a98a; box-shadow:0 0 0 4px rgb(32 169 138 / 15%); transform:translateY(-1px); }
+.workflow-ai-importer > header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+.workflow-ai-importer h4 { margin:3px 0; color:var(--text-primary,#f5f7ff); font-size:.9rem; }
+.workflow-ai-importer header span { color:#31a6bd; font:800 .58rem 'DM Mono',monospace; letter-spacing:.1em; }
+.workflow-ai-importer header p,.workflow-ai-importer > small { margin:0; color:var(--text-secondary,#9dacbf); font-size:.66rem; line-height:1.55; }
+.workflow-ai-import-controls { display:grid; grid-template-columns:minmax(190px,.7fr) minmax(0,1fr) auto; align-items:end; gap:8px; }
+.workflow-ai-import-controls label { display:grid; gap:5px; color:var(--text-secondary,#aebbd0); font-size:.65rem; font-weight:800; }
+.workflow-ai-import-controls select { min-height:38px; border:1px solid var(--border-soft,#33415f); border-radius:8px; background:var(--surface-card,#0a1020); color:var(--text-primary,#f5f7ff); padding:0 9px; }
+.workflow-ai-import-controls input[type='file'] { min-width:0; border:1px solid var(--border-soft,#33415f); border-radius:8px; padding:7px; background:var(--surface-card,#0a1020); color:var(--text-secondary,#aebbd0); font-size:.65rem; }
 
 .workflow-summary-text { max-height: 300px; overflow: auto; margin: 0; padding: 15px; border: 1px solid #263451; border-radius: 12px; background: #090f1d; color: #dbe6f7; white-space: pre-wrap; font: 12px/1.7 inherit; }
 .workflow-timeline { display: grid; gap: 11px; margin: 16px 0 0; padding: 0; list-style: none; }
@@ -120,4 +130,5 @@
   .workflow-editor-card { padding: 15px; }
   .allocation-list section { grid-template-columns: 1fr; }
   .allocation-office { min-height: 32px; }
+  .workflow-ai-importer > header,.workflow-ai-import-controls { grid-template-columns:1fr; display:grid; }
 }

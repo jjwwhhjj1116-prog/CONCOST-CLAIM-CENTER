@@ -112,8 +112,15 @@ export const WORKFORCE_UNITS: readonly WorkforceUnit[] = [
 
 export interface ProjectWorkflowItem {
   stageId: WorkflowStageId;
+  stageCode?: 'PROPOSAL' | 'AWARD' | 'KICKOFF' | 'SITE_SURVEY' | 'TAKEOFF_COST' | 'REPORT_WRITING';
   startDay: number;
   endDay: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  scheduleVersion?: number;
+  scheduleStatus?: 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'DELAYED';
+  scheduleNote?: string;
+  scheduleExplicit?: boolean;
   status: 'DONE' | 'IN_PROGRESS' | 'PLANNED';
   owner: string;
   detail: string;
@@ -130,6 +137,20 @@ export interface WorkflowProject {
   start: string;
   end: string;
   awardStatus: 'WON' | 'PENDING' | 'LOST';
+  responsiblePm?: { id: string; name: string } | null;
+  profileVersion?: number;
+  canManageSchedule?: boolean;
+  pendingChangeRequests?: readonly {
+    id: string;
+    stageCode: string;
+    proposedStartDate: string;
+    proposedEndDate: string;
+    proposedStatus: string;
+    reasonText: string;
+    expectedScheduleVersion: number;
+    requestedByName: string;
+    requestedAt: string;
+  }[];
   highlights: readonly {
     label: string;
     tone: 'finish' | 'structure' | 'civil' | 'report' | 'survey' | 'pending';

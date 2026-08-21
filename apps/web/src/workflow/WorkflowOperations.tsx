@@ -67,6 +67,19 @@ interface WorkflowPayload {
   googleDrive: { connected: boolean; deferredByUser: boolean; uploadEnabled: boolean };
 }
 
+interface WorkflowAiImport {
+  meetingAt: string | null;
+  surveyDate: string | null;
+  location: string;
+  agenda: string;
+  participants: string[];
+  leadUnit: string;
+  sourceNotes: string;
+  summary: string;
+  timeline: Array<{ order: number; title: string; detail: string }>;
+  missingFields: string[];
+}
+
 const stageRoute: Record<WorkflowRouteId, 3 | 4 | 5> = { 'WF-03': 3, 'WF-04': 4, 'WF-05': 5 };
 const WORKFORCE_OPTIONS = WORKFORCE_UNITS
   .filter((unit) => unit.discipline !== '클레임')
@@ -269,6 +282,63 @@ export const WorkflowOperations: React.FC<{
   );
 };
 
+const WORKFLOW_IMPORT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.hwp,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg,.webm';
+const evidenceCategoryFor = (kind: 'KICKOFF' | 'SITE_SURVEY', file: File) => {
+  if (kind === 'KICKOFF') return file.type.startsWith('audio/') ? 'MEETING_RECORDING' : 'MEETING_MINUTES';
+  if (file.type.startsWith('audio/')) return 'SITE_RECORDING';
+  if (file.type.startsWith('image/')) return 'SITE_PHOTO';
+  return 'SITE_DOCUMENT';
+};
+
+function downloadWorkflowTemplate(kind: 'KICKOFF' | 'SITE_SURVEY'): void {
+  const rows = kind === 'KICKOFF'
+    ? [['회의 일시','YYYY-MM-DD HH:mm'],['장소',''],['참석 담당자','쉼표로 구분'],['회의 안건',''],['회의 내용',''],['결정사항',''],['후속업무·담당·기한','']]
+    : [['조사 일자','YYYY-MM-DD'],['현장 위치',''],['조사 책임팀',''],['조사 범위',''],['관찰 내용',''],['사진·도면 번호',''],['추가 확인사항','']];
+  const csv = `\uFEFF항목,내용\r\n${rows.map((row) => row.map((cell) => `"${cell.replaceAll('"','""')}"`).join(',')).join('\r\n')}`;
+  const url = URL.createObjectURL(new Blob([csv], { type:'text/csv;charset=utf-8' }));
+  const anchor = document.createElement('a'); anchor.href = url; anchor.download = kind === 'KICKOFF' ? '착수회의_현장작성_양식.csv' : '현장조사_현장작성_양식.csv'; anchor.click(); URL.revokeObjectURL(url);
+}
+
+const WorkflowAiImporter: React.FC<{
+  caseId: string;
+  kind: 'KICKOFF' | 'SITE_SURVEY';
+  disabled: boolean;
+  onImported: (value: WorkflowAiImport) => void;
+}> = ({ caseId, kind, disabled, onImported }) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dataClass,setDataClass] = useState<'GENERAL'|'INTERNAL'|'CONFIDENTIAL'|'RESTRICTED'>('INTERNAL');
+  const [dragging,setDragging] = useState(false);
+  const [busy,setBusy] = useState(false);
+  const [message,setMessage] = useState('');
+  const [error,setError] = useState('');
+
+  const processFile = async (file?: File) => {
+    if (!file || disabled || busy) return;
+    setBusy(true); setError(''); setMessage('회사 Google Drive에 원본을 먼저 저장하고 있습니다.');
+    try {
+      const evidence = new FormData(); evidence.set('file',file); evidence.set('category',evidenceCategoryFor(kind,file));
+      const stored = await fetch(`/api/cases/${encodeURIComponent(caseId)}/evidence`, { method:'POST',headers:{'Idempotency-Key':`workflow-source-${crypto.randomUUID()}`},body:evidence });
+      const storedPayload = await stored.json().catch(() => ({})) as { error?: string };
+      if (!stored.ok) throw new Error(storedPayload.error ?? '원본을 회사 Google Drive에 저장하지 못했습니다.');
+      setMessage('원본 저장 완료 · Gemini가 양식의 항목을 근거대로 정리하고 있습니다.');
+      const form = new FormData(); form.set('file',file); form.set('workflowKind',kind); form.set('dataClass',dataClass);
+      const response = await fetch(`/api/cases/${encodeURIComponent(caseId)}/workflow/ai-import`, { method:'POST',body:form });
+      const payload = await response.json().catch(() => ({})) as { import?: WorkflowAiImport; error?: string; code?: string; security?: { redactionCount:number; rawProviderPayloadStored:boolean } };
+      if (!response.ok || !payload.import) throw new Error(payload.error ?? 'AI 문서 정리를 완료하지 못했습니다.');
+      onImported(payload.import);
+      setMessage(`자동 입력 완료 · 원본은 Drive에 보존되고 AI 원문 응답은 저장하지 않았습니다.${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''} 비어 있는 항목은 사람이 확인해 주세요.`);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '파일을 처리하지 못했습니다.'); }
+    finally { setBusy(false); if(inputRef.current) inputRef.current.value=''; }
+  };
+
+  return <section className={`workflow-ai-importer${dragging?' is-dragging':''}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); void processFile(event.dataTransfer.files[0]); }}>
+    <header><div><span>EXCEL·문서·녹음 → DRIVE → GEMINI</span><h4>{kind === 'KICKOFF' ? '회의록 자동 입력' : '현장조사 기록 자동 입력'}</h4><p>현장에서 작성한 Excel 호환 양식, 회의록, 사진 또는 녹음을 끌어 놓으면 원본을 Drive에 저장한 뒤 화면 항목을 자동으로 채웁니다.</p></div><Button size="sm" variant="secondary" onClick={() => downloadWorkflowTemplate(kind)}>Excel 양식(.csv) 내보내기</Button></header>
+    <div className="workflow-ai-import-controls"><label>자료 보안등급<select value={dataClass} disabled={busy} onChange={(event) => setDataClass(event.target.value as typeof dataClass)}><option value="GENERAL">일반·외부전송 가능</option><option value="INTERNAL">회사 내부</option><option value="CONFIDENTIAL">기밀</option><option value="RESTRICTED">제한자료</option></select></label><input ref={inputRef} type="file" accept={WORKFLOW_IMPORT_ACCEPT} disabled={disabled||busy} onChange={(event) => void processFile(event.target.files?.[0])}/><Button onClick={() => inputRef.current?.click()} disabled={disabled||busy}>{busy?'저장·정리 중…':'가져오기·자동 작성'}</Button></div>
+    <small>내부·기밀 자료는 관리자가 유료 Gemini의 비학습 조건을 확인하고 보안 전송을 승인한 경우에만 전송됩니다. 승인 전에는 Drive 저장만 완료되고 AI 전송은 차단됩니다.</small>
+    {message && <p className="notice-box" role="status">{message}</p>}{error && <p className="error-box" role="alert">{error}</p>}
+  </section>;
+};
+
 const KickoffEditor: React.FC<{
   caseId: string;
   form: { meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number };
@@ -283,6 +353,7 @@ const KickoffEditor: React.FC<{
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>KICKOFF INTAKE</span><h3>착수회의 기록</h3></div><em>v{form.expectedVersion}</em></header>
+      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onImported={(value) => setForm((current) => ({ ...current, meetingAt:value.meetingAt?localDateTime(value.meetingAt):current.meetingAt,location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:value.sourceNotes,status:'DRAFTED' }))}/>
       <div className="workflow-form-grid">
         <label>회의 일시<input type="datetime-local" value={form.meetingAt} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, meetingAt: event.target.value }))} /></label>
         <label>회의 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">진행 예정</option><option value="COMPLETED">진행 완료</option><option value="DRAFTED">회의록 초안</option><option value="CONFIRMED">확정</option></select></label>
@@ -320,6 +391,7 @@ const SurveyEditor: React.FC<{
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>SITE SURVEY PLAN</span><h3>현장조사 계획·원본 분류</h3></div><em>v{form.expectedVersion}</em></header>
+      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onImported={(value) => setForm((current) => ({ ...current,surveyDate:value.surveyDate??current.surveyDate,location:value.location,scopeText:value.agenda||value.sourceNotes,leadUnit:value.leadUnit||current.leadUnit,status:'IN_PROGRESS',expectedVersion:current.expectedVersion }))}/>
       <div className="workflow-form-grid">
         <label>조사 일자<input type="date" value={form.surveyDate} disabled={disabled || form.expectedVersion > 0} onChange={(event) => setForm((current) => ({ ...current, surveyDate: event.target.value, expectedVersion: 0 }))} /></label>
         <label>진행 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option></select></label>

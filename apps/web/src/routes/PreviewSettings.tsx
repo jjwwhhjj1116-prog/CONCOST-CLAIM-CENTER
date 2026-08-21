@@ -35,6 +35,15 @@ interface MemoryCandidate {
   version: number; createdAt: string; reviewedAt: string | null; feedbackText: string; chapterCode: string;
   caseNumber: string; caseTitle: string; createdByName: string;
 }
+interface AiGovernance {
+  providerKind: 'GEMINI';
+  providerServiceTier: 'UNVERIFIED_OR_FREE' | 'PAID_NO_PRODUCT_IMPROVEMENT' | 'VERTEX_AI_ENTERPRISE';
+  confidentialExternalAiEnabled: boolean;
+  minimizePersonalData: boolean;
+  providerTermsUrl: string;
+  version: number;
+  updatedAt: string;
+}
 
 const PROVIDER_COPY: Record<ProviderKind, {
   short: string; use: string; placeholder: string; issueUrl: string; guideUrl: string; issueSteps: readonly string[];
@@ -64,6 +73,8 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [workspace, setWorkspace] = useState<WorkspacePolicy | null>(null);
   const [runtime, setRuntime] = useState<WorkspaceRuntime | null>(null);
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
+  const [aiGovernance, setAiGovernance] = useState<AiGovernance | null>(null);
+  const [aiGovernanceAck, setAiGovernanceAck] = useState('');
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -76,13 +87,15 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     try {
       setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials'));
       if (isAdmin) {
-        const [admin, memory] = await Promise.all([
+        const [admin, memory, governance] = await Promise.all([
           apiRequest<{ settings: WorkspacePolicy; runtime: WorkspaceRuntime }>('/api/settings/admin-workspace'),
-          apiRequest<{ candidates: MemoryCandidate[] }>('/api/admin/report-memory')
+          apiRequest<{ candidates: MemoryCandidate[] }>('/api/admin/report-memory'),
+          apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance').catch(() => null)
         ]);
         setWorkspace(admin.settings);
         setRuntime(admin.runtime);
         setMemoryCandidates(memory.candidates);
+        setAiGovernance(governance?.governance ?? null);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -166,6 +179,16 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     finally { setBusy(''); }
   };
 
+  const saveAiGovernance = async () => {
+    if (!aiGovernance) return;
+    setBusy('ai-governance'); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance', { method:'PUT', body:JSON.stringify({ providerServiceTier:aiGovernance.providerServiceTier,confidentialExternalAiEnabled:aiGovernance.confidentialExternalAiEnabled,expectedVersion:aiGovernance.version,acknowledgement:aiGovernanceAck }) });
+      setAiGovernance(result.governance); setAiGovernanceAck(''); setNotice('외부 AI 자료 전송 정책을 저장했습니다. 정책에 맞는 자료만 Gemini로 전송됩니다.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(''); }
+  };
+
   const decideMemory = async (candidate: MemoryCandidate, action: 'APPROVE' | 'REJECT' | 'DISABLE') => {
     setBusy(`memory:${candidate.id}`); setError(''); setNotice('');
     try {
@@ -232,6 +255,11 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     {section === 'ADMIN' && isAdmin && workspace && <>
       <PreviewGoogleDriveSetup onNavigate={onNavigate} />
       {renderCredentials('ORGANIZATION', '조직 공용 AI 설정', '개인 키가 없는 직원에게 적용되는 회사 공용 암호화 키입니다.')}
+      {aiGovernance && <Card title="외부 AI 자료 보안·비학습 정책"><div className="workspace-policy-grid">
+        <label>Gemini 서비스 등급<select value={aiGovernance.providerServiceTier} onChange={(event) => setAiGovernance({ ...aiGovernance,providerServiceTier:event.target.value as AiGovernance['providerServiceTier'],confidentialExternalAiEnabled:event.target.value==='UNVERIFIED_OR_FREE'?false:aiGovernance.confidentialExternalAiEnabled })}><option value="UNVERIFIED_OR_FREE">무료 또는 결제상태 미확인 · 내부자료 전송 차단</option><option value="PAID_NO_PRODUCT_IMPROVEMENT">Cloud Billing 활성 유료 Gemini API</option><option value="VERTEX_AI_ENTERPRISE">Vertex AI 기업계약</option></select></label>
+        <label className="settings-check"><input type="checkbox" checked={aiGovernance.confidentialExternalAiEnabled} disabled={aiGovernance.providerServiceTier==='UNVERIFIED_OR_FREE'} onChange={(event) => setAiGovernance({ ...aiGovernance,confidentialExternalAiEnabled:event.target.checked })}/>내부·기밀 자료의 외부 AI 전송 허용</label>
+        <label className="is-wide">관리자 확인 문구<input value={aiGovernanceAck} onChange={(event) => setAiGovernanceAck(event.target.value)} placeholder="유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다" /></label>
+      </div><p className="settings-honest-note"><strong>기본값은 차단입니다.</strong> 무료 Gemini API에는 회사 내부·기밀 자료를 보내지 않습니다. 유료 서비스의 실제 Cloud Billing 상태와 회사 계약·개인정보 처리기준을 관리자가 확인한 뒤에만 허용하세요. 전송 전 주민번호·전화·이메일·키 패턴을 최소화하고, 공급자 원문 응답은 D1에 저장하지 않습니다.</p><div className="action-row"><Button onClick={() => void saveAiGovernance()} disabled={busy==='ai-governance'||aiGovernanceAck!=='유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다'}>{busy==='ai-governance'?'저장 중…':'보안정책 확인·저장'}</Button><a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noreferrer">Gemini 공식 이용약관 ↗</a><a href="https://ai.google.dev/gemini-api/docs/zdr" target="_blank" rel="noreferrer">Zero Data Retention 안내 ↗</a></div></Card>}
       <Card title="조직·로컬 AI·Hermes Memory 정책"><div className="workspace-policy-grid">
         <label>조직 표시명<input value={workspace.organizationName} maxLength={80} onChange={(event) => setWorkspace({ ...workspace, organizationName: event.target.value })} /></label>
         <label>로컬 AI 정책<select value={workspace.localAiMode} onChange={(event) => setWorkspace({ ...workspace, localAiMode: event.target.value as WorkspacePolicy['localAiMode'] })}><option value="DISABLED">비활성</option><option value="PRIVATE_SERVER_BRIDGE">회사 전용 Server Bridge 준비</option></select></label>
