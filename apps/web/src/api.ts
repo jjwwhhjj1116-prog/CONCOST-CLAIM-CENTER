@@ -71,3 +71,18 @@ export async function apiDownloadPost(pathname: string, body: unknown): Promise<
   const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
   return { blob: await response.blob(), filename: encoded ? decodeURIComponent(encoded) : 'download.bin' };
 }
+
+export function triggerBrowserDownload(result: { blob: Blob; filename: string }): void {
+  const url = URL.createObjectURL(result.blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = result.filename;
+  anchor.rel = 'noopener';
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  window.setTimeout(() => {
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, 10_000);
+}

@@ -1,6 +1,7 @@
 import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiDownload, apiRequest } from '../api';
+import { ApiError, apiDownload, apiRequest, triggerBrowserDownload } from '../api';
+import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
@@ -84,6 +85,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [selectedChapterId, setSelectedChapterId] = useState('');
   const [generating, setGenerating] = useState(false);
   const [improving, setImproving] = useState(false);
+  const [aiGeneration, setAiGeneration] = useState<{ kind: 'outline' | 'chapter' | 'improve'; status: AiGenerationStatus; title: string; error?: string } | null>(null);
   const [improvementInstruction, setImprovementInstruction] = useState('사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬어 주세요.');
   const [memoryFeedback, setMemoryFeedback] = useState('');
   const [memoryScope, setMemoryScope] = useState<MemoryScope>('CHAPTER');
@@ -318,20 +320,20 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const generateOutline = async () => {
     if (!editable || !authoring?.available || !authoring.outlineAiConnected || generatingOutline || savingOutline || loadedCaseId !== selectedCaseId) return;
     const requestCaseId = selectedCaseId;
-    setGeneratingOutline(true); setError('');
+    setGeneratingOutline(true); setError(''); setAiGeneration({ kind: 'outline', status: 'running', title: '보고서 목차 작성계획을 만들고 있습니다' });
     try {
       const result = await apiRequest<{ suggestions: Array<{ chapterId: string; chapterCode: string; planningNote: string }>; guidelineVersion: number }>('/api/report-authoring/outline/generate', { method: 'POST', body: JSON.stringify({ caseId: requestCaseId }) });
       if (selectedCaseRef.current !== requestCaseId) return;
       setOutlineNotes(Object.fromEntries(result.suggestions.map((item) => [item.chapterId, item.planningNote])));
-      setOutlineDirty(true);
-    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+      setOutlineDirty(true); setAiGeneration((current) => current?.kind === 'outline' ? { ...current, status: 'complete' } : current);
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) { const message=reason instanceof Error ? reason.message : String(reason); setError(message); setAiGeneration((current) => current?.kind === 'outline' ? { ...current, status: 'error', error: message } : current); } }
     finally { if (selectedCaseRef.current === requestCaseId) setGeneratingOutline(false); }
   };
 
   const generateChapter = async () => {
     if (!editable || !authoring?.available || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating || loadedCaseId !== selectedCaseId) return;
     const requestCaseId = selectedCaseId;
-    setGenerating(true); setError('');
+    setGenerating(true); setError(''); setAiGeneration({ kind: 'chapter', status: 'running', title: `${selectedChapter?.title ?? '선택 챕터'} 초안을 작성하고 있습니다` });
     try {
       const result = await apiRequest<{ chapter: { chapterCode: string; title: string; content: string; promptVersion: number; memory?: { engine: string; shortTermItems: number; approvedLongTermRules: number; personalRules: number; organizationRules: number } } }>('/api/report-authoring/generate', {
         method: 'POST', body: JSON.stringify({ caseId: requestCaseId, chapterId: selectedChapterId, expectedDraftVersion: version })
@@ -345,13 +347,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const nextContent = existing.test(content) ? content.replace(existing, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
       contentRef.current = nextContent; setContent(nextContent); setDirty(true);
       if (result.chapter.memory) setMemoryNotice(`이번 초안 메모리 적용 · 단기 ${result.chapter.memory.shortTermItems}개 · 승인 장기 ${result.chapter.memory.approvedLongTermRules}개(개인 ${result.chapter.memory.personalRules} · 조직 ${result.chapter.memory.organizationRules})`);
+      setAiGeneration((current) => current?.kind === 'chapter' ? { ...current, status: 'complete' } : current);
     } catch (reason) {
       if (selectedCaseRef.current !== requestCaseId) return;
       const providerStatus = reason instanceof ApiError && typeof reason.payload.providerStatus === 'number' ? ` · 공급자 HTTP ${reason.payload.providerStatus}` : '';
       const providerReason = reason instanceof ApiError && typeof reason.payload.providerReason === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/u.test(reason.payload.providerReason)
         ? ` · Google 사유 ${reason.payload.providerReason}`
         : '';
-      setError(`${reason instanceof Error ? reason.message : String(reason)}${providerStatus}${providerReason}`);
+      const message=`${reason instanceof Error ? reason.message : String(reason)}${providerStatus}${providerReason}`;setError(message);setAiGeneration((current) => current?.kind === 'chapter' ? { ...current, status: 'error', error: message } : current);
     }
     finally { if (selectedCaseRef.current === requestCaseId) setGenerating(false); }
   };
@@ -359,14 +362,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const improveWriting = async () => {
     if (!editable || !authoring?.assistantConnected || !content.trim() || dirty || saving || improving || loadedCaseId !== selectedCaseId) return;
     const requestCaseId = selectedCaseId;
-    setImproving(true); setError('');
+    setImproving(true); setError(''); setAiGeneration({ kind: 'improve', status: 'running', title: 'Gemini가 보고서 문장을 개선하고 있습니다' });
     try {
       const result = await apiRequest<{ content: string; credentialSource: string; providerKind: string; modelCode: string }>('/api/report-authoring/improve', {
         method: 'POST', body: JSON.stringify({ caseId: requestCaseId, content, instruction: improvementInstruction.trim(), expectedDraftVersion: version })
       });
       if (selectedCaseRef.current !== requestCaseId) return;
-      contentRef.current = result.content; setContent(result.content); setDirty(true);
-    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+      contentRef.current = result.content; setContent(result.content); setDirty(true); setAiGeneration((current) => current?.kind === 'improve' ? { ...current, status: 'complete' } : current);
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) { const message=reason instanceof Error ? reason.message : String(reason);setError(message);setAiGeneration((current) => current?.kind === 'improve' ? { ...current, status: 'error', error: message } : current); } }
     finally { if (selectedCaseRef.current === requestCaseId) setImproving(false); }
   };
 
@@ -432,9 +435,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setError('');
     try {
       const result = await apiDownload(`/api/report-outputs/${encodeURIComponent(output.id)}/download`);
-      const anchor = document.createElement('a');
-      anchor.href = URL.createObjectURL(result.blob); anchor.download = result.filename; anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(anchor.href), 1_000);
+      triggerBrowserDownload(result);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
@@ -489,6 +490,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
+      <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'프로젝트 근거와 유형별 작성 지침을 확인해 챕터별 작성 방향을 만듭니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형·템플릿 확인','워크플로우 근거 분류','챕터별 작성 방향 생성','화면 반영 대기']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'목차 작성계획이 준비되었습니다. 내용을 확인한 뒤 목차 기획을 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 D1에 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 계획 확인하기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
         <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
