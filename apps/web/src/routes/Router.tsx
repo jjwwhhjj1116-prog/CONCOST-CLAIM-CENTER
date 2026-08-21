@@ -112,6 +112,7 @@ export const reviewerCapabilities = {
 
 export interface RouterProps {
   currentPath: string;
+  currentSearch?: string;
   roles: UserRole[];
   onNavigate: (path: string) => void;
   userName?: string;
@@ -156,7 +157,7 @@ const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
   );
 };
 
-export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName = 'Preview User', previewMode = false, onNavigate }) => {
+export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch = '', roles, userName = 'Preview User', previewMode = false, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
   const resolvedRoute = resolveRoute(currentPath);
   const currentRoute = resolvedRoute?.route;
@@ -196,8 +197,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, roles, userName
   }
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
-  if (previewMode && currentRoute.id === 'WF-06') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
-  if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'WF-06') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && ['PROP-01', 'PROP-02'].includes(currentRoute.id)) {
     return (

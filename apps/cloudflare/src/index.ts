@@ -483,16 +483,88 @@ async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Pro
 
 async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
-  if (request.method !== 'GET') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
-  const rows = await env.DB.prepare(
-    `SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson, u.is_active AS active, ` +
-    `(SELECT COUNT(*) FROM preview_case_assignments a WHERE a.user_id = u.id) AS assignedCaseCount ` +
-    `FROM preview_users u ORDER BY u.is_active DESC, u.display_name COLLATE NOCASE`
-  ).all<{ id: string; loginId: string; displayName: string; email: string; rolesJson: string; active: number; assignedCaseCount: number }>();
-  return json({ users: rows.results.map((entry) => ({ id: entry.id, loginId: entry.loginId, displayName: entry.displayName, email: entry.email, roles: parsePreviewRoles(entry.rolesJson), active: entry.active === 1, assignedCaseCount: Number(entry.assignedCaseCount ?? 0) })), phase: 'CF10_PRODUCT_EXPERIENCE' });
+  const accountSchemaAvailable = await env.DB.prepare('SELECT version FROM preview_users LIMIT 0').all().then(() => true).catch(() => false);
+
+  if (request.method === 'GET') {
+    const rows = await env.DB.prepare(
+      `SELECT u.id, u.login_id AS loginId, u.display_name AS displayName, u.email, u.roles_json AS rolesJson, u.is_active AS active, ${accountSchemaAvailable ? 'u.version' : '1'} AS version, ` +
+      `(SELECT COUNT(*) FROM preview_case_assignments a WHERE a.user_id = u.id) AS assignedCaseCount ` +
+      `FROM preview_users u ORDER BY u.is_active DESC, u.display_name COLLATE NOCASE`
+    ).all<{ id: string; loginId: string; displayName: string; email: string; rolesJson: string; active: number; version: number; assignedCaseCount: number }>();
+    return json({ users: rows.results.map((entry) => ({ id: entry.id, loginId: entry.loginId, displayName: entry.displayName, email: entry.email, roles: parsePreviewRoles(entry.rolesJson), active: entry.active === 1, version: Number(entry.version), assignedCaseCount: Number(entry.assignedCaseCount ?? 0) })), phase: accountSchemaAvailable ? 'CF38_ADMIN_ACCOUNTS' : 'CF10_PRODUCT_EXPERIENCE' });
+  }
+
+  if (!accountSchemaAvailable) return json({ error: 'Admin account migration is required', code: 'ADMIN_ACCOUNT_MIGRATION_REQUIRED' }, 503);
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+  const now = new Date().toISOString();
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+
+  if (request.method === 'POST') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['loginId', 'displayName', 'email', 'password', 'roles']) || typeof body.loginId !== 'string' || typeof body.displayName !== 'string' || typeof body.email !== 'string' || typeof body.password !== 'string' || !Array.isArray(body.roles)) return json({ error: 'Account payload is invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
+    const loginId = body.loginId.trim();
+    const displayName = body.displayName.trim();
+    const email = body.email.trim().toLowerCase();
+    const roles = [...new Set(body.roles.filter((role): role is string => typeof role === 'string' && PREVIEW_ROLES.has(role)))];
+    if (!emailPattern.test(loginId) || !emailPattern.test(email) || loginId.length > 100 || displayName.length < 1 || displayName.length > 100 || body.password.length < 4 || body.password.length > 128 || roles.length < 1 || roles.length !== body.roles.length) return json({ error: 'Account fields are invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
+    const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+    const iterations = 310_000;
+    const passwordHash = await derivePreviewPassword(body.password, salt, iterations);
+    if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
+    const targetId = crypto.randomUUID();
+    try {
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_users (id, login_id, password_salt, password_hash, password_iterations, display_name, email, roles_json, is_active, created_at, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1)').bind(targetId, loginId, salt, passwordHash, iterations, displayName, email, JSON.stringify(roles), now),
+        env.DB.prepare('INSERT INTO preview_user_admin_events (id, actor_id, target_user_id, action, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), user.id, targetId, 'ACCOUNT_CREATED', JSON.stringify({ loginId, roles }), now)
+      ]);
+    } catch {
+      return json({ error: 'Login ID is already registered or the account could not be created', code: 'ACCOUNT_CREATE_CONFLICT' }, 409);
+    }
+    return json({ user: { id: targetId, loginId, displayName, email, roles, active: true, version: 1, assignedCaseCount: 0 }, phase: 'CF38_ADMIN_ACCOUNTS' }, 201);
+  }
+
+  const targetId = new URL(request.url).pathname.match(/^\/api\/admin\/users\/([0-9a-f-]{36})$/iu)?.[1] ?? '';
+  if (request.method !== 'PUT' || !PREVIEW_DRAFT_KEY.test(targetId)) return json({ error: 'Method or account route was not found', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !exactObjectKeys(body, ['action', 'expectedVersion', 'password']) || typeof body.action !== 'string' || !Number.isInteger(body.expectedVersion) || (body.password !== undefined && typeof body.password !== 'string')) return json({ error: 'Account action is invalid', code: 'INVALID_ACCOUNT_ACTION' }, 400);
+  const target = await env.DB.prepare('SELECT id, login_id AS loginId, roles_json AS rolesJson, is_active AS active, version FROM preview_users WHERE id=?').bind(targetId).first<{ id: string; loginId: string; rolesJson: string; active: number; version: number }>();
+  if (!target) return json({ error: 'Account was not found', code: 'ACCOUNT_NOT_FOUND' }, 404);
+  const expectedVersion = Number(body.expectedVersion);
+  if (expectedVersion !== Number(target.version)) return json({ error: 'Account changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(target.version) }, 409);
+  if (body.action === 'DEACTIVATE' && targetId === user.id) return json({ error: 'You cannot deactivate the account currently in use', code: 'CANNOT_DEACTIVATE_SELF' }, 409);
+
+  let action: 'ACCOUNT_ACTIVATED' | 'ACCOUNT_DEACTIVATED' | 'PASSWORD_RESET';
+  let update;
+  if (body.action === 'ACTIVATE' || body.action === 'DEACTIVATE') {
+    const active = body.action === 'ACTIVATE' ? 1 : 0;
+    action = active ? 'ACCOUNT_ACTIVATED' : 'ACCOUNT_DEACTIVATED';
+    update = env.DB.prepare('UPDATE preview_users SET is_active=?, version=version+1 WHERE id=? AND version=?').bind(active, targetId, expectedVersion);
+  } else if (body.action === 'RESET_PASSWORD') {
+    if (typeof body.password !== 'string' || body.password.length < 4 || body.password.length > 128) return json({ error: 'Password must be between 4 and 128 characters', code: 'INVALID_PASSWORD' }, 400);
+    const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+    const iterations = 310_000;
+    const passwordHash = await derivePreviewPassword(body.password, salt, iterations);
+    if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
+    action = 'PASSWORD_RESET';
+    update = env.DB.prepare('UPDATE preview_users SET password_salt=?, password_hash=?, password_iterations=?, version=version+1 WHERE id=? AND version=?').bind(salt, passwordHash, iterations, targetId, expectedVersion);
+  } else {
+    return json({ error: 'Account action is not supported', code: 'INVALID_ACCOUNT_ACTION' }, 400);
+  }
+
+  try {
+    const results = await env.DB.batch([
+      update,
+      env.DB.prepare('DELETE FROM preview_sessions WHERE user_id=?').bind(targetId),
+      env.DB.prepare('INSERT INTO preview_user_admin_events (id, actor_id, target_user_id, action, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_users WHERE id=? AND version=?)').bind(crypto.randomUUID(), user.id, targetId, action, JSON.stringify({ loginId: target.loginId }), now, targetId, expectedVersion + 1)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1) return json({ error: 'Account changed in another session', code: 'VERSION_CONFLICT' }, 409);
+  } catch {
+    return json({ error: 'The last active Admin account cannot be deactivated', code: 'LAST_ADMIN_REQUIRED' }, 409);
+  }
+  return json({ ok: true, version: expectedVersion + 1, active: body.action === 'ACTIVATE' ? true : body.action === 'DEACTIVATE' ? false : target.active === 1, phase: 'CF38_ADMIN_ACCOUNTS' });
 }
 
 interface PreviewKickoffRow {
@@ -1583,16 +1655,29 @@ interface PreviewReportDraftRow {
   title: string;
   content: string;
   version: number;
+  wizardStep: number;
+  selectedChapterId: string | null;
   createdAt: string;
   updatedAt: string;
   updatedById: string;
   updatedByName: string;
 }
 
+async function previewReportWorkspaceSchemaAvailable(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT wizard_step, selected_chapter_id FROM preview_report_drafts LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
   const draft = await env.DB.prepare(
-    'SELECT d.case_id AS caseId, d.title, d.content, d.version, d.created_at AS createdAt, d.updated_at AS updatedAt, ' +
+    `SELECT d.case_id AS caseId, d.title, d.content, d.version, ${workspaceSchema ? 'd.wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'd.selected_chapter_id' : 'NULL'} AS selectedChapterId, d.created_at AS createdAt, d.updated_at AS updatedAt, ` +
     'u.id AS updatedById, u.display_name AS updatedByName FROM preview_report_drafts d ' +
     'JOIN preview_users u ON u.id = d.updated_by WHERE d.case_id = ? AND d.organization_id = ?'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewReportDraftRow>();
@@ -1606,6 +1691,8 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
       title: draft.title,
       content: draft.content,
       version: Number(draft.version),
+      wizardStep: Number(draft.wizardStep),
+      selectedChapterId: draft.selectedChapterId,
       createdAt: draft.createdAt,
       updatedAt: draft.updatedAt,
       updatedBy: { id: draft.updatedById, name: draft.updatedByName }
@@ -1635,24 +1722,31 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   if (request.method === 'GET') return previewReportPayload(env, caseId);
   if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot edit report drafts', code: 'FORBIDDEN' }, 403);
+  const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body || !exactObjectKeys(body, ['title', 'content', 'expectedVersion']) || typeof body.title !== 'string' || typeof body.content !== 'string' || !Number.isInteger(body.expectedVersion)) {
+  if (!body || !exactObjectKeys(body, ['title', 'content', 'expectedVersion', 'wizardStep', 'selectedChapterId']) || typeof body.title !== 'string' || typeof body.content !== 'string' || !Number.isInteger(body.expectedVersion) || (body.wizardStep !== undefined && !Number.isInteger(body.wizardStep)) || (body.selectedChapterId !== undefined && !(body.selectedChapterId === null || typeof body.selectedChapterId === 'string'))) {
     return json({ error: 'Report draft payload is invalid', code: 'INVALID_REPORT_PAYLOAD' }, 400);
   }
   const title = body.title.trim();
   const content = body.content;
   const expectedVersion = Number(body.expectedVersion);
-  if (!title || title.length > 300 || content.length > 500_000 || expectedVersion < 0) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  const requestedWizardStep = body.wizardStep === undefined ? null : Number(body.wizardStep);
+  const requestedChapterId = body.selectedChapterId === undefined ? undefined : typeof body.selectedChapterId === 'string' ? body.selectedChapterId.trim() : null;
+  if (!title || title.length > 300 || content.length > 500_000 || expectedVersion < 0 || (requestedWizardStep !== null && (requestedWizardStep < 1 || requestedWizardStep > 5)) || (typeof requestedChapterId === 'string' && (!requestedChapterId || requestedChapterId.length > 100 || !PREVIEW_DRAFT_KEY.test(requestedChapterId)))) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
 
-  const existing = await env.DB.prepare('SELECT version, updated_at AS updatedAt FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; updatedAt: string }>();
+  const existing = await env.DB.prepare(`SELECT version, ${workspaceSchema ? 'wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'selected_chapter_id' : 'NULL'} AS selectedChapterId, updated_at AS updatedAt FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?`).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; wizardStep: number; selectedChapterId: string | null; updatedAt: string }>();
+  const wizardStep = requestedWizardStep ?? Number(existing?.wizardStep ?? 1);
+  const selectedChapterId = requestedChapterId === undefined ? existing?.selectedChapterId ?? null : requestedChapterId;
   const contentSha256 = await sha256Hex(content);
   if (!existing) {
     if (expectedVersion !== 0) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: 0 }, 409);
     const now = new Date().toISOString();
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, user.id, user.id, now, now),
+        workspaceSchema
+          ? env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, wizard_step, selected_chapter_id, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, wizardStep, selectedChapterId, user.id, user.id, now, now)
+          : env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, user.id, user.id, now, now),
         env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, contentSha256, user.id, now),
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', '보고서 초안 저장 · v1', title, now)
       ]);
@@ -1667,12 +1761,49 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   const nextVersion = Number(existing.version) + 1;
   const now = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString();
   const results = await env.DB.batch([
-    env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion),
+    workspaceSchema
+      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion),
     env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, contentSha256, user.id, now, caseId, nextVersion),
     env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', `보고서 초안 저장 · v${nextVersion}`, title, now, caseId, nextVersion)
   ]) as Array<{ meta?: { changes?: number } }>;
   if (results[0]?.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
   return previewReportPayload(env, caseId);
+}
+
+interface PreviewReportWorkspaceRow {
+  caseId: string;
+  caseNumber: string;
+  caseTitle: string;
+  claimType: string;
+  reportTitle: string;
+  version: number;
+  wizardStep: number;
+  selectedChapterId: string | null;
+  updatedAt: string;
+  updatedByName: string;
+  contentLength: number;
+}
+
+async function handlePreviewReportWorkspaces(request: Request, env: CloudflareEnv): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (request.method !== 'GET') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  if (!await previewReportWorkspaceSchemaAvailable(env)) return json({ error: 'Report workspace migration is required', code: 'REPORT_WORKSPACE_MIGRATION_REQUIRED' }, 503);
+  const rows = await env.DB.prepare(
+    'SELECT d.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, c.claim_type AS claimType, d.title AS reportTitle, ' +
+    'd.version, d.wizard_step AS wizardStep, d.selected_chapter_id AS selectedChapterId, d.updated_at AS updatedAt, ' +
+    'u.display_name AS updatedByName, length(d.content) AS contentLength FROM preview_report_drafts d ' +
+    'JOIN preview_cases c ON c.id = d.case_id AND c.organization_id = d.organization_id AND c.deleted_at IS NULL ' +
+    'JOIN preview_users u ON u.id = d.updated_by WHERE d.organization_id = ? ' +
+    'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) ' +
+    'ORDER BY d.updated_at DESC LIMIT 100'
+  ).bind(PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewReportWorkspaceRow>();
+  return json({
+    workspaces: rows.results.map((row) => ({ ...row, version: Number(row.version), wizardStep: Number(row.wizardStep), contentLength: Number(row.contentLength) })),
+    phase: 'CF37_REPORT_WORKSPACE_RESUME'
+  });
 }
 
 // CF12 report-authoring prompts. Prompt bodies are Admin-only and are never
@@ -4319,7 +4450,7 @@ const worker = {
       return handlePreviewDashboard(request, env);
     }
 
-    if (url.pathname === '/api/admin/users') {
+    if (url.pathname === '/api/admin/users' || url.pathname.startsWith('/api/admin/users/')) {
       return handlePreviewAdminUsers(request, env);
     }
 
@@ -4365,6 +4496,10 @@ const worker = {
 
     if (url.pathname === '/api/cases' || url.pathname.startsWith('/api/cases/')) {
       return handlePreviewCases(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-workspaces') {
+      return handlePreviewReportWorkspaces(request, env);
     }
 
     if (url.pathname === '/api/report-drafts') {

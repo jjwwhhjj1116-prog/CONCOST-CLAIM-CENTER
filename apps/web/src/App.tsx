@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button } from '@claim-studio/ui';
 import { apiRequest } from './api';
 import { AppShell } from './layout/AppShell';
+import { requestNavigation } from './navigation-guard';
 import { isSafeReturnTo, RouterView, type UserRole } from './routes/Router';
 
 interface SessionUser {
@@ -42,9 +43,14 @@ export const App: React.FC = () => {
 
   const navigate = useCallback((path: string, replace = false) => {
     const url = new URL(path, window.location.origin);
-    if (replace) window.history.replaceState(null, '', `${url.pathname}${url.search}`);
-    else window.history.pushState(null, '', `${url.pathname}${url.search}`);
-    setCurrentLocation(`${url.pathname}${url.search}`);
+    const destination = `${url.pathname}${url.search}`;
+    const proceed = () => {
+      if (replace) window.history.replaceState(null, '', destination);
+      else window.history.pushState(null, '', destination);
+      setCurrentLocation(destination);
+    };
+    if (!replace && requestNavigation(destination, proceed)) return;
+    proceed();
   }, []);
   useEffect(() => {
     const restoreFromHistory = () => setCurrentLocation(currentBrowserLocation());
@@ -156,7 +162,7 @@ export const App: React.FC = () => {
   const workspacePath = currentPath === '/' ? '/dashboard' : currentPath;
   return (
     <AppShell currentPath={workspacePath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} onExpireSession={() => void expireSession()}>
-      <RouterView currentPath={workspacePath} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} />
+      <RouterView currentPath={workspacePath} currentSearch={currentSearch} roles={session.roles} userName={session.name} previewMode={previewMode} onNavigate={navigate} />
     </AppShell>
   );
 };

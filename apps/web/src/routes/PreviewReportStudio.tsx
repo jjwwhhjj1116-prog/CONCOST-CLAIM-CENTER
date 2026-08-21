@@ -2,6 +2,7 @@ import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiDownload, apiRequest } from '../api';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
+import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
 import type { UserRole } from './Router';
 import type { PreviewReportReview } from './PreviewApprovalInbox';
@@ -9,6 +10,7 @@ import type { PreviewReportReview } from './PreviewApprovalInbox';
 interface CaseSummary { id: string; caseNumber: string; title: string; claimType: string; status: string }
 interface ReportDraft {
   caseId: string; title: string; content: string; version: number; createdAt: string; updatedAt: string;
+  wizardStep: number; selectedChapterId: string | null;
   updatedBy: { id: string; name: string };
 }
 interface ReportRevision {
@@ -16,6 +18,11 @@ interface ReportRevision {
   savedBy: { id: string; name: string };
 }
 interface ReportPayload { draft: ReportDraft | null; revisions: ReportRevision[] }
+interface ReportWorkspace {
+  caseId: string; caseNumber: string; caseTitle: string; claimType: string; reportTitle: string;
+  version: number; wizardStep: number; selectedChapterId: string | null; updatedAt: string;
+  updatedByName: string; contentLength: number;
+}
 interface AuthoringChapter { id: string; chapterCode: string; title: string; agentCode: string; ordinal: number; promptVersion: number }
 interface OutlineItem { chapterId: string; chapterCode: string; promptVersion: number; planningNote: string }
 interface OutlinePlan { persistenceAvailable: boolean; status: 'DRAFT' | 'CONFIRMED'; version: number; updatedAt: string | null; updatedBy: string | null; items: OutlineItem[] }
@@ -93,10 +100,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [showTemplatePreview, setShowTemplatePreview] = useState(false);
   const [previewTemplateCategoryCode, setPreviewTemplateCategoryCode] = useState('');
   const [activeStep, setActiveStep] = useState<ReportWizardStep>(1);
+  const [workspaceDirty, setWorkspaceDirty] = useState(false);
+  const [savedWorkspaces, setSavedWorkspaces] = useState<ReportWorkspace[]>([]);
+  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
+  const [navigationBusy, setNavigationBusy] = useState(false);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
   const contentRef = useRef('');
+  const activeStepRef = useRef<ReportWizardStep>(1);
+  const selectedChapterRef = useRef('');
   const editable = roles.some((role) => EDIT_ROLES.includes(role));
   const selectedCase = useMemo(() => cases.find((record) => record.id === selectedCaseId) ?? null, [cases, selectedCaseId]);
   const selectedWorkflowProject = useMemo(() => WORKFLOW_PROJECTS.find((project) => project.caseId === selectedCaseId) ?? null, [selectedCaseId]);
@@ -109,9 +122,15 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [authoring, selectedChapter]);
   const authoredChapterCodes = useMemo(() => new Set(Array.from(content.matchAll(/<!-- AI-CHAPTER:([^:]+):START -->/gu), (match) => match[1])), [content]);
 
+  const loadSavedWorkspaces = useCallback(async (): Promise<ReportWorkspace[]> => {
+    const result = await apiRequest<{ workspaces: ReportWorkspace[] }>('/api/report-workspaces');
+    setSavedWorkspaces(result.workspaces);
+    return result.workspaces;
+  }, []);
+
   const loadDraft = useCallback(async (caseId: string) => {
     const sequence = ++loadSequence.current;
-    setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false);
+    setLoading(true); setError(''); setLoadedCaseId(''); setDirty(false); setWorkspaceDirty(false);
     try {
       const [result, reviewResult, finalizationResult, authoringResult] = await Promise.all([
         apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
@@ -138,7 +157,15 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setOutlineVersion(authoringResult.outlinePlan.version);
       setOutlineNotes(Object.fromEntries(authoringResult.outlinePlan.items.map((item) => [item.chapterId, item.planningNote])));
       setOutlineDirty(false);
-      setSelectedChapterId((current) => authoringResult.chapters.some((chapter) => chapter.id === current) ? current : authoringResult.chapters[0]?.id ?? '');
+      const loadedChapterId = result.draft?.selectedChapterId && authoringResult.chapters.some((chapter) => chapter.id === result.draft?.selectedChapterId)
+        ? result.draft.selectedChapterId
+        : authoringResult.chapters[0]?.id ?? '';
+      const loadedStep = Math.min(5, Math.max(1, Number(result.draft?.wizardStep ?? 1))) as ReportWizardStep;
+      selectedChapterRef.current = loadedChapterId;
+      activeStepRef.current = loadedStep;
+      setSelectedChapterId(loadedChapterId);
+      setActiveStep(loadedStep);
+      setWorkspaceDirty(false);
       setLoadedCaseId(caseId);
     } catch (reason) {
       if (sequence === loadSequence.current && selectedCaseRef.current === caseId) setError(reason instanceof Error ? reason.message : String(reason));
@@ -150,62 +177,84 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   useEffect(() => {
     void (async () => {
       try {
-        const result = await apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100&q=');
+        const [result, workspaces] = await Promise.all([
+          apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100&q='),
+          loadSavedWorkspaces()
+        ]);
         setCases(result.cases);
         const requestedCaseId = new URLSearchParams(window.location.search).get('caseId') ?? '';
-        const first = result.cases.some((record) => record.id === requestedCaseId) ? requestedCaseId : result.cases[0]?.id ?? '';
+        const resumableCaseId = workspaces.find((workspace) => result.cases.some((record) => record.id === workspace.caseId))?.caseId ?? '';
+        const first = result.cases.some((record) => record.id === requestedCaseId) ? requestedCaseId : resumableCaseId || result.cases[0]?.id || '';
         selectedCaseRef.current = first;
         setSelectedCaseId(first);
       } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); }
     })();
-  }, []);
+  }, [loadSavedWorkspaces]);
 
   useEffect(() => { if (selectedCaseId) void loadDraft(selectedCaseId); else setLoading(false); }, [selectedCaseId, loadDraft]);
 
-  const saveNow = useCallback(async () => {
-    if (!editable || !dirty || saving || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return;
+  const saveNow = useCallback(async (): Promise<boolean> => {
+    if (!editable || saving || !selectedCaseId || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId) return false;
+    if (!dirty && !workspaceDirty && version > 0) return true;
     const requestCaseId = selectedCaseId;
     const requestTitle = title;
     const requestContent = content;
     const requestVersion = version;
+    const requestWizardStep = activeStep;
+    const requestChapterId = selectedChapterId || null;
     setSaving(true); setError('');
     try {
       const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(requestCaseId)}`, {
-        method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, expectedVersion: requestVersion })
+        method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, expectedVersion: requestVersion, wizardStep: requestWizardStep, selectedChapterId: requestChapterId })
       });
-      if (selectedCaseRef.current !== requestCaseId || !result.draft) return;
+      if (selectedCaseRef.current !== requestCaseId || !result.draft) return false;
       setVersion(result.draft.version);
       setSavedAt(result.draft.updatedAt);
       setRevisions(result.revisions);
       setDirty(titleRef.current !== requestTitle || contentRef.current !== requestContent);
+      setWorkspaceDirty(activeStepRef.current !== requestWizardStep || (selectedChapterRef.current || null) !== requestChapterId);
+      await loadSavedWorkspaces();
+      return true;
     } catch (reason) {
-      if (selectedCaseRef.current !== requestCaseId) return;
+      if (selectedCaseRef.current !== requestCaseId) return false;
       setError(reason instanceof ApiError && reason.status === 409 ? '다른 탭에서 보고서가 먼저 저장되었습니다. 최신본을 다시 불러온 뒤 계속 작성해 주세요.' : reason instanceof Error ? reason.message : String(reason));
+      return false;
     } finally {
       if (selectedCaseRef.current === requestCaseId) setSaving(false);
     }
-  }, [content, dirty, editable, loadedCaseId, saving, selectedCaseId, title, version]);
+  }, [activeStep, content, dirty, editable, loadedCaseId, loadSavedWorkspaces, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
-    if (!dirty || saving) return;
+    if ((!dirty && !workspaceDirty) || saving) return;
     const timer = window.setTimeout(() => { void saveNow(); }, 900);
     return () => window.clearTimeout(timer);
-  }, [content, dirty, saveNow, saving, title]);
+  }, [activeStep, content, dirty, saveNow, saving, selectedChapterId, title, workspaceDirty]);
 
   useEffect(() => {
-    const warn = (event: BeforeUnloadEvent) => { if (dirty || saving) event.preventDefault(); };
+    const warn = (event: BeforeUnloadEvent) => { if (dirty || workspaceDirty || outlineDirty || saving || savingOutline) event.preventDefault(); };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty, saving]);
+  }, [dirty, outlineDirty, saving, savingOutline, workspaceDirty]);
 
   const selectCase = (caseId: string) => {
-    loadSequence.current += 1;
-    selectedCaseRef.current = caseId;
-    titleRef.current = ''; contentRef.current = '';
-    setSelectedCaseId(caseId); setLoadedCaseId(''); setTitle(''); setContent(''); setVersion(0); setRevisions([]); setReviews([]); setFinalizations([]); setAuthoring(null); setSelectedChapterId(''); setOutlineStatus('DRAFT'); setOutlineVersion(0); setOutlineNotes({}); setOutlineDirty(false); setReviewNote(''); setMemoryFeedback(''); setMemoryNotice(''); memoryRequestKey.current=crypto.randomUUID(); setSavedAt(null); setDirty(false); setError(''); setActiveStep(1);
+    if (!caseId || caseId === selectedCaseId) return;
     const project = WORKFLOW_PROJECTS.find((candidate) => candidate.caseId === caseId);
     const projectQuery = project ? `&projectId=${encodeURIComponent(project.id)}` : '';
     onNavigate(`/reports/studio?caseId=${encodeURIComponent(caseId)}${projectQuery}`);
+  };
+
+  const changeWizardStep = (step: ReportWizardStep) => {
+    if (step === activeStep) return;
+    activeStepRef.current = step;
+    setActiveStep(step);
+    setWorkspaceDirty(true);
+  };
+
+  const changeSelectedChapter = (chapterId: string) => {
+    if (chapterId === selectedChapterId) return;
+    selectedChapterRef.current = chapterId;
+    setSelectedChapterId(chapterId);
+    setWorkspaceDirty(true);
   };
 
   const withProjectContext = (route: string) => {
@@ -216,8 +265,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     return `${target.pathname}${target.search}`;
   };
 
-  const saveOutline = async (status: 'DRAFT' | 'CONFIRMED') => {
-    if (!editable || !authoring?.available || !authoring.outlinePlan.persistenceAvailable || savingOutline || loadedCaseId !== selectedCaseId) return;
+  const saveOutline = async (status: 'DRAFT' | 'CONFIRMED'): Promise<boolean> => {
+    if (!editable || !authoring?.available || !authoring.outlinePlan.persistenceAvailable || savingOutline || loadedCaseId !== selectedCaseId) return false;
     const requestCaseId = selectedCaseId;
     setSavingOutline(true); setError('');
     try {
@@ -230,12 +279,40 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           items: authoring.chapters.map((chapter) => ({ chapterId: chapter.id, chapterCode: chapter.chapterCode, promptVersion: chapter.promptVersion, planningNote: outlineNotes[chapter.id]?.trim() ?? '' }))
         })
       });
-      if (selectedCaseRef.current !== requestCaseId) return;
+      if (selectedCaseRef.current !== requestCaseId) return false;
       setOutlineStatus(result.outlinePlan.status); setOutlineVersion(result.outlinePlan.version); setOutlineDirty(false);
       setAuthoring((current) => current ? { ...current, outlinePlan: result.outlinePlan } : current);
+      return true;
     } catch (reason) {
       if (selectedCaseRef.current === requestCaseId) setError(reason instanceof ApiError && reason.status === 409 ? '목차 또는 관리자 템플릿이 변경되었습니다. 최신본을 다시 불러와 목차를 확인해 주세요.' : reason instanceof Error ? reason.message : String(reason));
+      return false;
     } finally { if (selectedCaseRef.current === requestCaseId) setSavingOutline(false); }
+  };
+
+  useEffect(() => registerNavigationBlocker((navigation) => {
+    const current = `${window.location.pathname}${window.location.search}`;
+    if (!editable || !selectedCaseId || loadedCaseId !== selectedCaseId || navigation.path === current) return false;
+    setPendingNavigation(navigation);
+    return true;
+  }), [editable, loadedCaseId, selectedCaseId]);
+
+  const continuePendingNavigation = () => {
+    const navigation = pendingNavigation;
+    if (!navigation) return;
+    setPendingNavigation(null);
+    navigation.proceed();
+  };
+
+  const saveAndContinueNavigation = async () => {
+    if (!pendingNavigation || navigationBusy || saving || savingOutline) return;
+    setNavigationBusy(true);
+    try {
+      if (outlineDirty && !await saveOutline(outlineStatus)) return;
+      if (!await saveNow()) return;
+      continuePendingNavigation();
+    } finally {
+      setNavigationBusy(false);
+    }
   };
 
   const generateOutline = async () => {
@@ -417,6 +494,22 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
       </section>
 
+      <section className="report-resume-board" aria-labelledby="report-resume-title">
+        <header>
+          <div><span>SAVED REPORT WORKSPACES</span><h3 id="report-resume-title">저장한 보고서 이어쓰기</h3><p>다른 메뉴로 이동하거나 다시 로그인해도 마지막 저장 단계와 챕터에서 계속할 수 있습니다.</p></div>
+          <strong>{savedWorkspaces.length}<small>저장 프로젝트</small></strong>
+        </header>
+        {savedWorkspaces.length ? <ul>{savedWorkspaces.map((workspace) => {
+          const active = workspace.caseId === selectedCaseId;
+          const step = REPORT_WIZARD_STEPS.find((item) => item.id === workspace.wizardStep) ?? REPORT_WIZARD_STEPS[0];
+          return <li key={workspace.caseId}><button type="button" className={active ? 'is-active' : ''} aria-current={active ? 'true' : undefined} onClick={() => selectCase(workspace.caseId)}>
+            <span className="report-resume-board__step">STEP {workspace.wizardStep}</span>
+            <div><strong>{workspace.caseNumber} · {workspace.caseTitle}</strong><small>{workspace.reportTitle} · {step.title}</small><em>{new Date(workspace.updatedAt).toLocaleString('ko-KR')} · {workspace.updatedByName} · v{workspace.version}</em></div>
+            <b>{active ? '현재 작업' : '이어쓰기 →'}</b>
+          </button></li>;
+        })}</ul> : <p className="empty-box">아직 저장한 보고서가 없습니다. 아래에서 프로젝트를 고른 뒤 “지금 저장”을 누르면 여기에 표시됩니다.</p>}
+      </section>
+
       <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계">
         <div className="report-wizard-navigation__heading">
           <span>REPORT WIZARD</span>
@@ -428,7 +521,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           const complete = stepComplete[step.id];
           const unlocked = stepUnlocked[step.id];
           return <li key={step.id}>
-            <button type="button" className={current ? 'is-current' : complete ? 'is-complete' : ''} disabled={!unlocked} aria-current={current ? 'step' : undefined} onClick={() => setActiveStep(step.id)}>
+            <button type="button" className={current ? 'is-current' : complete ? 'is-complete' : ''} disabled={!unlocked} aria-current={current ? 'step' : undefined} onClick={() => changeWizardStep(step.id)}>
               <b>{complete ? '✓' : step.id}</b>
               <span><strong>{step.title}</strong><small>{current ? '지금 진행 중' : complete ? '완료' : unlocked ? '열림' : '앞 단계 완료 후 열림'}</small></span>
             </button>
@@ -452,8 +545,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <div className="inline-form">
           <Select label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row" aria-live="polite">
-            <span className="preview-pill">{error ? '저장 확인 필요' : saving ? 'D1 저장 중' : dirty ? '변경사항 있음' : version ? `D1 저장 완료 · v${version}` : '새 초안'}</span>
-            <Button onClick={() => void saveNow()} disabled={!editable || !dirty || saving || loadedCaseId !== selectedCaseId}>{saving ? '저장 중…' : '지금 저장'}</Button>
+            <span className="preview-pill">{error ? '저장 확인 필요' : saving ? 'D1 저장 중' : dirty || workspaceDirty || outlineDirty ? '저장할 변경사항 있음' : version ? `D1 저장 완료 · v${version}` : '새 초안'}</span>
+            <Button onClick={() => void saveNow()} disabled={!editable || (!dirty && !workspaceDirty && version > 0) || saving || loadedCaseId !== selectedCaseId}>{saving ? '저장 중…' : '지금 저장'}</Button>
             {error && <Button variant="secondary" onClick={() => selectedCaseId && void loadDraft(selectedCaseId)}>최신본 다시 불러오기</Button>}
           </div>
         </div>
@@ -484,7 +577,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <header><div><span>{authoring.claimType} · APPROVED OUTLINE · PLAN v{outlineVersion || 'NEW'}</span><h3>보고서를 쓰기 전에 챕터별 작성 방향을 확정하세요.</h3><p>관리자가 승인한 목차는 빠뜨리거나 바꿀 수 없습니다. 각 챕터를 눌러 이번 프로젝트에서 다룰 쟁점과 검토 방향을 메모한 뒤 목차 기획을 확정합니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
             {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.claimType} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
             <div className="notice-box"><strong>쉬운 시작:</strong> 아래 “AI로 목차 작성계획 만들기”를 누르면 현재 프로젝트 자료를 읽고 각 챕터에 무엇을 쓸지 자동으로 채웁니다. 내용을 확인한 뒤 “목차 기획 확정”을 누르세요.</div>
-            <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => setSelectedChapterId(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {chapter.title}</strong><small>{chapter.agentCode} · prompt v{chapter.promptVersion}</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
+            <ol>{authoring.chapters.map((chapter) => { const authored = authoredChapterCodes.has(chapter.chapterCode); const active = chapter.id === selectedChapterId; return <li key={chapter.id}><button type="button" className={active ? 'is-active' : ''} onClick={() => changeSelectedChapter(chapter.id)} aria-pressed={active}><span>{String(chapter.ordinal).padStart(2, '0')}</span><div><strong>{chapter.chapterCode} · {chapter.title}</strong><small>{chapter.agentCode} · prompt v{chapter.promptVersion}</small></div><em className={authored ? 'is-complete' : ''}>{authored ? '초안 있음' : '작성 대기'}</em></button></li>; })}</ol>
             {selectedChapter && <div className="report-outline-note"><label htmlFor="report-outline-note"><span>{selectedChapter.chapterCode}</span> 이번 챕터 작성 방향</label><textarea id="report-outline-note" maxLength={2000} value={outlineNotes[selectedChapter.id] ?? ''} disabled={!editable || savingOutline} onChange={(event) => { setOutlineNotes((current) => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); }} placeholder="예: 현장조사 사진과 실측 수량의 차이를 표로 비교하고, 계약도면 기준과 실제 시공상태를 구분해 작성" /><small>{(outlineNotes[selectedChapter.id] ?? '').length}/2,000 · 빈 메모도 허용되지만 핵심 쟁점을 적으면 챕터 작성 지시에 함께 반영됩니다.</small></div>}
             <div className="report-outline-actions"><span className={`report-outline-status is-${outlineStatus.toLowerCase()}`}>{outlineStatus === 'CONFIRMED' && !outlineDirty ? '✓ 목차 기획 확정' : outlineDirty ? '목차 변경사항 있음' : '목차 기획 대기'}</span><Button variant="secondary" disabled={!editable || !authoring.outlineAiConnected || generatingOutline || savingOutline} onClick={() => void generateOutline()}>{generatingOutline ? '프로젝트 근거 분석 중…' : 'AI로 목차 작성계획 만들기'}</Button><Button variant="secondary" disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (!outlineDirty && outlineVersion > 0)} onClick={() => void saveOutline(outlineStatus === 'CONFIRMED' ? 'CONFIRMED' : 'DRAFT')}>{savingOutline ? '저장 중…' : '목차 메모 저장'}</Button><Button disabled={!editable || savingOutline || generatingOutline || !authoring.outlinePlan.persistenceAvailable || (outlineStatus === 'CONFIRMED' && !outlineDirty)} onClick={() => void saveOutline('CONFIRMED')}>{outlineStatus === 'CONFIRMED' ? '변경 목차 다시 확정' : '목차 기획 확정'}</Button></div>
             {!authoring.outlineAiConnected && <div className="error-box">관리자 설정에서 목차 기획용 {authoring.outlineProviderLabel} API 키를 연결하면 AI 목차 계획 버튼이 열립니다.</div>}
@@ -494,7 +587,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <Card title="AI CHAPTER WORKFLOW · 3단계 챕터별 자동 작성" className="report-step-card report-step-card--3">
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 챕터 프롬프트가 없습니다.'}</div> : <div className="form-stack">
             <div className="inline-form">
-              <Select label="자동 작성할 챕터" value={selectedChapterId} onChange={(event) => setSelectedChapterId(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${chapter.title} · prompt v${chapter.promptVersion}` }))} />
+              <Select label="자동 작성할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${chapter.title} · prompt v${chapter.promptVersion}` }))} />
               <Button onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '선택 챕터 자동 작성'}</Button>
             </div>
             {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>목차 기획 메모</strong> {outlineNotes[selectedChapter.id]?.trim() || '별도 메모 없음 · 승인된 기본 챕터 지시를 사용합니다.'}</p></div>}
@@ -546,15 +639,26 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </Card>
       </>}
       <footer className="report-wizard-footer" aria-label="보고서 단계 이동">
-        <Button variant="secondary" disabled={!previousStep} onClick={() => previousStep && setActiveStep(previousStep)}>← 이전 단계</Button>
+        <Button variant="secondary" disabled={!previousStep} onClick={() => previousStep && changeWizardStep(previousStep)}>← 이전 단계</Button>
         <div>
           <strong>{activeStep} / 5 · {activeStepGuide.title}</strong>
           <small>{stepComplete[activeStep] ? `✓ ${activeStepGuide.doneText}` : nextBlockedReason || activeStepGuide.doneText}</small>
         </div>
         {nextStep
-          ? <Button disabled={!stepComplete[activeStep]} onClick={() => setActiveStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
+          ? <Button disabled={!stepComplete[activeStep]} onClick={() => changeWizardStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
           : <Button onClick={() => onNavigate('/approval')}>검토·승인함 열기 →</Button>}
       </footer>
+      <Dialog isOpen={Boolean(pendingNavigation)} title="보고서 작업을 저장하고 이동할까요?" onClose={() => !navigationBusy && setPendingNavigation(null)}>
+        <div className="report-navigation-save-dialog">
+          <div className="report-navigation-save-dialog__project"><span>현재 작성 중</span><strong>{selectedCase?.caseNumber} · {selectedCase?.title}</strong><small>{activeStep}단계 · {REPORT_WIZARD_STEPS[activeStep - 1].title} · {version ? `D1 v${version}` : '아직 저장하지 않은 새 초안'}</small></div>
+          <p>{dirty || workspaceDirty || outlineDirty ? '저장하지 않은 본문·목차·진행 단계가 있습니다. “저장하고 이동”을 누르면 현재 상태를 D1에 저장한 뒤 이동합니다.' : '현재 상태는 이미 저장되어 있습니다. “저장하고 이동”을 누르면 안전하게 다음 화면으로 이동합니다.'}</p>
+          <div className="action-row">
+            <Button variant="secondary" onClick={() => setPendingNavigation(null)} disabled={navigationBusy}>계속 작성</Button>
+            <Button variant="danger" onClick={continuePendingNavigation} disabled={navigationBusy || saving || savingOutline}>저장하지 않고 이동</Button>
+            <Button onClick={() => void saveAndContinueNavigation()} disabled={navigationBusy || saving || savingOutline}>{navigationBusy ? '저장 확인 중…' : '저장하고 이동'}</Button>
+          </div>
+        </div>
+      </Dialog>
       <Dialog isOpen={showTemplatePreview && Boolean(selectedTemplateCategory)} title={selectedTemplateCategory ? `${selectedTemplateCategory.categoryCode} · ${selectedTemplateCategory.displayName}` : '원본 보고서 템플릿'} onClose={() => setShowTemplatePreview(false)}>
         {selectedTemplateCategory && <div className="report-template-preview-dialog"><header><span>SOURCE-ANALYZED TEMPLATE · FINISHED REPORT REFERENCE · v{selectedTemplateCategory.analysisVersion}</span><p>{selectedTemplateCategory.analysisSummary}</p>{!selectedTemplateCategory.matchesCurrentType && <strong>참고 열람 전용 · 현재 프로젝트 유형은 {authoring?.claimType}, 이 원본의 주 유형은 {selectedTemplateCategory.primaryClaimType}입니다.</strong>}</header><section className="report-template-source-outline"><h3>원본에서 확인한 목차·작성 순서</h3><ol>{selectedTemplateCategory.outline.map((item) => <li key={item}>{item}</li>)}</ol></section><section className="report-template-source-files"><header><div><span>PRIVATE COMPANY GOOGLE DRIVE</span><h3>실제 원본 완제품 {selectedTemplateCategory.uploadedSourceCount}/{selectedTemplateCategory.expectedSourceCount}개</h3></div></header>{selectedTemplateCategory.files.length ? <ul>{selectedTemplateCategory.files.map((file) => <li key={file.id}><div><strong>{file.originalName}</strong><small>{file.fileExtension.toUpperCase()} · {(file.byteSize / 1024 / 1024).toFixed(1)} MB · {file.uploadedByName} · SHA {file.sha256.slice(0, 12)}…</small></div><Button variant="secondary" onClick={() => void openTemplateSource(file)}>{file.viewMode === 'INLINE' ? '원본 PDF 열기' : '원본 다운로드'}</Button></li>)}</ul> : <p className="empty-box">구조 분석과 챕터 프롬프트는 적용됐지만 Google Drive 원본 파일은 아직 등록되지 않았습니다. 관리자가 AI·템플릿 관리 화면에서 원본 폴더를 한 번 등록해야 합니다.</p>}</section>{selectedTemplatePreview && <details className="report-template-structure-fallback"><summary>웹용 구조 예시도 함께 보기</summary><pre>{selectedTemplatePreview.finishedExample}</pre></details>}</div>}
       </Dialog>

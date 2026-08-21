@@ -59,10 +59,10 @@ async function databaseFixture(): Promise<{ sql: Database; env: CloudflareEnv }>
   for (const name of [
     '0001_cf_foundation.sql', '0001_cf02_preview_drafts.sql', '0002_cf03_preview_evidence.sql',
     '0003_cf04_preview_auth.sql', '0004_cf05_google_drive.sql', '0005_cf06_case_operations.sql',
-    '0006_cf07_report_studio_drafts.sql'
+    '0006_cf07_report_studio_drafts.sql', '0029_cf37_report_workspace_resume.sql', '0030_cf38_admin_account_management.sql'
   ]) sql.exec(migration(name));
   const now = new Date().toISOString();
-  const addUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
+  const addUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at,version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 1)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
   addUser(ADMIN_ID, 'admin', '["admin"]');
   addUser(REVIEWER_ID, 'reviewer', '["reviewer"]');
   sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(ADMIN_TOKEN), ADMIN_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);
@@ -113,6 +113,30 @@ test('CF07 report body autosaves with optimistic versions and survives database 
 
 interface ReportShape { version: number; content: string }
 
+test('CF37 saves wizard position and exposes assigned resumable report workspaces', async () => {
+  const { sql, env } = await databaseFixture();
+  const caseId = await createCase(env);
+  const chapterId = '70000000-0000-4000-8000-000000000037';
+  const saved = await worker.fetch(request(`/api/report-drafts?caseId=${caseId}`, ADMIN_TOKEN, {
+    method: 'PUT',
+    body: JSON.stringify({ title: '이어쓰기 보고서', content: '챕터 초안', expectedVersion: 0, wizardStep: 3, selectedChapterId: chapterId })
+  }), env);
+  assert.equal(saved.status, 200);
+  const savedBody = await saved.json() as { draft: ReportShape & { wizardStep: number; selectedChapterId: string } };
+  assert.equal(savedBody.draft.wizardStep, 3);
+  assert.equal(savedBody.draft.selectedChapterId, chapterId);
+
+  const listed = await worker.fetch(request('/api/report-workspaces', ADMIN_TOKEN), env);
+  assert.equal(listed.status, 200);
+  const listBody = await listed.json() as { workspaces: Array<{ caseId: string; wizardStep: number; reportTitle: string }> };
+  assert.deepEqual(listBody.workspaces.map((entry) => [entry.caseId, entry.wizardStep, entry.reportTitle]), [[caseId, 3, '이어쓰기 보고서']]);
+
+  const SQL = await initSqlJs();
+  const restarted = new SQL.Database(sql.export());
+  assert.deepEqual(restarted.exec('SELECT wizard_step, selected_chapter_id FROM preview_report_drafts')[0].values[0], [3, chapterId]);
+  restarted.close(); sql.close();
+});
+
 test('CF07 Reviewer can read an assigned report but cannot save, and D1 history is immutable', async () => {
   const { sql, env } = await databaseFixture();
   const caseId = await createCase(env);
@@ -136,5 +160,31 @@ test('CF07 Report Studio exposes case selection, debounce autosave, manual save,
   assert.match(component, /지금 저장/u);
   assert.match(component, /완제품 템플릿 열람/u);
   assert.match(component, /beforeunload/u);
+  assert.match(component, /저장한 보고서 이어쓰기/u);
+  assert.match(component, /저장하고 이동/u);
+  assert.match(component, /registerNavigationBlocker/u);
   assert.match(router, /currentRoute\.id === 'REPO-02'.*PreviewReportStudio/u);
 });
+
+test('CF38 Admin approves, blocks, reactivates, and resets D1 login accounts', async () => {
+  const { sql, env } = await databaseFixture();
+  const created = await worker.fetch(request('/api/admin/users', ADMIN_TOKEN, {
+    method: 'POST', body: JSON.stringify({ loginId: 'new.user@con-cost.com', displayName: '신규 사용자', email: 'new.user@con-cost.com', password: 'initial-pass', roles: ['staff'] })
+  }), env);
+  assert.equal(created.status, 201);
+  const account = (await created.json() as { user: WorkspaceAccount }).user;
+  assert.equal(account.version, 1);
+  assert.equal((await worker.fetch(new Request('https://preview.example/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loginId: account.loginId, password: 'initial-pass' }) }), env)).status, 200);
+
+  const deactivated = await worker.fetch(request(`/api/admin/users/${account.id}`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ action: 'DEACTIVATE', expectedVersion: 1 }) }), env);
+  assert.equal(deactivated.status, 200);
+  assert.equal((await worker.fetch(new Request('https://preview.example/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loginId: account.loginId, password: 'initial-pass' }) }), env)).status, 401);
+  assert.equal((await worker.fetch(request(`/api/admin/users/${account.id}`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ action: 'ACTIVATE', expectedVersion: 2 }) }), env)).status, 200);
+  assert.equal((await worker.fetch(request(`/api/admin/users/${account.id}`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ action: 'RESET_PASSWORD', expectedVersion: 3, password: 'replacement-pass' }) }), env)).status, 200);
+  assert.equal((await worker.fetch(new Request('https://preview.example/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ loginId: account.loginId, password: 'replacement-pass' }) }), env)).status, 200);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_user_admin_events')[0].values[0][0], 4);
+  assert.throws(() => sql.run('DELETE FROM preview_users WHERE id=?', [account.id]), /deactivated/u);
+  sql.close();
+});
+
+interface WorkspaceAccount { id: string; loginId: string; version: number }
