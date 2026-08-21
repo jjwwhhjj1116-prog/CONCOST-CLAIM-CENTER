@@ -44,6 +44,23 @@ async function assertDialogFitsViewport(page: import('playwright-core').Page, mi
   if(minimumDesktopWidth)assert.ok(metrics.width>=minimumDesktopWidth,`wide dialog is unexpectedly narrow: ${JSON.stringify(metrics)}`);
 }
 
+async function assertCoachFitsViewport(page: import('playwright-core').Page):Promise<void>{
+  const metrics=await page.getByRole('complementary',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).evaluate((panel)=>{
+    const rect=panel.getBoundingClientRect();
+    const style=getComputedStyle(panel);
+    return {left:rect.left,top:rect.top,right:rect.right,bottom:rect.bottom,width:rect.width,clientWidth:panel.clientWidth,scrollWidth:panel.scrollWidth,viewportWidth:window.innerWidth,viewportHeight:window.innerHeight,documentOverflow:document.documentElement.scrollWidth-document.documentElement.clientWidth,backdropFilter:style.backdropFilter};
+  });
+  assert.ok(metrics.left>=8,`coach starts outside viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.top>=8,`coach starts above viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.right<=metrics.viewportWidth-8,`coach ends outside viewport: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.bottom<=metrics.viewportHeight-8,`coach ends below viewport: ${JSON.stringify(metrics)}`);
+  if(metrics.viewportWidth>720)assert.ok(metrics.width<=430,`coach obscures too much of the actual page: ${JSON.stringify(metrics)}`);
+  else assert.ok(metrics.top>=metrics.viewportHeight*.45,`mobile coach must leave at least the upper half of the actual screen visible: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.scrollWidth<=metrics.clientWidth+1,`coach content overflows horizontally: ${JSON.stringify(metrics)}`);
+  assert.ok(metrics.documentOverflow<=1,`document overflows horizontally: ${JSON.stringify(metrics)}`);
+  assert.ok(!metrics.backdropFilter||metrics.backdropFilter==='none',`coach must not blur the page: ${JSON.stringify(metrics)}`);
+}
+
 async function main():Promise<void>{
   if(!fs.existsSync(path.join(distRoot,'index.html')))throw new Error('Run cf:build before CF35 E2E.');
   const server=staticServer('http://127.0.0.1');
@@ -73,21 +90,26 @@ async function main():Promise<void>{
     await page.goto(`${origin}/`,{waitUntil:'domcontentloaded'});
     await page.waitForURL(`${origin}/dashboard`);
     assert.equal(await page.getByText(/페이지를 찾을 수 없습니다 \(404\)/u).count(),0);
-    const dialog=page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'});
-    await dialog.waitFor({state:'visible',timeout:10_000});
-    await assertDialogFitsViewport(page,800);
+    const coach=page.getByRole('complementary',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'});
+    await coach.waitFor({state:'visible',timeout:10_000});
+    await assertCoachFitsViewport(page);
+    assert.equal(await page.locator('.modal-backdrop').count(),0,'first-run guide must not use a blocking or blurred backdrop');
     for(let index=0;index<WORKSPACE_TUTORIAL_STEPS.length;index+=1){
       const expected=WORKSPACE_TUTORIAL_STEPS[index];
-      assert.match(await dialog.innerText(),new RegExp(expected.title.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'u'));
-      await dialog.getByRole('button',{name:expected.pathLabel,exact:true}).click();
-      assert.match(await dialog.innerText(),/화면 확인 완료/u);
-      if(index<WORKSPACE_TUTORIAL_STEPS.length-1)await dialog.getByRole('button',{name:'다음 설명 →'}).click();
+      assert.match(await coach.innerText(),new RegExp(expected.title.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'u'));
+      await coach.getByRole('button',{name:expected.pathLabel,exact:true}).click();
+      await page.waitForURL((url)=>url.pathname===expected.path,{timeout:10_000});
+      assert.match(await coach.innerText(),/배경 화면에 표시된/u);
+      await page.locator('.workspace-tutorial-target').first().waitFor({state:'visible',timeout:10_000});
+      assert.ok(await page.locator('.workspace-tutorial-target').count()>=1,`${expected.path} needs a visible numbered target`);
+      assert.equal(await page.locator('.modal-backdrop').count(),0,`${expected.path} must remain visible and interactive`);
+      if(index<WORKSPACE_TUTORIAL_STEPS.length-1)await coach.getByRole('button',{name:'다음 설명 →'}).click();
     }
-    await dialog.getByRole('button',{name:'튜토리얼 완료'}).click();
-    await dialog.waitFor({state:'hidden'});
+    await coach.getByRole('button',{name:'튜토리얼 완료'}).click();
+    await coach.waitFor({state:'hidden'});
     assert.equal(completionWrites,1);
     assert.equal(completionAction,'COMPLETED');
-    console.log(`  1/4 first-run tutorial visits and explains all ${WORKSPACE_TUTORIAL_STEPS.length} workflow screens, then persists completion PASS`);
+    console.log(`  1/4 non-modal first-run tutorial shows numbered live-screen targets across all ${WORKSPACE_TUTORIAL_STEPS.length} workflow screens and persists completion PASS`);
 
     await page.goto(`${origin}/dashboard`,{waitUntil:'domcontentloaded'});
     await page.getByRole('button',{name:'현재 화면 도움말 열기'}).click();
@@ -106,17 +128,17 @@ async function main():Promise<void>{
     console.log('  3/4 report help keeps the exact five-step authoring order PASS');
 
     await page.reload({waitUntil:'domcontentloaded'});
-    assert.equal(await page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).count(),0);
+    assert.equal(await page.getByRole('complementary',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).count(),0);
     await page.setViewportSize({width:640,height:900});
     await page.getByRole('button',{name:'현재 화면 도움말 열기'}).click();
     await page.getByRole('button',{name:'전체 튜토리얼 다시 보기'}).click();
-    await page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).waitFor({state:'visible'});
-    await assertDialogFitsViewport(page);
+    await page.getByRole('complementary',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'}).waitFor({state:'visible'});
+    await assertCoachFitsViewport(page);
     await page.setViewportSize({width:1024,height:900});
-    await assertDialogFitsViewport(page,800);
+    await assertCoachFitsViewport(page);
     await page.setViewportSize({width:1440,height:900});
-    await assertDialogFitsViewport(page,800);
-    console.log('  4/4 completed tutorial stays closed and reopened tutorial fits 640/1024/1440px without clipping PASS');
+    await assertCoachFitsViewport(page);
+    console.log('  4/4 completed tutorial stays closed and reopened non-modal coach fits 640/1024/1440px without clipping PASS');
     await context.close();
     console.log('✅ CF35 guided workspace browser E2E PASS (4 flows)');
   }finally{

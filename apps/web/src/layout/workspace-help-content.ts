@@ -8,6 +8,7 @@ export interface TutorialStep {
   completion: string;
   path: string;
   pathLabel: string;
+  targetSelectors: readonly string[];
 }
 
 export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
@@ -15,79 +16,92 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
     eyebrow: 'START · 업무 홈', title: '먼저 오늘 해야 할 프로젝트를 확인합니다.',
     explanation: '처음에는 CLAIM CENTER HOME에서 진행 중 프로젝트, 검토 대기, 일정과 마감 항목을 확인하세요.',
     tasks: ['대시보드의 진행 현황 확인', '내가 담당한 프로젝트 선택', '현재 단계와 다음 할 일 확인'],
-    completion: '작업할 프로젝트와 오늘 처리할 단계가 정해지면 완료입니다.', path: '/dashboard', pathLabel: '업무 홈 열기'
+    completion: '작업할 프로젝트와 오늘 처리할 단계가 정해지면 완료입니다.', path: '/dashboard', pathLabel: '업무 홈 열기',
+    targetSelectors: ['.dashboard-quick-actions', '.dashboard-kpi-grid', '.dashboard-columns']
   },
   {
     eyebrow: 'INTAKE · 프로젝트 의뢰', title: '클라이언트의 입장부터 분명하게 등록합니다.',
     explanation: '피해자 측인지 피의자·피고 측인지 선택하고, 그 입장에서 사건 설명과 녹음 요약을 남깁니다.',
     tasks: ['클라이언트 법적 지위 선택', '사건 설명 입력', '필요하면 녹음 파일 추가', '의뢰 저장'],
-    completion: '저장 후 같은 프로젝트가 선택된 제안서 작성 화면으로 이동하면 완료입니다.', path: '/cases/new', pathLabel: '프로젝트 의뢰 열고 확인'
+    completion: '저장 후 같은 프로젝트가 선택된 제안서 작성 화면으로 이동하면 완료입니다.', path: '/cases/new', pathLabel: '프로젝트 의뢰 열고 확인',
+    targetSelectors: ['.case-create-form', '.case-create-summary', '.case-create-actions']
   },
   {
     eyebrow: 'PROPOSAL · 제안서 작성', title: '의뢰 내용을 제안서로 이어갑니다.',
     explanation: '방금 등록한 프로젝트를 다시 고르지 않아도 같은 프로젝트가 선택됩니다. 제안서 작성과 발송본을 고정하세요.',
     tasks: ['연결 프로젝트 확인', '제안서 작성', '발송 버전과 원문 해시 고정'],
-    completion: '거래처에 보낸 제안서가 프로젝트에 연결되면 완료입니다.', path: '/proposals/editor', pathLabel: '제안서 작성 열고 확인'
+    completion: '거래처에 보낸 제안서가 프로젝트에 연결되면 완료입니다.', path: '/proposals/editor', pathLabel: '제안서 작성 열고 확인',
+    targetSelectors: ['.proposal-intake-context', '.proposal-step-card', '.proposal-step-button']
   },
   {
     eyebrow: 'AWARD · 프로젝트 접수', title: '수주 여부를 확인하고 프로젝트로 전환합니다.',
     explanation: '수주 확정된 제안서만 계약 금액과 수행 기간을 가진 실제 프로젝트가 됩니다.',
     tasks: ['발송 제안서 연결', '수주 또는 미수주 결정', '수행 기간과 담당자 확인'],
-    completion: '수주 프로젝트가 일정표에 나타나면 완료입니다.', path: '/workflow/award', pathLabel: '프로젝트 접수 열고 확인'
+    completion: '수주 프로젝트가 일정표에 나타나면 완료입니다.', path: '/workflow/award', pathLabel: '프로젝트 접수 열고 확인',
+    targetSelectors: ['.proposal-flow-list', '.proposal-flow-detail', '.proposal-flow-kpis']
   },
   {
     eyebrow: 'SCHEDULE · 프로젝트 일정표', title: '모든 단계가 한 프로젝트 일정으로 연결되는지 봅니다.',
     explanation: '제안서·수주·착수회의·현장조사·산출·보고서의 실제 D1 기록을 한 줄로 보여줍니다.',
     tasks: ['프로젝트 선택', '1~6단계 상태 확인', '기간과 담당 팀 확인'],
-    completion: '현재 단계와 빠진 기록을 찾으면 완료입니다.', path: '/projects/schedule', pathLabel: '일정표 열고 확인'
+    completion: '현재 단계와 빠진 기록을 찾으면 완료입니다.', path: '/projects/schedule', pathLabel: '일정표 열고 확인',
+    targetSelectors: ['.schedule-toolbar', '.schedule-board', '.schedule-project-info']
   },
   {
     eyebrow: 'KICKOFF · 착수회의', title: '회의 기록과 후속 업무를 남깁니다.',
     explanation: '회의 일시·참석자·쟁점을 저장하고 AI 요약과 타임라인 초안을 사람이 확인합니다.',
     tasks: ['회의 정보 저장', '메모·녹음 근거 확인', '요약·후속업무 확인'],
-    completion: '확정 회의록과 다음 행동이 남으면 완료입니다.', path: '/meetings', pathLabel: '착수회의 열고 확인'
+    completion: '확정 회의록과 다음 행동이 남으면 완료입니다.', path: '/meetings', pathLabel: '착수회의 열고 확인',
+    targetSelectors: ['.workflow-project-selector', '.workflow-form-grid', '.workflow-actions']
   },
   {
     eyebrow: 'SURVEY · 현장조사', title: '현장 범위와 사진·녹음 근거를 모읍니다.',
     explanation: '조사일, 위치, 범위를 기록하고 현장 자료를 해당 프로젝트에 연결합니다.',
     tasks: ['조사 범위 저장', '사진·녹음 업로드', '자료 날짜·업로더 확인'],
-    completion: '현장조사 기록과 원본 자료가 연결되면 완료입니다.', path: '/workflow/site-survey', pathLabel: '현장조사 열고 확인'
+    completion: '현장조사 기록과 원본 자료가 연결되면 완료입니다.', path: '/workflow/site-survey', pathLabel: '현장조사 열고 확인',
+    targetSelectors: ['.workflow-project-selector', '.workflow-form-grid', '.workflow-dropzone']
   },
   {
     eyebrow: 'QUANTITY · 물량산출 및 내역', title: '산출 기준·투입 팀·원본 파일을 연결합니다.',
     explanation: '산출 범위와 기준을 남기고 마감·구조·토목조경 팀 일정을 배정합니다.',
     tasks: ['산출 범위·기준 입력', '팀별 기간 배정', '산출서·내역서 업로드'],
-    completion: '일정표와 자료실에 팀 일정과 파일이 모두 보이면 완료입니다.', path: '/workflow/quantity', pathLabel: '물량산출 열고 확인'
+    completion: '일정표와 자료실에 팀 일정과 파일이 모두 보이면 완료입니다.', path: '/workflow/quantity', pathLabel: '물량산출 열고 확인',
+    targetSelectors: ['.workflow-project-selector', '.workflow-form-grid', '.workflow-evidence-card']
   },
   {
     eyebrow: 'REPORT · 5단계 작성', title: '보고서는 한 단계만 보고 차례대로 작성합니다.',
     explanation: '템플릿 확인 → 목차 기획 → 챕터별 AI 작성 → 사람 검토·수정 → 검토 요청 순서입니다.',
     tasks: ['완제품 템플릿 열람', '목차 기획 확정', '챕터별 근거 확인·작성', '최신본 저장·검토 요청'],
-    completion: '작성 완료를 눌러 검토·승인 대기열로 보내면 완료입니다.', path: '/reports/studio', pathLabel: '보고서 작성 열고 확인'
+    completion: '작성 완료를 눌러 검토·승인 대기열로 보내면 완료입니다.', path: '/reports/studio', pathLabel: '보고서 작성 열고 확인',
+    targetSelectors: ['.report-wizard-navigation', '.report-template-viewer-control', '.report-wizard-footer']
   },
   {
     eyebrow: 'APPROVAL · 검토 승인', title: '대표 또는 부사장이 최종 승인합니다.',
     explanation: '작성자와 다른 검토자가 확인하고, CEO·Director 권한의 최종 결재자가 승인해야 납품 알림이 PM에게 갑니다.',
     tasks: ['제출 버전·근거 확인', '수정 요청 또는 최종 승인', 'PM 알림·메일 발송 상태 확인'],
-    completion: '승인 이력과 PM 납품 알림이 생성되면 완료입니다.', path: '/approvals', pathLabel: '검토·승인 열고 확인'
+    completion: '승인 이력과 PM 납품 알림이 생성되면 완료입니다.', path: '/approval', pathLabel: '검토·승인 열고 확인',
+    targetSelectors: ['.content-stack > *:first-child', '.inline-form', '.content-stack > *:last-child']
   },
   {
     eyebrow: 'EVIDENCE · 자료실', title: '모든 원본 자료는 회사 Google Drive에 모읍니다.',
     explanation: '브라우저는 Worker를 통해 업로드하고, 원본은 Drive에, 파일 ID·해시·업로더·시간은 D1에 남습니다.',
     tasks: ['프로젝트 선택', '자료 종류 선택', '업로드', 'Drive 저장 상태와 SHA-256 확인'],
-    completion: 'GOOGLE_DRIVE 저장 표시와 다운로드 링크가 보이면 완료입니다.', path: '/cases/files', pathLabel: '자료실 열고 확인'
+    completion: 'GOOGLE_DRIVE 저장 표시와 다운로드 링크가 보이면 완료입니다.', path: '/cases/files', pathLabel: '자료실 열고 확인',
+    targetSelectors: ['.preview-evidence-hero', '.inline-form', '.case-evidence-dropzone']
   },
   {
     eyebrow: 'COURT · 법원 자료', title: '법원 사건번호와 소송 일정을 사람이 확인해 등록합니다.',
     explanation: '현재는 법원 자동 스크래핑이 아니라 D1 기반 내부 검증 시스템입니다. 공식 출처를 확인한 값만 일정표에 반영합니다.',
     tasks: ['법원·사건번호 입력', '공식 출처 URL 기록', '기일·제출기한 등록', '검증 상태 확인'],
-    completion: '프로젝트와 법원 일정이 연결되면 완료입니다.', path: '/after-delivery', pathLabel: '법원 자료 열고 확인'
+    completion: '프로젝트와 법원 일정이 연결되면 완료입니다.', path: '/after-delivery', pathLabel: '법원 자료 열고 확인',
+    targetSelectors: ['.litigation-search', '.litigation-list', '.litigation-detail']
   },
   {
     eyebrow: 'SETTINGS · 안전한 연결', title: '마지막으로 개인·관리자 연결 상태를 확인합니다.',
     explanation: '개인은 Gemini 보조 키, 관리자는 회사 Google Drive·프롬프트·Hermes 브리지 정책을 관리합니다.',
     tasks: ['개인 Gemini 연결 확인', '회사 Drive 연결 확인', '관리자 프롬프트·메모리 정책 확인'],
-    completion: '비밀키 원문 없이 연결 상태만 표시되면 완료입니다.', path: '/settings', pathLabel: '설정 열고 확인'
+    completion: '비밀키 원문 없이 연결 상태만 표시되면 완료입니다.', path: '/settings', pathLabel: '설정 열고 확인',
+    targetSelectors: ['.settings-section-tabs', '.credential-settings-card', '.settings-admin-links']
   }
 ] as const;
 
