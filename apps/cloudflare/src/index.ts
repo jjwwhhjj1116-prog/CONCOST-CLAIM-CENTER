@@ -19,6 +19,7 @@ import {
   validateEvidenceFile,
   validateReportTemplateFile,
   verifyDriveFolder,
+  type ClaimCenterFolderKind,
   type GoogleFetch
 } from './google-drive';
 import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
@@ -624,6 +625,24 @@ function kickoffDraft(agenda: string, notes: string, meetingAt: string): { summa
   return { summary, timeline };
 }
 
+function parseGeminiKickoffDraft(content: string): { summary: string; timeline: Array<{ order: number; title: string; detail: string }> } | null {
+  try {
+    const normalized = content.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
+    const parsed = JSON.parse(normalized) as Record<string, unknown>;
+    if (typeof parsed.summary !== 'string' || parsed.summary.trim().length < 20 || parsed.summary.length > 30000 || !Array.isArray(parsed.timeline)) return null;
+    const timeline = parsed.timeline.slice(0, 20).map((value, index) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+      const row = value as Record<string, unknown>;
+      const title = typeof row.title === 'string' ? row.title.trim().slice(0, 160) : '';
+      const detail = typeof row.detail === 'string' ? row.detail.trim().slice(0, 1200) : '';
+      return title && detail ? { order: index + 1, title, detail } : null;
+    }).filter((value): value is { order: number; title: string; detail: string } => Boolean(value));
+    return timeline.length ? { summary: parsed.summary.trim(), timeline } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const [kickoff, surveys, allocations, events] = await Promise.all([
@@ -647,6 +666,8 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
       'FROM preview_workflow_events e JOIN preview_users u ON u.id = e.actor_id WHERE e.case_id = ? ORDER BY e.created_at DESC LIMIT 100'
     ).bind(caseRow.id).all<{ id: string; eventType: string; entityId: string; detailJson: string; createdAt: string; actorName: string }>()
   ]);
+  const driveConfigured = Boolean(await googleConfig(env));
+  const driveConnected = driveConfigured ? Boolean(await getGoogleDriveCredential(env)) : false;
   return json({
     case: previewCaseProjection(caseRow),
     kickoff: kickoff ? {
@@ -659,8 +680,8 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     siteSurveys: surveys.results,
     allocations: allocations.results,
     events: events.results.map((event) => ({ ...event, detail: JSON.parse(event.detailJson) as unknown, detailJson: undefined })),
-    googleDrive: { connected: false, deferredByUser: true, uploadEnabled: false },
-    phase: 'CF11_PROJECT_WORKFLOW'
+    googleDrive: { connected: driveConnected, deferredByUser: !driveConfigured, uploadEnabled: driveConnected },
+    phase: 'CF39_INTEGRATED_PROJECT_WORKSPACE'
   });
 }
 
@@ -706,13 +727,31 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     const expectedVersion = Number(body.expectedVersion);
     const kickoff = await env.DB.prepare('SELECT meeting_at AS meetingAt, agenda, raw_notes AS rawNotes, version FROM preview_workflow_kickoffs WHERE case_id=?').bind(caseId).first<{ meetingAt: string; agenda: string; rawNotes: string; version: number }>();
     if (!kickoff || !Number.isInteger(expectedVersion) || kickoff.version !== expectedVersion) return json({ error: 'Kickoff has changed. Reload before generating the draft.', code: 'VERSION_CONFLICT' }, 409);
-    const draft = kickoffDraft(kickoff.agenda, kickoff.rawNotes, kickoff.meetingAt);
+    let draft = kickoffDraft(kickoff.agenda, kickoff.rawNotes, kickoff.meetingAt);
+    let generator = 'LOCAL_STRUCTURED_FALLBACK';
+    const organizationGemini = await resolveOrganizationAiCredential(env, 'GEMINI');
+    if (organizationGemini) {
+      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.6-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: now, updatedByName: 'ORGANIZATION_ADMIN' };
+      const generated = await generatePreviewAiText(
+        env,
+        route,
+        '당신은 건설 클레임 착수회의 기록 담당자입니다. 입력된 원문에 없는 사람·날짜·금액·결론을 만들지 마세요. 결정사항, 미결 쟁점, 담당자, 기한, 후속 업무를 시간 순서로 분리하세요. JSON 이외의 문장은 출력하지 마세요.',
+        JSON.stringify({ project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType }, meetingAt: kickoff.meetingAt, agenda: kickoff.agenda, rawNotes: kickoff.rawNotes, outputSchema: { summary: '한국어 회의록 요약', timeline: [{ title: '항목 제목', detail: '원문에 근거한 결정·담당·기한·후속조치' }] } }),
+        user.id,
+        organizationGemini
+      );
+      if (generated.response) return generated.response;
+      const parsed = generated.content ? parseGeminiKickoffDraft(generated.content) : null;
+      if (!parsed) return json({ error: 'Gemini 회의록 응답을 안전한 타임라인 형식으로 확인하지 못했습니다.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502);
+      draft = parsed;
+      generator = `GEMINI:${route.modelCode}:ORGANIZATION`;
+    }
     const nextVersion = expectedVersion + 1;
     await env.DB.batch([
       env.DB.prepare('UPDATE preview_workflow_kickoffs SET summary_text=?, timeline_json=?, status=\'DRAFTED\', version=version+1, updated_by=?, updated_at=? WHERE case_id=? AND version=?')
         .bind(draft.summary, JSON.stringify(draft.timeline), user.id, now, caseId, expectedVersion),
       env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_workflow_kickoffs WHERE case_id=? AND version=? AND updated_at=?)')
-        .bind(crypto.randomUUID(), caseId, user.id, 'KICKOFF_DRAFT_GENERATED', caseId, JSON.stringify({ generator: 'LOCAL_STRUCTURED_DRAFT', timelineCount: draft.timeline.length }), now, caseId, nextVersion, now)
+        .bind(crypto.randomUUID(), caseId, user.id, 'KICKOFF_DRAFT_GENERATED', caseId, JSON.stringify({ generator, timelineCount: draft.timeline.length }), now, caseId, nextVersion, now)
     ]);
     const canonical = await env.DB.prepare('SELECT version FROM preview_workflow_kickoffs WHERE case_id=?').bind(caseId).first<{ version: number }>();
     if (canonical?.version !== nextVersion) return json({ error: 'Concurrent kickoff update detected', code: 'VERSION_CONFLICT' }, 409);
@@ -1099,6 +1138,43 @@ async function handlePreviewLitigation(request: Request, env: CloudflareEnv, url
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   const detailMatch = url.pathname.match(/^\/api\/litigation-records\/([0-9a-f-]{36})(?:\/(events))?$/iu);
 
+  if (url.pathname === '/api/litigation-outcomes' && request.method === 'GET') {
+    const records = await env.DB.prepare(
+      'SELECT l.id,l.case_id AS caseId,c.case_number AS projectCaseNumber,c.title AS projectTitle,l.court_name AS courtName,l.court_case_number AS courtCaseNumber,' +
+      'l.case_title AS caseTitle,l.division_name AS divisionName,l.parties_text AS partiesText,l.filed_on AS filedOn,l.current_stage AS currentStage,' +
+      'l.next_hearing_at AS nextHearingAt,l.verification_status AS verificationStatus,l.official_source_url AS officialSourceUrl,l.source_checked_at AS sourceCheckedAt,' +
+      'checker.display_name AS sourceCheckedByName,l.version,(SELECT COUNT(*) FROM preview_litigation_events e WHERE e.litigation_case_id=l.id) AS eventCount,' +
+      '(SELECT COUNT(*) FROM preview_litigation_events e WHERE e.litigation_case_id=l.id AND e.verification_status=\'VERIFIED\') AS verifiedEventCount,' +
+      'l.created_at AS createdAt,l.updated_at AS updatedAt FROM preview_litigation_cases l JOIN preview_cases c ON c.id=l.case_id LEFT JOIN preview_users checker ON checker.id=l.source_checked_by ' +
+      'WHERE l.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=l.case_id AND a.user_id=?)) ORDER BY l.updated_at DESC LIMIT 100'
+    ).bind(PREVIEW_ORGANIZATION_ID,user.roles.includes('admin')?1:0,user.id).all<PreviewLitigationRow>();
+    const events = await env.DB.prepare(
+      'SELECT e.litigation_case_id AS litigationId,e.event_type AS eventType,e.occurred_at AS occurredAt,e.title,e.detail_text AS detailText,e.verification_status AS verificationStatus ' +
+      'FROM preview_litigation_events e JOIN preview_litigation_cases l ON l.id=e.litigation_case_id JOIN preview_cases c ON c.id=l.case_id ' +
+      'WHERE l.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=l.case_id AND a.user_id=?)) ORDER BY e.occurred_at DESC,e.created_at DESC'
+    ).bind(PREVIEW_ORGANIZATION_ID,user.roles.includes('admin')?1:0,user.id).all<{litigationId:string;eventType:string;occurredAt:string;title:string;detailText:string;verificationStatus:string}>();
+    const now = Date.now();
+    const outcomes = records.results.map((record) => {
+      const linked = events.results.filter((event) => event.litigationId===record.id);
+      const completedEvents = linked.filter((event) => Date.parse(event.occurredAt)<=now);
+      const upcomingEvents = linked.filter((event) => Date.parse(event.occurredAt)>now).sort((a,b)=>a.occurredAt.localeCompare(b.occurredAt));
+      const judgement = completedEvents.find((event) => event.eventType==='JUDGEMENT') ?? null;
+      const outcomeStatus = record.currentStage==='CLOSED' ? 'CLOSED' : judgement?.verificationStatus==='VERIFIED' ? 'JUDGEMENT_RECORDED' : upcomingEvents.length ? 'SCHEDULED' : linked.length ? 'IN_PROGRESS' : 'NOT_STARTED';
+      return {
+        ...litigationProjection(record),
+        outcomeStatus,
+        completedEventCount: completedEvents.length,
+        upcomingEventCount: upcomingEvents.length,
+        nextSchedule: upcomingEvents[0] ?? (record.nextHearingAt ? { eventType:'HEARING', occurredAt:record.nextHearingAt, title:'다음 기일', detailText:'법원 사건 기본정보에 등록된 다음 기일', verificationStatus:record.verificationStatus } : null),
+        judgement,
+        performanceSummary: judgement
+          ? `${judgement.title} · ${judgement.verificationStatus==='VERIFIED'?'공식 근거 확인':'사람 확인 필요'}`
+          : `${completedEvents.length}개 일정 완료 · ${upcomingEvents.length}개 예정 · 판결 결과 미등록`
+      };
+    });
+    return json({ outcomes, generatedAt:new Date().toISOString(), calculationPolicy:'RECORDED_COURT_EVENTS_ONLY', officialLookupAutomated:false, phase:'CF39_LITIGATION_OUTCOME_SUMMARY' });
+  }
+
   if (url.pathname === '/api/litigation-records' && request.method === 'GET') {
     const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
     const caseId = (url.searchParams.get('caseId') ?? '').trim();
@@ -1324,8 +1400,20 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     for (const key of required) bodyText = bodyText.replace(`{{${key}}}`, inputs[key]);
     let providerId: string | null = null; let modelId: string | null = null;
     if (body.generationMode === 'AI') {
-      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.5-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'SERVER' };
-      const generated = await generatePreviewAiText(env, route, '당신은 건설 클레임 기술제안서 작성자입니다. 사용자가 제공한 사실만 사용하고, 근거 없는 수치와 계약조건을 만들지 마세요. 한국어로 명확한 제목과 1~5장 구조의 제안서를 작성하세요.', structured, user.id);
+      const organizationGemini = await resolveOrganizationAiCredential(env, 'GEMINI');
+      if (!organizationGemini) return json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503);
+      const intakeSummary = await env.DB.prepare(
+        'SELECT summary_text AS summaryText,client_legal_position AS clientLegalPosition,created_at AS createdAt FROM preview_intake_audio_summaries WHERE case_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1'
+      ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ summaryText: string; clientLegalPosition: string; createdAt: string }>().catch(() => null);
+      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.6-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'ORGANIZATION_ADMIN' };
+      const generated = await generatePreviewAiText(
+        env,
+        route,
+        '당신은 건설 클레임 기술제안서 전담 작성자입니다. 승인된 제안서 템플릿 구조를 유지하고 사용자가 제공한 사실만 사용하세요. 클라이언트의 법적 지위와 관점을 명시하되 상대방 주장을 사실처럼 단정하지 마세요. 근거 없는 수치·계약조건·판례·일정을 만들지 말고 누락 정보는 [확인 필요]로 표시하세요. 한국어 전문 문체로 작성하세요.',
+        JSON.stringify({ project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, description: caseRow.description }, approvedTemplate: current.templateBody, writerInputs: inputs, latestIntakeAudioSummary: intakeSummary ?? null }),
+        user.id,
+        organizationGemini
+      );
       if (generated.response) return generated.response;
       bodyText = generated.content ?? bodyText; providerId = 'GEMINI'; modelId = route.modelCode;
     }
@@ -1374,13 +1462,13 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 async function summarizeIntakeAudio(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,mimeType: string): Promise<{summary?:string;modelCode:string;response?:Response}> {
-  const credential=await resolvePreviewAiCredential(env,user.id,'GEMINI');
-  if(!credential) return {modelCode:'gemini-2.5-flash',response:json({error:'내 설정 또는 관리자 설정에서 Gemini API 키를 연결해 주세요.',code:'GEMINI_NOT_CONFIGURED'},503)};
-  const modelCode='gemini-2.5-flash';
+  const credential=await resolveOrganizationAiCredential(env,'GEMINI');
+  if(!credential) return {modelCode:'gemini-3.6-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
+  const modelCode='gemini-3.6-flash';
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
   let response:Response;
   try{
-    response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({contents:[{role:'user',parts:[{text:`당신은 건설 클레임 프로젝트 의뢰 녹음 정리 담당자입니다. 클라이언트 법적 지위는 ${caseRow.clientLegalPosition}입니다. 반드시 클라이언트 입장에서만 사실을 정리하고 추측하지 마세요. 다음 형식으로 한국어 작성: 1) 의뢰 배경 2) 클라이언트 주장 3) 상대방 주장 또는 쟁점 4) 확보 자료 5) 추가 확인 질문 6) 보고서 작성 시 관점 주의사항.`},{inline_data:{mime_type:mimeType,data:bytesToBase64(bytes)}}]}],generationConfig:{temperature:0.1,maxOutputTokens:4096}})});
+    response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 녹음 정리 담당자입니다. 입력 원문에 없는 사실을 만들지 말고 클라이언트 관점과 상대방 주장을 구분하세요.'}]},contents:[{role:'user',parts:[{text:`프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n클라이언트 법적 지위: ${caseRow.clientLegalPosition}\n다음 형식으로 한국어 작성: 1) 시간순 타임라인 2) 의뢰 배경 3) 클라이언트 주장 4) 상대방 주장 또는 쟁점 5) 확보 자료 6) 추가 확인 질문 7) 제안서·보고서 작성 시 관점 주의사항.`},{inline_data:{mime_type:mimeType,data:bytesToBase64(bytes)}}]}],generationConfig:{maxOutputTokens:4096}})});
   }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 녹음 요약 시간이 초과되었습니다.',code:'GEMINI_AUDIO_UNAVAILABLE'},504)}}
   clearTimeout(timeout);
   if(!response.ok){const safe=safeGeminiProviderError(await response.json().catch(()=>null),response.status);return{modelCode,response:json({...safe,providerStatus:response.status},response.status===401||response.status===403?503:502)}}
@@ -2046,6 +2134,13 @@ async function previewStoredAiCredential(
 async function resolvePreviewAiCredential(env: CloudflareEnv, actorId: string, provider: PreviewAiProvider): Promise<ResolvedPreviewAiCredential | null> {
   const personal = actorId && provider === 'GEMINI' ? await previewStoredAiCredential(env, provider, 'USER', actorId) : null;
   if (personal) return personal;
+  const organization = await previewStoredAiCredential(env, provider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID);
+  if (organization) return organization;
+  const apiKey = previewEnvironmentApiKey(env, provider);
+  return apiKey ? { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) } : null;
+}
+
+async function resolveOrganizationAiCredential(env: CloudflareEnv, provider: PreviewAiProvider): Promise<ResolvedPreviewAiCredential | null> {
   const organization = await previewStoredAiCredential(env, provider, 'ORGANIZATION', PREVIEW_ORGANIZATION_ID);
   if (organization) return organization;
   const apiKey = previewEnvironmentApiKey(env, provider);
@@ -4211,9 +4306,40 @@ async function handlePreviewEvidence(request: Request, env: CloudflareEnv, url: 
   }
 }
 
-const CASE_EVIDENCE_CATEGORIES = new Set(['TAKEOFF_SOURCE', 'COST_BREAKDOWN']);
+const CASE_EVIDENCE_CATEGORY_CONFIG = {
+  INTAKE_REFERENCE: { label: '프로젝트 의뢰·발주처 제공자료', folderKind: 'INTAKE_REFERENCE' },
+  PROPOSAL_REFERENCE: { label: '제안서 근거자료', folderKind: 'PROPOSAL_REFERENCE' },
+  KICKOFF_MATERIAL: { label: '착수회의 제공자료', folderKind: 'KICKOFF_MATERIAL' },
+  MEETING_MINUTES: { label: '회의록', folderKind: 'MEETING_MINUTES' },
+  MEETING_RECORDING: { label: '회의 녹음', folderKind: 'MEETING_RECORDING' },
+  SITE_PHOTO: { label: '현장조사 사진', folderKind: 'SITE_PHOTO' },
+  SITE_RECORDING: { label: '현장조사 녹음', folderKind: 'SITE_RECORDING' },
+  SITE_DOCUMENT: { label: '현장조사 기타자료', folderKind: 'SITE_DOCUMENT' },
+  TAKEOFF_SOURCE: { label: '산출자료', folderKind: 'TAKEOFF_SOURCE' },
+  COST_BREAKDOWN: { label: '내역자료', folderKind: 'COST_BREAKDOWN' },
+  REPORT_REFERENCE: { label: '보고서 근거자료', folderKind: 'REPORT_REFERENCE' },
+  COURT_DOCUMENT: { label: '법원·소송자료', folderKind: 'COURT_DOCUMENT' },
+  FINAL_DELIVERABLE: { label: '최종 납품본', folderKind: 'FINAL_DELIVERABLE' }
+} as const satisfies Record<string, { label: string; folderKind: ClaimCenterFolderKind }>;
+type CaseEvidenceCategory = keyof typeof CASE_EVIDENCE_CATEGORY_CONFIG;
+const CASE_EVIDENCE_CATEGORIES = new Set<string>(Object.keys(CASE_EVIDENCE_CATEGORY_CONFIG));
 const CASE_EVIDENCE_UPLOAD_ROLES = new Set(['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer']);
 const CASE_EVIDENCE_CHUNK_BYTES = 450_000;
+
+function legacyEvidenceCategory(category: CaseEvidenceCategory): 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' {
+  return category === 'COST_BREAKDOWN' ? 'COST_BREAKDOWN' : 'TAKEOFF_SOURCE';
+}
+
+async function hasEvidenceWorkflowCategory(db: D1DatabaseLike): Promise<boolean> {
+  try {
+    await db.prepare('SELECT workflow_category FROM preview_case_evidence LIMIT 0').all();
+    await db.prepare('SELECT workflow_category FROM preview_google_case_operations LIMIT 0').all();
+    await db.prepare('SELECT workflow_category FROM preview_google_case_evidence LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface CaseEvidenceRow {
   id: string;
@@ -4244,6 +4370,7 @@ function caseEvidenceProjection(row: CaseEvidenceRow): Record<string, unknown> {
     uploadedAt: row.uploadedAt,
     googleFileId: row.googleFileId ?? null,
     googleFolderId: row.googleFolderId ?? null,
+    driveUrl: row.googleFileId ? `https://drive.google.com/open?id=${encodeURIComponent(row.googleFileId)}` : null,
     downloadUrl: `/api/cases/evidence/${row.id}/download`
   };
 }
@@ -4295,25 +4422,27 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   const caseId = collectionMatch[1];
   const caseRow = await accessiblePreviewCase(env, user, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  const workflowSchema = await hasEvidenceWorkflowCategory(db);
 
   if (request.method === 'GET') {
     const category = url.searchParams.get('category') ?? '';
     if (category && !CASE_EVIDENCE_CATEGORIES.has(category)) return json({ error: 'Evidence category is invalid', code: 'INVALID_EVIDENCE_CATEGORY' }, 400);
+    const categoryColumn = workflowSchema ? 'workflow_category' : 'category';
     const legacyRows = await db.prepare(
-      'SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt ' +
-      'FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND (?=\'\' OR category=?) ORDER BY uploaded_at DESC LIMIT 100'
+      `SELECT id,${categoryColumn} AS category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt ` +
+      `FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND (?='' OR ${categoryColumn}=?) ORDER BY uploaded_at DESC LIMIT 200`
     ).bind(caseId, PREVIEW_ORGANIZATION_ID, category, category).all<CaseEvidenceRow>();
     let googleRows: CaseEvidenceRow[] = [];
     try {
       const result = await db.prepare(
-        "SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE case_id=? AND organization_id=? AND (?='' OR category=?) ORDER BY uploaded_at DESC LIMIT 100"
+        `SELECT id,${categoryColumn} AS category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE case_id=? AND organization_id=? AND (?='' OR ${categoryColumn}=?) ORDER BY uploaded_at DESC LIMIT 200`
       ).bind(caseId, PREVIEW_ORGANIZATION_ID, category, category).all<CaseEvidenceRow>();
       googleRows = result.results;
     } catch { googleRows = []; }
     const configured = Boolean(await googleConfig(env));
     const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
-    const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 100);
-    return json({ files: files.map(caseEvidenceProjection), googleDriveConfigured: configured, googleDriveConnected: connected, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
+    const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 200);
+    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF39_INTEGRATED_PROJECT_EVIDENCE' });
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);
@@ -4321,8 +4450,12 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   if (!idempotencyKey || !GOOGLE_IDEMPOTENCY_KEY.test(idempotencyKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
   const form = await request.formData().catch(() => null);
   const file = form?.get('file');
-  const category = form?.get('category');
-  if (!(file instanceof File) || typeof category !== 'string' || !CASE_EVIDENCE_CATEGORIES.has(category)) return json({ error: 'file and a valid category are required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
+  const requestedCategory = form?.get('category');
+  if (!(file instanceof File) || typeof requestedCategory !== 'string' || !CASE_EVIDENCE_CATEGORIES.has(requestedCategory)) return json({ error: 'file and a valid category are required', code: 'INVALID_EVIDENCE_PAYLOAD' }, 400);
+  const category = requestedCategory as CaseEvidenceCategory;
+  if (!workflowSchema && !['TAKEOFF_SOURCE','COST_BREAKDOWN'].includes(category)) return json({ error: '통합 자료실 D1 마이그레이션이 먼저 필요합니다.', code: 'EVIDENCE_SCHEMA_UPGRADE_REQUIRED' }, 503);
+  const legacyCategory = legacyEvidenceCategory(category);
+  const evidenceCategorySelect = workflowSchema ? 'workflow_category AS category' : 'category';
 
   try {
     const validated = await validateEvidenceFile(file);
@@ -4338,7 +4471,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
         if (existingOperation.requestFingerprint !== fingerprint) return json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
         if (existingOperation.status !== 'SUCCEEDED') return json({ error: '이 업로드는 외부 저장 결과 확인이 필요합니다. 관리자에게 알려 주세요.', code: existingOperation.status === 'RECONCILIATION_REQUIRED' ? 'RECONCILIATION_REQUIRED' : 'UPLOAD_IN_PROGRESS_OR_FAILED' }, 409);
         const replay = await db.prepare(
-          "SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?"
+          `SELECT id,${evidenceCategorySelect},original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?`
         ).bind(existingOperation.id).first<CaseEvidenceRow>();
         return replay ? json({ file: caseEvidenceProjection(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }) : json({ error: 'Google Drive upload metadata requires reconciliation', code: 'RECONCILIATION_REQUIRED' }, 409);
       }
@@ -4346,13 +4479,15 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       const operationId = crypto.randomUUID();
       const evidenceId = crypto.randomUUID();
       const reservedAt = new Date().toISOString();
-      const reservation = await db.prepare(
-        'INSERT OR IGNORE INTO preview_google_case_operations (id,organization_id,case_id,category,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,\'PENDING\',NULL,NULL,?,?,?)'
-      ).bind(operationId, PREVIEW_ORGANIZATION_ID, caseId, category, idempotencyKey, fingerprint, user.id, reservedAt, reservedAt).run();
+      const reservation = workflowSchema
+        ? await db.prepare('INSERT OR IGNORE INTO preview_google_case_operations (id,organization_id,case_id,category,workflow_category,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'PENDING\',NULL,NULL,?,?,?)')
+          .bind(operationId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, category, idempotencyKey, fingerprint, user.id, reservedAt, reservedAt).run()
+        : await db.prepare('INSERT OR IGNORE INTO preview_google_case_operations (id,organization_id,case_id,category,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,\'PENDING\',NULL,NULL,?,?,?)')
+          .bind(operationId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, idempotencyKey, fingerprint, user.id, reservedAt, reservedAt).run();
       if (reservation.meta?.changes !== 1) {
         const conflict = await db.prepare('SELECT id,status,request_fingerprint AS requestFingerprint FROM preview_google_case_operations WHERE organization_id=? AND case_id=? AND idempotency_key=?').bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<{ id: string; status: string; requestFingerprint: string }>();
         if (conflict?.requestFingerprint === fingerprint && conflict.status === 'SUCCEEDED') {
-          const replay = await db.prepare("SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?").bind(conflict.id).first<CaseEvidenceRow>();
+          const replay = await db.prepare(`SELECT id,${evidenceCategorySelect},original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,0 AS chunkCount,'GOOGLE_DRIVE' AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,google_file_id AS googleFileId,google_folder_id AS googleFolderId FROM preview_google_case_evidence WHERE operation_id=?`).bind(conflict.id).first<CaseEvidenceRow>();
           if (replay) return json({ file: caseEvidenceProjection(replay), replay: true, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' });
         }
         return json({ error: '동일 파일 업로드가 진행 중이거나 확인 대기 중입니다.', code: 'UPLOAD_CONFLICT' }, 409);
@@ -4362,16 +4497,19 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       try {
         const token = await accessToken(env);
         const root = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: 'PROJECT_ROOT', period: '', name: `${caseRow.caseNumber} ${caseRow.title}` });
-        const categoryName = category === 'TAKEOFF_SOURCE' ? '산출자료' : '내역자료';
-        const categoryFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: category as 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN', period: '', name: categoryName, parentId: root.id });
+        const categoryName = CASE_EVIDENCE_CATEGORY_CONFIG[category].label;
+        const categoryFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: CASE_EVIDENCE_CATEGORY_CONFIG[category].folderKind, period: '', name: categoryName, parentId: root.id });
         const period = uploadedAt.slice(0, 7);
         const monthFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: 'MONTH', period, name: period, parentId: categoryFolder.id });
         const uploaded = await uploadEvidenceToDrive(googleFetch(env), { accessToken: token, folderId: monthFolder.id, evidenceId, fileName: file.name, mimeType: validated.mimeType, sha256: validated.sha256, bytes: validated.bytes, caseId, category, uploadedById: user.id, uploadedAt });
         if (!db.batch) throw new GoogleDriveError('D1_BATCH_REQUIRED', 503, 'D1 batch is unavailable', true);
         const completedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();
         const results = await db.batch([
-          db.prepare('INSERT INTO preview_google_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-            .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, category, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, monthFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId),
+          workflowSchema
+            ? db.prepare('INSERT INTO preview_google_case_evidence (id,organization_id,case_id,category,workflow_category,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+              .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, category, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, monthFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId)
+            : db.prepare('INSERT INTO preview_google_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+              .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, monthFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId),
           db.prepare("UPDATE preview_google_case_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId, completedAt, operationId),
           db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED_TO_GOOGLE_DRIVE', `${categoryName} 업로드`, `${file.name} · ${period} · ${user.displayName}`, uploadedAt)
         ]) as Array<{ meta?: { changes?: number } }>;
@@ -4385,7 +4523,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       }
     }
     const existing = await db.prepare(
-      'SELECT id,category,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,request_fingerprint AS requestFingerprint ' +
+      `SELECT id,${evidenceCategorySelect},original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize,sha256,chunk_count AS chunkCount,storage_provider AS storageProvider,uploaded_by_name AS uploadedBy,uploaded_at AS uploadedAt,request_fingerprint AS requestFingerprint ` +
       'FROM preview_case_evidence WHERE organization_id=? AND case_id=? AND idempotency_key=?'
     ).bind(PREVIEW_ORGANIZATION_ID, caseId, idempotencyKey).first<CaseEvidenceRow>();
     if (existing) return existing.requestFingerprint === fingerprint ? json({ file: caseEvidenceProjection(existing), replay: true, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
@@ -4395,11 +4533,14 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     const evidenceId = crypto.randomUUID();
     const uploadedAt = new Date().toISOString();
     const statements = [
-      db.prepare('INSERT INTO preview_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,chunk_count,storage_provider,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-        .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, category, file.name, validated.mimeType, file.size, validated.sha256, chunks.length, 'D1_TEMPORARY', user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint),
+      workflowSchema
+        ? db.prepare('INSERT INTO preview_case_evidence (id,organization_id,case_id,category,workflow_category,original_name,mime_type,byte_size,sha256,chunk_count,storage_provider,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, category, file.name, validated.mimeType, file.size, validated.sha256, chunks.length, 'D1_TEMPORARY', user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint)
+        : db.prepare('INSERT INTO preview_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,chunk_count,storage_provider,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, file.name, validated.mimeType, file.size, validated.sha256, chunks.length, 'D1_TEMPORARY', user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint),
       ...chunks.map((chunk, index) => db.prepare('INSERT INTO preview_case_evidence_chunks (evidence_id,chunk_index,byte_size,payload) VALUES (?,?,?,?)').bind(evidenceId, index, chunk.byteLength, chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength))),
       db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)')
-        .bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED', `${category === 'TAKEOFF_SOURCE' ? '산출자료' : '내역자료'} 업로드`, file.name, uploadedAt)
+        .bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED', `${CASE_EVIDENCE_CATEGORY_CONFIG[category].label} 업로드`, file.name, uploadedAt)
     ];
     await db.batch(statements);
     return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: chunks.length, storageProvider: 'D1_TEMPORARY', uploadedBy: user.displayName, uploadedAt }), replay: false, phase: 'CF15_CASE_EVIDENCE_LIBRARY' }, 201);
@@ -4474,7 +4615,7 @@ const worker = {
       return handlePreviewReportMemory(request, env, url);
     }
 
-    if (url.pathname === '/api/litigation-records' || url.pathname.startsWith('/api/litigation-records/')) {
+    if (url.pathname === '/api/litigation-outcomes' || url.pathname === '/api/litigation-records' || url.pathname.startsWith('/api/litigation-records/')) {
       return handlePreviewLitigation(request, env, url);
     }
 

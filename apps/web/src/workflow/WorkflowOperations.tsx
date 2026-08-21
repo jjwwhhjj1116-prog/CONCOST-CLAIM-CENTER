@@ -216,7 +216,7 @@ export const WorkflowOperations: React.FC<{
     })
   }));
 
-  const generateSummary = () => mutate('회의록·타임라인 초안 생성', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff-summary`, {
+  const generateSummary = () => mutate('Gemini 회의록·타임라인 정리', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff-summary`, {
     method: 'POST', body: JSON.stringify({ expectedVersion: kickoff.expectedVersion })
   }));
 
@@ -262,14 +262,15 @@ export const WorkflowOperations: React.FC<{
       {failure && <div className="workflow-feedback is-error" role="alert"><strong>처리하지 못했습니다.</strong><span>{failure}</span><Button size="sm" variant="secondary" onClick={() => void loadWorkflow(selectedCaseId)}>다시 불러오기</Button></div>}
       {notice && <div className="workflow-feedback is-success" role="status">{notice}</div>}
 
-      {!loading && data && stageId === 3 && <KickoffEditor form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy)} onSave={saveKickoff} onGenerate={generateSummary} busy={busy} />}
-      {!loading && data && stageId === 4 && <SurveyEditor form={survey} setForm={setSurvey} surveys={data.siteSurveys} drive={data.googleDrive} disabled={!canEdit || Boolean(busy)} onSave={saveSurvey} busy={busy} />}
+      {!loading && data && stageId === 3 && <KickoffEditor caseId={selectedCaseId} form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy)} onSave={saveKickoff} onGenerate={generateSummary} busy={busy} onNavigate={onNavigate} />}
+      {!loading && data && stageId === 4 && <SurveyEditor caseId={selectedCaseId} form={survey} setForm={setSurvey} surveys={data.siteSurveys} drive={data.googleDrive} disabled={!canEdit || Boolean(busy)} onSave={saveSurvey} busy={busy} onNavigate={onNavigate} />}
       {!loading && data && stageId === 5 && <AllocationEditor caseId={selectedCaseId} form={allocation} setForm={setAllocation} allocations={data.allocations} disabled={!canEdit || Boolean(busy)} onSave={saveAllocation} busy={busy} onNavigate={onNavigate} />}
     </section>
   );
 };
 
 const KickoffEditor: React.FC<{
+  caseId: string;
   form: { meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number };
   setForm: React.Dispatch<React.SetStateAction<{ meetingAt: string; location: string; agenda: string; participantUnits: string; rawNotes: string; status: string; expectedVersion: number }>>;
   record: KickoffRecord | null;
@@ -277,7 +278,8 @@ const KickoffEditor: React.FC<{
   busy: string;
   onSave: () => void;
   onGenerate: () => void;
-}> = ({ form, setForm, record, disabled, busy, onSave, onGenerate }) => (
+  onNavigate: (path: string) => void;
+}> = ({ caseId, form, setForm, record, disabled, busy, onSave, onGenerate, onNavigate }) => (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>KICKOFF INTAKE</span><h3>착수회의 기록</h3></div><em>v{form.expectedVersion}</em></header>
@@ -289,17 +291,23 @@ const KickoffEditor: React.FC<{
         <label className="is-wide">참석 팀·담당자<input value={form.participantUnits} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, participantUnits: event.target.value }))} placeholder="쉼표로 구분" /></label>
         <label className="is-wide">회의 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="녹음 전사문 또는 회의 중 메모를 입력하세요." /></label>
       </div>
-      <div className="workflow-actions"><Button disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의 저장' ? '저장 중…' : '착수회의 저장'}</Button><Button variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === '회의록·타임라인 초안 생성' ? '생성 중…' : '회의록·타임라인 초안'}</Button></div>
-      <p className="workflow-honest-note">현재는 외부 AI 전송 없이 D1의 회의 메모를 구조화하는 초안입니다. AI 공급자 연결 후 근거 인용형 회의록으로 교체됩니다.</p>
+      <div className="workflow-actions"><Button disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의 저장' ? '저장 중…' : '착수회의 저장'}</Button><Button variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? 'Gemini 정리 중…' : 'Gemini로 회의록·타임라인 정리'}</Button></div>
+      <p className="workflow-honest-note">관리자 설정의 조직 공용 Gemini 키를 사용합니다. 키가 없는 테스트 환경에서는 원문을 보존한 로컬 구조화 초안만 만들며, 모든 결과는 담당자가 원문과 대조해 확정해야 합니다.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>MINUTES & TIMELINE</span><h3>회의록·후속 업무 초안</h3></div><em>{record?.status ?? 'EMPTY'}</em></header>
       {record?.summaryText ? <><pre className="workflow-summary-text">{record.summaryText}</pre><ol className="workflow-timeline">{record.timeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol></> : <div className="workflow-empty"><strong>아직 생성된 초안이 없습니다.</strong><p>회의 메모를 저장한 뒤 초안을 생성하세요.</p></div>}
     </article>
+    <article className="workflow-editor-card workflow-evidence-card">
+      <header><div><span>KICKOFF EVIDENCE</span><h3>착수회의 제공자료·회의록·녹음</h3></div><em>회사 Drive 자동 분류</em></header>
+      <p className="workflow-evidence-intro">발주처가 제공한 원본, 회의록과 녹음파일을 현재 프로젝트에 바로 연결합니다. 다른 분류는 자료실 전체 보기에서 선택할 수 있습니다.</p>
+      <CaseEvidencePanel caseId={caseId} defaultCategory="KICKOFF_MATERIAL" compact onNavigate={onNavigate} />
+    </article>
   </div>
 );
 
 const SurveyEditor: React.FC<{
+  caseId: string;
   form: { surveyDate: string; location: string; scopeText: string; leadUnit: string; status: string; expectedVersion: number };
   setForm: React.Dispatch<React.SetStateAction<{ surveyDate: string; location: string; scopeText: string; leadUnit: string; status: string; expectedVersion: number }>>;
   surveys: SurveyRecord[];
@@ -307,7 +315,8 @@ const SurveyEditor: React.FC<{
   disabled: boolean;
   busy: string;
   onSave: () => void;
-}> = ({ form, setForm, surveys, drive, disabled, busy, onSave }) => (
+  onNavigate: (path: string) => void;
+}> = ({ caseId, form, setForm, surveys, drive, disabled, busy, onSave, onNavigate }) => (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>SITE SURVEY PLAN</span><h3>현장조사 계획·원본 분류</h3></div><em>v{form.expectedVersion}</em></header>
@@ -319,11 +328,16 @@ const SurveyEditor: React.FC<{
         <label className="is-wide">조사 책임 팀<input value={form.leadUnit} maxLength={120} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, leadUnit: event.target.value }))} /></label>
       </div>
       <Button disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사 계획 저장' ? '저장 중…' : '현장조사 계획 저장'}</Button>
-      <div className="workflow-dropzone is-disabled" aria-disabled="true"><strong>사진·녹음·도면 드래그 앤 드롭</strong><span>{drive.deferredByUser ? 'Google Drive 연결을 보류하여 파일 전송은 비활성화했습니다.' : 'Google Drive 연결 후 활성화됩니다.'}</span><small>계획과 폴더명은 지금 D1에 저장되며 원본 업로드는 Drive 연결 단계에서 이어집니다.</small></div>
+      <p className="workflow-honest-note">조사 계획은 D1에 보존되고, 아래 원본 자료는 회사 Google Drive의 프로젝트/현장조사/월 폴더에 저장됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>FOLDER LEDGER</span><h3>조사일자별 폴더 계획</h3></div><em>{surveys.length}건</em></header>
       {surveys.length ? <div className="survey-list">{surveys.map((item) => <section key={item.id}><div><strong>{item.surveyDate} · {item.leadUnit}</strong><span>{item.location || '위치 미입력'} · {item.status}</span></div><code>{item.folderPath}</code><small>사진 {item.photoCount} · 녹음 {item.audioCount} · 문서 {item.documentCount}</small></section>)}</div> : <div className="workflow-empty"><strong>저장된 현장조사 계획이 없습니다.</strong><p>조사 일자와 범위를 먼저 등록하세요.</p></div>}
+    </article>
+    <article className="workflow-editor-card workflow-evidence-card">
+      <header><div><span>SITE EVIDENCE</span><h3>현장 사진·녹음·도면 업로드</h3></div><em>프로젝트 자료실 자동 연동</em></header>
+      <p className="workflow-evidence-intro">현장 사진을 기본으로 열었습니다. 녹음과 기타 조사자료는 상단 분류 탭을 바꿔 올리세요.</p>
+      <CaseEvidencePanel caseId={caseId} defaultCategory="SITE_PHOTO" compact onNavigate={onNavigate} />
     </article>
   </div>
 );
@@ -360,7 +374,7 @@ const AllocationEditor: React.FC<{
         <em>프로젝트 자료실 자동 연동</em>
       </header>
       <p className="workflow-evidence-intro">도면, 산출서, 내역서 등 원본을 구분해 올리면 현재 프로젝트의 자료실에 즉시 저장됩니다. 업로드 사용자와 일시는 자동 기록됩니다.</p>
-      <CaseEvidencePanel caseId={caseId} compact onNavigate={onNavigate} />
+      <CaseEvidencePanel caseId={caseId} compact defaultCategory="TAKEOFF_SOURCE" onNavigate={onNavigate} />
     </article>
   </div>
 );

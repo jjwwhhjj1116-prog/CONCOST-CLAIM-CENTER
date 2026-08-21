@@ -21,6 +21,8 @@ import { ProposalAwardWorkflow } from '../workflow/ProposalAwardWorkflow';
 import { WorkflowOperations } from '../workflow/WorkflowOperations';
 import { PreviewAiAdmin } from './PreviewAiAdmin';
 import { PreviewLitigationCenter } from './PreviewLitigationCenter';
+import { PreviewDeliveryCenter } from './PreviewDeliveryCenter';
+import { PreviewOutcomeCenter } from './PreviewOutcomeCenter';
 import { PreviewSettings } from './PreviewSettings';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
@@ -215,6 +217,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   if (previewMode && currentRoute.id === 'AI-01') return <PreviewAiAdmin />;
   if (previewMode && currentRoute.id === 'MY-01') return <PreviewSettings roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'POST-01') return <PreviewLitigationCenter roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'REPO-01') return <PreviewDeliveryCenter onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'OUTCOME-01') return <PreviewOutcomeCenter onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'FEE-01') return <StatusFeedbackState type="empty" title="운영 메뉴에서 제외된 기능입니다" message="성공보수 기능은 현재 클레임센터 스튜디오 업무 범위에서 사용하지 않습니다." actionLabel="업무 홈으로 이동" onAction={() => onNavigate('/dashboard')} />;
   if (previewMode && currentRoute.id !== 'RESP-01') return <PreviewFeature route={currentRoute} onNavigate={onNavigate} />;
 

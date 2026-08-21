@@ -13,6 +13,7 @@ import './evidence/CaseEvidencePanel.css';
 import './routes/PreviewAiAdmin.css';
 import './routes/PreviewReportStudio.css';
 import './routes/PreviewLitigationCenter.css';
+import './routes/PreviewQualityCenters.css';
 import './routes/PreviewSettings.css';
 import './preview-theme.css';
 import './theme-system.css';

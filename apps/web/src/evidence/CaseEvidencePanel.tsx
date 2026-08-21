@@ -1,7 +1,11 @@
 import { Button } from '@claim-studio/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export type CaseEvidenceCategory = 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN';
+export type CaseEvidenceCategory =
+  | 'INTAKE_REFERENCE' | 'PROPOSAL_REFERENCE' | 'KICKOFF_MATERIAL' | 'MEETING_MINUTES'
+  | 'MEETING_RECORDING' | 'SITE_PHOTO' | 'SITE_RECORDING' | 'SITE_DOCUMENT'
+  | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'REPORT_REFERENCE' | 'COURT_DOCUMENT'
+  | 'FINAL_DELIVERABLE';
 
 interface CaseEvidenceFile {
   id: string;
@@ -14,13 +18,25 @@ interface CaseEvidenceFile {
   uploadedBy: string;
   uploadedAt: string;
   downloadUrl: string;
+  driveUrl: string | null;
 }
 
-const categoryCopy: Record<CaseEvidenceCategory, { title: string; description: string; icon: string }> = {
-  TAKEOFF_SOURCE: { title: '산출자료', description: '도면, 실측표, 산출근거, 검토용 원본', icon: '∑' },
-  COST_BREAKDOWN: { title: '내역자료', description: '계약내역, 공사비 내역, 단가·금액 검토표', icon: '₩' }
+const categoryCopy: Record<CaseEvidenceCategory, { title: string; description: string; icon: string; phase: string }> = {
+  INTAKE_REFERENCE: { title: '의뢰·발주처 자료', description: '의뢰서, 발주처 제공 원본, 계약 전 자료', icon: 'IN', phase: '의뢰' },
+  PROPOSAL_REFERENCE: { title: '제안서 근거자료', description: '제안 범위·견적·발송본의 근거', icon: 'PR', phase: '제안' },
+  KICKOFF_MATERIAL: { title: '착수회의 제공자료', description: '착수 시 전달받은 도서와 참고자료', icon: 'KO', phase: '착수' },
+  MEETING_MINUTES: { title: '회의록', description: '착수·실무·협의 회의록과 메모', icon: 'MN', phase: '착수' },
+  MEETING_RECORDING: { title: '회의 녹음', description: '회의 음성 원본 MP3·M4A·WAV', icon: 'AU', phase: '착수' },
+  SITE_PHOTO: { title: '현장조사 사진', description: '현장 사진, 촬영 위치·시점 원본', icon: 'PH', phase: '현장' },
+  SITE_RECORDING: { title: '현장조사 녹음', description: '현장 설명·인터뷰·구술 기록', icon: 'SR', phase: '현장' },
+  SITE_DOCUMENT: { title: '현장조사 기타자료', description: '조사표, 도면, 측정값, 기타 원본', icon: 'SD', phase: '현장' },
+  TAKEOFF_SOURCE: { title: '산출자료', description: '도면, 실측표, 산출근거, 검토용 원본', icon: 'Σ', phase: '산출' },
+  COST_BREAKDOWN: { title: '내역자료', description: '계약내역, 공사비 내역, 단가·금액 검토표', icon: '₩', phase: '산출' },
+  REPORT_REFERENCE: { title: '보고서 근거자료', description: '본문·부록·검토의견 작성 근거', icon: 'RP', phase: '보고' },
+  COURT_DOCUMENT: { title: '법원·소송자료', description: '소장, 준비서면, 결정·판결 관련 자료', icon: 'CT', phase: '법원' },
+  FINAL_DELIVERABLE: { title: '최종 납품본', description: '승인된 최종 보고서와 납품 패키지', icon: 'OK', phase: '납품' }
 };
-const ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.hwp,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp';
+const ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.hwp,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg,.webm';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1_000) return `${bytes} B`;
@@ -104,18 +120,18 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const categoryFiles = files.filter((file) => file.category === category);
   const visibleFiles = compact ? categoryFiles.slice(0, 6) : categoryFiles;
   const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
-  return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 산출·내역 자료실">
+  return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 통합 자료실">
     <div className="case-evidence-categories" role="tablist" aria-label="자료 구분">
-      {(Object.keys(categoryCopy) as CaseEvidenceCategory[]).map((value) => <button key={value} type="button" role="tab" aria-selected={category === value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}><b aria-hidden="true">{categoryCopy[value].icon}</b><span><strong>{categoryCopy[value].title}</strong><small>{categoryCopy[value].description}</small></span><em>{files.filter((file) => file.category === value).length}</em></button>)}
+      {(Object.keys(categoryCopy) as CaseEvidenceCategory[]).map((value) => <button key={value} type="button" role="tab" aria-selected={category === value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}><b aria-hidden="true">{categoryCopy[value].icon}</b><span><i>{categoryCopy[value].phase}</i><strong>{categoryCopy[value].title}</strong><small>{categoryCopy[value].description}</small></span><em>{files.filter((file) => file.category === value).length}</em></button>)}
     </div>
     <div className={`case-evidence-dropzone${dragging ? ' is-dragging' : ''}${uploadDisabled ? ' is-disabled' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragOver={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); if (!uploadDisabled && event.dataTransfer.files) void upload(event.dataTransfer.files); }}>
       <input ref={inputRef} type="file" multiple accept={ACCEPT} disabled={uploadDisabled} onChange={(event) => event.target.files && void upload(event.target.files)} />
-      <span aria-hidden="true">⇧</span><div><strong>{uploading ? `${uploading}개 파일 저장 중…` : uploadDisabled ? '회사 Google Drive 연결이 필요합니다' : `${categoryCopy[category].title}를 끌어다 놓으세요`}</strong><small>최대 10MB · 업로더·업로드 시각·SHA-256을 기록하고 프로젝트/자료종류/월 폴더에 저장합니다.</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
+      <span aria-hidden="true">⇧</span><div><strong>{uploading ? `${uploading}개 파일 저장 중…` : uploadDisabled ? '회사 Google Drive 연결이 필요합니다' : `${categoryCopy[category].title}를 끌어다 놓으세요`}</strong><small>문서·사진·녹음파일 최대 10MB · 업로더·업로드 시각·SHA-256을 기록하고 프로젝트/자료종류/월 폴더에 저장합니다.</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
     </div>
-    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? 'COMPANY GOOGLE DRIVE STORAGE' : 'LOCAL TEST FALLBACK'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 Drive 연결 완료 · 새 파일은 프로젝트/산출·내역/월 폴더에 직접 저장됩니다.' : '업로드가 잠겨 있습니다. 설정의 관리자 설정에서 회사 계정을 연결하세요.' : '자동화 테스트 환경에서만 D1 임시 보존을 사용합니다.'} {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>Google Drive 설정 열기</button>}</p>
+    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? 'COMPANY GOOGLE DRIVE STORAGE' : 'LOCAL TEST FALLBACK'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 Drive 연결 완료 · 새 파일은 프로젝트/업무단계별 자료/월 폴더에 직접 저장됩니다.' : '업로드가 잠겨 있습니다. 설정의 관리자 설정에서 회사 계정을 연결하세요.' : '자동화 테스트 환경에서만 D1 임시 보존을 사용합니다.'} {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>Google Drive 설정 열기</button>}</p>
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error} <button type="button" onClick={() => void load()}>다시 확인</button></p>}
     <div className="case-evidence-list"><header><div><span>PROJECT EVIDENCE</span><h3>{categoryCopy[category].title} 목록</h3></div><div><em>{categoryFiles.length} FILES</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
-      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map((file) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>{categoryCopy[file.category].title} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small></div><span>{file.storageProvider === 'GOOGLE_DRIVE' ? 'GOOGLE DRIVE' : 'D1 LEGACY'}</span><Button size="sm" variant="secondary" onClick={() => void download(file)}>다운로드</Button></li>)}</ul> : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
+      {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map((file) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>{categoryCopy[file.category].title} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small></div><span>{file.storageProvider === 'GOOGLE_DRIVE' ? 'GOOGLE DRIVE' : 'D1 LEGACY'}</span><div className="case-evidence-file-actions">{file.driveUrl && <a href={file.driveUrl} target="_blank" rel="noreferrer">Drive에서 열기</a>}<Button size="sm" variant="secondary" onClick={() => void download(file)}>다운로드</Button></div></li>)}</ul> : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}
     </div>
   </section>;
 }

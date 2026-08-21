@@ -233,7 +233,12 @@ const extensionMime: Record<string, { mime: string; magic: (bytes: Uint8Array) =
   ppt: { mime: 'application/vnd.ms-powerpoint', magic: (b) => bytesToHex(b.slice(0, 4)) === 'd0cf11e0' },
   hwp: { mime: 'application/x-hwp', magic: (b) => bytesToHex(b.slice(0, 4)) === 'd0cf11e0' },
   txt: { mime: 'text/plain', magic: (b) => !b.includes(0) },
-  csv: { mime: 'text/csv', magic: (b) => !b.includes(0) }
+  csv: { mime: 'text/csv', magic: (b) => !b.includes(0) },
+  mp3: { mime: 'audio/mpeg', magic: (b) => decoder.decode(b.slice(0, 3)) === 'ID3' || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0) },
+  m4a: { mime: 'audio/mp4', magic: (b) => decoder.decode(b.slice(4, 8)) === 'ftyp' },
+  wav: { mime: 'audio/wav', magic: (b) => decoder.decode(b.slice(0, 4)) === 'RIFF' && decoder.decode(b.slice(8, 12)) === 'WAVE' },
+  ogg: { mime: 'audio/ogg', magic: (b) => decoder.decode(b.slice(0, 4)) === 'OggS' },
+  webm: { mime: 'audio/webm', magic: (b) => bytesToHex(b.slice(0, 4)) === '1a45dfa3' }
 };
 
 export async function validateEvidenceFile(file: File): Promise<{ bytes: Uint8Array; mimeType: string; sha256: string }> {
@@ -327,7 +332,17 @@ export async function verifyDriveFolder(fetcher: GoogleFetch, accessToken: strin
   return { id: folderId, name: payload.name };
 }
 
-const CLAIM_CENTER_FOLDER_KINDS = new Set(['PROJECT_ROOT', 'TAKEOFF_SOURCE', 'COST_BREAKDOWN', 'INTAKE_AUDIO', 'MONTH']);
+export type ClaimCenterFolderKind =
+  | 'PROJECT_ROOT' | 'INTAKE_REFERENCE' | 'PROPOSAL_REFERENCE' | 'KICKOFF_MATERIAL'
+  | 'MEETING_MINUTES' | 'MEETING_RECORDING' | 'SITE_PHOTO' | 'SITE_RECORDING'
+  | 'SITE_DOCUMENT' | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'REPORT_REFERENCE'
+  | 'COURT_DOCUMENT' | 'FINAL_DELIVERABLE' | 'INTAKE_AUDIO' | 'MONTH';
+
+const CLAIM_CENTER_FOLDER_KINDS = new Set<ClaimCenterFolderKind>([
+  'PROJECT_ROOT','INTAKE_REFERENCE','PROPOSAL_REFERENCE','KICKOFF_MATERIAL','MEETING_MINUTES',
+  'MEETING_RECORDING','SITE_PHOTO','SITE_RECORDING','SITE_DOCUMENT','TAKEOFF_SOURCE',
+  'COST_BREAKDOWN','REPORT_REFERENCE','COURT_DOCUMENT','FINAL_DELIVERABLE','INTAKE_AUDIO','MONTH'
+]);
 
 function driveQueryValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
@@ -335,7 +350,7 @@ function driveQueryValue(value: string): string {
 
 export async function ensureClaimCenterFolder(
   fetcher: GoogleFetch,
-  input: { accessToken: string; caseId: string; kind: 'PROJECT_ROOT' | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'INTAKE_AUDIO' | 'MONTH'; period: string; name: string; parentId?: string }
+  input: { accessToken: string; caseId: string; kind: ClaimCenterFolderKind; period: string; name: string; parentId?: string }
 ): Promise<{ id: string; name: string; created: boolean }> {
   if (!/^[0-9a-f-]{36}$/iu.test(input.caseId) || !CLAIM_CENTER_FOLDER_KINDS.has(input.kind) || !/^(?:|\d{4}-\d{2})$/u.test(input.period)) {
     throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder context is invalid');
