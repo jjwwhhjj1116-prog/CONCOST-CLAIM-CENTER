@@ -1,555 +1,93 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card, Dialog, Input, Select, StatusBadge, type StatusType } from '@claim-studio/ui';
-import { apiRequest, apiDownloadPost, ApiError } from '../api';
-import { proposalWorkbook, readProposalWorkbook } from './proposal-excel';
+import { apiDownloadPost, apiRequest } from '../api';
+import {
+  proposalStudioWorkbook as proposalWorkbook,
+  readProposalDocx,
+  readProposalStudioWorkbook as readProposalWorkbook,
+} from './proposal-excel';
 
-export interface ProposalViewProps {
-  routeId: string;
-  roles: readonly string[];
-  onNavigate: (path: string) => void;
-}
+export interface ProposalViewProps { routeId:string; roles:readonly string[]; onNavigate:(path:string)=>void }
+interface CaseItem { id:string; caseNumber:string; title:string; description?:string|null; claimType:string; status:string }
+interface ProposalTemplate { id:string; name:string; claimType:string; description:string; bodyTemplate:string; placeholdersJson:string }
+interface ProposalChapter { number:number; title:string; kind:'VARIABLE'|'FIXED'; moduleCode?:string; body:string }
+interface CompanyModule { code:string; chapterNumber:number; title:string; category:string; bodyMarkdown:string; isActive:boolean; version:number; updatedAt:string }
+interface TemplateSource { id:string; sourceName:string; sourceFormat:string; sourceDate:string; isDefault:boolean; analysisStatus:string; chapterMapJson:string; version:number }
+interface ProposalVersion { id:string; versionNumber:number; bodyText:string; structuredInputsJson:string; generationMode:string; providerId:string|null; modelId:string|null; inputSha256:string; sourceDocumentVersionIdsJson:string|null; sha256:string; isApproved:boolean; createdAt:string; createdBy?:{id:string;name:string} }
+interface ProposalReview { id:string; action:string; comment:string|null; createdAt:string; reviewer:{id:string;name:string} }
+interface ProposalExport { id:string;versionId:string;format:string;fileName:string;sha256:string;sanitizationCount:number;createdAt:string }
+interface Proposal { id:string;caseId:string;templateId:string;title:string;status:string;currentVersionId:string|null;approvedVersionId:string|null;version:number;template?:ProposalTemplate;versions?:ProposalVersion[];reviews?:ProposalReview[];exports?:ProposalExport[] }
+interface StudioInputs { clientName:string;projectTitle:string;subtitle:string;submissionDate:string;keyIssues:string;objective:string;planNotes:string;exclusions:string;chapters:ProposalChapter[];includedModuleCodes:string[] }
 
-interface CaseItem {
-  id: string;
-  caseNumber: string;
-  title: string;
-  claimType: string;
-  status: string;
-}
+const chapterTitles=['제안(용역)의 목적','당 현장의 핵심 쟁점 분석','업무 수행 내용 및 추진 계획','전문가 현황','당사의 강점','조직도 및 업무 영역','도시정비사업 공사비검증 실적','한국부동산원 공사비검증 실적','건설 클레임·소송·기술감정 실적','자격 증명자료','용역 조건 및 제안 범위','맺음말'];
+const blankChapters=():ProposalChapter[]=>chapterTitles.map((title,index)=>({number:index+1,title,kind:index>=3&&index<=10?'FIXED':'VARIABLE',body:'[작성 필요]'}));
+const parseArray=(value:string|null|undefined):string[]=>{try{const parsed:unknown=JSON.parse(value??'[]');return Array.isArray(parsed)&&parsed.every((item)=>typeof item==='string')?parsed:[];}catch{return[];}};
+const statusBadge=(status:string):StatusType=>['draft','in_review','approved','rejected'].includes(status.toLowerCase())?status.toLowerCase() as StatusType:'unwritten';
+const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 
-interface ProposalTemplate {
-  id: string;
-  name: string;
-  claimType: string;
-  description: string;
-  bodyTemplate: string;
-  placeholdersJson: string;
-}
+export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,onNavigate})=>{
+  const requestedCaseId=new URLSearchParams(window.location.search).get('caseId')??'';
+  const fromIntake=new URLSearchParams(window.location.search).get('from')==='intake';
+  const [cases,setCases]=useState<CaseItem[]>([]); const [selectedCaseId,setSelectedCaseId]=useState(requestedCaseId);
+  const [templates,setTemplates]=useState<ProposalTemplate[]>([]); const [selectedTemplateId,setSelectedTemplateId]=useState('');
+  const [proposals,setProposals]=useState<Proposal[]>([]); const [activeProposal,setActiveProposal]=useState<Proposal|null>(null);
+  const [modules,setModules]=useState<CompanyModule[]>([]); const [sources,setSources]=useState<TemplateSource[]>([]);
+  const [step,setStep]=useState(1); const [selectedChapter,setSelectedChapter]=useState(1); const [templatePreview,setTemplatePreview]=useState(false);
+  const [clientName,setClientName]=useState(''); const [projectTitle,setProjectTitle]=useState(''); const [subtitle,setSubtitle]=useState('건설 클레임 전문용역 제안'); const [submissionDate,setSubmissionDate]=useState(today());
+  const [keyIssues,setKeyIssues]=useState(''); const [objective,setObjective]=useState(''); const [planNotes,setPlanNotes]=useState(''); const [exclusions,setExclusions]=useState('해당 없음');
+  const [chapters,setChapters]=useState<ProposalChapter[]>(blankChapters); const [includedModuleCodes,setIncludedModuleCodes]=useState<string[]>([]); const [sourceDocumentVersionIds,setSourceDocumentVersionIds]=useState('');
+  const [reviewComment,setReviewComment]=useState(''); const [errorMessage,setErrorMessage]=useState<string|null>(null); const [successMessage,setSuccessMessage]=useState<string|null>(null); const [busy,setBusy]=useState(false);
+  const [selectedModuleCode,setSelectedModuleCode]=useState(''); const [moduleTitle,setModuleTitle]=useState(''); const [moduleBody,setModuleBody]=useState(''); const [moduleActive,setModuleActive]=useState(true);
+  const excelInputRef=useRef<HTMLInputElement>(null); const docxInputRef=useRef<HTMLInputElement>(null);
+  const canEdit=roles.some((role)=>['ceo','director','pm','admin'].includes(role)); const canApprove=roles.some((role)=>['reviewer','director','ceo','admin'].includes(role)); const canManageModules=roles.includes('admin');
 
-interface ProposalVersion {
-  id: string;
-  versionNumber: number;
-  bodyText: string;
-  structuredInputsJson: string;
-  generationMode: string;
-  providerId: string | null;
-  modelId: string | null;
-  inputSha256: string;
-  generatedAt: string | null;
-  sourceDocumentVersionIdsJson: string | null;
-  missingFieldsJson: string;
-  sha256: string;
-  isApproved: boolean;
-  createdAt: string;
-  createdBy?: { id: string; name: string };
-}
-
-interface ProposalReview {
-  id: string;
-  action: string;
-  comment: string | null;
-  createdAt: string;
-  reviewer: { id: string; name: string };
-}
-
-interface Proposal {
-  id: string;
-  caseId: string;
-  templateId: string;
-  title: string;
-  status: string;
-  currentVersionId: string | null;
-  approvedVersionId: string | null;
-  outputDocumentId: string | null;
-  version: number;
-  template?: ProposalTemplate;
-  versions?: ProposalVersion[];
-  reviews?: ProposalReview[];
-}
-
-function readStringArray(value: string | null | undefined): string[] {
-  try {
-    const parsed: unknown = JSON.parse(value ?? '[]');
-    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function proposalStatusBadge(status: string): StatusType {
-  const normalized = status.toLowerCase();
-  return ['draft', 'in_review', 'approved', 'rejected'].includes(normalized)
-    ? normalized as StatusType
-    : 'unwritten';
-}
-
-export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNavigate }) => {
-  const requestedCaseId = new URLSearchParams(window.location.search).get('caseId') ?? '';
-  const fromIntake = new URLSearchParams(window.location.search).get('from') === 'intake';
-  const [cases, setCases] = useState<CaseItem[]>([]);
-  const [selectedCaseId, setSelectedCaseId] = useState<string>(requestedCaseId);
-  const [templates, setTemplates] = useState<ProposalTemplate[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
-
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [activeProposal, setActiveProposal] = useState<Proposal | null>(null);
-
-  // Form Stepper State (Step 1..4)
-  const [step, setStep] = useState<number>(1);
-  const [background, setBackground] = useState<string>('');
-  const [objective, setObjective] = useState<string>('');
-  const [method, setMethod] = useState<string>('');
-  const [expectedOutcome, setExpectedOutcome] = useState<string>('');
-  const [exclusions, setExclusions] = useState<string>('');
-  const [sourceDocumentVersionIds, setSourceDocumentVersionIds] = useState<string>('');
-  const [providerId, setProviderId] = useState<string>('GEMINI');
-  const [modelId, setModelId] = useState<string>('gemini-3.7-flash');
-
-  const [reviewComment, setReviewComment] = useState<string>('');
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const excelInputRef = useRef<HTMLInputElement>(null);
-  const canEdit = roles.some((role) => ['ceo', 'director', 'pm', 'admin'].includes(role));
-  const canApprove = roles.some((role) => ['reviewer', 'director', 'ceo', 'admin'].includes(role));
-
-  // Load cases
-  useEffect(() => {
-    apiRequest<{ cases: CaseItem[] }>('/api/cases')
-      .then((res) => {
-        setCases(res.cases || []);
-        if (res.cases && res.cases.length > 0) {
-          setSelectedCaseId((current) => {
-            const preferred = current || requestedCaseId;
-            return res.cases.some((item) => item.id === preferred) ? preferred : res.cases[0].id;
-          });
-        }
-      })
-      .catch((err: Error) => setErrorMessage(err.message));
-  }, []);
-
-  // Load templates and proposals when selectedCaseId changes
-  const loadCaseData = useCallback(async (cId: string) => {
-    if (!cId) return;
-    try {
-      const c = cases.find((item) => item.id === cId);
-      const claimTypeQuery = c ? `?claimType=${c.claimType}` : '';
-      const [tplRes, propRes] = await Promise.all([
-        apiRequest<{ templates: ProposalTemplate[] }>(`/api/proposal-templates${claimTypeQuery}`),
-        apiRequest<{ proposals: Proposal[] }>(`/api/cases/${cId}/proposals`)
-      ]);
-      setTemplates(tplRes.templates || []);
-      if (tplRes.templates && tplRes.templates.length > 0) {
-        setSelectedTemplateId(tplRes.templates[0].id);
+  const applyVersion=useCallback((version:ProposalVersion|undefined,caseRow?:CaseItem)=>{
+    if(!version){setChapters(blankChapters());return;}
+    try{
+      const parsed=JSON.parse(version.structuredInputsJson) as Partial<StudioInputs>&Record<string,unknown>;
+      if(Array.isArray(parsed.chapters)&&parsed.chapters.length===12){
+        setClientName(String(parsed.clientName??''));setProjectTitle(String(parsed.projectTitle??caseRow?.title??''));setSubtitle(String(parsed.subtitle??'건설 클레임 전문용역 제안'));setSubmissionDate(String(parsed.submissionDate??today()));
+        setKeyIssues(String(parsed.keyIssues??''));setObjective(String(parsed.objective??''));setPlanNotes(String(parsed.planNotes??''));setExclusions(String(parsed.exclusions??'해당 없음'));
+        setChapters(parsed.chapters as ProposalChapter[]);setIncludedModuleCodes(Array.isArray(parsed.includedModuleCodes)?parsed.includedModuleCodes.filter((item):item is string=>typeof item==='string'):[]);
+      }else{
+        const next=blankChapters();next[0].body=`${String(parsed.background??'')}\n\n${String(parsed.objective??'')}`.trim();next[2].body=String(parsed.method??'');next[11].body=`${String(parsed.expectedOutcome??'')}\n\n제외사항: ${String(parsed.exclusions??'')}`;
+        setClientName('');setProjectTitle(`${caseRow?.title??'프로젝트'} 기술용역 제안서`);setObjective(String(parsed.objective??''));setPlanNotes(String(parsed.method??''));setExclusions(String(parsed.exclusions??'해당 없음'));setChapters(next);
       }
-      setProposals(propRes.proposals || []);
-      if (propRes.proposals && propRes.proposals.length > 0) {
-        loadProposalDetail(cId, propRes.proposals[0].id);
-      } else {
-        setActiveProposal(null);
-      }
-    } catch (err: unknown) {
-      if (err instanceof ApiError) setErrorMessage(err.message);
-      else setErrorMessage('데이터 로드 실패');
-    }
-  }, [cases]);
+      setSourceDocumentVersionIds(parseArray(version.sourceDocumentVersionIdsJson).join(', '));
+    }catch{setChapters(blankChapters());}
+  },[]);
 
-  useEffect(() => {
-    if (selectedCaseId) {
-      void loadCaseData(selectedCaseId);
-    }
-  }, [selectedCaseId, loadCaseData]);
+  const loadProposalDetail=useCallback(async(cId:string,pId:string)=>{const response=await apiRequest<{proposal:Proposal}>(`/api/cases/${cId}/proposals/${pId}`);setActiveProposal(response.proposal);applyVersion(response.proposal.versions?.[0],cases.find((item)=>item.id===cId));},[applyVersion,cases]);
+  const loadCaseData=useCallback(async(cId:string)=>{if(!cId)return;const caseRow=cases.find((item)=>item.id===cId);const query=caseRow?`?claimType=${caseRow.claimType}`:'';try{const [templateResult,proposalResult]=await Promise.all([apiRequest<{templates:ProposalTemplate[]}>(`/api/proposal-templates${query}`),apiRequest<{proposals:Proposal[]}>(`/api/cases/${cId}/proposals`)]);setTemplates(templateResult.templates??[]);setSelectedTemplateId(templateResult.templates?.[0]?.id??'');setProposals(proposalResult.proposals??[]);if(proposalResult.proposals?.length)await loadProposalDetail(cId,proposalResult.proposals[0].id);else{setActiveProposal(null);setProjectTitle(`${caseRow?.title??''} 기술용역 제안서`);setObjective(caseRow?.description??'');setChapters(blankChapters());setStep(1);}}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'제안서 데이터를 불러오지 못했습니다.');}},[cases,loadProposalDetail]);
+  useEffect(()=>{void Promise.all([apiRequest<{cases:CaseItem[]}>('/api/cases'),apiRequest<{modules:CompanyModule[];sources:TemplateSource[]}>('/api/proposal-studio/config')]).then(([res,config])=>{setCases(res.cases??[]);setModules(config.modules??[]);setSources(config.sources??[]);setIncludedModuleCodes((config.modules??[]).filter((module)=>module.isActive).map((module)=>module.code));setSelectedCaseId((current)=>{const preferred=current||requestedCaseId;return res.cases.some((item) => item.id === preferred)?preferred:res.cases?.[0]?.id??'';});}).catch((reason:Error)=>setErrorMessage(reason.message));},[]);
+  useEffect(()=>{if(selectedCaseId)void loadCaseData(selectedCaseId);},[selectedCaseId,loadCaseData]);
+  useEffect(()=>{const selected=modules.find((module)=>module.code===selectedModuleCode)??modules[0];if(!selected)return;if(selected.code!==selectedModuleCode)setSelectedModuleCode(selected.code);setModuleTitle(selected.title);setModuleBody(selected.bodyMarkdown);setModuleActive(selected.isActive);},[modules,selectedModuleCode]);
 
-  const loadProposalDetail = async (cId: string, pId: string) => {
-    try {
-      const res = await apiRequest<{ proposal: Proposal }>(`/api/cases/${cId}/proposals/${pId}`);
-      setActiveProposal(res.proposal);
-      const latestVer = res.proposal.versions?.[0];
-      if (latestVer) {
-        try {
-          const parsed = JSON.parse(latestVer.structuredInputsJson) as Record<string, string>;
-          setBackground(parsed.background || '');
-          setObjective(parsed.objective || '');
-          setMethod(parsed.method || '');
-          setExpectedOutcome(parsed.expectedOutcome || '');
-          setExclusions(parsed.exclusions || '');
-          setSourceDocumentVersionIds(readStringArray(latestVer.sourceDocumentVersionIdsJson).join(', '));
-        } catch {
-          // ignore json parse error
-        }
-      }
-    } catch (err: unknown) {
-      if (err instanceof ApiError) setErrorMessage(err.message);
-    }
-  };
+  const createProposal=async()=>{if(!selectedCaseId||!selectedTemplateId)return;setBusy(true);setErrorMessage(null);try{const result=await apiRequest<{proposal:Proposal}>(`/api/cases/${selectedCaseId}/proposals`,{method:'POST',body:JSON.stringify({templateId:selectedTemplateId})});await loadCaseData(selectedCaseId);await loadProposalDetail(selectedCaseId,result.proposal.id);setStep(1);setSuccessMessage('12개 챕터 제안서 작업공간을 만들었습니다. 1단계 입력부터 진행하세요.');onNavigate(`/proposals/editor?caseId=${encodeURIComponent(selectedCaseId)}`);}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'제안서를 만들지 못했습니다.');}finally{setBusy(false);}};
+  const preparedChapters=()=>chapters.map((chapter)=>chapter.number===1?{...chapter,body:objective}:chapter.number===2?{...chapter,body:keyIssues}:chapter.number===3?{...chapter,body:planNotes}:chapter);
+  const saveVersion=async(generationMode:'MANUAL'|'AI')=>{if(!activeProposal||!selectedCaseId)return;if(![clientName,projectTitle,subtitle,submissionDate,keyIssues,objective,planNotes,exclusions].every((value)=>value.trim())){setErrorMessage('1단계의 클라이언트·프로젝트 정보와 핵심 쟁점·목적·수행 메모를 모두 입력하세요.');return;}setBusy(true);setErrorMessage(null);try{await apiRequest(`/api/cases/${selectedCaseId}/proposals/${activeProposal.id}/versions`,{method:'POST',body:JSON.stringify({clientName,projectTitle,subtitle,submissionDate,keyIssues,objective,planNotes,exclusions,chapters:preparedChapters(),includedModuleCodes,generationMode,sourceDocumentVersionIds:sourceDocumentVersionIds.split(',').map((item)=>item.trim()).filter(Boolean),version:activeProposal.version})});await loadProposalDetail(selectedCaseId,activeProposal.id);setStep(generationMode==='AI'?3:4);setSuccessMessage(generationMode==='AI'?'Gemini가 가변 1·2·3·12장 초안을 만들고 회사 DB 모듈을 병합했습니다.':'사람 검수본을 새 버전으로 저장했습니다.');}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'제안서 버전을 저장하지 못했습니다.');}finally{setBusy(false);}};
+  const workflow=async(action:'REQUEST_REVIEW'|'APPROVE'|'REJECT')=>{if(!activeProposal||!selectedCaseId)return;setBusy(true);try{await apiRequest(`/api/cases/${selectedCaseId}/proposals/${activeProposal.id}/reviews`,{method:'POST',body:JSON.stringify({action,comment:reviewComment,versionId:activeProposal.currentVersionId,version:activeProposal.version})});await loadProposalDetail(selectedCaseId,activeProposal.id);setReviewComment('');setSuccessMessage('제안서 검토 상태를 갱신했습니다.');}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'검토 상태를 바꾸지 못했습니다.');}finally{setBusy(false);}};
+  const download=async(format:'docx'|'md')=>{if(!activeProposal||!selectedCaseId)return;setBusy(true);try{const result=await apiDownloadPost(`/api/cases/${selectedCaseId}/proposals/${activeProposal.id}/render`,{format,versionId:activeProposal.approvedVersionId,version:activeProposal.version});const url=URL.createObjectURL(result.blob);const anchor=document.createElement('a');anchor.href=url;anchor.download=result.filename;anchor.click();URL.revokeObjectURL(url);await loadProposalDetail(selectedCaseId,activeProposal.id);setSuccessMessage(`${format.toUpperCase()} 승인본과 내보내기 해시를 DB 이력에 기록했습니다.`);}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'제안서를 내려받지 못했습니다.');}finally{setBusy(false);}};
+  const exportExcel=()=>{const selected=cases.find((item)=>item.id===selectedCaseId);const bytes=proposalWorkbook({clientName,projectTitle,subtitle,submissionDate,keyIssues,objective,planNotes,exclusions},`${selected?.caseNumber??''} · ${selected?.title??''}`,templates.find((item)=>item.id===selectedTemplateId)?.name??'컨코스트 12챕터');const payload=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;const url=URL.createObjectURL(new Blob([payload],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`${selected?.caseNumber??'PROJECT'}_제안서_입력양식.xlsx`;anchor.click();URL.revokeObjectURL(url);setSuccessMessage('Excel 양식을 내보냈습니다. C열 작성 후 다시 가져오면 1단계에 반영됩니다.');};
+  const importExcel=async(file?:File)=>{if(!file)return;setBusy(true);try{const values=await readProposalWorkbook(file);setClientName(values.clientName);setProjectTitle(values.projectTitle);setSubtitle(values.subtitle);setSubmissionDate(values.submissionDate);setKeyIssues(values.keyIssues);setObjective(values.objective);setPlanNotes(values.planNotes);setExclusions(values.exclusions);setStep(1);setSuccessMessage('작성 Excel 가져오기 완료. 화면 확인 후 Gemini 초안 생성을 진행하세요.');}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'Excel을 읽지 못했습니다.');}finally{setBusy(false);if(excelInputRef.current)excelInputRef.current.value='';}};
+  const importDocx=async(file?:File)=>{if(!file)return;setBusy(true);try{const imported=await readProposalDocx(file);const body=(number:number)=>imported.find((chapter)=>chapter.number===number)?.body;setChapters((current)=>current.map((item)=>item.kind==='VARIABLE'&&body(item.number)?{...item,body:body(item.number)??item.body}:item));if(body(1))setObjective(body(1)??'');if(body(2))setKeyIssues(body(2)??'');if(body(3))setPlanNotes(body(3)??'');setSelectedChapter(1);setStep(3);setSuccessMessage(`Word 제안서에서 ${imported.length}개 챕터를 인식했습니다. 가변 1·2·3·12장만 가져왔으며 회사 고정 장은 승인 DB 원문을 유지합니다.`);}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'Word 제안서를 읽지 못했습니다.');}finally{setBusy(false);if(docxInputRef.current)docxInputRef.current.value='';}};
+  const saveCompanyModule=async()=>{const selected=modules.find((module)=>module.code===selectedModuleCode);if(!selected||!canManageModules)return;setBusy(true);setErrorMessage(null);try{const response=await apiRequest<{module:CompanyModule;sanitizationCount:number}>(`/api/proposal-studio/modules/${selected.code}`,{method:'PUT',body:JSON.stringify({title:moduleTitle,bodyMarkdown:moduleBody,isActive:moduleActive,version:selected.version})});setModules((current)=>current.map((module)=>module.code===response.module.code?response.module:module));setChapters((current)=>current.map((item)=>item.moduleCode===response.module.code?{...item,title:response.module.title,body:response.module.bodyMarkdown}:item));setSuccessMessage(`관리자 회사 DB 모듈 v${response.module.version} 저장 완료${response.sanitizationCount?` · 금액 ${response.sanitizationCount}건 비공개 처리`:''}.`);}catch(reason){setErrorMessage(reason instanceof Error?reason.message:'회사 DB 모듈을 저장하지 못했습니다.');}finally{setBusy(false);}};
 
-  // Create new proposal (PROP-01 Action)
-  const handleCreateProposal = async () => {
-    if (!selectedCaseId || !selectedTemplateId) {
-      setErrorMessage('사건과 템플릿을 선택하세요');
-      return;
-    }
-    setIsSubmitting(true);
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    try {
-      const res = await apiRequest<{ proposal: Proposal; versionId: string }>(`/api/cases/${selectedCaseId}/proposals`, {
-        method: 'POST',
-        body: JSON.stringify({ templateId: selectedTemplateId })
-      });
-      setSuccessMessage('신규 제안서가 성공적으로 생성되었습니다.');
-      await loadCaseData(selectedCaseId);
-      loadProposalDetail(selectedCaseId, res.proposal.id);
-      onNavigate(`/proposals/editor?caseId=${encodeURIComponent(selectedCaseId)}`);
-    } catch (err: unknown) {
-      if (err instanceof ApiError) setErrorMessage(err.message);
-      else setErrorMessage('제안서 생성 중 오류 발생');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Save / Add new Version (PROP-02 Action: Manual or AI)
-  const handleSaveVersion = async (generationMode: 'MANUAL' | 'AI') => {
-    if (!selectedCaseId || !activeProposal) return;
-    if (![background, objective, method, expectedOutcome, exclusions].every((value) => value.trim())) {
-      setErrorMessage('의뢰 배경, 수행 목적, 수행 방법, 예상 성과물, 제외사항은 모두 필수입니다. 해당 없음은 “없음”으로 입력하세요.');
-      return;
-    }
-    setIsSubmitting(true);
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    try {
-      await apiRequest(`/api/cases/${selectedCaseId}/proposals/${activeProposal.id}/versions`, {
-        method: 'POST',
-        body: JSON.stringify({
-          background,
-          objective,
-          method,
-          expectedOutcome,
-          exclusions,
-          generationMode,
-          ...(generationMode === 'AI' ? { providerId, modelId } : {}),
-          sourceDocumentVersionIds: sourceDocumentVersionIds.split(',').map((id) => id.trim()).filter(Boolean),
-          version: activeProposal.version
-        })
-      });
-      setSuccessMessage(`제안서 버전이 (${generationMode === 'AI' ? 'AI 초안' : '수동'}) 성공적으로 저장되었습니다.`);
-      await loadProposalDetail(selectedCaseId, activeProposal.id);
-    } catch (err: unknown) {
-      if (err instanceof ApiError) setErrorMessage(err.message);
-      else setErrorMessage('버전 저장 실패');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Workflow Action (REQUEST_REVIEW, APPROVE, REJECT)
-  const handleWorkflowAction = async (action: 'REQUEST_REVIEW' | 'APPROVE' | 'REJECT') => {
-    if (!selectedCaseId || !activeProposal) return;
-    setIsSubmitting(true);
-    setErrorMessage(null);
-    setSuccessMessage(null);
-    try {
-      const res = await apiRequest<{ message: string; status: string }>(`/api/cases/${selectedCaseId}/proposals/${activeProposal.id}/reviews`, {
-        method: 'POST',
-        body: JSON.stringify({
-          action,
-          comment: reviewComment,
-          versionId: activeProposal.currentVersionId,
-          version: activeProposal.version
-        })
-      });
-      setSuccessMessage(`상태가 변경되었습니다: ${res.status}`);
-      setReviewComment('');
-      await loadProposalDetail(selectedCaseId, activeProposal.id);
-    } catch (err: unknown) {
-      if (err instanceof ApiError) setErrorMessage(err.message);
-      else setErrorMessage('검토/승인 작업 실패');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Render & Download Document
-  const handleRenderDownload = async (format: 'docx' | 'pdf') => {
-    if (!selectedCaseId || !activeProposal) return;
-    setIsSubmitting(true);
-    setErrorMessage(null);
-    try {
-      const { blob, filename } = await apiDownloadPost(`/api/cases/${selectedCaseId}/proposals/${activeProposal.id}/render`, {
-        format,
-        versionId: activeProposal.approvedVersionId,
-        version: activeProposal.version
-      });
-      const downloadUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(downloadUrl);
-      setSuccessMessage(`[${format.toUpperCase()}] 출력 문서가 성공적으로 내려받아졌습니다: ${filename}`);
-      await loadProposalDetail(selectedCaseId, activeProposal.id);
-    } catch (err: unknown) {
-      if (err instanceof ApiError) setErrorMessage(err.message);
-      else setErrorMessage('문서 출력/다운로드 실패');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleExcelExport = () => {
-    if (!activeProposal || !selectedCase) return;
-    const bytes = proposalWorkbook(
-      { background, objective, method, expectedOutcome, exclusions },
-      `${selectedCase.caseNumber} · ${selectedCase.title}`,
-      templates.find((template) => template.id === activeProposal.templateId)?.name ?? activeProposal.title
-    );
-    const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    const url = URL.createObjectURL(new Blob([payload], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${selectedCase.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu, '_')}_클라이언트_제안서_작성양식.xlsx`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    setSuccessMessage('클라이언트 제안서 Excel 양식을 내보냈습니다. C열만 수정한 뒤 다시 가져오세요.');
-  };
-
-  const handleExcelImport = async (file: File | undefined) => {
-    if (!file) return;
-    setIsSubmitting(true); setErrorMessage(null); setSuccessMessage(null);
-    try {
-      const values = await readProposalWorkbook(file);
-      setBackground(values.background); setObjective(values.objective); setMethod(values.method);
-      setExpectedOutcome(values.expectedOutcome); setExclusions(values.exclusions); setStep(1);
-      setSuccessMessage('Excel 작성 내용을 불러왔습니다. 화면에서 확인한 뒤 “수동 버전 저장”으로 D1에 저장하세요.');
-    } catch (reason) {
-      setErrorMessage(reason instanceof Error ? reason.message : 'Excel 제안서 양식을 읽지 못했습니다.');
-    } finally {
-      setIsSubmitting(false);
-      if (excelInputRef.current) excelInputRef.current.value = '';
-    }
-  };
-
-  const currentVer = activeProposal?.versions?.[0];
-  const selectedCase = cases.find((item) => item.id === selectedCaseId);
-
-  return (
-    <div className="proposal-view-container">
-      {errorMessage && (
-        <Dialog isOpen={Boolean(errorMessage)} title="오류" onClose={() => setErrorMessage(null)}>
-          <p className="error-text" style={{ color: 'var(--color-danger, #d93025)' }}>{errorMessage}</p>
-        </Dialog>
-      )}
-
-      {successMessage && (
-        <Card title="알림">
-          <p style={{ color: 'var(--color-success, #1e8e3e)' }}>{successMessage}</p>
-        </Card>
-      )}
-
-      {/* Case Selector Header */}
-      <Card title="현재 프로젝트 · 제안서 작성 연결">
-        <div className="form-stack">
-          <Select
-            label="사건 선택"
-            value={selectedCaseId}
-            onChange={(e) => setSelectedCaseId(e.target.value)}
-            options={cases.map((c) => ({ value: c.id, label: `[${c.caseNumber}] ${c.title} (${c.claimType})` }))}
-          />
-
-          {selectedCase && <section className="proposal-intake-context" aria-label="현재 선택된 프로젝트">
-            <div><span>{fromIntake ? '방금 저장한 프로젝트 의뢰' : '현재 선택 프로젝트'}</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>
-            <p><b>다음 할 일</b> 유형에 맞는 템플릿을 선택해 제안서를 만들고, 의뢰 배경부터 순서대로 작성하세요.</p>
-          </section>}
-
-          {proposals.length > 0 && (
-            <Select
-              label="기존 제안서 선택"
-              value={activeProposal?.id || ''}
-              onChange={(e) => loadProposalDetail(selectedCaseId, e.target.value)}
-              options={proposals.map((p) => ({ value: p.id, label: `${p.title} (상태: ${p.status}, v${p.version})` }))}
-            />
-          )}
-        </div>
-      </Card>
-
-      {/* PROP-01: Template Selection Section */}
-      {(routeId === 'PROP-01' || (!activeProposal && selectedCaseId)) && (
-        <Card title={routeId === 'PROP-01' ? '제안서 템플릿 선택' : '제안서 작성 1단계 · 유형별 템플릿 선택'}>
-          <p className="muted">현재 프로젝트 유형에 맞는 표준 기술제안서 템플릿을 선택하세요. 생성하면 의뢰 배경 작성부터 바로 시작합니다.</p>
-          <div className="form-stack" style={{ marginTop: '1rem' }}>
-            <Select
-              label="적용 템플릿 선택"
-              value={selectedTemplateId}
-              onChange={(e) => setSelectedTemplateId(e.target.value)}
-              options={templates.map((t) => ({ value: t.id, label: `${t.name} [${t.claimType}]` }))}
-            />
-
-            {templates.find((t) => t.id === selectedTemplateId) && (
-              <div className="template-preview" style={{ padding: '0.75rem', background: '#f8f9fa', borderRadius: '4px', border: '1px solid #dadce0' }}>
-                <h4>{templates.find((t) => t.id === selectedTemplateId)?.name}</h4>
-                <p>{templates.find((t) => t.id === selectedTemplateId)?.description}</p>
-                <pre style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', maxHeight: '150px', overflowY: 'auto' }}>
-                  {templates.find((t) => t.id === selectedTemplateId)?.bodyTemplate}
-                </pre>
-              </div>
-            )}
-
-            <div className="action-row">
-              <Button onClick={handleCreateProposal} disabled={isSubmitting || !selectedTemplateId || !canEdit}>
-                선택한 템플릿으로 제안서 생성
-              </Button>
-              {routeId === 'PROP-01' && <Button variant="secondary" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(selectedCaseId)}`)}>
-                제안서 단계형 작성기로 이동
-              </Button>}
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* PROP-02: Stepper Writer & Review/Approval Section */}
-      {activeProposal && (
-        <Card title={`단계형 제안서 작성기 [${activeProposal.title}]`} className="proposal-step-card">
-          <div data-active-step={step}>
-              <div className="proposal-status-header" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-                <span>현재 상태:</span>
-                <StatusBadge status={proposalStatusBadge(activeProposal.status)} />
-                <span className="muted">| 버전: v{currentVer?.versionNumber || 1}</span>
-                {currentVer?.generationMode === 'AI' && <StatusBadge status="ai_draft" />}
-              </div>
-
-              <section className="proposal-excel-workflow" aria-label="클라이언트 제안서 Excel 작성">
-                <div><strong>Excel로 클라이언트별 내용만 수정</strong><span>승인 템플릿 구조와 항목 코드는 고정하고 C열의 내용만 현장에서 수정합니다.</span></div>
-                <div className="action-row">
-                  <Button variant="secondary" onClick={handleExcelExport}>Excel 양식 내보내기</Button>
-                  <input ref={excelInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => void handleExcelImport(event.target.files?.[0])} />
-                  <Button variant="secondary" onClick={() => excelInputRef.current?.click()} disabled={isSubmitting || !canEdit}>작성 Excel 가져오기</Button>
-                </div>
-              </section>
-
-              {/* Wizard Stepper Tabs */}
-              <div className="stepper-nav" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-                <Button className="proposal-step-button" size="sm" variant={step === 1 ? 'primary' : 'secondary'} onClick={() => setStep(1)}><b>01</b><span>의뢰 배경</span></Button>
-                <Button className="proposal-step-button" size="sm" variant={step === 2 ? 'primary' : 'secondary'} onClick={() => setStep(2)}><b>02</b><span>수행 방법</span></Button>
-                <Button className="proposal-step-button" size="sm" variant={step === 3 ? 'primary' : 'secondary'} onClick={() => setStep(3)}><b>03</b><span>성과물·제외</span></Button>
-                <Button className="proposal-step-button" size="sm" variant={step === 4 ? 'primary' : 'secondary'} onClick={() => setStep(4)}><b>04</b><span>미리보기·승인</span></Button>
-              </div>
-
-              {step === 1 && (
-                <div className="step-content form-stack">
-                  <Input label="1-1. 의뢰 배경 (BACKGROUND)" value={background} onChange={(e) => setBackground(e.target.value)} placeholder="클레임 의뢰 및 기술검토 배경 입력" />
-                  <Input label="1-2. 수행 목적 (OBJECTIVE)" value={objective} onChange={(e) => setObjective(e.target.value)} placeholder="분석 및 과업 목적 입력" />
-                  <Button variant="secondary" onClick={() => setStep(2)}>다음 단계 (수행 방법) →</Button>
-                </div>
-              )}
-
-              {step === 2 && (
-                <div className="step-content form-stack">
-                  <Input label="2. 수행 방법 및 산출 범위 (METHOD)" value={method} onChange={(e) => setMethod(e.target.value)} placeholder="현장실측, 수량산출, 계약서 검증 등 방법론 입력" />
-                  <div className="action-row">
-                    <Button variant="secondary" onClick={() => setStep(1)}>← 이전</Button>
-                    <Button variant="secondary" onClick={() => setStep(3)}>다음 단계 (성과물) →</Button>
-                  </div>
-                </div>
-              )}
-
-              {step === 3 && (
-                <div className="step-content form-stack">
-                  <Input label="3-1. 예상 성과물 (EXPECTED_OUTCOME)" value={expectedOutcome} onChange={(e) => setExpectedOutcome(e.target.value)} placeholder="제출 문서 및 기한 입력" />
-                  <Input label="3-2. 제외 사항 (EXCLUSIONS)" value={exclusions} onChange={(e) => setExclusions(e.target.value)} placeholder="과업 범위 제외 조건 입력" />
-                  <Input
-                    label="3-3. 근거 DocumentVersion ID 목록 (쉼표 구분, 선택)"
-                    value={sourceDocumentVersionIds}
-                    onChange={(e) => setSourceDocumentVersionIds(e.target.value)}
-                    placeholder="DOCVER-..."
-                  />
-                  <div className="action-row">
-                    <Button variant="secondary" onClick={() => setStep(2)}>← 이전</Button>
-                    <Button variant="secondary" onClick={() => setStep(4)}>다음 단계 (미리보기 & 승인) →</Button>
-                  </div>
-                </div>
-              )}
-
-              {step === 4 && (
-                <div className="step-content form-stack">
-                  <h4>Step 4: 작성 내용 미리보기 & 승인 워크플로우</h4>
-                  <div className="body-preview" style={{ padding: '1rem', background: '#f1f3f4', borderRadius: '4px', whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-                    {currentVer?.bodyText || '생성된 본문 텍스트가 없습니다.'}
-                  </div>
-
-                  {currentVer?.generationMode === 'AI' && (
-                    <div className="provenance-box" style={{ fontSize: '0.8rem', color: '#5f6368', padding: '0.5rem', background: '#e8f0fe', borderRadius: '4px' }}>
-                      <strong>AI_DRAFT Provenance:</strong> Provider: {currentVer.providerId} | Model: {currentVer.modelId} | Input SHA-256: {currentVer.inputSha256.slice(0, 16)}... | 생성: {currentVer.generatedAt}
-                    </div>
-                  )}
-
-                  <div className="action-row" style={{ marginTop: '1rem' }}>
-                    <Select label="AI 공급자" value={providerId} onChange={(event) => setProviderId(event.target.value)} options={[{ value: 'GEMINI', label: 'Google · Gemini (서버 보안 연결)' }]} />
-                    <Select label="AI 모델" value={modelId} onChange={(event) => setModelId(event.target.value)} options={[{ value: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash · 관리자 조직 키' }]} />
-                    <Button variant="secondary" onClick={() => handleSaveVersion('MANUAL')} disabled={isSubmitting || !canEdit}>
-                      수동 버전 저장
-                    </Button>
-                    <Button onClick={() => handleSaveVersion('AI')} disabled={isSubmitting || !canEdit}>
-                      🤖 Gemini 제안서 초안 생성
-                    </Button>
-                  </div>
-
-                  <hr style={{ margin: '1.5rem 0' }} />
-
-                  <h4>검토 및 승인 제어</h4>
-                  <Input label="검토/반려 사유" value={reviewComment} onChange={(e) => setReviewComment(e.target.value)} placeholder="승인 또는 반려 시 의견 작성" />
-
-                  <div className="action-row" style={{ marginTop: '0.5rem' }}>
-                    <Button variant="secondary" onClick={() => handleWorkflowAction('REQUEST_REVIEW')} disabled={isSubmitting || !canEdit || activeProposal.status !== 'DRAFT'}>
-                      검토 요청 (IN_REVIEW)
-                    </Button>
-                    <Button onClick={() => handleWorkflowAction('APPROVE')} disabled={isSubmitting || !canApprove || activeProposal.status !== 'IN_REVIEW'}>
-                      제안서 승인 (APPROVE)
-                    </Button>
-                    <Button variant="danger" onClick={() => handleWorkflowAction('REJECT')} disabled={isSubmitting || !canApprove || activeProposal.status !== 'IN_REVIEW'}>
-                      반려 (REJECT)
-                    </Button>
-                  </div>
-
-                  <hr style={{ margin: '1.5rem 0' }} />
-
-                  <h4>실제 문서 출력 (APPROVED 상태 전용)</h4>
-                  {activeProposal.status !== 'APPROVED' && (
-                    <p style={{ color: 'var(--color-danger, #d93025)', fontSize: '0.9rem' }}>
-                      ⚠️ 제안서가 APPROVED 승인 상태일 때만 최종 DOCX/PDF 출력이 가능합니다. (현재: {activeProposal.status})
-                    </p>
-                  )}
-                  <div className="action-row">
-                    <Button onClick={() => handleRenderDownload('docx')} disabled={isSubmitting || activeProposal.status !== 'APPROVED'}>
-                      📄 DOCX 출력 다운로드
-                    </Button>
-                    <Button onClick={() => handleRenderDownload('pdf')} disabled={isSubmitting || activeProposal.status !== 'APPROVED'}>
-                      📕 PDF 출력 다운로드
-                    </Button>
-                  </div>
-
-                  <h4>버전·근거·승인 이력</h4>
-                  <ul aria-label="제안서 버전 이력">
-                    {(activeProposal.versions ?? []).map((version) => (
-                      <li key={version.id}>
-                        v{String(version.versionNumber).padStart(2, '0')} · {version.generationMode}{version.isApproved ? ' · 승인본' : ''}
-                        {' · '}SHA-256 {version.sha256.slice(0, 16)}… · 근거 {readStringArray(version.sourceDocumentVersionIdsJson).length}건
-                      </li>
-                    ))}
-                  </ul>
-                  <ul aria-label="제안서 검토 이력">
-                    {(activeProposal.reviews ?? []).map((review) => (
-                      <li key={review.id}>{review.action} · {review.reviewer.name} · {review.comment || '의견 없음'}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-        </Card>
-      )}
-    </div>
-  );
+  const selectedCase=cases.find((item)=>item.id===selectedCaseId);const currentVersion=activeProposal?.versions?.[0];const chapter=chapters[selectedChapter-1]??chapters[0];
+  return <div className="proposal-view-container proposal-studio-v2">
+    {errorMessage&&<Dialog isOpen title="제안서 작업 확인" onClose={()=>setErrorMessage(null)}><p className="error-text">{errorMessage}</p></Dialog>}
+    {templatePreview&&<Dialog isOpen title="비식별 표준 제안서 완제품 구조" onClose={()=>setTemplatePreview(false)}><div className="proposal-template-dialog"><p>실제 제안서 원본은 개인정보와 금액을 포함하므로 브라우저에 공개하지 않습니다. 기존 원본 23종을 카탈로그에 등록하고 핵심 최신본을 분석해 만든 안전한 표준 구조입니다.</p><ol>{chapterTitles.map((title,index)=><li key={title}><b>{index+1}. {title}</b><span>{index<3||index===11?'Gemini 가변 작성':'관리자 승인 회사 DB 자동 병합'}</span></li>)}</ol><h4>비공개 원본 템플릿 카탈로그</h4><ul>{sources.map((source)=><li key={source.id}>{source.sourceName} · {source.sourceFormat}{source.isDefault?' · 기본':''} · {source.analysisStatus==='ANALYZED'?'구조 분석 완료':'참조 등록'}</li>)}</ul></div></Dialog>}
+    {successMessage&&<div className="proposal-success" role="status"><b>완료</b><span>{successMessage}</span><button type="button" onClick={()=>setSuccessMessage(null)}>닫기</button></div>}
+    <Card title="현재 프로젝트 · 제안서 연결"><div className="proposal-project-bar"><Select label="프로젝트" value={selectedCaseId} onChange={(event)=>setSelectedCaseId(event.target.value)} options={cases.map((item)=>({value:item.id,label:`${item.caseNumber} · ${item.title}`}))}/>{proposals.length>0&&<Select label="저장된 제안서" value={activeProposal?.id??''} onChange={(event)=>void loadProposalDetail(selectedCaseId,event.target.value)} options={proposals.map((item)=>({value:item.id,label:`${item.title} · ${item.status} · 편집 v${item.version}`}))}/>}</div>{selectedCase&&<div className="proposal-project-context"><b>{fromIntake?'방금 등록한 프로젝트':'선택 프로젝트'}</b><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><span>{selectedCase.claimType} · {selectedCase.status}</span></div>}</Card>
+    {(routeId==='PROP-01'||(!activeProposal && selectedCaseId))&&<Card title={routeId==='PROP-01'?'제안서 템플릿 선택':'제안서 작성 1단계 · 유형별 템플릿 선택'}><div className="proposal-template-pick"><Select label="프로젝트 유형 승인 템플릿" value={selectedTemplateId} onChange={(event)=>setSelectedTemplateId(event.target.value)} options={templates.map((item)=>({value:item.id,label:item.name}))}/><Button variant="secondary" onClick={()=>setTemplatePreview(true)}>선택 템플릿 완제품 보기</Button><Button onClick={()=>void createProposal()} disabled={!canEdit||busy||!selectedTemplateId}>12챕터 제안서 시작</Button></div><p className="muted">최신 HWP·PDF·DOCX 제안서 5종을 분석한 표준 구조입니다. 금액은 저장 전에 자동 비공개 처리됩니다.</p></Card>}
+    {activeProposal&&<Card title={`${activeProposal.title} · 4단계 제안서 스튜디오`} className="proposal-step-card">
+      <div className="proposal-status-row"><StatusBadge status={statusBadge(activeProposal.status)}/><span>저장 버전 v{currentVersion?.versionNumber??1}</span><span>DB 편집 버전 {activeProposal.version}</span>{currentVersion?.generationMode==='AI'&&<StatusBadge status="ai_draft"/>}</div>
+      <nav className="proposal-four-steps" aria-label="제안서 4단계">{[['01','입력','클라이언트·쟁점'],['02','AI 초안','Gemini+회사 DB'],['03','사람 검수','12챕터 편집'],['04','승인·보관','DOCX·MD·DB']].map((item,index)=><button key={item[0]} className={`proposal-step-button ${step===index+1?'active':''}`} onClick={()=>setStep(index+1)}><b>{item[0]}</b><span>{item[1]}</span><small>{item[2]}</small></button>)}</nav>
+      <section className="proposal-excel-workflow"><div><b>현장 작성·기존 문서 가져오기</b><span>Excel 입력 양식과 Word 12챕터 본문을 가져옵니다. 금액은 서버에서 다시 마스킹합니다.</span></div><div className="action-row"><Button variant="secondary" onClick={exportExcel}>Excel 양식 내보내기</Button><input ref={excelInputRef} hidden type="file" accept=".xlsx" onChange={(event)=>void importExcel(event.target.files?.[0])}/><Button variant="secondary" onClick={()=>excelInputRef.current?.click()} disabled={busy}>작성 Excel 가져오기</Button><input ref={docxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importDocx(event.target.files?.[0])}/><Button variant="secondary" onClick={()=>docxInputRef.current?.click()} disabled={busy}>Word DOCX 가져오기</Button></div></section>
+      {step===1&&<div className="proposal-stage proposal-stage-input"><header><b>STEP 1</b><h3>클라이언트와 프로젝트 사실을 입력하세요.</h3><p>이 내용이 갑지와 Gemini 초안의 기준입니다. 모르면 추측하지 말고 ‘확인 필요’라고 적으세요.</p></header><div className="proposal-input-grid"><Input label="클라이언트명" value={clientName} onChange={(event)=>setClientName(event.target.value)}/><Input label="프로젝트 제목" value={projectTitle} onChange={(event)=>setProjectTitle(event.target.value)}/><Input label="제안서 부제" value={subtitle} onChange={(event)=>setSubtitle(event.target.value)}/><Input label="제출일" type="date" value={submissionDate} onChange={(event)=>setSubmissionDate(event.target.value)}/><label className="proposal-field wide"><span>핵심 쟁점 3~5개</span><textarea value={keyIssues} onChange={(event)=>setKeyIssues(event.target.value)} placeholder="계약조건, 물가변동 기준일, 단가조정 등 확인된 사실"/></label><label className="proposal-field"><span>제안 목적·의뢰 배경</span><textarea value={objective} onChange={(event)=>setObjective(event.target.value)}/></label><label className="proposal-field"><span>수행 계획 메모</span><textarea value={planNotes} onChange={(event)=>setPlanNotes(event.target.value)}/></label><label className="proposal-field wide"><span>제외·추가 확인 사항</span><textarea value={exclusions} onChange={(event)=>setExclusions(event.target.value)}/></label></div><div className="proposal-next"><Button onClick={()=>setStep(2)}>입력 완료 · AI 초안 단계 →</Button></div></div>}
+      {step===2&&<div className="proposal-stage proposal-ai-stage"><header><b>STEP 2</b><h3>Gemini가 가변 챕터를 쓰고 회사 DB를 병합합니다.</h3><p>1·2·3·12장은 프로젝트 사실로 생성하고, 4~11장은 아래 승인 모듈을 그대로 사용합니다.</p></header><div className="proposal-ai-map"><div><b>Gemini 가변 작성</b><strong>01 · 02 · 03 · 12장</strong><span>목적, 핵심 쟁점, 수행계획, 맺음말</span></div><div><b>회사 DB 자동 병합</b><strong>04 ~ 11장</strong><span>전문가, 강점, 조직, 실적, 자격, 용역조건</span></div><div><b>보안 필터</b><strong>금액 3중 마스킹</strong><span>AI 응답 → 서버 → D1 Trigger</span></div></div><label className="proposal-field"><span>근거 DocumentVersion ID (선택, 쉼표 구분)</span><textarea value={sourceDocumentVersionIds} onChange={(event)=>setSourceDocumentVersionIds(event.target.value)} placeholder="DOCVER-..."/></label><div className="proposal-next"><Button variant="secondary" onClick={()=>setStep(1)}>← 입력 수정</Button><Button onClick={()=>void saveVersion('AI')} disabled={busy||!canEdit}>Gemini 12챕터 초안 생성</Button></div></div>}
+      {step===3&&<div className="proposal-stage proposal-editor-stage"><header><b>STEP 3</b><h3>목차를 눌러 한 챕터씩 사람 검수하세요.</h3><p>가변 장은 직접 수정합니다. 회사 고정 장은 오른쪽에서 포함 여부만 선택합니다.</p></header><div className="proposal-editor-grid"><aside className="proposal-toc" aria-label="12개 챕터 목차">{chapters.map((item)=><button key={item.number} className={selectedChapter===item.number?'active':''} onClick={()=>setSelectedChapter(item.number)}><b>{String(item.number).padStart(2,'0')}</b><span>{item.title}</span><small>{item.kind==='FIXED'?'회사 DB':'프로젝트 작성'}</small></button>)}</aside><main className="proposal-chapter-editor"><div><span>{chapter.kind==='FIXED'?'ADMIN APPROVED MODULE':'HUMAN REVIEW'}</span><h3>{chapter.number}. {chapter.title}</h3></div><textarea aria-label={`${chapter.title} 본문`} value={chapter.body} readOnly={chapter.kind==='FIXED'} onChange={(event)=>setChapters((current)=>current.map((item)=>item.number===chapter.number?{...item,body:event.target.value}:item))}/>{chapter.kind==='FIXED'&&<p>회사 고정 장은 관리자 승인 DB에서만 수정됩니다. 이 프로젝트 제안서에서는 원문 위조를 막기 위해 읽기 전용입니다.</p>}</main><aside className="proposal-module-panel"><h4>회사 실적 모듈</h4><p>프로젝트에 필요한 모듈만 켜세요.</p>{modules.map((module)=><label key={module.code}><input type="checkbox" checked={includedModuleCodes.includes(module.code)} onChange={(event)=>setIncludedModuleCodes((current)=>event.target.checked?[...new Set([...current,module.code])]:current.filter((code)=>code!==module.code))}/><span><b>{module.chapterNumber}. {module.title}</b><small>승인 DB v{module.version}</small></span></label>)}</aside></div>{canManageModules&&<section className="proposal-admin-module-editor"><div><b>관리자 · 회사 고정 모듈 DB 편집</b><span>저장하면 모든 신규 제안서의 4~11장에 적용됩니다. 금액은 자동 비공개 처리됩니다.</span></div><Select label="편집할 고정 챕터" value={selectedModuleCode} onChange={(event)=>setSelectedModuleCode(event.target.value)} options={modules.map((module)=>({value:module.code,label:`${module.chapterNumber}. ${module.title} · v${module.version}`}))}/><Input label="챕터 제목" value={moduleTitle} onChange={(event)=>setModuleTitle(event.target.value)}/><label className="proposal-field wide"><span>관리자 승인 본문</span><textarea value={moduleBody} onChange={(event)=>setModuleBody(event.target.value)}/></label><label className="proposal-module-active"><input type="checkbox" checked={moduleActive} onChange={(event)=>setModuleActive(event.target.checked)}/><span>신규 제안서에 이 모듈 사용</span></label><Button onClick={()=>void saveCompanyModule()} disabled={busy||!moduleTitle.trim()||!moduleBody.trim()}>관리자 회사 DB 버전 저장</Button></section>}<div className="proposal-next"><Button variant="secondary" onClick={()=>setStep(2)}>← AI 단계</Button><Button onClick={()=>void saveVersion('MANUAL')} disabled={busy||!canEdit}>사람 검수본 저장 · 승인 단계 →</Button></div></div>}
+      {step===4&&<div className="proposal-stage proposal-approval-stage"><header><b>STEP 4</b><h3>검토·승인 후 안전한 문서로 내보냅니다.</h3><p>승인 전에는 DOCX/Markdown을 내보낼 수 없습니다. 모든 출력은 SHA-256과 마스킹 횟수를 DB에 남깁니다.</p></header><div className="proposal-final-preview"><h3>{projectTitle}</h3><p>{subtitle}</p><span>{clientName} · {submissionDate}</span><ol>{chapters.map((item)=><li key={item.number}>{item.number}. {item.title}</li>)}</ol></div><Input label="검토·반려 의견" value={reviewComment} onChange={(event)=>setReviewComment(event.target.value)}/><div className="action-row"><Button variant="secondary" onClick={()=>void workflow('REQUEST_REVIEW')} disabled={busy||!canEdit||activeProposal.status!=='DRAFT'}>검토 요청</Button><Button onClick={()=>void workflow('APPROVE')} disabled={busy||!canApprove||activeProposal.status!=='IN_REVIEW'}>최종 승인</Button><Button variant="danger" onClick={()=>void workflow('REJECT')} disabled={busy||!canApprove||activeProposal.status!=='IN_REVIEW'}>반려</Button></div><div className="proposal-export-row"><Button onClick={()=>void download('docx')} disabled={busy||activeProposal.status!=='APPROVED'}>Word DOCX 내려받기</Button><Button variant="secondary" onClick={()=>void download('md')} disabled={busy||activeProposal.status!=='APPROVED'}>Markdown 내려받기</Button></div><div className="proposal-history"><section><h4>버전·근거 이력</h4><ul>{(activeProposal.versions??[]).map((version)=><li key={version.id}>v{version.versionNumber} · {version.generationMode}{version.isApproved?' · 승인본':''} · SHA {version.sha256.slice(0,12)}… · 근거 {parseArray(version.sourceDocumentVersionIdsJson).length}건</li>)}</ul></section><section><h4>내보내기 DB 이력</h4><ul>{(activeProposal.exports??[]).map((item)=><li key={item.id}>{item.format} · {item.fileName} · 마스킹 {item.sanitizationCount}건</li>)}</ul></section></div></div>}
+    </Card>}
+  </div>;
 };
