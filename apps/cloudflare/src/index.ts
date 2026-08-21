@@ -141,6 +141,7 @@ const PREVIEW_SESSION_COOKIE = 'claim_center_session';
 const PREVIEW_SESSION_SECONDS = 12 * 60 * 60;
 const PREVIEW_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
 const RESPONSIBLE_PM_NAMES = ['현동명', '이원희', '이경훈', '최영배', '장범선'] as const;
+const RESPONSIBLE_PM_NAME_SET = new Set<string>(RESPONSIBLE_PM_NAMES);
 
 interface PreviewUserRow {
   id: string;
@@ -480,6 +481,7 @@ async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Pro
          FROM preview_project_stage_schedules s JOIN preview_cases c ON c.id=s.case_id AND c.organization_id=s.organization_id
          JOIN preview_project_schedule_profiles p ON p.case_id=s.case_id JOIN preview_users u ON u.id=p.responsible_pm_id
          WHERE s.organization_id=? AND c.deleted_at IS NULL AND s.status<>'COMPLETED'
+           AND u.is_active=1 AND u.display_name IN ('현동명','이원희','이경훈','최영배','장범선')
            AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=s.case_id AND a.user_id=?))
          ORDER BY CASE WHEN s.end_date<? THEN 0 ELSE 1 END,s.start_date,s.end_date LIMIT 20`
       ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,today).all<Record<string,unknown>>(),
@@ -2089,6 +2091,7 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
     const progress = Math.round(statuses.reduce((sum,status) => sum + (status === 'DONE' ? 1 : status === 'IN_PROGRESS' ? 0.5 : 0),0) / 6 * 100);
     const explicit = explicitByCase.get(row.caseId) ?? new Map<string, ExplicitStage>();
     const profile = profileByCase.get(row.caseId) ?? null;
+    const approvedProfile = profile && RESPONSIBLE_PM_NAME_SET.has(profile.responsiblePmName) ? profile : null;
     const explicitDates = [...explicit.values()].flatMap((item) => [item.startDate,item.endDate]).sort();
     const start = row.projectStartOn ?? explicitDates.at(0) ?? '';
     const end = row.projectEndOn ?? explicitDates.at(-1) ?? '';
@@ -2098,12 +2101,12 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
         stageId, stageCode, startDay: schedule ? workflowDateDay(schedule.startDate,1) : 0, endDay: schedule ? workflowDateDay(schedule.endDate,1) : 0,
         startDate: schedule?.startDate ?? null, endDate: schedule?.endDate ?? null, scheduleVersion: Number(schedule?.version ?? 0),
         scheduleStatus: schedule?.status ?? 'PLANNED', scheduleNote: schedule?.noteText ?? '', scheduleExplicit: Boolean(schedule), status,
-        owner: profile?.responsiblePmName ?? owner, detail
+        owner: approvedProfile?.responsiblePmName ?? owner, detail
       };
     };
     const stages = [
       { stageId:1,stageCode:'PROPOSAL',startDay:workflowDateDay(row.proposalCreatedAt ?? row.createdAt,createdDay),endDay:workflowDateDay(row.sentAt ?? row.proposalCreatedAt,createdDay),startDate:(row.proposalCreatedAt ?? row.createdAt).slice(0,10),endDate:(row.sentAt ?? row.proposalCreatedAt ?? row.createdAt).slice(0,10),scheduleVersion:0,scheduleStatus:proposalStatus,scheduleNote:'',scheduleExplicit:true,status:proposalStatus,owner:'제안 담당',detail:row.proposalCreatedAt ? `제안서 ${row.proposalStatus ?? 'DRAFT'}${row.sentAt ? ' · 발송본 연결' : ''}` : '프로젝트 의뢰 저장 · 제안서 작성 필요' },
-      { stageId:2,stageCode:'AWARD',startDay:workflowDateDay(row.sentAt,row.projectStartOn ? workflowDateDay(row.projectStartOn,createdDay) : createdDay),endDay:workflowDateDay(row.projectStartOn ?? row.sentAt,createdDay),startDate:row.sentAt?.slice(0,10) ?? row.projectStartOn ?? null,endDate:row.projectStartOn ?? row.sentAt?.slice(0,10) ?? null,scheduleVersion:0,scheduleStatus:awardStatus,scheduleNote:'',scheduleExplicit:Boolean(row.sentAt || row.projectStartOn),status:awardStatus,owner:profile?.responsiblePmName ?? '프로젝트 책임자',detail:row.awardStatus === 'WON' ? '접수 확정 · 수행 프로젝트 전환' : row.awardStatus === 'LOST' ? '접수 취소' : '거래처 회신·접수 확정 대기' },
+      { stageId:2,stageCode:'AWARD',startDay:workflowDateDay(row.sentAt,row.projectStartOn ? workflowDateDay(row.projectStartOn,createdDay) : createdDay),endDay:workflowDateDay(row.projectStartOn ?? row.sentAt,createdDay),startDate:row.sentAt?.slice(0,10) ?? row.projectStartOn ?? null,endDate:row.projectStartOn ?? row.sentAt?.slice(0,10) ?? null,scheduleVersion:0,scheduleStatus:awardStatus,scheduleNote:'',scheduleExplicit:Boolean(row.sentAt || row.projectStartOn),status:awardStatus,owner:approvedProfile?.responsiblePmName ?? '프로젝트 책임자',detail:row.awardStatus === 'WON' ? '접수 확정 · 수행 프로젝트 전환' : row.awardStatus === 'LOST' ? '접수 취소' : '거래처 회신·접수 확정 대기' },
       scheduledStage('KICKOFF',3,kickoffStatus,'담당 PM',row.kickoffAt ? `착수회의 ${row.kickoffStatus}` : '착수회의 기록 필요'),
       scheduledStage('SITE_SURVEY',4,surveyStatus,'담당 PM',Number(row.surveyCount)>0 ? `현장조사 ${row.surveyCompleted}/${row.surveyCount}건 완료` : '현장조사 범위·자료 필요'),
       scheduledStage('TAKEOFF_COST',5,quantityStatus,row.allocationUnits ?? '담당 PM',`팀 배정 ${row.allocationStart ? '완료' : '필요'} · 산출 ${row.takeoffCount} · 내역 ${row.costCount}`),
@@ -2114,7 +2117,7 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
     if (Number(row.takeoffCount)+Number(row.costCount)>0) highlights.push({label:`Drive 산출·내역 ${Number(row.takeoffCount)+Number(row.costCount)}건`,tone:'survey'});
     if (row.reviewStatus) highlights.push({label:`보고서 검토 · ${row.reviewStatus}`,tone:'report'});
     if (!highlights.length) highlights.push({label:'실제 D1 기록 · 다음 단계 입력 필요',tone:'pending'});
-    return { id:`project-${row.caseId}`,caseId:row.caseId,code:row.caseNumber,name:row.title,client:row.clientName ?? '거래처 정보 입력 대기',claimType:row.claimType,clientLegalPosition:row.clientLegalPosition,progress,start,end,awardStatus:row.awardStatus ?? 'PENDING',responsiblePm:profile ? { id:profile.responsiblePmId,name:profile.responsiblePmName } : null,profileVersion:Number(profile?.version ?? 0),canManageSchedule:user.roles.includes('admin') || profile?.responsiblePmId === user.id,pendingChangeRequests:requestsByCase.get(row.caseId) ?? [],highlights,stages };
+    return { id:`project-${row.caseId}`,caseId:row.caseId,code:row.caseNumber,name:row.title,client:row.clientName ?? '거래처 정보 입력 대기',claimType:row.claimType,clientLegalPosition:row.clientLegalPosition,progress,start,end,awardStatus:row.awardStatus ?? 'PENDING',responsiblePm:approvedProfile ? { id:approvedProfile.responsiblePmId,name:approvedProfile.responsiblePmName } : null,profileVersion:Number(profile?.version ?? 0),canManageSchedule:user.roles.includes('admin') || approvedProfile?.responsiblePmId === user.id,pendingChangeRequests:requestsByCase.get(row.caseId) ?? [],highlights,stages };
   });
   return json({ projects, dataBasis:'REAL_D1_WORKFLOW_RECORDS', schedulePolicy:scheduleReady?'RESPONSIBLE_PM_EXPLICIT_DATES':'LEGACY_READ_ONLY', stageSources:['preview_proposals','preview_proposal_links','preview_workflow_kickoffs','preview_site_surveys','preview_workforce_allocations','preview_google_case_evidence','preview_report_drafts','preview_report_reviews','preview_report_finalizations',...(scheduleReady?['preview_project_schedule_profiles','preview_project_stage_schedules','preview_schedule_change_requests']:[])], phase:'CF40_PM_SCHEDULE_AI_IMPORT' });
 }

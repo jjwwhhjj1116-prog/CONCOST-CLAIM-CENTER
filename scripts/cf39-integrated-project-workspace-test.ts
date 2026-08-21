@@ -108,6 +108,13 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
 
 test('CF43 PM choices are exactly the requested five members while the workspace Admin is excluded', async () => {
   const { sql, env } = await setup();
+  sql.run('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) VALUES (?,?,?,?)', [CASE_ID,ADMIN_ID,ADMIN_ID,'2026-08-21T00:00:01.000Z']);
+  sql.run('DROP TRIGGER preview_schedule_profile_insert_guard');
+  sql.run('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)', [CASE_ID,'concost',ADMIN_ID,1,ADMIN_ID,'2026-08-21T00:00:01.000Z','2026-08-21T00:00:01.000Z']);
+  const legacySchedule = await worker.fetch(request('/api/project-workflow/schedule', ADMIN_TOKEN), env);
+  const legacyProject = (await legacySchedule.json() as any).projects.find((entry: any) => entry.caseId === CASE_ID);
+  assert.equal(legacyProject.responsiblePm, null);
+  assert.equal(legacyProject.profileVersion, 1);
   const options = await worker.fetch(request(`/api/project-workflow/pm-options?caseId=${CASE_ID}`, ADMIN_TOKEN), env);
   assert.equal(options.status, 200);
   const names = (await options.json() as any).users.map((entry: any) => entry.displayName);
@@ -116,10 +123,10 @@ test('CF43 PM choices are exactly the requested five members while the workspace
   const targetId = PM_ROSTER[1][0];
   sql.run('DELETE FROM preview_case_assignments WHERE case_id=? AND user_id=?', [CASE_ID,targetId]);
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_case_assignments WHERE case_id=? AND user_id=?', [CASE_ID,targetId])[0].values[0][0], 0);
-  const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:targetId,expectedProfileVersion:0 }) }), env);
+  const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:targetId,expectedProfileVersion:1 }) }), env);
   assert.equal(assigned.status, 200);
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_case_assignments WHERE case_id=? AND user_id=?', [CASE_ID,targetId])[0].values[0][0], 1);
-  const adminDenied = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:ADMIN_ID,expectedProfileVersion:1 }) }), env);
+  const adminDenied = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:ADMIN_ID,expectedProfileVersion:2 }) }), env);
   assert.equal(adminDenied.status, 400);
   sql.close();
 });
