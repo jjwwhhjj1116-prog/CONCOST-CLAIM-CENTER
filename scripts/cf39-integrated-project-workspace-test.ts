@@ -90,7 +90,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
         [id, login, salt, hash, iterations, label, login.includes('@') ? login : `${login}@example.invalid`, roles, now]
       );
       add(ADMIN_ID, 'yjw@con-cost.com', '관리자', '["admin"]', adminSalt, adminPasswordHash, 310000);
-      for (const [id, login, label] of PM_ROSTER) add(id, login, label, '["pm"]');
+      for (const [id, login, label] of PM_ROSTER) add(id, login, label, label === '현동명' ? '["ceo","admin"]' : '["pm"]');
       add(REVIEWER_ID, 'reviewer', '검토자', '["reviewer"]');
       add(STAFF_ID, 'staff-cf39', '프로젝트 Staff', '["staff"]');
     }
@@ -106,7 +106,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
   return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: 'AQ.SYNTHETIC_CF39_ORGANIZATION_KEY', GEMINI_TEST_FETCH: geminiFetch } };
 }
 
-test('CF43 PM choices are exactly the five approved non-Admin members and assignment is automatic', async () => {
+test('CF43 PM choices are exactly the requested five members while the workspace Admin is excluded', async () => {
   const { sql, env } = await setup();
   const options = await worker.fetch(request(`/api/project-workflow/pm-options?caseId=${CASE_ID}`, ADMIN_TOKEN), env);
   assert.equal(options.status, 200);

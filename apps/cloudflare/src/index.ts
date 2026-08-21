@@ -2133,7 +2133,6 @@ async function projectPmCandidate(env: CloudflareEnv, _caseId: string, preferred
     `SELECT u.id,u.display_name AS displayName FROM preview_users u
      WHERE u.is_active=1 AND (?='' OR u.id=?)
        AND u.display_name IN (?,?,?,?,?)
-       AND NOT EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value)='admin')
      ORDER BY CASE WHEN u.id=? THEN 0 ELSE 1 END,u.display_name LIMIT 1`
   ).bind(preferredId,preferredId,...RESPONSIBLE_PM_NAMES,preferredId).first<{ id: string; displayName: string }>();
 }
@@ -2155,7 +2154,6 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     const rows = await env.DB.prepare(
       `SELECT u.id,u.display_name AS displayName,u.email FROM preview_users u
        WHERE u.is_active=1 AND u.display_name IN (?,?,?,?,?)
-         AND NOT EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value)='admin')
        ORDER BY CASE u.display_name WHEN '현동명' THEN 1 WHEN '이원희' THEN 2 WHEN '이경훈' THEN 3 WHEN '최영배' THEN 4 ELSE 5 END`
     ).bind(...RESPONSIBLE_PM_NAMES).all<Record<string, unknown>>();
     return json({ users: rows.results, phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
