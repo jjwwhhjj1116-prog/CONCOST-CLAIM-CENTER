@@ -16,6 +16,7 @@ interface Activity {
 }
 interface CaseRecord {
   id: string; caseNumber: string; title: string; description?: string | null; claimType: string;
+  clientLegalPosition?: 'VICTIM' | 'SUSPECT' | 'OTHER' | 'UNSPECIFIED'; clientPositionDetail?: string | null;
   status: string; version: number; category?: CaseCategory | null; parties: Party[]; schedules: Schedule[];
   activityTimeline?: Activity[];
 }
@@ -242,18 +243,29 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   const [title, setTitle] = useState('');
   const [claimType, setClaimType] = useState('TYPE-01');
   const [description, setDescription] = useState('');
+  const [clientLegalPosition, setClientLegalPosition] = useState<'VICTIM' | 'SUSPECT' | 'OTHER'>('VICTIM');
+  const [clientPositionDetail, setClientPositionDetail] = useState('');
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [createdCase, setCreatedCase] = useState<CaseRecord | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
+  const [audioIdempotencyKey, setAudioIdempotencyKey] = useState(() => crypto.randomUUID());
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError('');
     try {
-      const result = await apiRequest<{ case: CaseRecord }>('/api/cases', {
-        method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, category: { major: '건설 클레임', middle: claimType, minor: '사건 업무' } })
+      const result = createdCase ? { case: createdCase } : await apiRequest<{ case: CaseRecord }>('/api/cases', {
+        method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, clientLegalPosition, clientPositionDetail, category: { major: '건설 클레임', middle: claimType, minor: '사건 업무' } })
       });
+      setCreatedCase(result.case);
+      if (audioFile) {
+        const form = new FormData(); form.set('file', audioFile);
+        await apiRequest(`/api/cases/${encodeURIComponent(result.case.id)}/intake-audio`, { method: 'POST', headers: { 'Idempotency-Key': audioIdempotencyKey }, body: form });
+        setAudioIdempotencyKey(crypto.randomUUID());
+      }
       setIdempotencyKey(crypto.randomUUID());
       onNavigate(`/proposals/editor?caseId=${encodeURIComponent(result.case.id)}&from=intake`);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    } catch (reason) { setError(`${createdCase ? '의뢰는 저장되었습니다. 녹음 업로드를 다시 시도해 주세요. · ' : ''}${reason instanceof Error ? reason.message : String(reason)}`); }
     finally { setSaving(false); }
   };
   return <div className="case-create-page">
@@ -262,7 +274,10 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
       <form className="case-create-form" onSubmit={(event) => void submit(event)}>
         <Input label="사건명" value={title} maxLength={500} required placeholder="예: 공동주택 공사비 적정성 검토" onChange={(event) => setTitle(event.target.value)} />
         <Select label="클레임 업무 유형" value={claimType} options={[...CLAIM_TYPES]} onChange={(event) => setClaimType(event.target.value)} />
-        <label className="case-description-field" htmlFor="case-description"><span>사건 설명</span><textarea id="case-description" value={description} maxLength={5000} placeholder="사건의 배경, 주요 쟁점, 현재 확보한 자료를 간단히 입력하세요." onChange={(event) => setDescription(event.target.value)} /></label>
+        <Select label="우리 클라이언트의 법적 지위" value={clientLegalPosition} options={[{value:'VICTIM',label:'피해자·원고 측'},{value:'SUSPECT',label:'피의자·피고 측'},{value:'OTHER',label:'기타 이해관계인'}]} onChange={(event) => setClientLegalPosition(event.target.value as 'VICTIM'|'SUSPECT'|'OTHER')} />
+        <Input label="클라이언트 입장 상세" value={clientPositionDetail} maxLength={2000} required={clientLegalPosition === 'OTHER'} placeholder="예: 원고 조합, 피고 시공사, 감정 신청인" onChange={(event) => setClientPositionDetail(event.target.value)} />
+        <label className="case-description-field" htmlFor="case-description"><span>사건 설명 · 반드시 클라이언트 관점으로 작성</span><textarea id="case-description" value={description} maxLength={5000} placeholder="우리 클라이언트가 무엇을 주장하고 어떤 피해·책임 쟁점을 다투는지, 확보 자료와 함께 입력하세요." onChange={(event) => setDescription(event.target.value)} /></label>
+        <label className="case-intake-audio" htmlFor="case-intake-audio"><span>의뢰 녹음 파일 · 선택</span><input id="case-intake-audio" type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/webm,.mp3,.m4a,.wav,.ogg,.webm" onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)} /><small>{audioFile ? `${audioFile.name} · ${(audioFile.size/1024/1024).toFixed(1)}MB · 저장 후 Gemini가 클라이언트 관점으로 요약합니다.` : '최대 10MB. 원본은 회사 Google Drive, 요약문은 D1에 저장됩니다.'}</small></label>
         <div className="case-create-summary"><span>저장 후 다음 단계</span><p>대분류·중분류·소분류와 담당자를 D1에 함께 저장한 뒤, 이 프로젝트가 선택된 제안서 작성 1단계로 이동합니다.</p></div>
         {error && <ErrorBox error={error} />}
         <div className="case-create-actions"><Button type="button" variant="secondary" onClick={() => onNavigate('/dashboard')}>취소</Button><Button type="submit" isLoading={saving}>의뢰 저장 후 제안서 작성</Button></div>

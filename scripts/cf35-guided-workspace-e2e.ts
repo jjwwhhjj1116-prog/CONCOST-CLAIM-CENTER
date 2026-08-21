@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import path from 'node:path';
 import { chromium, type Browser } from 'playwright-core';
+import { WORKSPACE_TUTORIAL_STEPS } from '../apps/web/src/layout/workspace-help-content';
 
 const root = path.resolve(__dirname, '..');
 const distRoot = path.join(root, 'apps', 'web', 'dist');
@@ -36,6 +37,7 @@ async function main():Promise<void>{
   const origin=`http://127.0.0.1:${port}`;
   let browser:Browser|undefined;
   let tutorialVersion:string|null=null;
+  let completionAction:'COMPLETED'|'SKIPPED'|null=null;
   let stateVersion=0;
   let completionWrites=0;
   try{
@@ -45,11 +47,11 @@ async function main():Promise<void>{
     await page.route('**/auth/session',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({id:'00000000-0000-4000-8000-000000000002',email:'guide@example.invalid',name:'신규 사용자',organizationId:'concost',roles:['staff'],previewMode:true})}));
     await page.route('**/api/settings/tutorial',async route=>{
       if(route.request().method()==='PUT'){
-        const body=route.request().postDataJSON()as{tutorialVersion:string;expectedVersion:number};
+        const body=route.request().postDataJSON()as{tutorialVersion:string;expectedVersion:number;action:'COMPLETED'|'SKIPPED'};
         assert.equal(body.expectedVersion,stateVersion);
-        tutorialVersion=body.tutorialVersion;stateVersion+=1;completionWrites+=1;
+        tutorialVersion=body.tutorialVersion;completionAction=body.action;stateVersion+=1;completionWrites+=1;
       }
-      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tutorial:{completedTutorialVersion:tutorialVersion,completedAt:tutorialVersion?new Date().toISOString():null,version:stateVersion,updatedAt:tutorialVersion?new Date().toISOString():null},currentTutorialVersion:'CF35_V1',phase:'CF35_GUIDED_WORKSPACE'})});
+      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tutorial:{completedTutorialVersion:tutorialVersion,completedAt:tutorialVersion?new Date().toISOString():null,completionAction,version:stateVersion,updatedAt:tutorialVersion?new Date().toISOString():null},currentTutorialVersion:'CF36_V1',phase:'CF36_GUIDED_WORKSPACE'})});
     });
     await page.route('**/api/preview/draft',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{title:'가이드 검증 초안',content:'검증용 합성 메모',updatedAt:null}})}));
     await page.route('**/api/cases?**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({cases:[],total:0,page:1,limit:100})}));
@@ -57,16 +59,20 @@ async function main():Promise<void>{
     await page.goto(`${origin}/dashboard`,{waitUntil:'domcontentloaded'});
     const dialog=page.getByRole('dialog',{name:'처음 사용하는 분을 위한 클레임센터 업무 순서'});
     await dialog.waitFor({state:'visible',timeout:10_000});
-    assert.match(await dialog.innerText(),/먼저 오늘 해야 할 프로젝트/u);
-    for(const title of ['새 의뢰를 등록하고 제안서를 연결합니다.','일정표에서 프로젝트의 현재 위치를 확인합니다.','모든 근거 자료는 프로젝트 자료실에 모읍니다.','보고서는 한 단계씩 완료하고 다음으로 이동합니다.','검토·납품 후 법원 일정과 수정 이력을 관리합니다.','설정은 개인용과 관리자용을 구분합니다.']){
-      await dialog.getByRole('button',{name:'다음 설명 →'}).click();
-      assert.match(await dialog.innerText(),new RegExp(title.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'u'));
+    for(let index=0;index<WORKSPACE_TUTORIAL_STEPS.length;index+=1){
+      const expected=WORKSPACE_TUTORIAL_STEPS[index];
+      assert.match(await dialog.innerText(),new RegExp(expected.title.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'u'));
+      await dialog.getByRole('button',{name:expected.pathLabel,exact:true}).click();
+      assert.match(await dialog.innerText(),/화면 확인 완료/u);
+      if(index<WORKSPACE_TUTORIAL_STEPS.length-1)await dialog.getByRole('button',{name:'다음 설명 →'}).click();
     }
     await dialog.getByRole('button',{name:'튜토리얼 완료'}).click();
     await dialog.waitFor({state:'hidden'});
     assert.equal(completionWrites,1);
-    console.log('  1/4 first-run tutorial advances through all seven steps and persists completion PASS');
+    assert.equal(completionAction,'COMPLETED');
+    console.log(`  1/4 first-run tutorial visits and explains all ${WORKSPACE_TUTORIAL_STEPS.length} workflow screens, then persists completion PASS`);
 
+    await page.goto(`${origin}/dashboard`,{waitUntil:'domcontentloaded'});
     await page.getByRole('button',{name:'현재 화면 도움말 열기'}).click();
     const help=page.getByRole('dialog',{name:'도움말 · CLAIM CENTER HOME'});
     await help.waitFor({state:'visible'});

@@ -51,7 +51,7 @@ test('CF33 imports six SHA-pinned two-stage type guidelines and exact active cha
 test('CF33 type policy and chapter status are Admin-versioned and history is append-only', async () => {
   const { db,adminId,staffId } = await guidelineDatabase();
   assert.throws(()=>db.run("UPDATE preview_report_type_guidelines SET target_work=?,version=2,updated_by=?,updated_at=? WHERE claim_type='TYPE-01'",['staff cannot edit this guideline because role validation applies',staffId,'2026-08-19T00:00:00.000Z']),/active Admin/u);
-  db.run("UPDATE preview_report_type_guidelines SET target_work=?,version=2,updated_by=?,updated_at=? WHERE claim_type='TYPE-01'",['관리자가 검증한 대상 업무 범위를 새 버전으로 안전하게 저장합니다.',adminId,'2026-08-19T00:00:00.000Z']);
+  db.run("UPDATE preview_report_type_guidelines SET target_work=?,version=2,updated_by=?,updated_at=? WHERE claim_type='TYPE-01'",['관리자가 검증한 대상 업무 범위를 새 버전으로 안전하게 저장합니다.',adminId,'2099-08-19T00:00:00.000Z']);
   assert.throws(()=>db.run("UPDATE preview_report_chapter_prompts SET status='ARCHIVED',version=version+1,updated_by=?,updated_at=? WHERE id='PROMPT-TYPE-01-CH-01'",[adminId,'2026-08-19T00:00:01.000Z']),/optimistic version/u);
   assert.throws(()=>db.run('UPDATE preview_report_type_guideline_history SET version=99'),/append-only/u);
   assert.throws(()=>db.run("DELETE FROM preview_report_type_guidelines WHERE claim_type='TYPE-01'"),/cannot be deleted/u);

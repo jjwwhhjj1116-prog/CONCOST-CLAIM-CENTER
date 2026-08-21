@@ -548,6 +548,9 @@ body {
 .case-create-number strong, .admin-user-total strong { font: 700 clamp(3rem, 7vw, 5.4rem) 'Space Grotesk', sans-serif; line-height: 0.9; color: #67e8f9; }
 .case-create-number span, .admin-user-total span { color: #a78bfa; font: 700 0.66rem 'Space Grotesk', sans-serif; letter-spacing: 0.14em; }
 .case-create-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.case-intake-audio { grid-column: 1 / -1; display: grid; gap: 8px; border: 1px dashed #79b8cc; border-radius: 14px; padding: 15px 17px; background: #f2fbfd; color: #173d4b; font-weight: 800; }
+.case-intake-audio input { width: 100%; color: #334155; font-weight: 650; }
+.case-intake-audio small { color: #52677a; font-weight: 600; line-height: 1.45; }
 .case-description-field { grid-column: 1 / -1; display: grid; gap: 8px; color: #dbeafe; font-weight: 700; }
 .case-description-field textarea { min-height: 140px; padding: 14px; border: 1px solid rgba(148, 163, 184, 0.32); border-radius: 12px; background: rgba(2, 6, 23, 0.74); color: #f8fafc; resize: vertical; }
 .case-create-summary { grid-column: 1 / -1; display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid rgba(34, 211, 238, 0.25); border-radius: 12px; background: rgba(34, 211, 238, 0.06); }

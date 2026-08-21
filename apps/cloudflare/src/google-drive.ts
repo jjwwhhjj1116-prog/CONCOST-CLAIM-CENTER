@@ -327,7 +327,7 @@ export async function verifyDriveFolder(fetcher: GoogleFetch, accessToken: strin
   return { id: folderId, name: payload.name };
 }
 
-const CLAIM_CENTER_FOLDER_KINDS = new Set(['PROJECT_ROOT', 'TAKEOFF_SOURCE', 'COST_BREAKDOWN', 'MONTH']);
+const CLAIM_CENTER_FOLDER_KINDS = new Set(['PROJECT_ROOT', 'TAKEOFF_SOURCE', 'COST_BREAKDOWN', 'INTAKE_AUDIO', 'MONTH']);
 
 function driveQueryValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
@@ -335,7 +335,7 @@ function driveQueryValue(value: string): string {
 
 export async function ensureClaimCenterFolder(
   fetcher: GoogleFetch,
-  input: { accessToken: string; caseId: string; kind: 'PROJECT_ROOT' | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'MONTH'; period: string; name: string; parentId?: string }
+  input: { accessToken: string; caseId: string; kind: 'PROJECT_ROOT' | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'INTAKE_AUDIO' | 'MONTH'; period: string; name: string; parentId?: string }
 ): Promise<{ id: string; name: string; created: boolean }> {
   if (!/^[0-9a-f-]{36}$/iu.test(input.caseId) || !CLAIM_CENTER_FOLDER_KINDS.has(input.kind) || !/^(?:|\d{4}-\d{2})$/u.test(input.period)) {
     throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder context is invalid');

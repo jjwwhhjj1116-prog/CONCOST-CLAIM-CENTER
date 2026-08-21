@@ -45,8 +45,9 @@ test('CF27 project intake continues with the newly created case selected in prop
 
 test('CF27 live D1 cases are visible in the project schedule instead of static samples only', () => {
   const schedule = read('apps/web/src/workflow/ProjectWorkflowSchedule.tsx');
-  assert.match(schedule, /apiRequest<\{ cases: LiveCaseRecord\[\] \}>\('\/api\/cases\?limit=100&q='\)/u);
-  assert.match(schedule, /liveCases\.map\(\(record\)/u);
+  assert.match(schedule, /apiRequest<\{ projects: WorkflowProject\[\]; dataBasis: string \}>\('\/api\/project-workflow\/schedule'\)/u);
+  assert.match(schedule, /setProjects\(result\.projects\)/u);
+  assert.doesNotMatch(schedule, /WORKFLOW_PROJECTS/u);
   assert.match(schedule, /D1 LIVE PROJECTS · 신규 의뢰 자동 반영/u);
   assert.match(schedule, /\/proposals\/editor\?caseId=\$\{caseId\}&projectId=/u);
   assert.match(schedule, /\/workflow\/award\?caseId=\$\{caseId\}&projectId=/u);

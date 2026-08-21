@@ -6,6 +6,7 @@ import { CATEGORY_HELP, CURRENT_TUTORIAL_VERSION, ROUTE_HELP, WORKSPACE_TUTORIAL
 interface TutorialState {
   completedTutorialVersion: string | null;
   completedAt: string | null;
+  completionAction: 'COMPLETED' | 'SKIPPED' | null;
   version: number;
   updatedAt: string | null;
 }
@@ -19,7 +20,8 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
-  const [tutorialState, setTutorialState] = useState<TutorialState>({ completedTutorialVersion: null, completedAt: null, version: 0, updatedAt: null });
+  const [tutorialState, setTutorialState] = useState<TutorialState>({ completedTutorialVersion: null, completedAt: null, completionAction: null, version: 0, updatedAt: null });
+  const [visitedSteps, setVisitedSteps] = useState<Set<number>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const categoryHelp = CATEGORY_HELP[category] ?? CATEGORY_HELP.home;
@@ -42,21 +44,21 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
     return () => { active = false; };
   }, [previewMode]);
 
-  const finishTutorial = async () => {
+  const saveTutorialDecision = async (action: 'COMPLETED' | 'SKIPPED') => {
     if (saving) return;
     setSaving(true); setNotice('');
     try {
       const result = await apiRequest<{ tutorial: TutorialState }>('/api/settings/tutorial', {
-        method: 'PUT', body: JSON.stringify({ tutorialVersion: CURRENT_TUTORIAL_VERSION, expectedVersion: tutorialState.version })
+        method: 'PUT', body: JSON.stringify({ tutorialVersion: CURRENT_TUTORIAL_VERSION, expectedVersion: tutorialState.version, action })
       });
       setTutorialState(result.tutorial);
       window.localStorage.setItem('claim-center-tutorial-fallback', CURRENT_TUTORIAL_VERSION);
-      setTutorialOpen(false); setTutorialStep(0);
+      setTutorialOpen(false); setTutorialStep(0); setVisitedSteps(new Set());
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 409) {
         const latest = await apiRequest<{ tutorial: TutorialState }>('/api/settings/tutorial').catch(() => null);
         if (latest?.tutorial.completedTutorialVersion === CURRENT_TUTORIAL_VERSION) {
-          setTutorialState(latest.tutorial); setTutorialOpen(false); setTutorialStep(0); return;
+          setTutorialState(latest.tutorial); setTutorialOpen(false); setTutorialStep(0); setVisitedSteps(new Set()); return;
         }
       }
       setNotice('완료 상태를 저장하지 못했습니다. 네트워크를 확인한 뒤 다시 눌러 주세요. 안내 내용은 사라지지 않습니다.');
@@ -64,7 +66,12 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
   };
 
   const reopenTutorial = () => {
-    setHelpOpen(false); setTutorialStep(0); setNotice(''); setTutorialOpen(true);
+    setHelpOpen(false); setTutorialStep(0); setVisitedSteps(new Set()); setNotice(''); setTutorialOpen(true);
+  };
+
+  const visitTutorialStep = () => {
+    setVisitedSteps((current) => new Set(current).add(tutorialStep));
+    onNavigate(step.path);
   };
 
   return <>
@@ -80,15 +87,19 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, onNavigate
           <div><h3>{step.title}</h3><p>{step.explanation}</p><ol>{step.tasks.map((task) => <li key={task}>{task}</li>)}</ol></div>
         </section>
         <aside><strong>이 단계의 완료 기준</strong><p>{step.completion}</p></aside>
+        <div className={`workspace-tutorial__visit ${visitedSteps.has(tutorialStep) ? 'is-visited' : ''}`}>
+          <div><strong>{visitedSteps.has(tutorialStep) ? '화면 확인 완료' : '실제 화면을 열어 보세요'}</strong><span>{visitedSteps.has(tutorialStep) ? '현재 단계의 카테고리를 직접 열었습니다. 이제 다음 설명으로 갈 수 있습니다.' : '버튼을 누르면 이 안내창 뒤의 실제 카테고리가 열립니다. 안내창은 닫히지 않습니다.'}</span></div>
+          <Button variant="secondary" onClick={visitTutorialStep}>{visitedSteps.has(tutorialStep) ? '화면 다시 열기' : step.pathLabel}</Button>
+        </div>
         {notice && <p className="error-box" role="alert">{notice}</p>}
         <footer>
           <Button variant="secondary" disabled={tutorialStep === 0 || saving} onClick={() => setTutorialStep((current) => Math.max(0, current - 1))}>← 이전 설명</Button>
-          <Button variant="secondary" onClick={() => { setTutorialOpen(false); onNavigate(step.path); }}>{step.pathLabel}</Button>
+          <Button variant="secondary" disabled={saving} onClick={() => void saveTutorialDecision('SKIPPED')}>가이드 건너뛰기</Button>
           {tutorialStep < WORKSPACE_TUTORIAL_STEPS.length - 1
-            ? <Button onClick={() => setTutorialStep((current) => Math.min(WORKSPACE_TUTORIAL_STEPS.length - 1, current + 1))}>다음 설명 →</Button>
-            : <Button disabled={saving} onClick={() => void finishTutorial()}>{saving ? '완료 저장 중…' : '튜토리얼 완료'}</Button>}
+            ? <Button disabled={!visitedSteps.has(tutorialStep)} onClick={() => setTutorialStep((current) => Math.min(WORKSPACE_TUTORIAL_STEPS.length - 1, current + 1))}>다음 설명 →</Button>
+            : <Button disabled={saving || !visitedSteps.has(tutorialStep)} onClick={() => void saveTutorialDecision('COMPLETED')}>{saving ? '완료 저장 중…' : '튜토리얼 완료'}</Button>}
         </footer>
-        <small>중간에 닫아도 다음 로그인 때 다시 안내합니다. 완료 후에는 상단 도움말에서 언제든 다시 볼 수 있습니다.</small>
+        <small>건너뛰기는 이 계정에 1회 저장됩니다. 완료 또는 건너뛰기 후에는 상단 도움말에서 언제든 전체 튜토리얼을 다시 볼 수 있습니다.</small>
       </div>
     </Dialog>
     <Dialog isOpen={helpOpen} title={`도움말 · ${categoryHelp.title}`} onClose={() => setHelpOpen(false)} hideDefaultAction>

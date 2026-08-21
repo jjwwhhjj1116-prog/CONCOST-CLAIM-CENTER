@@ -86,7 +86,8 @@ test('CF23 opens project workflow as a contextual schedule dialog without a dupl
   assert.match(schedule, /role="dialog"/u);
   assert.match(schedule, /aria-modal="true"/u);
   assert.match(schedule, /D1 LIVE PROJECTS · 신규 의뢰 자동 반영/u);
-  assert.match(schedule, /apiRequest<\{ cases: LiveCaseRecord\[\] \}>\('\/api\/cases\?limit=100&q='\)/u);
+  assert.match(schedule, /apiRequest<\{ projects: WorkflowProject\[\]; dataBasis: string \}>\('\/api\/project-workflow\/schedule'\)/u);
+  assert.doesNotMatch(schedule, /WORKFLOW_PROJECTS/u);
   assert.match(scheduleCss, /\.project-context-strip \{/u);
   assert.match(scheduleCss, /\.project-detail-modal-backdrop \{/u);
 });

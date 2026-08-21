@@ -19,9 +19,11 @@ export interface PreviewReportReview {
   reviewedBy: { id: string; name: string | null } | null;
   decisionNote: string | null;
   reviewedAt: string | null;
+  deliveryNotification: { id: string; emailStatus: 'PENDING' | 'SENT' | 'FAILED' | 'CONFIG_REQUIRED' } | null;
 }
 
-const DECISION_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'reviewer'];
+const REVIEW_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'reviewer'];
+const FINAL_APPROVAL_ROLES: readonly UserRole[] = ['ceo', 'director'];
 
 function statusLabel(status: PreviewReportReview['status']): string {
   if (status === 'APPROVED') return '승인 완료';
@@ -36,7 +38,8 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
-  const canDecide = roles.some((role) => DECISION_ROLES.includes(role));
+  const canReview = roles.some((role) => REVIEW_ROLES.includes(role));
+  const canFinalApprove = roles.some((role) => FINAL_APPROVAL_ROLES.includes(role));
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -78,7 +81,7 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
           ]} />
           <div className="action-row"><span className="preview-pill">대기 {reviews.filter((review) => review.status === 'PENDING').length}건</span><Button variant="secondary" onClick={() => void load()}>새로고침</Button></div>
         </div>
-        <p className="muted">승인은 제출된 정확한 보고서 버전에 고정됩니다. 요청자 본인의 자기 승인은 서버와 D1에서 모두 차단됩니다.</p>
+        <p className="muted">승인은 제출된 정확한 보고서 버전에 고정됩니다. 수정 요청은 검토자도 할 수 있지만 최종 승인은 CEO·DIRECTOR 역할(현동명 대표 또는 이원희 부사장)만 할 수 있으며 자기 승인은 서버와 D1에서 모두 차단됩니다.</p>
         {error && <p className="error-box" role="alert">{error}</p>}
       </Card>
 
@@ -89,13 +92,15 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
             <p>{review.requestNote || '별도 검토 메모 없음'}</p>
             <p className="muted">요청 {new Date(review.requestedAt).toLocaleString('ko-KR')} · {review.requestedBy.name}{review.reviewedBy ? ` / 결정 ${review.reviewedBy.name}` : ''}</p>
             {review.decisionNote && <p className="notice-box"><strong>결정 의견</strong><br />{review.decisionNote}</p>}
-            {review.status === 'PENDING' && canDecide && <>
+            {review.status === 'APPROVED' && review.deliveryNotification && <p className="notice-box"><strong>프로젝트 PM 납품 알림 생성 완료</strong><br />개인 알림은 즉시 저장되었습니다. 이메일 상태: {review.deliveryNotification.emailStatus === 'SENT' ? '발송 완료' : review.deliveryNotification.emailStatus === 'CONFIG_REQUIRED' ? '메일 발송 브리지 설정 필요' : review.deliveryNotification.emailStatus === 'FAILED' ? '발송 실패 · 관리자 재처리 필요' : '발송 대기'}</p>}
+            {review.status === 'PENDING' && canReview && <>
               <label htmlFor={`decision-note-${review.id}`}>검토 의견</label>
               <textarea id={`decision-note-${review.id}`} className="report-editor report-editor--decision" value={notes[review.id] ?? ''} maxLength={4000} disabled={busyId === review.id} onChange={(event) => setNotes((current) => ({ ...current, [review.id]: event.target.value }))} placeholder="승인 근거 또는 수정할 내용을 입력하세요." />
               <div className="action-row">
-                <Button onClick={() => void decide(review, 'APPROVED')} disabled={busyId === review.id}>{busyId === review.id ? '처리 중…' : '이 버전 승인'}</Button>
+                {canFinalApprove && <Button onClick={() => void decide(review, 'APPROVED')} disabled={busyId === review.id}>{busyId === review.id ? '처리 중…' : '이 버전 승인 · 최종 결재 후 PM 납품 알림'}</Button>}
                 <Button variant="danger" onClick={() => void decide(review, 'CHANGES_REQUESTED')} disabled={busyId === review.id || !(notes[review.id]?.trim())}>수정 요청</Button>
               </div>
+              {!canFinalApprove && <p className="muted">최종 승인은 현동명 대표 또는 이원희 부사장 계정에서 진행합니다.</p>}
             </>}
           </div>
         </Card>

@@ -3,7 +3,6 @@ import { Button } from '@claim-studio/ui';
 import { apiRequest } from '../api';
 import {
   REPORT_AUTHOR_NAMES,
-  WORKFLOW_PROJECTS,
   WORKFLOW_STAGES,
   WORKFORCE_UNITS,
   workflowStageFromRoute,
@@ -50,65 +49,12 @@ interface ProjectWorkflowScheduleProps {
   onNavigate: (path: string) => void;
 }
 
-interface LiveCaseRecord {
-  id: string;
-  caseNumber: string;
-  title: string;
-  claimType: string;
-  status: string;
-  createdAt: string;
-}
-
-const CASE_STATUS_ORDER = ['INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS', 'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'CLOSED'];
-const STAGE_OWNERS: Record<WorkflowStageId, string> = {
-  1: '제안 담당', 2: '프로젝트 책임자', 3: '클레임센터', 4: '현장조사팀', 5: '마감·구조·토목조경·VIETQS', 6: REPORT_AUTHOR_NAMES.join(' · ')
-};
-
-function liveCaseProject(record: LiveCaseRecord): WorkflowProject {
-  const workflowIndex = Math.max(0, CASE_STATUS_ORDER.indexOf(record.status));
-  const activeStage = workflowIndex < 3 ? 1 : workflowIndex === 3 ? 2 : workflowIndex === 4 ? 3 : workflowIndex === 5 ? 5 : 6;
-  const createdDay = clampDay(new Date(record.createdAt).getUTCDate() || 1);
-  const stages = WORKFLOW_STAGES.map((stage) => {
-    const startDay = clampDay(createdDay + ((stage.id - 1) * 3));
-    const endDay = clampDay(startDay + (stage.id === 5 ? 7 : 2));
-    return {
-      stageId: stage.id,
-      startDay,
-      endDay,
-      status: stage.id < activeStage ? 'DONE' as const : stage.id === activeStage ? 'IN_PROGRESS' as const : 'PLANNED' as const,
-      owner: STAGE_OWNERS[stage.id],
-      detail: stage.id === 1 && record.status === 'INQUIRY' ? '신규 의뢰 저장 완료 · 제안서 작성 필요' : `${stage.name} ${stage.id === activeStage ? '진행 단계' : '예정'}`
-    };
-  });
-  return {
-    id: `live-${record.id}`,
-    caseId: record.id,
-    code: record.caseNumber,
-    name: record.title,
-    client: '거래처 정보 입력 대기',
-    claimType: record.claimType,
-    progress: Math.min(96, Math.max(8, activeStage * 16 - (record.status === 'INQUIRY' ? 8 : 0))),
-    start: record.createdAt.slice(0, 10),
-    end: new Date(new Date(record.createdAt).getTime() + 45 * 86_400_000).toISOString().slice(0, 10),
-    awardStatus: workflowIndex >= 3 ? 'WON' : 'PENDING',
-    highlights: [{ label: record.status === 'INQUIRY' ? 'D1 신규 의뢰 · 제안서 작성 필요' : `D1 실데이터 · ${record.status}`, tone: 'pending' as const }],
-    stages
-  };
-}
-
 export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = ({ routeId, onNavigate }) => {
   const [viewMode, setViewMode] = useState<'month' | '30days'>('month');
-  const [liveCases, setLiveCases] = useState<LiveCaseRecord[]>([]);
+  const [projects, setProjects] = useState<WorkflowProject[]>([]);
   const [liveError, setLiveError] = useState('');
   const focusedStageId = workflowStageFromRoute(routeId);
   const requestedProjectId = new URLSearchParams(window.location.search).get('projectId');
-  const projects = useMemo(() => {
-    const live = liveCases.map((record) => {
-      const sample = WORKFLOW_PROJECTS.find((project) => project.caseId === record.id);
-      return sample ? { ...sample, code: record.caseNumber, name: record.title, claimType: record.claimType } : liveCaseProject(record);
-    });
-    return [...live, ...WORKFLOW_PROJECTS.filter((project) => !liveCases.some((record) => record.id === project.caseId))];
-  }, [liveCases]);
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === requestedProjectId) ?? projects[0],
     [projects, requestedProjectId]
@@ -119,8 +65,8 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
 
   useEffect(() => {
     let active = true;
-    apiRequest<{ cases: LiveCaseRecord[] }>('/api/cases?limit=100&q=')
-      .then((result) => { if (active) { setLiveCases(result.cases); setLiveError(''); } })
+    apiRequest<{ projects: WorkflowProject[]; dataBasis: string }>('/api/project-workflow/schedule')
+      .then((result) => { if (active) { setProjects(result.projects); setLiveError(''); } })
       .catch((reason) => { if (active) setLiveError(reason instanceof Error ? reason.message : 'D1 프로젝트를 불러오지 못했습니다.'); });
     return () => { active = false; };
   }, []);
@@ -138,6 +84,11 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [isProjectDialogOpen, onNavigate]);
+
+  if (!selectedProject) return <section className="workflow-page" aria-label="프로젝트 일정표">
+    <header className="workflow-hero"><div><span className="workflow-kicker">CLAIM DELIVERY WORKFLOW</span><h2>프로젝트 통합 일정표</h2><p>제안서부터 보고서 작성까지 실제 D1 업무 기록을 연결합니다.</p></div></header>
+    {liveError ? <p className="error-box" role="alert">{liveError}</p> : <p className="empty-box">등록된 프로젝트를 불러오는 중이거나 아직 프로젝트 의뢰가 없습니다.</p>}
+  </section>;
 
   const openProjectDialog = (project: WorkflowProject) => {
     onNavigate(`/projects/schedule?projectId=${encodeURIComponent(project.id)}`);
@@ -183,10 +134,10 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
       {showOverview ? (
         <>
           <div className="workflow-summary" aria-label="프로젝트 일정 요약">
-            <article><span>전체 프로젝트</span><strong>{projects.length}</strong><small>D1 실데이터 + 명시된 샘플</small></article>
+            <article><span>전체 프로젝트</span><strong>{projects.length}</strong><small>D1 실제 단계 기록만 표시</small></article>
             <article><span>수주 검토</span><strong>{projects.filter((project) => project.awardStatus === 'PENDING').length}</strong><small>의뢰·제안서 회신 대기</small></article>
-            <article><span>이번 달 팀 배정</span><strong>8</strong><small>한국 인원·VIETQS 팀</small></article>
-            <article><span>보고서 작성 대기</span><strong>2</strong><small>전담 작성자 5명</small></article>
+            <article><span>팀 배정 프로젝트</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 5 && stage.status !== 'PLANNED')).length}</strong><small>실제 수량산출·내역 투입 기록</small></article>
+            <article><span>보고서 작성 대기</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 6 && stage.status !== 'DONE')).length}</strong><small>전담 작성자 5명</small></article>
           </div>
 
           <div className="schedule-toolbar" aria-label="일정표 보기 설정">

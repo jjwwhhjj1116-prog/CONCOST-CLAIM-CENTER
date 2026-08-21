@@ -59,6 +59,8 @@ export interface CloudflareEnv {
   GEMINI_TEST_FETCH?: typeof fetch;
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_TEST_FETCH?: typeof fetch;
+  PM_NOTIFICATION_WEBHOOK_URL?: string;
+  PM_NOTIFICATION_WEBHOOK_SECRET?: string;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -332,6 +334,8 @@ interface PreviewCaseRow {
   categoryMajor: string;
   categoryMiddle: string;
   categoryMinor: string;
+  clientLegalPosition: string;
+  clientPositionDetail: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -347,6 +351,8 @@ function previewCaseProjection(row: PreviewCaseRow): Record<string, unknown> {
     title: row.title,
     description: row.description,
     claimType: row.claimType,
+    clientLegalPosition: row.clientLegalPosition,
+    clientPositionDetail: row.clientPositionDetail,
     status: row.status,
     version: row.version,
     category: { major: row.categoryMajor, middle: row.categoryMiddle, minor: row.categoryMinor },
@@ -373,11 +379,24 @@ function exactObjectKeys(value: Record<string, unknown>, allowed: readonly strin
   return Object.keys(value).every((key) => allowed.includes(key));
 }
 
+async function previewCasePerspectiveSchemaAvailable(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT client_legal_position,client_position_detail FROM preview_cases LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function accessiblePreviewCase(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<PreviewCaseRow | null> {
   if (!env.DB) return null;
+  const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
+    ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail, '
+    : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail, ";
   return env.DB.prepare(
     'SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, ' +
-    'c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, c.created_at AS createdAt, c.updated_at AS updatedAt ' +
+    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
     'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL ' +
     'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
@@ -387,13 +406,14 @@ async function previewCaseDetail(env: CloudflareEnv, user: SessionUser, caseId: 
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const row = await accessiblePreviewCase(env, user, caseId);
   if (!row) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
-  const [parties, schedules, activities] = await Promise.all([
+  const [parties, schedules, activities, intakeSummaries] = await Promise.all([
     env.DB.prepare('SELECT id, name, role, contact FROM preview_case_parties WHERE case_id = ? ORDER BY created_at ASC LIMIT 100').bind(caseId).all<{ id: string; name: string; role: string; contact: string | null }>(),
     env.DB.prepare('SELECT id, title, type, scheduled_at AS date, location FROM preview_case_schedules WHERE case_id = ? ORDER BY scheduled_at ASC LIMIT 100').bind(caseId).all<{ id: string; title: string; type: string; date: string; location: string | null }>(),
     env.DB.prepare(
       'SELECT a.id, a.title, a.description, a.created_at AS createdAt, u.id AS actorId, u.display_name AS actorName ' +
       'FROM preview_case_activities a JOIN preview_users u ON u.id = a.actor_id WHERE a.case_id = ? ORDER BY a.created_at DESC LIMIT 100'
-    ).bind(caseId).all<{ id: string; title: string; description: string | null; createdAt: string; actorId: string; actorName: string }>()
+    ).bind(caseId).all<{ id: string; title: string; description: string | null; createdAt: string; actorId: string; actorName: string }>(),
+    env.DB.prepare('SELECT s.id,s.summary_text AS summaryText,s.client_legal_position AS clientLegalPosition,s.provider_kind AS providerKind,s.model_code AS modelCode,s.created_at AS createdAt,e.original_name AS originalName,e.google_file_id AS googleFileId FROM preview_intake_audio_summaries s JOIN preview_intake_audio_evidence e ON e.id=s.evidence_id WHERE s.case_id=? ORDER BY s.created_at DESC LIMIT 20').bind(caseId).all<Record<string, unknown>>().catch(() => ({ results: [] }))
   ]);
   return json({
     case: {
@@ -403,7 +423,8 @@ async function previewCaseDetail(env: CloudflareEnv, user: SessionUser, caseId: 
       activityTimeline: activities.results.map((activity) => ({
         id: activity.id, title: activity.title, description: activity.description, createdAt: activity.createdAt,
         actor: { id: activity.actorId, name: activity.actorName }
-      }))
+      })),
+      intakeAudioSummaries: intakeSummaries.results
     },
     phase: 'CF06_D1_CASE_OPERATIONS'
   });
@@ -1267,10 +1288,164 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
   return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
 }
 
+const INTAKE_AUDIO_MIME_TYPES = new Set(['audio/mpeg','audio/mp4','audio/wav','audio/x-wav','audio/ogg','audio/webm']);
+function intakeAudioMagic(bytes: Uint8Array, mimeType: string): boolean {
+  if (mimeType === 'audio/mpeg') return (bytes[0]===0x49&&bytes[1]===0x44&&bytes[2]===0x33) || (bytes[0]===0xff&&(bytes[1]&0xe0)===0xe0);
+  if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav') return bytesToHex(bytes.slice(0,4))==='52494646' && new TextDecoder().decode(bytes.slice(8,12))==='WAVE';
+  if (mimeType === 'audio/mp4') return new TextDecoder().decode(bytes.slice(4,8))==='ftyp';
+  if (mimeType === 'audio/ogg') return new TextDecoder().decode(bytes.slice(0,4))==='OggS';
+  return mimeType === 'audio/webm' && bytesToHex(bytes.slice(0,4))==='1a45dfa3';
+}
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary='';
+  for(let offset=0;offset<bytes.length;offset+=0x8000) binary+=String.fromCharCode(...bytes.subarray(offset,Math.min(bytes.length,offset+0x8000)));
+  return btoa(binary);
+}
+async function summarizeIntakeAudio(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,mimeType: string): Promise<{summary?:string;modelCode:string;response?:Response}> {
+  const credential=await resolvePreviewAiCredential(env,user.id,'GEMINI');
+  if(!credential) return {modelCode:'gemini-2.5-flash',response:json({error:'내 설정 또는 관리자 설정에서 Gemini API 키를 연결해 주세요.',code:'GEMINI_NOT_CONFIGURED'},503)};
+  const modelCode='gemini-2.5-flash';
+  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
+  let response:Response;
+  try{
+    response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({contents:[{role:'user',parts:[{text:`당신은 건설 클레임 프로젝트 의뢰 녹음 정리 담당자입니다. 클라이언트 법적 지위는 ${caseRow.clientLegalPosition}입니다. 반드시 클라이언트 입장에서만 사실을 정리하고 추측하지 마세요. 다음 형식으로 한국어 작성: 1) 의뢰 배경 2) 클라이언트 주장 3) 상대방 주장 또는 쟁점 4) 확보 자료 5) 추가 확인 질문 6) 보고서 작성 시 관점 주의사항.`},{inline_data:{mime_type:mimeType,data:bytesToBase64(bytes)}}]}],generationConfig:{temperature:0.1,maxOutputTokens:4096}})});
+  }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 녹음 요약 시간이 초과되었습니다.',code:'GEMINI_AUDIO_UNAVAILABLE'},504)}}
+  clearTimeout(timeout);
+  if(!response.ok){const safe=safeGeminiProviderError(await response.json().catch(()=>null),response.status);return{modelCode,response:json({...safe,providerStatus:response.status},response.status===401||response.status===403?503:502)}}
+  const summary=extractGeminiText(await response.json().catch(()=>null));
+  if(!summary||summary.length>30000)return{modelCode,response:json({error:'Gemini 녹음 요약 형식이 올바르지 않습니다.',code:'GEMINI_MALFORMED_RESPONSE'},502)};
+  return{summary,modelCode};
+}
+
+async function handlePreviewIntakeAudio(request:Request,env:CloudflareEnv,user:SessionUser,caseId:string):Promise<Response>{
+  if(!env.DB)return json({error:'D1 database is not bound',code:'D1_NOT_CONFIGURED'},503);
+  if(request.method!=='POST')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
+  if(!user.roles.some((role)=>new Set(['admin','ceo','director','pm','staff']).has(role)))return json({error:'Role cannot upload intake audio',code:'FORBIDDEN'},403);
+  const caseRow=await accessiblePreviewCase(env,user,caseId);
+  if(!caseRow)return json({error:'Case was not found or is not assigned to this user',code:'CASE_NOT_FOUND'},404);
+  if(!['VICTIM','SUSPECT','OTHER'].includes(caseRow.clientLegalPosition))return json({error:'Select the client legal position before audio summarization',code:'CLIENT_POSITION_REQUIRED'},409);
+  const key=request.headers.get('Idempotency-Key')??'';
+  if(!GOOGLE_IDEMPOTENCY_KEY.test(key))return json({error:'A valid Idempotency-Key is required',code:'INVALID_IDEMPOTENCY_KEY'},400);
+  const form=await request.formData().catch(()=>null); const file=form?.get('file');
+  if(!(file instanceof File)||!INTAKE_AUDIO_MIME_TYPES.has(file.type)||file.size<1||file.size>10_000_000)return json({error:'A supported audio file up to 10MB is required',code:'INVALID_INTAKE_AUDIO'},400);
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  if(!intakeAudioMagic(bytes,file.type))return json({error:'Audio file signature does not match its MIME type',code:'INVALID_AUDIO_SIGNATURE'},400);
+  const sha=await sha256Hex(bytes); const fingerprint=await sha256Hex(`${caseId}:${caseRow.clientLegalPosition}:${file.name}:${file.type}:${file.size}:${sha}`);
+  const replay=await env.DB.prepare('SELECT o.status,s.id,s.summary_text AS summaryText,e.google_file_id AS googleFileId FROM preview_intake_audio_operations o LEFT JOIN preview_intake_audio_evidence e ON e.operation_id=o.id LEFT JOIN preview_intake_audio_summaries s ON s.evidence_id=e.id WHERE o.organization_id=? AND o.case_id=? AND o.idempotency_key=? AND o.request_fingerprint=?').bind(PREVIEW_ORGANIZATION_ID,caseId,key,fingerprint).first<{status:string;id:string|null;summaryText:string|null;googleFileId:string|null}>();
+  if(replay)return replay.status==='SUCCEEDED'?json({summary:{id:replay.id,text:replay.summaryText,googleFileId:replay.googleFileId},replay:true,phase:'CF36_CLIENT_POSITION_AUDIO'}):json({error:'이 녹음은 외부 저장 결과 확인이 필요합니다.',code:replay.status==='RECONCILIATION_REQUIRED'?'RECONCILIATION_REQUIRED':'UPLOAD_IN_PROGRESS_OR_FAILED'},409);
+  const operationId=crypto.randomUUID(); const reservedAt=new Date().toISOString();
+  const reserved=await env.DB.prepare("INSERT OR IGNORE INTO preview_intake_audio_operations (id,organization_id,case_id,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'PENDING',NULL,NULL,?,?,?)").bind(operationId,PREVIEW_ORGANIZATION_ID,caseId,key,fingerprint,user.id,reservedAt,reservedAt).run();
+  if(reserved.meta?.changes!==1)return json({error:'동일 녹음 처리가 이미 진행 중입니다.',code:'AUDIO_OPERATION_CONFLICT'},409);
+  const generated=await summarizeIntakeAudio(env,user,caseRow,bytes,file.type);
+  if(generated.response){await env.DB.prepare("UPDATE preview_intake_audio_operations SET status='FAILED',error_code='GEMINI_SUMMARY_FAILED',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run();return generated.response;}
+  try{
+    const token=await accessToken(env); const uploadedAt=new Date().toISOString(); const evidenceId=crypto.randomUUID(); const summaryId=crypto.randomUUID();
+    const root=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'PROJECT_ROOT',period:'',name:`${caseRow.caseNumber} ${caseRow.title}`});
+    const categoryFolder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'INTAKE_AUDIO',period:'',name:'프로젝트 의뢰 녹음',parentId:root.id});
+    const period=uploadedAt.slice(0,7); const month=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'MONTH',period,name:period,parentId:categoryFolder.id});
+    const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:month.id,evidenceId,fileName:file.name,mimeType:file.type,sha256:sha,bytes,caseId,category:'INTAKE_AUDIO',uploadedById:user.id,uploadedAt});
+    if(!env.DB.batch)throw new GoogleDriveError('D1_BATCH_REQUIRED',503,'D1 batch is unavailable',true);
+    const completedAt=new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString();
+    const results=await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_intake_audio_evidence (id,organization_id,case_id,operation_id,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by,uploaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(evidenceId,PREVIEW_ORGANIZATION_ID,caseId,operationId,file.name,file.type,file.size,sha,uploaded.fileId,month.id,user.id,uploadedAt),
+      env.DB.prepare("INSERT INTO preview_intake_audio_summaries (id,organization_id,case_id,evidence_id,client_legal_position,summary_text,provider_kind,model_code,created_by,created_at) VALUES (?,?,?,?,?,?,'GEMINI',?,?,?)").bind(summaryId,PREVIEW_ORGANIZATION_ID,caseId,evidenceId,caseRow.clientLegalPosition,generated.summary,generated.modelCode,user.id,uploadedAt),
+      env.DB.prepare("UPDATE preview_intake_audio_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId,completedAt,operationId),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'INTAKE_AUDIO_SUMMARIZED','의뢰 녹음 업로드·Gemini 요약',?,?)").bind(crypto.randomUUID(),caseId,user.id,`${file.name} · CLIENT_POSITION:${caseRow.clientLegalPosition}`,uploadedAt)
+    ]) as Array<{meta?:{changes?:number}}>;
+    if(results.some((result)=>result.meta?.changes!==1))throw new GoogleDriveError('INTAKE_AUDIO_COMMIT_FAILED',503,'Audio metadata did not commit atomically',true);
+    return json({summary:{id:summaryId,text:generated.summary,modelCode:generated.modelCode,googleFileId:uploaded.fileId,folderPath:`${caseRow.caseNumber}/프로젝트 의뢰 녹음/${period}`},replay:false,phase:'CF36_CLIENT_POSITION_AUDIO'},201);
+  }catch(reason){const uncertain=reason instanceof GoogleDriveError&&reason.uncertain;await env.DB.prepare('UPDATE preview_intake_audio_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status=\'PENDING\'').bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED',new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run().catch(()=>undefined);return googleFailure(reason)}
+}
+
+type RealWorkflowStatus = 'DONE' | 'IN_PROGRESS' | 'PLANNED';
+interface RealWorkflowScheduleRow {
+  caseId: string; caseNumber: string; title: string; claimType: string; clientLegalPosition: string;
+  createdAt: string; clientName: string | null; proposalCreatedAt: string | null; proposalStatus: string | null;
+  sentAt: string | null; awardStatus: 'WON' | 'PENDING' | 'LOST' | null; projectStartOn: string | null; projectEndOn: string | null;
+  kickoffAt: string | null; kickoffStatus: string | null; surveyStart: string | null; surveyEnd: string | null;
+  surveyCount: number; surveyCompleted: number; allocationStart: string | null; allocationEnd: string | null;
+  allocationUnits: string | null; takeoffCount: number; costCount: number; reportCreatedAt: string | null;
+  reportUpdatedAt: string | null; reviewStatus: string | null; reviewAt: string | null; finalizedAt: string | null;
+}
+
+function workflowDateDay(value: string | null, fallback: number): number {
+  if (!value) return Math.max(1, Math.min(31, fallback));
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? Math.max(1, Math.min(31, fallback)) : Math.max(1, Math.min(31, parsed.getUTCDate()));
+}
+
+async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEnv): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (request.method !== 'GET') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const admin = user.roles.includes('admin') ? 1 : 0;
+  const rows = await env.DB.prepare(
+    `SELECT c.id AS caseId,c.case_number AS caseNumber,c.title,c.claim_type AS claimType,c.client_legal_position AS clientLegalPosition,c.created_at AS createdAt,
+      (SELECT p.client_name FROM preview_proposal_links p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS clientName,
+      (SELECT p.created_at FROM preview_proposals p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS proposalCreatedAt,
+      (SELECT p.status FROM preview_proposals p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS proposalStatus,
+      (SELECT p.sent_at FROM preview_proposal_links p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS sentAt,
+      (SELECT p.award_status FROM preview_proposal_links p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS awardStatus,
+      (SELECT p.project_start_on FROM preview_proposal_links p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS projectStartOn,
+      (SELECT p.project_end_on FROM preview_proposal_links p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS projectEndOn,
+      (SELECT k.meeting_at FROM preview_workflow_kickoffs k WHERE k.case_id=c.id) AS kickoffAt,
+      (SELECT k.status FROM preview_workflow_kickoffs k WHERE k.case_id=c.id) AS kickoffStatus,
+      (SELECT MIN(s.survey_date) FROM preview_site_surveys s WHERE s.case_id=c.id) AS surveyStart,
+      (SELECT MAX(s.survey_date) FROM preview_site_surveys s WHERE s.case_id=c.id) AS surveyEnd,
+      (SELECT COUNT(*) FROM preview_site_surveys s WHERE s.case_id=c.id) AS surveyCount,
+      (SELECT COUNT(*) FROM preview_site_surveys s WHERE s.case_id=c.id AND s.status='COMPLETED') AS surveyCompleted,
+      (SELECT MIN(a.start_date) FROM preview_workforce_allocations a WHERE a.case_id=c.id) AS allocationStart,
+      (SELECT MAX(a.end_date) FROM preview_workforce_allocations a WHERE a.case_id=c.id) AS allocationEnd,
+      (SELECT group_concat(DISTINCT a.unit_label) FROM preview_workforce_allocations a WHERE a.case_id=c.id) AS allocationUnits,
+      (SELECT COUNT(*) FROM preview_google_case_evidence e WHERE e.case_id=c.id AND e.category='TAKEOFF_SOURCE') AS takeoffCount,
+      (SELECT COUNT(*) FROM preview_google_case_evidence e WHERE e.case_id=c.id AND e.category='COST_BREAKDOWN') AS costCount,
+      (SELECT d.created_at FROM preview_report_drafts d WHERE d.case_id=c.id) AS reportCreatedAt,
+      (SELECT d.updated_at FROM preview_report_drafts d WHERE d.case_id=c.id) AS reportUpdatedAt,
+      (SELECT r.status FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewStatus,
+      (SELECT COALESCE(r.reviewed_at,r.requested_at) FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewAt,
+      (SELECT f.finalized_at FROM preview_report_finalizations f WHERE f.case_id=c.id ORDER BY f.finalized_at DESC LIMIT 1) AS finalizedAt
+    FROM preview_cases c WHERE c.organization_id=? AND c.deleted_at IS NULL
+      AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments x WHERE x.case_id=c.id AND x.user_id=?))
+    ORDER BY c.updated_at DESC LIMIT 100`
+  ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<RealWorkflowScheduleRow>();
+
+  const projects = rows.results.map((row) => {
+    const createdDay = workflowDateDay(row.createdAt, 1);
+    const proposalStatus: RealWorkflowStatus = row.sentAt || row.proposalStatus === 'APPROVED' ? 'DONE' : row.proposalCreatedAt ? 'IN_PROGRESS' : 'PLANNED';
+    const awardStatus: RealWorkflowStatus = row.awardStatus === 'WON' || row.awardStatus === 'LOST' ? 'DONE' : row.sentAt ? 'IN_PROGRESS' : 'PLANNED';
+    const kickoffStatus: RealWorkflowStatus = ['COMPLETED','DRAFTED','CONFIRMED'].includes(row.kickoffStatus ?? '') ? 'DONE' : row.kickoffAt ? 'IN_PROGRESS' : 'PLANNED';
+    const surveyStatus: RealWorkflowStatus = Number(row.surveyCount) > 0 && Number(row.surveyCompleted) === Number(row.surveyCount) ? 'DONE' : Number(row.surveyCount) > 0 ? 'IN_PROGRESS' : 'PLANNED';
+    const quantityStatus: RealWorkflowStatus = Number(row.takeoffCount) > 0 && Number(row.costCount) > 0 && Boolean(row.allocationStart) ? 'DONE' : row.allocationStart || Number(row.takeoffCount) + Number(row.costCount) > 0 ? 'IN_PROGRESS' : 'PLANNED';
+    const reportStatus: RealWorkflowStatus = row.finalizedAt ? 'DONE' : row.reportCreatedAt || row.reviewStatus ? 'IN_PROGRESS' : 'PLANNED';
+    const statuses = [proposalStatus,awardStatus,kickoffStatus,surveyStatus,quantityStatus,reportStatus];
+    const progress = Math.round(statuses.reduce((sum,status) => sum + (status === 'DONE' ? 1 : status === 'IN_PROGRESS' ? 0.5 : 0),0) / 6 * 100);
+    const start = row.projectStartOn ?? row.createdAt.slice(0,10);
+    const end = row.projectEndOn ?? row.allocationEnd ?? row.finalizedAt?.slice(0,10) ?? new Date(Date.parse(start) + 45*86_400_000).toISOString().slice(0,10);
+    const stages = [
+      { stageId:1,startDay:workflowDateDay(row.proposalCreatedAt ?? row.createdAt,createdDay),endDay:workflowDateDay(row.sentAt ?? row.proposalCreatedAt,createdDay+2),status:proposalStatus,owner:'제안 담당',detail:row.proposalCreatedAt ? `제안서 ${row.proposalStatus ?? 'DRAFT'}${row.sentAt ? ' · 발송본 연결' : ''}` : '프로젝트 의뢰 저장 · 제안서 작성 필요' },
+      { stageId:2,startDay:workflowDateDay(row.sentAt,createdDay+3),endDay:workflowDateDay(row.projectStartOn ?? row.sentAt,createdDay+4),status:awardStatus,owner:'프로젝트 책임자',detail:row.awardStatus === 'WON' ? '수주 확정 · 수행 프로젝트 전환' : row.awardStatus === 'LOST' ? '미수주 종결' : '거래처 회신 대기' },
+      { stageId:3,startDay:workflowDateDay(row.kickoffAt,createdDay+5),endDay:workflowDateDay(row.kickoffAt,createdDay+6),status:kickoffStatus,owner:'클레임센터',detail:row.kickoffAt ? `착수회의 ${row.kickoffStatus}` : '착수회의 기록 필요' },
+      { stageId:4,startDay:workflowDateDay(row.surveyStart,createdDay+7),endDay:workflowDateDay(row.surveyEnd,createdDay+11),status:surveyStatus,owner:'현장조사팀',detail:Number(row.surveyCount)>0 ? `현장조사 ${row.surveyCompleted}/${row.surveyCount}건 완료` : '현장조사 범위·자료 필요' },
+      { stageId:5,startDay:workflowDateDay(row.allocationStart,createdDay+12),endDay:workflowDateDay(row.allocationEnd,createdDay+22),status:quantityStatus,owner:row.allocationUnits ?? '마감·구조·토목조경·VIETQS',detail:`팀 배정 ${row.allocationStart ? '완료' : '필요'} · 산출 ${row.takeoffCount} · 내역 ${row.costCount}` },
+      { stageId:6,startDay:workflowDateDay(row.reportCreatedAt,createdDay+23),endDay:workflowDateDay(row.finalizedAt ?? row.reviewAt ?? row.reportUpdatedAt,createdDay+30),status:reportStatus,owner:'현동명 · 이원희 · 이경훈 · 최영배 · 장범선',detail:row.finalizedAt ? '승인본 최종 확정' : row.reviewStatus ? `검토 ${row.reviewStatus}` : row.reportCreatedAt ? '보고서 작성 중' : '보고서 작성 예정' }
+    ];
+    const highlights: Array<{label:string;tone:string}> = [];
+    if (row.allocationUnits) highlights.push({label:`투입 팀 · ${row.allocationUnits}`,tone:'finish'});
+    if (Number(row.takeoffCount)+Number(row.costCount)>0) highlights.push({label:`Drive 산출·내역 ${Number(row.takeoffCount)+Number(row.costCount)}건`,tone:'survey'});
+    if (row.reviewStatus) highlights.push({label:`보고서 검토 · ${row.reviewStatus}`,tone:'report'});
+    if (!highlights.length) highlights.push({label:'실제 D1 기록 · 다음 단계 입력 필요',tone:'pending'});
+    return { id:`project-${row.caseId}`,caseId:row.caseId,code:row.caseNumber,name:row.title,client:row.clientName ?? '거래처 정보 입력 대기',claimType:row.claimType,clientLegalPosition:row.clientLegalPosition,progress,start,end,awardStatus:row.awardStatus ?? 'PENDING',highlights,stages };
+  });
+  return json({ projects, dataBasis:'REAL_D1_WORKFLOW_RECORDS', stageSources:['preview_proposals','preview_proposal_links','preview_workflow_kickoffs','preview_site_surveys','preview_workforce_allocations','preview_google_case_evidence','preview_report_drafts','preview_report_reviews','preview_report_finalizations'], phase:'CF36_WORKFLOW_INTEGRITY' });
+}
+
 async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const intakeAudioPath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/intake-audio$/iu);
+  if(intakeAudioPath)return handlePreviewIntakeAudio(request,env,user,intakeAudioPath[1]);
   const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|allocations))?$/iu);
   if (workflowPath) return handlePreviewCaseWorkflow(request, env, url, user, workflowPath[1], workflowPath[2]);
   const casePath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})(?:\/(status|parties|schedules))?$/iu);
@@ -1282,8 +1457,11 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     const admin = user.roles.includes('admin') ? 1 : 0;
     const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
     const where = "c.organization_id = ? AND c.deleted_at IS NULL AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')";
+    const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
+      ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail,'
+      : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail,";
     const rows = await env.DB.prepare(
-      `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC LIMIT ?`
+      `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns} c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC LIMIT ?`
     ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, query, like, like, limitRaw).all<PreviewCaseRow>();
     const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, query, like, like).first<{ total: number }>();
     return json({ cases: rows.results.map(previewCaseProjection), total: Number(count?.total ?? 0), phase: 'CF06_D1_CASE_OPERATIONS' });
@@ -1292,19 +1470,22 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   if (url.pathname === '/api/cases' && request.method === 'POST') {
     if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot create cases', code: 'FORBIDDEN' }, 403);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['title', 'claimType', 'description', 'category'])) return json({ error: 'Case payload is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
+    const perspectiveSchema = await previewCasePerspectiveSchemaAvailable(env);
+    if (!body || !exactObjectKeys(body, ['title', 'claimType', 'description', 'clientLegalPosition', 'clientPositionDetail', 'category']) || (perspectiveSchema && (!Object.hasOwn(body, 'clientLegalPosition') || !Object.hasOwn(body, 'clientPositionDetail')))) return json({ error: 'Case payload is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
     const category = body.category as Record<string, unknown> | null;
     const title = typeof body.title === 'string' ? body.title.trim() : '';
     const description = typeof body.description === 'string' ? body.description.trim() : '';
     const claimType = typeof body.claimType === 'string' ? body.claimType : '';
-    if (!title || title.length > 500 || description.length > 5000 || !PREVIEW_CLAIM_TYPES.has(claimType) || !category || !exactObjectKeys(category, ['major', 'middle', 'minor'])) return json({ error: 'Case title, type, description, or category is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
+    const clientLegalPosition = typeof body.clientLegalPosition === 'string' ? body.clientLegalPosition : 'UNSPECIFIED';
+    const clientPositionDetail = typeof body.clientPositionDetail === 'string' ? body.clientPositionDetail.trim() : '';
+    if (!title || title.length > 500 || description.length > 5000 || !PREVIEW_CLAIM_TYPES.has(claimType) || (perspectiveSchema && !['VICTIM','SUSPECT','OTHER'].includes(clientLegalPosition)) || clientPositionDetail.length > 2000 || (clientLegalPosition === 'OTHER' && !clientPositionDetail) || !category || !exactObjectKeys(category, ['major', 'middle', 'minor'])) return json({ error: 'Case title, type, client legal position, description, or category is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
     const major = typeof category.major === 'string' ? category.major.trim() : '';
     const middle = typeof category.middle === 'string' ? category.middle.trim() : '';
     const minor = typeof category.minor === 'string' ? category.minor.trim() : '';
     if (![major, middle, minor].every((entry) => entry.length >= 1 && entry.length <= 100)) return json({ error: 'All three category levels are required', code: 'INVALID_CASE_CATEGORY' }, 400);
     const idempotencyKey = request.headers.get('Idempotency-Key');
     if (idempotencyKey && !PREVIEW_CASE_CREATE_KEY.test(idempotencyKey)) return json({ error: 'Idempotency-Key is invalid', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
-    const fingerprint = idempotencyKey ? await sha256Hex(JSON.stringify({ title, description, claimType, major, middle, minor })) : null;
+    const fingerprint = idempotencyKey ? await sha256Hex(JSON.stringify(perspectiveSchema ? { title, description, claimType, clientLegalPosition, clientPositionDetail, major, middle, minor } : { title, description, claimType, major, middle, minor })) : null;
     if (idempotencyKey) {
       const existing = await env.DB.prepare(
         'SELECT id, request_fingerprint AS requestFingerprint FROM preview_cases WHERE organization_id = ? AND idempotency_key = ?'
@@ -1320,9 +1501,11 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now),
+        perspectiveSchema
+          ? env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at, client_legal_position, client_position_detail) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now, clientLegalPosition, clientPositionDetail || null)
+          : env.DB.prepare('INSERT INTO preview_cases (id, organization_id, case_number, title, description, claim_type, status, version, category_major, category_middle, category_minor, created_by, idempotency_key, request_fingerprint, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, NULL)').bind(caseId, PREVIEW_ORGANIZATION_ID, caseNumber, title, description || null, claimType, 'INQUIRY', major, middle, minor, user.id, idempotencyKey, fingerprint, now, now),
         env.DB.prepare('INSERT INTO preview_case_assignments (case_id, user_id, assigned_by, assigned_at) VALUES (?, ?, ?, ?)').bind(caseId, user.id, user.id, now),
-        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'CASE_CREATED', '사건 등록', `${claimType} · ${caseNumber}`, now)
+        env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'CASE_CREATED', '사건 등록', `${claimType} · ${caseNumber} · CLIENT_POSITION:${clientLegalPosition}`, now)
       ]);
       const response = await previewCaseDetail(env, user, caseId);
       return new Response(response.body, { status: 201, headers: response.headers });
@@ -2500,10 +2683,10 @@ interface PreviewWorkspaceSettingProjection {
   shortTermMemoryEnabled: boolean; longTermMemoryEnabled: boolean; version: number; updatedAt: string | null;
 }
 interface PreviewTutorialStateRow {
-  completedTutorialVersion: string; completedAt: string; version: number; updatedAt: string;
+  completedTutorialVersion: string; completedAt: string; completionAction: 'COMPLETED' | 'SKIPPED'; version: number; updatedAt: string;
 }
 interface PreviewTutorialStateProjection {
-  completedTutorialVersion: string | null; completedAt: string | null; version: number; updatedAt: string | null;
+  completedTutorialVersion: string | null; completedAt: string | null; completionAction: 'COMPLETED' | 'SKIPPED' | null; version: number; updatedAt: string | null;
 }
 
 const defaultPreviewPreferences = (): PreviewPreferenceProjection => ({
@@ -2516,7 +2699,7 @@ const defaultPreviewWorkspaceSettings = (): PreviewWorkspaceSettingProjection =>
 });
 
 const defaultPreviewTutorialState = (): PreviewTutorialStateProjection => ({
-  completedTutorialVersion: null, completedAt: null, version: 0, updatedAt: null
+  completedTutorialVersion: null, completedAt: null, completionAction: null, version: 0, updatedAt: null
 });
 
 async function previewUserPreferences(env: CloudflareEnv, userId: string): Promise<ReturnType<typeof defaultPreviewPreferences>> {
@@ -2540,15 +2723,33 @@ async function previewWorkspaceSettings(env: CloudflareEnv): Promise<ReturnType<
 
 async function previewUserTutorialState(env: CloudflareEnv, userId: string): Promise<PreviewTutorialStateProjection> {
   if (!env.DB) return defaultPreviewTutorialState();
+  const actionSchema = await previewTutorialCompletionActionSchema(env);
   const row = await env.DB.prepare(
-    'SELECT completed_tutorial_version AS completedTutorialVersion,completed_at AS completedAt,version,updated_at AS updatedAt FROM preview_user_tutorial_state WHERE user_id=?'
+    `SELECT completed_tutorial_version AS completedTutorialVersion,completed_at AS completedAt,${actionSchema ? 'completion_action' : "'COMPLETED'"} AS completionAction,version,updated_at AS updatedAt FROM preview_user_tutorial_state WHERE user_id=?`
   ).bind(userId).first<PreviewTutorialStateRow>();
   return row ? {
     completedTutorialVersion: row.completedTutorialVersion,
     completedAt: row.completedAt,
+    completionAction: row.completionAction,
     version: Number(row.version),
     updatedAt: row.updatedAt
   } : defaultPreviewTutorialState();
+}
+
+async function previewTutorialCompletionActionSchema(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT completion_action FROM preview_user_tutorial_state LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function previewTutorialApiProjection(state: PreviewTutorialStateProjection, includeAction: boolean): Record<string, unknown> {
+  if (includeAction) return { ...state };
+  const { completionAction: _completionAction, ...legacy } = state;
+  return legacy;
 }
 
 async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -2559,34 +2760,42 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
 
   if (url.pathname === '/api/settings/tutorial') {
     if (request.method === 'GET') {
-      try { return json({ tutorial: await previewUserTutorialState(env, user.id), currentTutorialVersion: 'CF35_V1', phase: 'CF35_GUIDED_WORKSPACE' }); }
+      try {
+        const actionSchema = await previewTutorialCompletionActionSchema(env);
+        return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF36_V1', phase: 'CF36_GUIDED_WORKSPACE' });
+      }
       catch { return json({ error: 'Tutorial state migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
     }
     if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+    const actionSchema = await previewTutorialCompletionActionSchema(env);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['tutorialVersion','expectedVersion'])
+    if (!body || !exactObjectKeys(body, ['tutorialVersion','expectedVersion','action'])
       || typeof body.tutorialVersion !== 'string' || !/^CF\d{2}_V\d+$/u.test(body.tutorialVersion)
-      || !Number.isInteger(body.expectedVersion)) {
+      || !Number.isInteger(body.expectedVersion) || (actionSchema && !['COMPLETED','SKIPPED'].includes(String(body.action)))) {
       return json({ error: 'Tutorial completion payload is invalid', code: 'INVALID_TUTORIAL_PAYLOAD' }, 400);
     }
+    const completionAction = actionSchema ? String(body.action) : 'COMPLETED';
     const current = await previewUserTutorialState(env, user.id);
     if (current.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
-    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: current, currentTutorialVersion: 'CF35_V1', phase: 'CF35_GUIDED_WORKSPACE' });
+    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: previewTutorialApiProjection(current, actionSchema), currentTutorialVersion: 'CF36_V1', phase: 'CF36_GUIDED_WORKSPACE' });
     const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt ?? '1970-01-01') + 1)).toISOString();
     const nextVersion = current.version + 1;
     const write = current.version === 0
-      ? env.DB.prepare('INSERT INTO preview_user_tutorial_state (user_id,completed_tutorial_version,completed_at,version,updated_by,created_at,updated_at) SELECT ?,?,?,1,?,?,? WHERE ?=0')
-        .bind(user.id, body.tutorialVersion, now, user.id, now, now, body.expectedVersion)
-      : env.DB.prepare('UPDATE preview_user_tutorial_state SET completed_tutorial_version=?,completed_at=?,version=version+1,updated_by=?,updated_at=? WHERE user_id=? AND version=?')
-        .bind(body.tutorialVersion, now, user.id, now, user.id, body.expectedVersion);
+      ? actionSchema
+        ? env.DB.prepare('INSERT INTO preview_user_tutorial_state (user_id,completed_tutorial_version,completed_at,version,updated_by,created_at,updated_at,completion_action) SELECT ?,?,?,1,?,?,?,? WHERE ?=0').bind(user.id, body.tutorialVersion, now, user.id, now, now, completionAction, body.expectedVersion)
+        : env.DB.prepare('INSERT INTO preview_user_tutorial_state (user_id,completed_tutorial_version,completed_at,version,updated_by,created_at,updated_at) SELECT ?,?,?,1,?,?,? WHERE ?=0').bind(user.id, body.tutorialVersion, now, user.id, now, now, body.expectedVersion)
+      : actionSchema
+        ? env.DB.prepare('UPDATE preview_user_tutorial_state SET completed_tutorial_version=?,completed_at=?,version=version+1,updated_by=?,updated_at=?,completion_action=? WHERE user_id=? AND version=?').bind(body.tutorialVersion, now, user.id, now, completionAction, user.id, body.expectedVersion)
+        : env.DB.prepare('UPDATE preview_user_tutorial_state SET completed_tutorial_version=?,completed_at=?,version=version+1,updated_by=?,updated_at=? WHERE user_id=? AND version=?').bind(body.tutorialVersion, now, user.id, now, user.id, body.expectedVersion);
     try {
       const results = await env.DB.batch([
         write,
-        env.DB.prepare('INSERT INTO preview_user_tutorial_history (id,user_id,tutorial_version,state_version,completed_by,completed_at) VALUES (?,?,?,?,?,?)')
-          .bind(crypto.randomUUID(), user.id, body.tutorialVersion, nextVersion, user.id, now)
+        actionSchema
+          ? env.DB.prepare('INSERT INTO preview_user_tutorial_history (id,user_id,tutorial_version,state_version,completed_by,completed_at,completion_action) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), user.id, body.tutorialVersion, nextVersion, user.id, now, completionAction)
+          : env.DB.prepare('INSERT INTO preview_user_tutorial_history (id,user_id,tutorial_version,state_version,completed_by,completed_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), user.id, body.tutorialVersion, nextVersion, user.id, now)
       ]) as Array<{meta?:{changes?:number}}>;
       if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT' }, 409);
-      return json({ tutorial: await previewUserTutorialState(env, user.id), currentTutorialVersion: 'CF35_V1', phase: 'CF35_GUIDED_WORKSPACE' });
+      return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF36_V1', phase: 'CF36_GUIDED_WORKSPACE' });
     } catch {
       const latest = await previewUserTutorialState(env, user.id).catch(() => null);
       if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);
@@ -2680,6 +2889,7 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
   let verifiedProposals: Record<string, unknown>[] = [];
   let proposalAwardDecisions: Record<string, unknown>[] = [];
   let evidenceCatalog: Record<string, unknown>[] = [];
+  let intakeAudioSummaries: Record<string, unknown>[] = [];
   try {
     const [records, events] = await Promise.all([
       env.DB.prepare(
@@ -2718,6 +2928,15 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
   } catch {
     // The additive project evidence library may be absent in older fixtures.
   }
+  try {
+    const summaries = await env.DB.prepare(
+      'SELECT s.id,s.client_legal_position AS clientLegalPosition,s.summary_text AS summaryText,s.provider_kind AS providerKind,s.model_code AS modelCode,s.created_at AS createdAt,e.original_name AS originalName,e.sha256 ' +
+      'FROM preview_intake_audio_summaries s JOIN preview_intake_audio_evidence e ON e.id=s.evidence_id WHERE s.case_id=? AND s.organization_id=? ORDER BY s.created_at DESC LIMIT 20'
+    ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>();
+    intakeAudioSummaries = summaries.results;
+  } catch {
+    // Older fixtures remain readable before the additive CF36 intake migration.
+  }
   const [kickoff, surveys, allocations, parties, schedules] = await Promise.all([
     env.DB.prepare('SELECT meeting_at AS meetingAt, location, agenda, participant_units_json AS participantUnitsJson, raw_notes AS rawNotes, summary_text AS summaryText, timeline_json AS timelineJson, status, version FROM preview_workflow_kickoffs WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<Record<string, unknown>>(),
     env.DB.prepare('SELECT survey_date AS surveyDate, location, scope_text AS scopeText, lead_unit AS leadUnit, folder_path AS folderPath, status, version FROM preview_site_surveys WHERE case_id = ? AND organization_id = ? ORDER BY survey_date').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
@@ -2731,6 +2950,12 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
     parties: parties.results,
     schedules: schedules.results,
     proposalWorkflow: { verifiedProposalSnapshots: verifiedProposals, awardDecisions: proposalAwardDecisions },
+    clientPerspective: {
+      legalPosition: caseRow.clientLegalPosition,
+      positionDetail: caseRow.clientPositionDetail,
+      mandatoryRule: 'Write from the registered client position. Never silently swap claimant/respondent, victim/suspect, plaintiff/defendant, or infer a missing legal status.',
+      intakeAudioSummaries
+    },
     litigation: { verifiedCases: verifiedLitigation, verifiedEvents: verifiedLitigationEvents },
     evidenceCatalog,
     sourcePolicy: 'Only these same-case D1 snapshots may be treated as facts. Proposal facts require VERIFIED document URL plus SHA-256. Litigation facts require VERIFIED official-source rows with source URL (and event SHA-256). Evidence catalog rows prove file identity, category, uploader, time, size and SHA-256 only; binary file contents must not be inferred unless separately extracted. Missing or conflicting fields must be marked [확인 필요].'
@@ -3134,6 +3359,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
 // CF08 report review and approval. Each request points to one immutable CF07
 // revision; a different active user must make the terminal decision.
 const PREVIEW_REVIEW_DECISION_ROLES = new Set(['admin', 'ceo', 'director', 'reviewer']);
+const PREVIEW_FINAL_APPROVAL_ROLES = new Set(['ceo','director']);
 const PREVIEW_REVIEW_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
 
 interface PreviewReportReviewRow {
@@ -3153,6 +3379,8 @@ interface PreviewReportReviewRow {
   reviewedByName: string | null;
   decisionNote: string | null;
   reviewedAt: string | null;
+  deliveryNotificationId?: string | null;
+  deliveryEmailStatus?: string | null;
 }
 
 function previewReviewProjection(row: PreviewReportReviewRow): Record<string, unknown> {
@@ -3171,16 +3399,57 @@ function previewReviewProjection(row: PreviewReportReviewRow): Record<string, un
     reviewedBy: row.reviewedById ? { id: row.reviewedById, name: row.reviewedByName } : null,
     decisionNote: row.decisionNote,
     reviewedAt: row.reviewedAt
+    ,deliveryNotification: row.deliveryNotificationId ? { id: row.deliveryNotificationId, emailStatus: row.deliveryEmailStatus ?? 'PENDING' } : null
   };
+}
+
+async function dispatchPreviewEmailOutbox(env:CloudflareEnv,outboxId:string):Promise<void>{
+  if(!env.DB)return;
+  const row=await env.DB.prepare("SELECT id,recipient_email AS recipientEmail,subject,body_text AS bodyText,status,attempt_count AS attemptCount,updated_at AS updatedAt FROM preview_email_outbox WHERE id=? AND status='PENDING'").bind(outboxId).first<{id:string;recipientEmail:string;subject:string;bodyText:string;status:string;attemptCount:number;updatedAt:string}>();
+  if(!row)return;
+  const now=new Date(Math.max(Date.now(),Date.parse(row.updatedAt)+1)).toISOString();
+  const endpoint=env.PM_NOTIFICATION_WEBHOOK_URL?.trim()??'';
+  if(!/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/|$)/u.test(endpoint)||!env.PM_NOTIFICATION_WEBHOOK_SECRET){
+    await env.DB.prepare("UPDATE preview_email_outbox SET status='CONFIG_REQUIRED',attempt_count=attempt_count+1,last_error_code='EMAIL_BRIDGE_NOT_CONFIGURED',updated_at=? WHERE id=? AND status='PENDING' AND attempt_count=?").bind(now,outboxId,row.attemptCount).run();
+    return;
+  }
+  let response:Response;
+  try{response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${env.PM_NOTIFICATION_WEBHOOK_SECRET}`},body:JSON.stringify({messageType:'REPORT_APPROVED_DELIVERY_REQUIRED',to:row.recipientEmail,subject:row.subject,text:row.bodyText,idempotencyKey:row.id})});}
+  catch{response=new Response(null,{status:503});}
+  const providerMessageId=response.headers.get('X-Message-Id');
+  await env.DB.prepare("UPDATE preview_email_outbox SET status=?,attempt_count=attempt_count+1,provider_message_id=?,last_error_code=?,updated_at=? WHERE id=? AND status='PENDING' AND attempt_count=?").bind(response.ok?'SENT':'FAILED',response.ok?(providerMessageId??`accepted-${row.id}`):null,response.ok?null:`EMAIL_BRIDGE_${response.status}`,now,outboxId,row.attemptCount).run();
+}
+
+async function handlePreviewNotifications(request:Request,env:CloudflareEnv):Promise<Response>{
+  if(!env.DB)return json({error:'D1 database is not bound',code:'D1_NOT_CONFIGURED'},503);
+  const user=await previewSessionUser(request,env);if(!user)return json({error:'Login is required',code:'AUTH_REQUIRED'},401);
+  if(request.method!=='GET')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
+  const rows=await env.DB.prepare('SELECT n.id,n.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,n.review_id AS reviewId,n.notification_type AS notificationType,n.title,n.message,n.read_at AS readAt,n.created_at AS createdAt,o.status AS emailStatus,o.recipient_email AS recipientEmail FROM preview_notifications n JOIN preview_cases c ON c.id=n.case_id LEFT JOIN preview_email_outbox o ON o.notification_id=n.id WHERE n.user_id=? ORDER BY n.created_at DESC LIMIT 100').bind(user.id).all<Record<string,unknown>>();
+  return json({notifications:rows.results,phase:'CF36_APPROVAL_DELIVERY_NOTIFICATION'});
+}
+
+async function previewApprovalNotificationSchema(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT id FROM preview_notifications LIMIT 0').all();
+    await env.DB.prepare('SELECT id FROM preview_email_outbox LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function previewReportReviewList(env: CloudflareEnv, user: SessionUser, caseId = ''): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const notificationSchema = await previewApprovalNotificationSchema(env);
+  const deliveryColumns = notificationSchema
+    ? "(SELECT n.id FROM preview_notifications n WHERE n.review_id=v.id AND n.notification_type='REPORT_APPROVED_DELIVERY_REQUIRED' LIMIT 1) AS deliveryNotificationId, (SELECT o.status FROM preview_email_outbox o JOIN preview_notifications n ON n.id=o.notification_id WHERE n.review_id=v.id LIMIT 1) AS deliveryEmailStatus "
+    : 'NULL AS deliveryNotificationId, NULL AS deliveryEmailStatus ';
   const rows = await env.DB.prepare(
     'SELECT v.id, v.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, v.report_revision_id AS reportRevisionId, ' +
     'v.report_version AS reportVersion, r.title AS reportTitle, v.status, v.requested_by AS requestedById, requester.display_name AS requestedByName, ' +
     'v.request_note AS requestNote, v.requested_at AS requestedAt, v.reviewed_by AS reviewedById, reviewer.display_name AS reviewedByName, ' +
-    'v.decision_note AS decisionNote, v.reviewed_at AS reviewedAt FROM preview_report_reviews v ' +
+    'v.decision_note AS decisionNote, v.reviewed_at AS reviewedAt, ' + deliveryColumns + 'FROM preview_report_reviews v ' +
     'JOIN preview_cases c ON c.id = v.case_id JOIN preview_report_revisions r ON r.id = v.report_revision_id ' +
     'JOIN preview_users requester ON requester.id = v.requested_by LEFT JOIN preview_users reviewer ON reviewer.id = v.reviewed_by ' +
     'WHERE v.organization_id = ? AND (? = \'\' OR v.case_id = ?) ' +
@@ -3253,6 +3522,8 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
       return json({ error: 'Review decision payload is invalid', code: 'INVALID_DECISION_PAYLOAD' }, 400);
     }
     const status = String(body.decision) as 'APPROVED' | 'CHANGES_REQUESTED';
+    const notificationSchema = await previewApprovalNotificationSchema(env);
+    if(status==='APPROVED'&&notificationSchema&&!user.roles.some((role)=>PREVIEW_FINAL_APPROVAL_ROLES.has(role)))return json({error:'최종 승인은 대표 또는 부사장 권한(CEO/DIRECTOR)만 할 수 있습니다.',code:'FINAL_APPROVER_REQUIRED'},403);
     const note = body.note.trim();
     if (note.length > 4000 || (status === 'CHANGES_REQUESTED' && !note)) return json({ error: 'A changes-requested decision requires a note', code: 'DECISION_NOTE_REQUIRED' }, 400);
     const review = await env.DB.prepare('SELECT id, case_id AS caseId, report_version AS reportVersion, status, requested_by AS requestedBy FROM preview_report_reviews WHERE id = ? AND organization_id = ?').bind(decisionMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; reportVersion: number; status: string; requestedBy: string }>();
@@ -3265,12 +3536,28 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const now = new Date(Math.max(Date.now(), Date.now() + 1)).toISOString();
     const eventType = status === 'APPROVED' ? 'REPORT_APPROVED' : 'CHANGES_REQUESTED';
-    const results = await env.DB.batch([
+    let notificationId:string|null=null; let outboxId:string|null=null; let pmRecipient:{id:string;email:string;displayName:string}|null=null;
+    if(status==='APPROVED'&&notificationSchema){
+      pmRecipient=await env.DB.prepare("SELECT u.id,u.email,u.display_name AS displayName FROM preview_users u WHERE u.is_active=1 AND (EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=? AND a.user_id=u.id) OR u.id=?) AND (instr(u.roles_json,'\"pm\"')>0 OR u.id=?) ORDER BY CASE WHEN instr(u.roles_json,'\"pm\"')>0 THEN 0 ELSE 1 END LIMIT 1").bind(review.caseId,review.requestedBy,review.requestedBy).first<{id:string;email:string;displayName:string}>();
+      if(!pmRecipient)return json({error:'납품 알림을 받을 프로젝트 PM 계정을 지정해 주세요.',code:'PROJECT_PM_REQUIRED'},409);
+      notificationId=crypto.randomUUID();outboxId=crypto.randomUUID();
+    }
+    const statements=[
       env.DB.prepare('UPDATE preview_report_reviews SET status = ?, reviewed_by = ?, decision_note = ?, reviewed_at = ? WHERE id = ? AND organization_id = ? AND status = \'PENDING\' AND requested_by <> ?').bind(status, user.id, note || null, now, review.id, PREVIEW_ORGANIZATION_ID, user.id),
       env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.id, eventType, user.id, note || null, now, review.id, status, user.id),
       env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.caseId, user.id, eventType, status === 'APPROVED' ? `보고서 승인 · v${review.reportVersion}` : `보고서 수정 요청 · v${review.reportVersion}`, note || null, now, review.id, status, user.id)
-    ]) as Array<{ meta?: { changes?: number } }>;
+    ];
+    if(status==='APPROVED'&&pmRecipient&&notificationId&&outboxId){
+      const title=`납품 필요 · 보고서 v${review.reportVersion} 승인 완료`;
+      const message=`최종 결재자가 보고서 v${review.reportVersion}을 승인했습니다. 프로젝트 납품 절차를 진행해 주세요.`;
+      statements.push(
+        env.DB.prepare("INSERT INTO preview_notifications (id,organization_id,user_id,case_id,review_id,notification_type,title,message,read_at,created_at) SELECT ?,?,?,?,?, 'REPORT_APPROVED_DELIVERY_REQUIRED',?,?,NULL,? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id=? AND status='APPROVED')").bind(notificationId,PREVIEW_ORGANIZATION_ID,pmRecipient.id,review.caseId,review.id,title,message,now,review.id),
+        env.DB.prepare("INSERT INTO preview_email_outbox (id,organization_id,notification_id,recipient_user_id,recipient_email,subject,body_text,status,attempt_count,provider_message_id,last_error_code,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'PENDING',0,NULL,NULL,?,? WHERE EXISTS (SELECT 1 FROM preview_notifications WHERE id=?)").bind(outboxId,PREVIEW_ORGANIZATION_ID,notificationId,pmRecipient.id,pmRecipient.email,`[클레임센터] ${title}`,`${pmRecipient.displayName}님,\n\n${message}\n\n프로젝트: ${review.caseId}\n검토번호: ${review.id}`,now,now,notificationId)
+      );
+    }
+    const results = await env.DB.batch(statements) as Array<{ meta?: { changes?: number } }>;
     if (results[0]?.meta?.changes !== 1) return json({ error: 'Review was already decided in another session', code: 'REVIEW_STATUS_CONFLICT' }, 409);
+    if(status==='APPROVED'&&outboxId)await dispatchPreviewEmailOutbox(env,outboxId).catch(()=>undefined);
     return previewReportReviewList(env, user, review.caseId);
   }
 
@@ -4064,6 +4351,10 @@ const worker = {
       return handlePreviewProposalWorkflow(request, env, url);
     }
 
+    if (url.pathname === '/api/project-workflow/schedule') {
+      return handleProjectWorkflowSchedule(request, env);
+    }
+
     if (url.pathname === '/api/proposal-templates' || /^\/api\/cases\/[0-9a-f-]{36}\/proposals(?:\/|$)/iu.test(url.pathname)) {
       return handlePreviewProposalAuthoring(request, env, url);
     }
@@ -4086,6 +4377,10 @@ const worker = {
 
     if (url.pathname === '/api/report-reviews' || url.pathname.startsWith('/api/report-reviews/')) {
       return handlePreviewReportReviews(request, env, url);
+    }
+
+    if (url.pathname === '/api/notifications') {
+      return handlePreviewNotifications(request, env);
     }
 
     if (url.pathname === '/api/report-finalizations' || url.pathname.startsWith('/api/report-finalizations/') || url.pathname.startsWith('/api/report-outputs/')) {

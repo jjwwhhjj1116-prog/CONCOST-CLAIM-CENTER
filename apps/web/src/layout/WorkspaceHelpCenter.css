@@ -15,6 +15,13 @@
 .workspace-tutorial > aside { border-left: 4px solid #4b967f; border-radius: 12px; padding: 12px 15px; background: #edf8f3; }
 .workspace-tutorial aside strong { color: #30715e; font-size: .72rem; }
 .workspace-tutorial aside p { margin: 5px 0 0; color: #234e43; font-weight: 800; }
+.workspace-tutorial__visit { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #f3c7a8; border-radius: 14px; padding: 13px 15px; background: #fff8f2; }
+.workspace-tutorial__visit div { display: grid; gap: 4px; }
+.workspace-tutorial__visit strong { color: #9a4c20; }
+.workspace-tutorial__visit span { color: #76513c; font-size: .78rem; line-height: 1.45; }
+.workspace-tutorial__visit.is-visited { border-color: #8ed7bd; background: #edf9f4; }
+.workspace-tutorial__visit.is-visited strong { color: #23765b; }
+.workspace-tutorial__visit.is-visited span { color: #356b5a; }
 .workspace-tutorial > footer, .workspace-help-center > footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .workspace-tutorial > small { color: var(--text-muted); line-height: 1.5; }
 .workspace-help-center { display: grid; gap: 16px; min-width: min(780px, calc(100vw - 80px)); }
@@ -36,6 +43,8 @@
 .workspace-help-center__route li::before { counter-increment: route-step; content: counter(route-step); display: block; margin-bottom: 5px; color: #4f46e5; font: 850 .67rem 'DM Mono', monospace; }
 :root[data-theme='dark'] .workspace-tutorial > section, :root[data-theme='dark'] .workspace-help-center__grid section { border-color: #334155; background: #111c30; }
 :root[data-theme='dark'] .workspace-tutorial > aside { background: #12352d; }
+:root[data-theme='dark'] .workspace-tutorial__visit { border-color: #7c4326; background: #2b1d16; }
+:root[data-theme='dark'] .workspace-tutorial__visit.is-visited { border-color: #246b55; background: #102d25; }
 :root[data-theme='dark'] .workspace-tutorial aside strong, :root[data-theme='dark'] .workspace-tutorial aside p { color: #a7f3d0; }
 :root[data-theme='dark'] .workspace-help-center__route { border-color: #4338ca; background: linear-gradient(110deg, #1e1b4b, #132b2b); }
 :root[data-theme='dark'] .workspace-help-center__route li { background: #0f172a; color: #e2e8f0; }
@@ -46,4 +55,5 @@
   .workspace-help-center__grid { grid-template-columns: 1fr; }
   .workspace-help-center__route ol { grid-template-columns: 1fr; }
   .workspace-tutorial > footer, .workspace-help-center > footer { align-items: stretch; flex-direction: column; }
+  .workspace-tutorial__visit { align-items: stretch; flex-direction: column; }
 }
