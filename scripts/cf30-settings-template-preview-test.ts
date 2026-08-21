@@ -107,8 +107,17 @@ test('CF31 exposes OAuth app onboarding and high-contrast light Drive controls',
   assert.match(worker, /\/api\/google\/oauth-app/u);
   assert.match(worker, /encryptSecret\(body\.clientSecret\.trim\(\)/u);
   assert.match(drive, /Google OAuth 앱을 한 번만 등록하세요/u);
-  assert.match(drive, /console\.cloud\.google\.com\/apis\/credentials/u);
+  assert.match(drive, /Google Drive 연결·계정 교체 따라하기/u);
+  assert.match(drive, /console\.cloud\.google\.com\/auth\/branding/u);
+  assert.match(drive, /console\.cloud\.google\.com\/auth\/audience/u);
+  assert.match(drive, /console\.cloud\.google\.com\/auth\/scopes/u);
+  assert.match(drive, /console\.cloud\.google\.com\/auth\/clients/u);
+  assert.match(drive, /https:\/\/www\.googleapis\.com\/auth\/drive\.file/u);
+  assert.match(drive, /403 access_denied/u);
+  assert.match(drive, /redirect_uri_mismatch/u);
+  assert.match(drive, /기존 Drive 파일은 자동 이동되지 않으므로/u);
   assert.match(drive, /승인된 리디렉션 URI/u);
   assert.match(theme, /:root:not\(\[data-theme='dark'\]\) \.preview-drive-card strong \{ color: #0f172a/u);
   assert.match(theme, /\.preview-drive-status strong \{ color: #881337/u);
+  assert.match(theme, /\.preview-drive-guide-grid/u);
 });
