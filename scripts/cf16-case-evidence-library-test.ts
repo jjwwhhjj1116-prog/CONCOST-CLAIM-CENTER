@@ -145,8 +145,11 @@ test('CF16 keeps evidence bytes and attribution append-only and renders the uplo
   const library = readFileSync('apps/web/src/routes/PreviewEvidenceHub.tsx', 'utf8');
   const panel = readFileSync('apps/web/src/evidence/CaseEvidencePanel.tsx', 'utf8');
   assert.match(workflow, /산출자료·내역자료 업로드/u);
-  assert.match(workflow, /CaseEvidencePanel caseId=\{caseId\} compact/u);
+  assert.match(workflow, /allowedCategories=\{\['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING'\]\}/u);
+  assert.match(workflow, /allowedCategories=\{\['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT'\]\}/u);
+  assert.match(workflow, /allowedCategories=\{\['TAKEOFF_SOURCE', 'COST_BREAKDOWN'\]\}/u);
   assert.match(library, /CaseEvidencePanel caseId=\{selectedCaseId\}/u);
+  assert.match(panel, /visibleCategories\.map/u);
   assert.match(panel, /TAKEOFF_SOURCE/u);
   assert.match(panel, /COST_BREAKDOWN/u);
   assert.match(panel, /uploadedBy/u);

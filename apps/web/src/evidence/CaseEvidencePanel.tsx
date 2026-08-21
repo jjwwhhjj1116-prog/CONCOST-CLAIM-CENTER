@@ -44,8 +44,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
-export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', compact = false, onNavigate }: { caseId: string; defaultCategory?: CaseEvidenceCategory; compact?: boolean; onNavigate: (path: string) => void }): React.ReactElement {
-  const [category, setCategory] = useState<CaseEvidenceCategory>(defaultCategory);
+export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', allowedCategories, compact = false, onNavigate }: { caseId: string; defaultCategory?: CaseEvidenceCategory; allowedCategories?: readonly CaseEvidenceCategory[]; compact?: boolean; onNavigate: (path: string) => void }): React.ReactElement {
+  const categoryKey = allowedCategories?.join('|') ?? 'ALL';
+  const visibleCategories = allowedCategories?.length ? allowedCategories : Object.keys(categoryCopy) as CaseEvidenceCategory[];
+  const initialCategory = visibleCategories.includes(defaultCategory) ? defaultCategory : visibleCategories[0] ?? defaultCategory;
+  const [category, setCategory] = useState<CaseEvidenceCategory>(initialCategory);
   const [files, setFiles] = useState<CaseEvidenceFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [storagePolicy, setStoragePolicy] = useState<'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'>('D1_TEST_FALLBACK');
@@ -76,7 +79,7 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     finally { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setLoading(false); }
   }, [caseId]);
 
-  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(defaultCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setGoogleDriveConnected(false); }, [caseId, defaultCategory]);
+  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(initialCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setGoogleDriveConnected(false); }, [caseId, categoryKey, initialCategory]);
   useEffect(() => { void load(); }, [load]);
 
   const upload = async (incoming: FileList | File[]) => {
@@ -122,7 +125,7 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
   return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 통합 자료실">
     <div className="case-evidence-categories" role="tablist" aria-label="자료 구분">
-      {(Object.keys(categoryCopy) as CaseEvidenceCategory[]).map((value) => <button key={value} type="button" role="tab" aria-selected={category === value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}><b aria-hidden="true">{categoryCopy[value].icon}</b><span><i>{categoryCopy[value].phase}</i><strong>{categoryCopy[value].title}</strong><small>{categoryCopy[value].description}</small></span><em>{files.filter((file) => file.category === value).length}</em></button>)}
+      {visibleCategories.map((value) => <button key={value} type="button" role="tab" aria-selected={category === value} className={category === value ? 'is-active' : ''} onClick={() => setCategory(value)}><b aria-hidden="true">{categoryCopy[value].icon}</b><span><i>{categoryCopy[value].phase}</i><strong>{categoryCopy[value].title}</strong><small>{categoryCopy[value].description}</small></span><em>{files.filter((file) => file.category === value).length}</em></button>)}
     </div>
     <div className={`case-evidence-dropzone${dragging ? ' is-dragging' : ''}${uploadDisabled ? ' is-disabled' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragOver={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); if (!uploadDisabled && event.dataTransfer.files) void upload(event.dataTransfer.files); }}>
       <input ref={inputRef} type="file" multiple accept={ACCEPT} disabled={uploadDisabled} onChange={(event) => event.target.files && void upload(event.target.files)} />

@@ -372,7 +372,7 @@ const KickoffEditor: React.FC<{
     <article className="workflow-editor-card workflow-evidence-card">
       <header><div><span>KICKOFF EVIDENCE</span><h3>착수회의 제공자료·회의록·녹음</h3></div><em>회사 Drive 자동 분류</em></header>
       <p className="workflow-evidence-intro">발주처가 제공한 원본, 회의록과 녹음파일을 현재 프로젝트에 바로 연결합니다. 다른 분류는 자료실 전체 보기에서 선택할 수 있습니다.</p>
-      <CaseEvidencePanel caseId={caseId} defaultCategory="KICKOFF_MATERIAL" compact onNavigate={onNavigate} />
+      <CaseEvidencePanel caseId={caseId} defaultCategory="KICKOFF_MATERIAL" allowedCategories={['KICKOFF_MATERIAL', 'MEETING_MINUTES', 'MEETING_RECORDING']} compact onNavigate={onNavigate} />
     </article>
   </div>
 );
@@ -409,7 +409,7 @@ const SurveyEditor: React.FC<{
     <article className="workflow-editor-card workflow-evidence-card">
       <header><div><span>SITE EVIDENCE</span><h3>현장 사진·녹음·도면 업로드</h3></div><em>프로젝트 자료실 자동 연동</em></header>
       <p className="workflow-evidence-intro">현장 사진을 기본으로 열었습니다. 녹음과 기타 조사자료는 상단 분류 탭을 바꿔 올리세요.</p>
-      <CaseEvidencePanel caseId={caseId} defaultCategory="SITE_PHOTO" compact onNavigate={onNavigate} />
+      <CaseEvidencePanel caseId={caseId} defaultCategory="SITE_PHOTO" allowedCategories={['SITE_PHOTO', 'SITE_RECORDING', 'SITE_DOCUMENT']} compact onNavigate={onNavigate} />
     </article>
   </div>
 );
@@ -446,7 +446,7 @@ const AllocationEditor: React.FC<{
         <em>프로젝트 자료실 자동 연동</em>
       </header>
       <p className="workflow-evidence-intro">도면, 산출서, 내역서 등 원본을 구분해 올리면 현재 프로젝트의 자료실에 즉시 저장됩니다. 업로드 사용자와 일시는 자동 기록됩니다.</p>
-      <CaseEvidencePanel caseId={caseId} compact defaultCategory="TAKEOFF_SOURCE" onNavigate={onNavigate} />
+      <CaseEvidencePanel caseId={caseId} compact defaultCategory="TAKEOFF_SOURCE" allowedCategories={['TAKEOFF_SOURCE', 'COST_BREAKDOWN']} onNavigate={onNavigate} />
     </article>
   </div>
 );

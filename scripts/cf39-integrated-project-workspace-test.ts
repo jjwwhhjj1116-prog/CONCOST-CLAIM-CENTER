@@ -163,6 +163,7 @@ test('CF39 judgment performance is derived only from recorded court events and f
   assert.match(outcome.performanceSummary, /공식 근거 확인/u);
   const deliverySource = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewDeliveryCenter.tsx'), 'utf8');
   assert.match(deliverySource, /FINAL_DELIVERABLE/u);
+  assert.match(deliverySource, /allowedCategories=\{\['FINAL_DELIVERABLE'\]\}/u);
   assert.match(deliverySource, /Drive에서 열기|Google Drive/u);
   const outcomeSource = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewOutcomeCenter.tsx'), 'utf8');
   assert.match(outcomeSource, /litigation-outcomes/u);
