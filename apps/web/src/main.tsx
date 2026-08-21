@@ -9,6 +9,7 @@ import './layout/WorkspaceHelpCenter.css';
 import './workflow/ProjectWorkflowSchedule.css';
 import './workflow/ProposalAwardWorkflow.css';
 import './workflow/WorkflowOperations.css';
+import './proposals/ProposalLibraryView.css';
 import './evidence/CaseEvidencePanel.css';
 import './routes/PreviewAiAdmin.css';
 import './routes/PreviewReportStudio.css';

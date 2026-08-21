@@ -7,10 +7,11 @@ const router = readFileSync('apps/web/src/routes/Router.tsx', 'utf8');
 const studio = readFileSync('apps/web/src/routes/PreviewReportStudio.tsx', 'utf8');
 
 test('CF15 sidebar follows the five requested business categories without duplicate intake links', () => {
-  for (const label of ['CLAIM CENTER HOME', '프로젝트 제안 및 수주', '프로젝트 워크', '클레임센터 자료실', '법원 자료', '검토·납품·품질관리']) {
+  for (const label of ['CLAIM CENTER HOME', '프로젝트 제안 및 수주', '프로젝트 제안서', '프로젝트 워크', '클레임센터 자료실', '법원 자료', '검토·납품·품질관리']) {
     assert.match(shell, new RegExp(label, 'u'));
   }
-  assert.match(shell, /routeIds: \['CASE-02', 'PROP-02', 'WF-02'\]/u);
+  assert.match(shell, /routeIds: \['CASE-02', 'WF-02'\]/u);
+  assert.match(shell, /routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\]/u);
   assert.match(shell, /routeIds: \['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'\]/u);
   assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
@@ -19,6 +20,8 @@ test('CF15 sidebar follows the five requested business categories without duplic
   assert.doesNotMatch(shell, /01 ·|02 ·|03 ·|04 ·|05 ·/u);
   assert.match(router, /CASE-02'.*'프로젝트 의뢰'/u);
   assert.match(router, /PROP-02'.*'제안서 작성'/u);
+  assert.match(router, /PROP-03'.*'프로젝트별 제안서 목록'/u);
+  assert.match(router, /PROP-04'.*'제안서 DB관리'.*ADMIN_ONLY/u);
   assert.match(router, /WF-02'.*'프로젝트 접수'/u);
   assert.match(shell, /<button\s+type="button"\s+key=\{route\.id\}/u);
   assert.doesNotMatch(shell, /<a\s+key=\{route\.id\}/u);

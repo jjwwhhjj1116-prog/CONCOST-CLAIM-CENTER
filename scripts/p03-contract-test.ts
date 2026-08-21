@@ -7,6 +7,7 @@ import { CLAIM_TYPES, ROUTES, canAccessRoute, isSafeReturnTo, reviewerCapabiliti
 const root = path.join(__dirname, '..');
 const requiredScreenIds = ['AUTH-01', 'DASH-01', 'CASE-01', 'CASE-02', 'CASE-03', 'CASE-04', 'CASE-05', 'CASE-06', 'MEET-01', 'PROP-01', 'PROP-02', 'REPO-01', 'REPO-02', 'APPR-01', 'FEE-01', 'TPL-01', 'AI-01', 'USER-01', 'AUD-01', 'RESP-01'];
 const approvedExtensionIds = [
+  'PROP-03', 'PROP-04',
   'PROJ-01', 'PROJ-02',
   'WF-01', 'WF-02', 'WF-03', 'WF-04', 'WF-05', 'WF-06',
   'POST-01', 'OUTCOME-01', 'INTEG-01', 'MY-01'

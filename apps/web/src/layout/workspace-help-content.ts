@@ -127,6 +127,8 @@ export const CATEGORY_HELP: Record<string, HelpArticle> = {
 export const ROUTE_HELP: Record<string, { title: string; steps: readonly string[]; next: string }> = {
   'CASE-02': { title: '프로젝트 의뢰', steps: ['필수 의뢰정보 입력', '클레임 유형 선택', '담당자 확인', '저장 후 제안서 작성으로 이동'], next: '제안서 작성' },
   'PROP-02': { title: '제안서 작성', steps: ['의뢰 프로젝트 선택', '제안 내용 작성', '발송본 버전 고정', '수주 회신 대기'], next: '프로젝트 접수' },
+  'PROP-03': { title: '프로젝트별 제안서 목록', steps: ['제안서를 발송한 프로젝트 확인', '프로젝트별 발송 버전 비교', '회신·수주 상태 확인', '필요 시 작성 화면에서 이어서 수정'], next: '프로젝트 접수' },
+  'PROP-04': { title: '제안서 DB관리', steps: ['발송본 개별 원장 확인', '원문 URL·SHA-256 검증', '등록자·발송시각 감사', '필요한 원장을 Excel로 내보내기'], next: '감사로그' },
   'WF-02': { title: '프로젝트 접수', steps: ['발송 제안서 연결', '수주 확정 확인', '프로젝트 담당자 배정'], next: '프로젝트 일정표' },
   'PROJ-01': { title: '프로젝트 일정표', steps: ['프로젝트 검색', '세부 팝업 열기', '단계·팀·기간 확인', '충돌 일정 조정'], next: '현재 프로젝트 단계' },
   'WF-03': { title: '착수회의', steps: ['회의 일시·참석자 기록', '회의 메모 저장', 'AI 회의록·타임라인 생성', '후속 업무 확인'], next: '현장조사' },

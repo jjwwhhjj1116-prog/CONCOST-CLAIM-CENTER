@@ -12,7 +12,8 @@ const NAVIGATION_GROUPS: readonly {
   allowedRoles?: readonly UserRole[];
 }[] = [
   { label: 'CLAIM CENTER HOME', eyebrow: 'HOME', icon: 'home', routeIds: ['DASH-01'] },
-  { label: '프로젝트 제안 및 수주', eyebrow: 'PROPOSAL & AWARD', icon: 'proposal', routeIds: ['CASE-02', 'PROP-02', 'WF-02'] },
+  { label: '프로젝트 제안 및 수주', eyebrow: 'PROJECT INTAKE & AWARD', icon: 'proposal', routeIds: ['CASE-02', 'WF-02'] },
+  { label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', icon: 'proposal', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] },
   { label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work', routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'] },
   { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
   { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },

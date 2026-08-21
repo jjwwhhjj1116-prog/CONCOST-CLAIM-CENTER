@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Button, Card, ComponentCatalog, Dialog, Input, Select, StateView, StatusBadge } from '@claim-studio/ui';
 import { CaseManagement } from '../case-management/CaseManagement';
 import { ProposalView } from '../proposals/ProposalView';
+import { ProposalLibraryView } from '../proposals/ProposalLibraryView';
 import { ReportTemplateCatalog } from '../templates/ReportTemplateCatalog';
 import { ReportStudio } from '../reports/ReportStudio';
 import { ReportList } from '../reports/ReportList';
@@ -60,6 +61,8 @@ export const ROUTES: RouteConfig[] = [
   { id: 'MEET-01', path: '/meetings', name: '착수회의·회의록' },
   { id: 'PROP-01', path: '/proposals/templates', name: '제안서 템플릿 선택' },
   { id: 'PROP-02', path: '/proposals/editor', name: '제안서 작성' },
+  { id: 'PROP-03', path: '/proposals/projects', name: '프로젝트별 제안서 목록' },
+  { id: 'PROP-04', path: '/proposals/database', name: '제안서 DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'PROJ-01', path: '/projects/schedule', name: '프로젝트 일정표' },
   { id: 'PROJ-02', path: '/projects/workflow', name: '프로젝트 세부 워크플로우' },
   { id: 'WF-01', path: '/workflow/proposal-link', name: '1. 제안서 연동' },
@@ -213,6 +216,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
       </section>
     );
   }
+  if (previewMode && currentRoute.id === 'PROP-03') return <ProposalLibraryView mode="projects" onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'PROP-04') return <ProposalLibraryView mode="database" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'USER-01') return <PreviewAdminUsers />;
   if (previewMode && currentRoute.id === 'AI-01') return <PreviewAiAdmin />;
   if (previewMode && currentRoute.id === 'MY-01') return <PreviewSettings roles={roles} onNavigate={onNavigate} />;
@@ -247,6 +252,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
       </section>
     );
   }
+  if (currentRoute.id === 'PROP-03') return <ProposalLibraryView mode="projects" onNavigate={onNavigate} />;
+  if (currentRoute.id === 'PROP-04') return <ProposalLibraryView mode="database" onNavigate={onNavigate} />;
 
   if (currentRoute.id === 'TPL-01') {
     return (
