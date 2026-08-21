@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import initSqlJs, { type Database } from 'sql.js';
 import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index.js';
+import { proposalWorkbook, readProposalWorkbook } from '../apps/web/src/proposals/proposal-excel.js';
 
 const read = (path: string): string => readFileSync(join(process.cwd(), path), 'utf8');
 const ADMIN_ID = '00000000-0000-4000-8000-000000000027';
@@ -37,10 +38,21 @@ test('CF27 project intake continues with the newly created case selected in prop
   assert.match(proposal, /res\.cases\.some\(\(item\) => item\.id === preferred\)/u);
   assert.match(proposal, /!activeProposal && selectedCaseId/u);
   assert.match(proposal, /제안서 작성 1단계 · 유형별 템플릿 선택/u);
+  assert.match(proposal, /Excel 양식 내보내기/u);
+  assert.match(proposal, /작성 Excel 가져오기/u);
   assert.ok(
     router.indexOf("previewMode && ['PROP-01', 'PROP-02'].includes(currentRoute.id)") < router.indexOf("previewMode && currentRoute.id !== 'RESP-01'"),
     'preview mode must render the real proposal authoring surface before the generic feature placeholder'
   );
+});
+
+test('CF40 proposal Excel template round-trips client-specific fields without changing the approved structure', async () => {
+  const source = { background:'발주처 요청 배경',objective:'클레임 검토 목적',method:'계약·현장자료 분석',expectedOutcome:'기술제안서 제출',exclusions:'법률의견 제외' };
+  const bytes = proposalWorkbook(source,'CC-2026-040 · 발주처 프로젝트','TYPE-03 표준 기술제안서');
+  assert.deepEqual([...bytes.slice(0,4)],[0x50,0x4b,0x03,0x04]);
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const imported = await readProposalWorkbook(new File([buffer],'client-proposal.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+  assert.deepEqual(imported,source);
 });
 
 test('CF27 live D1 cases are visible in the project schedule instead of static samples only', () => {
@@ -49,6 +61,8 @@ test('CF27 live D1 cases are visible in the project schedule instead of static s
   assert.match(schedule, /setProjects\(result\.projects\)/u);
   assert.doesNotMatch(schedule, /WORKFLOW_PROJECTS/u);
   assert.match(schedule, /D1 LIVE PROJECTS · 신규 의뢰 자동 반영/u);
+  assert.match(schedule, /프로젝트별 담당 PM·기준 일정 설정/u);
+  assert.match(schedule, /PM·일정 설정/u);
   assert.match(schedule, /\/proposals\/editor\?caseId=\$\{caseId\}&projectId=/u);
   assert.match(schedule, /\/workflow\/award\?caseId=\$\{caseId\}&projectId=/u);
 });

@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button, Card, Dialog, Input, Select, StatusBadge, type StatusType } from '@claim-studio/ui';
 import { apiRequest, apiDownloadPost, ApiError } from '../api';
+import { proposalWorkbook, readProposalWorkbook } from './proposal-excel';
 
 export interface ProposalViewProps {
   routeId: string;
@@ -108,6 +109,7 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const excelInputRef = useRef<HTMLInputElement>(null);
   const canEdit = roles.some((role) => ['ceo', 'director', 'pm', 'admin'].includes(role));
   const canApprove = roles.some((role) => ['reviewer', 'director', 'ceo', 'admin'].includes(role));
 
@@ -298,6 +300,39 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
     }
   };
 
+  const handleExcelExport = () => {
+    if (!activeProposal || !selectedCase) return;
+    const bytes = proposalWorkbook(
+      { background, objective, method, expectedOutcome, exclusions },
+      `${selectedCase.caseNumber} · ${selectedCase.title}`,
+      templates.find((template) => template.id === activeProposal.templateId)?.name ?? activeProposal.title
+    );
+    const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    const url = URL.createObjectURL(new Blob([payload], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${selectedCase.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu, '_')}_클라이언트_제안서_작성양식.xlsx`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setSuccessMessage('클라이언트 제안서 Excel 양식을 내보냈습니다. C열만 수정한 뒤 다시 가져오세요.');
+  };
+
+  const handleExcelImport = async (file: File | undefined) => {
+    if (!file) return;
+    setIsSubmitting(true); setErrorMessage(null); setSuccessMessage(null);
+    try {
+      const values = await readProposalWorkbook(file);
+      setBackground(values.background); setObjective(values.objective); setMethod(values.method);
+      setExpectedOutcome(values.expectedOutcome); setExclusions(values.exclusions); setStep(1);
+      setSuccessMessage('Excel 작성 내용을 불러왔습니다. 화면에서 확인한 뒤 “수동 버전 저장”으로 D1에 저장하세요.');
+    } catch (reason) {
+      setErrorMessage(reason instanceof Error ? reason.message : 'Excel 제안서 양식을 읽지 못했습니다.');
+    } finally {
+      setIsSubmitting(false);
+      if (excelInputRef.current) excelInputRef.current.value = '';
+    }
+  };
+
   const currentVer = activeProposal?.versions?.[0];
   const selectedCase = cases.find((item) => item.id === selectedCaseId);
 
@@ -385,6 +420,15 @@ export const ProposalView: React.FC<ProposalViewProps> = ({ routeId, roles, onNa
                 <span className="muted">| 버전: v{currentVer?.versionNumber || 1}</span>
                 {currentVer?.generationMode === 'AI' && <StatusBadge status="ai_draft" />}
               </div>
+
+              <section className="proposal-excel-workflow" aria-label="클라이언트 제안서 Excel 작성">
+                <div><strong>Excel로 클라이언트별 내용만 수정</strong><span>승인 템플릿 구조와 항목 코드는 고정하고 C열의 내용만 현장에서 수정합니다.</span></div>
+                <div className="action-row">
+                  <Button variant="secondary" onClick={handleExcelExport}>Excel 양식 내보내기</Button>
+                  <input ref={excelInputRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(event) => void handleExcelImport(event.target.files?.[0])} />
+                  <Button variant="secondary" onClick={() => excelInputRef.current?.click()} disabled={isSubmitting || !canEdit}>작성 Excel 가져오기</Button>
+                </div>
+              </section>
 
               {/* Wizard Stepper Tabs */}
               <div className="stepper-nav" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>

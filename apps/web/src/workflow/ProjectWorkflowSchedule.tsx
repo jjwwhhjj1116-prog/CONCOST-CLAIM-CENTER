@@ -182,6 +182,11 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             </div>
           </div>
 
+          <aside className="schedule-manager-callout" aria-label="PM과 일정 설정 사용 방법">
+            <span aria-hidden="true">PM</span>
+            <div><strong>프로젝트별 담당 PM·기준 일정 설정</strong><p>아래 프로젝트의 <b>“PM·일정 설정”</b>을 누르면 담당 PM 지정과 착수회의·현장조사·물량산출·보고서 작성의 시작일·종료일을 바로 저장하고 수정할 수 있습니다.</p></div>
+          </aside>
+
           <section className="project-brief-board" aria-labelledby="project-brief-title">
             <header>
               <div><span>PROJECT SNAPSHOT</span><h3 id="project-brief-title">프로젝트별 작업 특이사항</h3></div>
@@ -198,7 +203,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                   <span className="project-highlight-list" aria-label={`${project.name} 작업 특이사항`}>
                     {project.highlights.map((highlight) => <em key={highlight.label} data-tone={highlight.tone}>{highlight.label}</em>)}
                   </span>
-                  <span className="project-brief-action">상세 보기 <b aria-hidden="true">›</b></span>
+                  <span className="project-brief-action"><small>{project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 지정 필요'}</small>PM·일정 설정 <b aria-hidden="true">›</b></span>
                 </button>
               ))}
             </div>
@@ -218,7 +223,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
               <div className="schedule-project-row" role="row" key={project.id}>
                 <button className="schedule-project-info" role="cell" onClick={() => openProjectDialog(project)} aria-haspopup="dialog">
                   <span className={`award-dot award-${project.awardStatus.toLowerCase()}`} aria-hidden="true" />
-                  <span className="schedule-project-copy"><strong>{project.name}</strong><small>{project.code} · {project.claimType} · {awardLabel(project.awardStatus)}</small></span>
+                  <span className="schedule-project-copy"><strong>{project.name}</strong><small>{project.code} · {project.claimType} · {awardLabel(project.awardStatus)} · {project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 미지정'}</small></span>
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
                 </button>
                 <div className="schedule-track" role="cell" aria-label={`${project.name} ${project.start}부터 ${project.end}까지`}>
