@@ -55,7 +55,7 @@ type ThemeMode = 'light' | 'dark';
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_MAX_WIDTH = 480;
 const SIDEBAR_DEFAULT_WIDTH = 352;
-const SIDEBAR_STORAGE_KEY = 'claim-center-sidebar-width-v2';
+const SIDEBAR_STORAGE_KEY = 'claim-center-sidebar-width-v3';
 
 const clampSidebarWidth = (value: number): number => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)));
 
