@@ -114,12 +114,12 @@ test('CF24 renders report authoring as a gated one-step-at-a-time wizard', () =>
 
   assert.match(studio, /type ReportWizardStep = 1 \| 2 \| 3 \| 4 \| 5/u);
   assert.match(studio, /REPORT_WIZARD_STEPS/u);
-  assert.match(studio, /이번 단계에서 할 일/u);
+  assert.match(studio, /REPORT STEP/u);
   assert.match(studio, /완료 기준/u);
   assert.match(studio, /이 단계 완료 · 다음 단계/u);
   assert.match(studio, /stepUnlocked/u);
   assert.match(css, /data-wizard-step='1'.*report-step-card--1/u);
-  assert.match(css, /data-wizard-step='5'.*report-step-card--final/u);
+  assert.match(css, /data-wizard-step='5'.*report-step-card--5/u);
   assert.match(css, /\.report-wizard-footer/u);
 });
 
@@ -137,4 +137,20 @@ test('CF51 keeps dark court heroes and light feedback surfaces readable', () => 
   assert.ok(contrastRatio('#dbeafe', '#0b1330') >= 7, '법원 배너 설명도 짙은 배경에서 AAA 수준이어야 합니다.');
   assert.ok(contrastRatio('#334155', '#fff7e6') >= 7, '라이트 안내문 본문은 밝은 배경에서 AAA 수준이어야 합니다.');
   assert.ok(contrastRatio('#64748b', '#ffffff') >= 4.5, '보조 문구 토큰은 흰 배경에서 WCAG AA를 충족해야 합니다.');
+});
+
+test('CF52 presents each report step as one focused work card and hides saved work behind a picker', () => {
+  const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const css = read('apps/web/src/routes/PreviewReportStudio.css');
+
+  assert.match(studio, /report-resume-control/u);
+  assert.match(studio, /report-resume-menu/u);
+  assert.match(studio, /프로젝트 번호·이름·보고서 제목/u);
+  assert.doesNotMatch(studio, /className="report-resume-board"/u);
+  assert.match(studio, /renderStageHeader\(1\)/u);
+  assert.match(studio, /renderStageHeader\(5\)/u);
+  assert.doesNotMatch(studio, /Card title="SOURCE READINESS/u);
+  assert.doesNotMatch(studio, /Card title=\{`저장 이력/u);
+  assert.doesNotMatch(studio, /Card title="FINAL OUTPUT/u);
+  assert.match(css, /\.report-stage-card::after \{ display: none; \}/u);
 });

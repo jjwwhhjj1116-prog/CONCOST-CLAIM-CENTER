@@ -104,6 +104,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [activeStep, setActiveStep] = useState<ReportWizardStep>(1);
   const [workspaceDirty, setWorkspaceDirty] = useState(false);
   const [savedWorkspaces, setSavedWorkspaces] = useState<ReportWorkspace[]>([]);
+  const [showResumePicker, setShowResumePicker] = useState(false);
+  const [resumeSearch, setResumeSearch] = useState('');
+  const [resumeCaseId, setResumeCaseId] = useState('');
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [navigationBusy, setNavigationBusy] = useState(false);
   const loadSequence = useRef(0);
@@ -118,6 +121,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
   const selectedTemplateCategory = useMemo(() => authoring?.templateLibrary.find((category) => category.categoryCode === previewTemplateCategoryCode) ?? authoring?.templateLibrary.find((category) => category.matchesCurrentType) ?? authoring?.templateLibrary[0] ?? null, [authoring, previewTemplateCategoryCode]);
   const selectedTemplatePreview = useMemo(() => authoring?.templates.find((template) => template.claimType === selectedTemplateCategory?.primaryClaimType) ?? authoring?.templates.find((template) => template.claimType === authoring.claimType) ?? null, [authoring, selectedTemplateCategory]);
+  const filteredSavedWorkspaces = useMemo(() => {
+    const query = resumeSearch.trim().toLocaleLowerCase('ko-KR');
+    if (!query) return savedWorkspaces;
+    return savedWorkspaces.filter((workspace) => `${workspace.caseNumber} ${workspace.caseTitle} ${workspace.reportTitle} ${workspace.updatedByName}`.toLocaleLowerCase('ko-KR').includes(query));
+  }, [resumeSearch, savedWorkspaces]);
   const selectedChapterSources = useMemo(() => {
     const codes = selectedChapter ? CHAPTER_SOURCE_CODES[selectedChapter.agentCode] ?? ['PROJECT'] : [];
     return authoring?.sourceGroups.filter((group) => codes.includes(group.code)) ?? [];
@@ -485,6 +493,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         : activeStep === 4
           ? '본문을 저장해 D1 저장 완료 표시를 확인해 주세요.'
           : '';
+  const renderStageHeader = (stepId: ReportWizardStep) => {
+    const guide = REPORT_WIZARD_STEPS[stepId - 1];
+    return <header className="report-stage-header">
+      <span className="report-stage-header__number" aria-hidden="true">{String(stepId).padStart(2, '0')}</span>
+      <div><small>REPORT STEP {stepId}</small><h3>{guide.title}</h3><p>{guide.shortHelp}</p>{showGuide && <ol>{guide.tasks.map((task, index) => <li key={task}><b>{index + 1}</b>{task}</li>)}</ol>}</div>
+      <aside><strong>{stepComplete[stepId] ? '✓ 단계 완료' : '완료 기준'}</strong><p>{guide.doneText}</p></aside>
+    </header>;
+  };
 
   if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 D1 보고서 저장 공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
 
@@ -493,23 +509,18 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'프로젝트 근거와 유형별 작성 지침을 확인해 챕터별 작성 방향을 만듭니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형·템플릿 확인','워크플로우 근거 분류','챕터별 작성 방향 생성','화면 반영 대기']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'목차 작성계획이 준비되었습니다. 내용을 확인한 뒤 목차 기획을 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 D1에 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 계획 확인하기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
-        <div className="report-authoring-hero__actions"><Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '사용 가이드 닫기' : '처음 사용 가이드'}</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}</div>
-      </section>
-
-      <section className="report-resume-board" aria-labelledby="report-resume-title">
-        <header>
-          <div><span>SAVED REPORT WORKSPACES</span><h3 id="report-resume-title">저장한 보고서 이어쓰기</h3><p>다른 메뉴로 이동하거나 다시 로그인해도 마지막 저장 단계와 챕터에서 계속할 수 있습니다.</p></div>
-          <strong>{savedWorkspaces.length}<small>저장 프로젝트</small></strong>
-        </header>
-        {savedWorkspaces.length ? <ul>{savedWorkspaces.map((workspace) => {
-          const active = workspace.caseId === selectedCaseId;
-          const step = REPORT_WIZARD_STEPS.find((item) => item.id === workspace.wizardStep) ?? REPORT_WIZARD_STEPS[0];
-          return <li key={workspace.caseId}><button type="button" className={active ? 'is-active' : ''} aria-current={active ? 'true' : undefined} onClick={() => selectCase(workspace.caseId)}>
-            <span className="report-resume-board__step">STEP {workspace.wizardStep}</span>
-            <div><strong>{workspace.caseNumber} · {workspace.caseTitle}</strong><small>{workspace.reportTitle} · {step.title}</small><em>{new Date(workspace.updatedAt).toLocaleString('ko-KR')} · {workspace.updatedByName} · v{workspace.version}</em></div>
-            <b>{active ? '현재 작업' : '이어쓰기 →'}</b>
-          </button></li>;
-        })}</ul> : <p className="empty-box">아직 저장한 보고서가 없습니다. 아래에서 프로젝트를 고른 뒤 “지금 저장”을 누르면 여기에 표시됩니다.</p>}
+        <div className="report-authoring-hero__actions">
+          <div className="report-resume-control">
+            <Button variant="secondary" aria-expanded={showResumePicker} aria-controls="report-resume-menu" onClick={() => { setShowResumePicker((current) => !current); setResumeCaseId(selectedCaseId || savedWorkspaces[0]?.caseId || ''); }}>저장한 보고서 이어쓰기 {savedWorkspaces.length ? `(${savedWorkspaces.length})` : ''}</Button>
+            {showResumePicker && <section id="report-resume-menu" className="report-resume-menu" aria-label="저장한 보고서 선택">
+              <header><div><strong>저장한 보고서 이어쓰기</strong><small>프로젝트를 찾아 마지막 저장 단계부터 계속합니다.</small></div><button type="button" aria-label="이어쓰기 창 닫기" onClick={() => setShowResumePicker(false)}>×</button></header>
+              <label><span>프로젝트 검색</span><input value={resumeSearch} onChange={(event) => setResumeSearch(event.target.value)} placeholder="프로젝트 번호·이름·보고서 제목" autoFocus /></label>
+              <label><span>저장된 프로젝트</span><select value={resumeCaseId} onChange={(event) => setResumeCaseId(event.target.value)}><option value="">프로젝트를 선택하세요</option>{filteredSavedWorkspaces.map((workspace) => <option key={workspace.caseId} value={workspace.caseId}>{workspace.caseNumber} · {workspace.caseTitle} · {workspace.wizardStep}단계 · v{workspace.version}</option>)}</select></label>
+              <Button disabled={!resumeCaseId} onClick={() => { selectCase(resumeCaseId); setShowResumePicker(false); setResumeSearch(''); }}>선택한 보고서 이어쓰기</Button>
+            </section>}
+          </div>
+          <Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '간단히 보기' : '단계 도움말 보기'}</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}
+        </div>
       </section>
 
       <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계">
@@ -532,18 +543,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <span className="report-wizard-navigation__progress"><i style={{ width: `${(activeStep / 5) * 100}%` }} /></span>
       </nav>
 
-      {showGuide && <section className="report-active-guide" aria-labelledby="report-active-guide-title">
-        <div className="report-active-guide__number" aria-hidden="true">{String(activeStep).padStart(2, '0')}</div>
-        <div>
-          <span>이번 단계에서 할 일</span>
-          <h3 id="report-active-guide-title">{activeStepGuide.title}</h3>
-          <p>{activeStepGuide.shortHelp}</p>
-          <ul>{activeStepGuide.tasks.map((task) => <li key={task}>{task}</li>)}</ul>
-        </div>
-        <aside><strong>완료 기준</strong><p>{activeStepGuide.doneText}</p><small>모르는 내용은 임의로 쓰지 말고 담당자에게 확인하세요.</small></aside>
-      </section>}
-
-      <Card title="PROJECT & TEMPLATE · 1단계" className="report-step-card report-step-card--1">
+      <Card title="" className="report-step-card report-step-card--1 report-stage-card">
+        {renderStageHeader(1)}
         <div className="inline-form">
           <Select label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row" aria-live="polite">
@@ -564,17 +565,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           <small>● 표시는 현재 프로젝트 {authoring?.claimType ?? selectedCase?.claimType}에 연결된 원본 분류입니다. PDF는 웹에서 바로 열고 HWP·HWPX·XLSX는 원본으로 내려받습니다.</small>
         </div>
         <p className="muted">회사 원본 32개는 공개 웹 자산이 아니라 로그인으로 보호된 Google Drive에 저장됩니다. 관리자가 원본 폴더를 등록하면 처음 작성할 때와 초안 수정 중 언제든 열람할 수 있습니다.</p>
+        {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="프로젝트별 보고서 최신본을 불러오고 있습니다." /> : <section className="report-stage-section report-source-readiness" aria-labelledby="report-source-readiness-title">
+          <header><div><span>PROJECT EVIDENCE MAP</span><h3 id="report-source-readiness-title">AI 참고자료 준비 상태</h3><p>제안서·착수회의·현장조사·물량산출·자료실·법원자료 중 현재 프로젝트에 연결된 기록만 확인합니다.</p></div><strong>{authoring?.sourceGroups.filter((group) => group.status === 'READY').length ?? 0}/{authoring?.sourceGroups.length ?? 0}<small>READY</small></strong></header>
+          <div className="report-source-grid">{authoring?.sourceGroups.map((group) => <button key={group.code} type="button" data-source-state={group.status} onClick={() => onNavigate(withProjectContext(group.route))}><span aria-hidden="true">{group.status === 'READY' ? '✓' : group.status === 'PARTIAL' ? '!' : '+'}</span><div><strong>{group.label}</strong><small>{group.detail}</small></div><em>{group.status === 'READY' ? '준비됨' : group.status === 'PARTIAL' ? '일부 준비' : '자료 연결'}</em></button>)}</div>
+          <p className="report-source-policy"><strong>근거 사용 원칙</strong> 파일 본문을 확인하지 못한 내용은 추측하지 않고 <b>[확인 필요]</b>로 남깁니다.</p>
+        </section>}
       </Card>
 
-      {loading || loadedCaseId !== selectedCaseId ? <StatusFeedbackState type="loading" message="프로젝트별 보고서 최신본을 불러오고 있습니다." /> : <>
-        <Card title="SOURCE READINESS · 워크플로우 1~5 근거 준비도" className="report-step-card report-step-card--source">
-          <div className="report-source-readiness">
-            <header><div><span>PROJECT EVIDENCE MAP</span><h3>AI가 참고할 프로젝트 자료를 먼저 확인하세요.</h3><p>제안서부터 착수회의·현장조사·물량산출·자료실·법원자료까지 현재 프로젝트에 연결된 기록만 표시합니다.</p></div><strong>{authoring?.sourceGroups.filter((group) => group.status === 'READY').length ?? 0}/{authoring?.sourceGroups.length ?? 0}<small>READY</small></strong></header>
-            <div className="report-source-grid">{authoring?.sourceGroups.map((group) => <button key={group.code} type="button" data-source-state={group.status} onClick={() => onNavigate(withProjectContext(group.route))}><span aria-hidden="true">{group.status === 'READY' ? '✓' : group.status === 'PARTIAL' ? '!' : '+'}</span><div><strong>{group.label}</strong><small>{group.detail}</small></div><em>{group.status === 'READY' ? '준비됨' : group.status === 'PARTIAL' ? '일부 준비' : '자료 연결'}</em></button>)}</div>
-            <p className="report-source-policy"><strong>근거 사용 원칙</strong> 파일명·업로더·업로드 시각·SHA-256은 파일 존재를 확인하는 정보입니다. PDF·HWP·도면의 본문을 아직 추출하지 않은 경우 AI가 내용을 추측하지 않고 <b>[확인 필요]</b>로 남깁니다.</p>
-          </div>
-        </Card>
-        <Card title="TABLE OF CONTENTS · 2단계 목차 기획" className="report-step-card report-step-card--2">
+      {loading || loadedCaseId !== selectedCaseId ? null : <>
+        <Card title="" className="report-step-card report-step-card--2 report-stage-card">
+          {renderStageHeader(2)}
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 목차 템플릿이 없습니다.'}</div> : <div className="report-outline-planner">
             <header><div><span>{authoring.claimType} · APPROVED OUTLINE · PLAN v{outlineVersion || 'NEW'}</span><h3>보고서를 쓰기 전에 챕터별 작성 방향을 확정하세요.</h3><p>관리자가 승인한 목차는 빠뜨리거나 바꿀 수 없습니다. 각 챕터를 눌러 이번 프로젝트에서 다룰 쟁점과 검토 방향을 메모한 뒤 목차 기획을 확정합니다.</p></div><strong>{authoredChapterCodes.size}/{authoring.chapters.length}<small>작성된 챕터</small></strong></header>
             {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.claimType} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
@@ -586,7 +586,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             {!authoring.outlinePlan.persistenceAvailable && <div className="error-box">목차 저장용 D1 마이그레이션이 아직 적용되지 않았습니다. 배포 상태를 확인해 주세요.</div>}
           </div>}
         </Card>
-        <Card title="AI CHAPTER WORKFLOW · 3단계 챕터별 자동 작성" className="report-step-card report-step-card--3">
+        <Card title="" className="report-step-card report-step-card--3 report-stage-card">
+          {renderStageHeader(3)}
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 챕터 프롬프트가 없습니다.'}</div> : <div className="form-stack">
             <div className="inline-form">
               <Select label="자동 작성할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${chapter.title} · prompt v${chapter.promptVersion}` }))} />
@@ -599,7 +600,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             {(dirty || saving) && <p className="notice-box">현재 편집 내용을 먼저 저장하면 최신 보고서 버전을 기준으로 AI 챕터를 작성할 수 있습니다.</p>}
           </div>}
         </Card>
-        <Card title={selectedCase ? `4단계 편집 · ${selectedCase.caseNumber} · ${selectedCase.title}` : '4단계 보고서 편집'} className="report-step-card report-step-card--4">
+        <Card title="" className="report-step-card report-step-card--4 report-stage-card">
+          {renderStageHeader(4)}
           <div className="form-stack">
             <Input label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
             <label htmlFor="preview-report-body">보고서 본문</label>
@@ -609,11 +611,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <p className="muted">{editable ? '입력 후 0.9초가 지나면 자동 저장됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
           </div>
+          <details className="report-revision-history"><summary>저장 이력 {revisions.length}건 보기</summary>{revisions.length ? <ul className="dashboard-work-list">{revisions.map((revision) => <li key={revision.id}><span><strong>버전 {revision.version} · {revision.title}</strong><small>{new Date(revision.savedAt).toLocaleString('ko-KR')} · {revision.savedBy.name} · SHA {revision.contentSha256.slice(0, 12)}…</small></span></li>)}</ul> : <p className="empty-box">아직 저장된 버전이 없습니다. 첫 내용을 입력하면 자동 저장됩니다.</p>}</details>
         </Card>
-        <Card title={`저장 이력 ${revisions.length}건`} className="report-step-card report-step-card--history">
-          {revisions.length ? <ul className="dashboard-work-list">{revisions.map((revision) => <li key={revision.id}><span><strong>버전 {revision.version} · {revision.title}</strong><small>{new Date(revision.savedAt).toLocaleString('ko-KR')} · {revision.savedBy.name} · SHA {revision.contentSha256.slice(0, 12)}…</small></span></li>)}</ul> : <p className="empty-box">아직 저장된 버전이 없습니다. 첫 내용을 입력하면 자동 저장됩니다.</p>}
-        </Card>
-        <Card title="5단계 검토·승인 제출" className="report-step-card report-step-card--5">
+        <Card title="" className="report-step-card report-step-card--5 report-stage-card">
+          {renderStageHeader(5)}
           <div className="form-stack">
             <div className="action-row"><span className="preview-pill">{currentReview ? currentReview.status === 'PENDING' ? `v${version} 검토 대기` : currentReview.status === 'APPROVED' ? `v${version} 승인 완료` : `v${version} 수정 요청` : pendingReview ? `v${pendingReview.reportVersion} 검토 중 · 현재 v${version}` : version ? `v${version} 제출 가능` : '저장 후 제출 가능'}</span><Button variant="secondary" onClick={() => onNavigate('/approval')}>검토·승인함 보기</Button></div>
             {currentReview?.decisionNote && <p className="notice-box"><strong>검토 의견</strong><br />{currentReview.decisionNote}</p>}
@@ -623,8 +624,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <div className="action-row"><Button onClick={() => void requestReview()} disabled={!version || dirty || saving || submittingReview || !!pendingReview || loadedCaseId !== selectedCaseId}>{submittingReview ? '제출 중…' : '저장된 최신본 검토 요청'}</Button>{dirty && <span className="muted">변경사항을 먼저 저장해야 합니다.</span>}{pendingReview && <span className="muted">기존 검토가 끝난 뒤 새 버전을 제출할 수 있습니다.</span>}</div>
             </>}
           </div>
-        </Card>
-        <Card title="FINAL OUTPUT · 승인본 확정 및 다운로드" className="report-step-card report-step-card--final">
+          <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·다운로드</h3>
           {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX/PDF 출력이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
             <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
@@ -637,7 +637,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               })}
             </div>
             {currentFinalization.outputs.map((output) => <p className="muted" key={output.id}>{output.format} · {(output.byteSize / 1024).toFixed(1)} KB · SHA {output.contentSha256.slice(0, 16)}…</p>)}
-          </div>}
+          </div>}</section>
         </Card>
       </>}
       <footer className="report-wizard-footer" aria-label="보고서 단계 이동">

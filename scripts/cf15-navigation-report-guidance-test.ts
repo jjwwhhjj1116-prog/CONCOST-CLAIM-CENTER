@@ -38,7 +38,8 @@ test('CF15 report writing menu opens the real studio with template, outline, tut
   assert.match(router, /previewMode && currentRoute\.id === 'REPO-02'.*PreviewReportStudio/u);
   assert.match(studio, /지금은 \{activeStep\}단계입니다/u);
   assert.match(studio, /이 단계 완료 · 다음 단계/u);
-  assert.match(studio, /TABLE OF CONTENTS · 2단계 목차 기획/u);
+  assert.match(studio, /renderStageHeader\(2\)/u);
+  assert.match(studio, /report-step-card--2 report-stage-card/u);
   assert.match(studio, /authoring\.chapters\.map/u);
   assert.match(studio, /프롬프트 원문은 관리자만 열람·수정/u);
   assert.match(studio, /roles\.includes\('admin'\).*onNavigate\('\/ai-config'\)/u);

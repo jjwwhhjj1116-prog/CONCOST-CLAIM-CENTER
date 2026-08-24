@@ -95,9 +95,12 @@ test('CF18 DB and UI prevent outline tampering and expose source readiness hones
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_outline_plans')[0].values[0][0], 0);
   const studio = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewReportStudio.tsx'), 'utf8');
   const css = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewReportStudio.css'), 'utf8');
-  assert.match(studio, /SOURCE READINESS · 워크플로우 1~5 근거 준비도/u);
+  assert.match(studio, /renderStageHeader\(1\)/u);
+  assert.match(studio, /report-stage-section report-source-readiness/u);
+  assert.match(studio, /AI 참고자료 준비 상태/u);
   assert.match(studio, /목차 기획 확정/u); assert.match(studio, /outlineStatus !== 'CONFIRMED'/u);
-  assert.match(studio, /PDF·HWP·도면의 본문을 아직 추출하지 않은 경우/u);
+  assert.match(studio, /파일 본문을 확인하지 못한 내용은 추측하지 않고/u);
+  assert.match(studio, /\[확인 필요\]/u);
   assert.match(studio, /report-chapter-source-pack/u); assert.match(css, /report-source-grid/u);
   sql.close();
 });
