@@ -2473,7 +2473,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const intakeSummary = await env.DB.prepare(
         'SELECT summary_text AS summaryText,client_legal_position AS clientLegalPosition,created_at AS createdAt FROM preview_intake_audio_summaries WHERE case_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1'
       ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ summaryText: string; clientLegalPosition: string; createdAt: string }>().catch(() => null);
-      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'ORGANIZATION_ADMIN' };
+      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'low', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'ORGANIZATION_ADMIN' };
       const issueLines=inputs.keyIssues.split(/\r?\n|[;；]/u).map((line)=>line.replace(/^\s*\d+[.)]\s*/u,'').trim()).filter(Boolean).slice(0,5);
       while(issueLines.length<4)issueLines.push(`[확인필요: 핵심 쟁점 ${issueLines.length+1}]`);
       const generationInput={
@@ -2487,7 +2487,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const callChapter=async(chapterNumber:1|2|3,context:Record<string,unknown>)=>{
         const prompt=promptProfile.chapters.find((item)=>item.chapterNumber===chapterNumber);
         if(!prompt)return {response:json({error:`${chapterNumber}장 지침이 없습니다.`,code:'PROPOSAL_TEMPLATE_PROMPTS_NOT_READY'},503),value:null as Record<string,unknown>|null};
-        const generated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[선택 템플릿]\n${selectedSource.sourceName}\n분류: ${promptProfile.templateCategory}\n\n[관리자 승인 ${chapterNumber}장 지침 · v${prompt.version}]\n${prompt.instructionText}`,JSON.stringify(context),user.id,organizationGemini);
+        const generated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[선택 템플릿]\n${selectedSource.sourceName}\n분류: ${promptProfile.templateCategory}\n\n[관리자 승인 ${chapterNumber}장 지침 · v${prompt.version}]\n${prompt.instructionText}`,JSON.stringify(context),user.id,organizationGemini,40_000);
         if(generated.response)return {response:generated.response,value:null as Record<string,unknown>|null};
         const value=proposalAiJson(generated.content??'');
         if(!value)return {response:json({error:`Gemini ${chapterNumber}장 응답이 JSON 형식이 아닙니다. 다시 생성해 주세요.`,code:'MALFORMED_PROPOSAL_AI_RESPONSE',chapterNumber},502),value:null as Record<string,unknown>|null};
@@ -2498,7 +2498,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const chapter3Result=await callChapter(3,{input:generationInput,확정된_2장:chapter2,확정된_1장:chapter1});if(chapter3Result.response)return chapter3Result.response;const chapter3=chapter3Result.value!;
       const rendered1=proposalRenderedAiChapter(1,chapter1);const rendered2=proposalRenderedAiChapter(2,chapter2);const rendered3=proposalRenderedAiChapter(3,chapter3);
       if(!rendered1||!rendered2||!rendered3)return json({error:'Gemini 초안이 선택 템플릿의 1~3장 구조 기준에 미달하여 저장하지 않았습니다.',code:'INCOMPLETE_PROPOSAL_AI_RESPONSE',requiredOrder:[2,1,3]},502);
-      const validationGenerated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}`,JSON.stringify({input:generationInput,chapter1,chapter2,chapter3}),user.id,organizationGemini);
+      const validationGenerated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}`,JSON.stringify({input:generationInput,chapter1,chapter2,chapter3}),user.id,organizationGemini,40_000);
       if(validationGenerated.response)return validationGenerated.response;
       const validation=proposalAiJson(validationGenerated.content??'');
       if(!validation||!['PASS','FAIL'].includes(String(validation.result)))return json({error:'Gemini 자가검증 응답 형식이 올바르지 않습니다.',code:'MALFORMED_PROPOSAL_AI_VALIDATION'},502);
@@ -4238,14 +4238,15 @@ async function generatePreviewAiText(
   system: string,
   input: string,
   actorId: string,
-  credentialOverride?: ResolvedPreviewAiCredential
+  credentialOverride?: ResolvedPreviewAiCredential,
+  timeoutMs = 90_000
 ): Promise<{ content?: string; credentialSource?: PreviewAiCredentialSource; response?: Response }> {
   const provider = route.providerKind as PreviewAiProvider;
   const credential = credentialOverride ?? await resolvePreviewAiCredential(env, actorId, provider);
   const apiKey = credential?.apiKey;
   if (!apiKey) return { response: json({ error: `내 설정 또는 관리자 설정에서 ${provider} API 키를 연결해 주세요.`, code: `${provider}_NOT_CONFIGURED` }, 503) };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 90_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let endpoint = '';
   let headers: Record<string, string> = { 'Content-Type': 'application/json' };
   let body: Record<string, unknown>;
@@ -4262,7 +4263,7 @@ async function generatePreviewAiText(
     endpoint = 'https://generativelanguage.googleapis.com/v1beta/interactions';
     headers = { ...headers, 'x-goog-api-key': apiKey };
     providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
-    body = { model: route.modelCode, system_instruction: system, input };
+    body = { model: route.modelCode, system_instruction: system, input, generation_config: { thinking_level: route.reasoningEffort } };
   } else {
     endpoint = 'https://api.anthropic.com/v1/messages';
     headers = { ...headers, 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };

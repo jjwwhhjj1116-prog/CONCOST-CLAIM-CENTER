@@ -135,7 +135,7 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
         target=created.proposal;forked=true;
       }
       const submittedChapters=generationMode==='AI'?preparedChapters():chapters;
-      await apiRequest(`/api/cases/${selectedCaseId}/proposals/${target.id}/versions`,{method:'POST',body:JSON.stringify({clientName,projectTitle,subtitle,submissionDate,keyIssues,objective,planNotes,exclusions,chapters:submittedChapters,includedModuleCodes,templateSourceId:selectedTemplateSourceId,generationMode,sourceDocumentVersionIds:sourceDocumentVersionIds.split(',').map((item)=>item.trim()).filter(Boolean),version:target.version})});
+      await apiRequest(`/api/cases/${selectedCaseId}/proposals/${target.id}/versions`,{method:'POST',timeoutMs:generationMode==='AI'?180_000:30_000,body:JSON.stringify({clientName,projectTitle,subtitle,submissionDate,keyIssues,objective,planNotes,exclusions,chapters:submittedChapters,includedModuleCodes,templateSourceId:selectedTemplateSourceId,generationMode,sourceDocumentVersionIds:sourceDocumentVersionIds.split(',').map((item)=>item.trim()).filter(Boolean),version:target.version})});
       await loadCaseData(selectedCaseId);await loadProposalDetail(selectedCaseId,target.id);if(generationMode==='AI')setAiGeneration({status:'complete'});else setStep(4);
       setSuccessMessage(`${forked?'기존 확정본은 보존하고 편집용 새 초안을 만들었습니다. ':''}${generationMode==='AI'?'Gemini가 1·2·3장 최초 초안을 만들고 4~11장 회사 고정 모듈과 12장 표준 맺음말을 병합했습니다. 이제부터는 사람이 직접 수정합니다.':'사람이 수정한 12개 챕터를 그대로 새 버전으로 저장했습니다.'}`);
     }catch(reason){const message=reason instanceof Error?reason.message:'제안서 버전을 저장하지 못했습니다.';if(generationMode==='AI')setAiGeneration({status:'error',error:message});else setErrorMessage(message);}finally{setBusy(false);}
