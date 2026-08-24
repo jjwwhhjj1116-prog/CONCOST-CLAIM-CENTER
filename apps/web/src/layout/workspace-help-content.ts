@@ -21,8 +21,8 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     eyebrow: 'INTAKE · 프로젝트 의뢰', title: '클라이언트의 입장부터 분명하게 등록합니다.',
-    explanation: '피해자 측인지 피의자·피고 측인지 선택하고, 그 입장에서 사건 설명과 녹음 요약을 남깁니다.',
-    tasks: ['클라이언트 법적 지위 선택', '사건 설명 입력', '필요하면 녹음 파일 추가', '의뢰 저장'],
+    explanation: '피해자 측인지 피의자·피고 측인지 선택하고, 그 입장에서 사건 설명과 첨부 자료의 AI 정리문을 남깁니다.',
+    tasks: ['클라이언트 법적 지위 선택', '사건 설명 입력', '필요하면 녹음·TXT·CSV·Excel 자료 추가', '의뢰 저장'],
     completion: '저장 후 같은 프로젝트가 선택된 제안서 작성 화면으로 이동하면 완료입니다.', path: '/cases/new', pathLabel: '프로젝트 의뢰 열고 확인',
     targetSelectors: ['.case-create-form', '.case-create-summary', '.case-create-actions']
   },
@@ -125,7 +125,7 @@ export const CATEGORY_HELP: Record<string, HelpArticle> = {
 };
 
 export const ROUTE_HELP: Record<string, { title: string; steps: readonly string[]; next: string }> = {
-  'CASE-02': { title: '프로젝트 의뢰', steps: ['필수 의뢰정보 입력', '클레임 유형 선택', '담당자 확인', '저장 후 제안서 작성으로 이동'], next: '제안서 작성' },
+  'CASE-02': { title: '프로젝트 의뢰', steps: ['필수 의뢰정보 입력', '클레임 유형·클라이언트 지위 선택', '녹음·TXT·CSV·Excel 자료를 Gemini로 정리', '저장 후 제안서 작성으로 이동'], next: '제안서 작성' },
   'PROP-02': { title: '제안서 작성', steps: ['의뢰 프로젝트 선택', '제안 내용 작성', '발송본 버전 고정', '수주 회신 대기'], next: '프로젝트 접수' },
   'PROP-03': { title: '프로젝트별 제안서 목록', steps: ['제안서를 발송한 프로젝트 확인', '프로젝트별 발송 버전 비교', '회신·수주 상태 확인', '필요 시 작성 화면에서 이어서 수정'], next: '프로젝트 접수' },
   'PROP-04': { title: '제안서 DB관리', steps: ['발송본 개별 원장 확인', '원문 URL·SHA-256 검증', '등록자·발송시각 감사', '필요한 원장을 Excel로 내보내기'], next: '감사로그' },

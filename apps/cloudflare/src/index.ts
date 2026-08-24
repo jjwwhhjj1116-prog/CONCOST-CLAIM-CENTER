@@ -25,6 +25,7 @@ import {
 import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
 import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
 import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportChapter } from './proposal-docx';
+import { extractIntakeSource, IntakeSourceError, type IntakeSource } from './intake-source';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -429,6 +430,7 @@ async function previewCaseDetail(env: CloudflareEnv, user: SessionUser, caseId: 
         id: activity.id, title: activity.title, description: activity.description, createdAt: activity.createdAt,
         actor: { id: activity.actorId, name: activity.actorName }
       })),
+      intakeSourceSummaries: intakeSummaries.results,
       intakeAudioSummaries: intakeSummaries.results
     },
     phase: 'CF06_D1_CASE_OPERATIONS'
@@ -1889,7 +1891,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         env,
         route,
         '당신은 컨코스트 건설 클레임 제안서 전담 작성자입니다. 승인된 제안서 템플릿 구조를 절대 훼손하지 마세요. 사실만 사용하고 금액은 모두 [비공개 협의금액]으로 표기하세요. 클라이언트의 관점과 상대방 주장을 구분하고, 근거 없는 계약조건·판례·수치·일정을 만들지 마세요. 확인할 수 없는 내용은 [확인 필요]로 표시하세요. 오직 JSON 객체 하나만 출력하세요. 형식: {"chapter1":"목적 본문","chapter2":"3~5대 쟁점 본문","chapter3":"Fact Finding→법리·원가 검증→협상 지원→총회·의결 4단계 본문","chapter12":"신뢰를 주는 맺음말"}. 마크다운 코드펜스를 사용하지 마세요.',
-        JSON.stringify({ approvedTemplate: current.templateBody, templateSource:{id:selectedSource.id,name:selectedSource.sourceName,format:selectedSource.sourceFormat,chapterMap:selectedSource.chapterMapJson}, project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, clientPositionDetail:caseRow.clientPositionDetail, description: caseRow.description }, writerInputs: {clientName:inputs.clientName,projectTitle:inputs.projectTitle,keyIssues:inputs.keyIssues,objective:inputs.objective,planNotes:inputs.planNotes,exclusions:inputs.exclusions}, latestIntakeAudioSummary: intakeSummary ?? null }),
+        JSON.stringify({ approvedTemplate: current.templateBody, templateSource:{id:selectedSource.id,name:selectedSource.sourceName,format:selectedSource.sourceFormat,chapterMap:selectedSource.chapterMapJson}, project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, clientPositionDetail:caseRow.clientPositionDetail, description: caseRow.description }, writerInputs: {clientName:inputs.clientName,projectTitle:inputs.projectTitle,keyIssues:inputs.keyIssues,objective:inputs.objective,planNotes:inputs.planNotes,exclusions:inputs.exclusions}, latestIntakeSourceSummary: intakeSummary ?? null, latestIntakeAudioSummary: intakeSummary ?? null }),
         user.id,
         organizationGemini
       );
@@ -1964,72 +1966,69 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
   return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
 }
 
-const INTAKE_AUDIO_MIME_TYPES = new Set(['audio/mpeg','audio/mp4','audio/wav','audio/x-wav','audio/ogg','audio/webm']);
-function intakeAudioMagic(bytes: Uint8Array, mimeType: string): boolean {
-  if (mimeType === 'audio/mpeg') return (bytes[0]===0x49&&bytes[1]===0x44&&bytes[2]===0x33) || (bytes[0]===0xff&&(bytes[1]&0xe0)===0xe0);
-  if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav') return bytesToHex(bytes.slice(0,4))==='52494646' && new TextDecoder().decode(bytes.slice(8,12))==='WAVE';
-  if (mimeType === 'audio/mp4') return new TextDecoder().decode(bytes.slice(4,8))==='ftyp';
-  if (mimeType === 'audio/ogg') return new TextDecoder().decode(bytes.slice(0,4))==='OggS';
-  return mimeType === 'audio/webm' && bytesToHex(bytes.slice(0,4))==='1a45dfa3';
-}
 function bytesToBase64(bytes: Uint8Array): string {
   let binary='';
   for(let offset=0;offset<bytes.length;offset+=0x8000) binary+=String.fromCharCode(...bytes.subarray(offset,Math.min(bytes.length,offset+0x8000)));
   return btoa(binary);
 }
-async function summarizeIntakeAudio(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,mimeType: string): Promise<{summary?:string;modelCode:string;response?:Response}> {
+async function summarizeIntakeSource(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,fileName:string,source:IntakeSource): Promise<{summary?:string;modelCode:string;response?:Response}> {
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
   if(!credential) return {modelCode:'gemini-3.7-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
   const modelCode='gemini-3.7-flash';
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
   let response:Response;
   try{
-    response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 녹음 정리 담당자입니다. 입력 원문에 없는 사실을 만들지 말고 클라이언트 관점과 상대방 주장을 구분하세요.'}]},contents:[{role:'user',parts:[{text:`프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n클라이언트 법적 지위: ${caseRow.clientLegalPosition}\n다음 형식으로 한국어 작성: 1) 시간순 타임라인 2) 의뢰 배경 3) 클라이언트 주장 4) 상대방 주장 또는 쟁점 5) 확보 자료 6) 추가 확인 질문 7) 제안서·보고서 작성 시 관점 주의사항.`},{inline_data:{mime_type:mimeType,data:bytesToBase64(bytes)}}]}],generationConfig:{maxOutputTokens:4096}})});
-  }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 녹음 요약 시간이 초과되었습니다.',code:'GEMINI_AUDIO_UNAVAILABLE'},504)}}
+    const sourcePart=source.kind==='AUDIO'
+      ? {inline_data:{mime_type:source.mimeType,data:bytesToBase64(bytes)}}
+      : {text:`첨부 파일에서 서버가 안전하게 추출한 원문입니다. 셀 주소·시트 표시는 원문 위치 표식입니다.\n\n${source.extractedText??''}`};
+    response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 자료 정리 담당자입니다. 녹음·텍스트·표에서 확인되는 사실만 사용하고, 추측하지 말며, 클라이언트 관점과 상대방 주장을 명확히 구분하세요.'}]},contents:[{role:'user',parts:[{text:`프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n클라이언트 법적 지위: ${caseRow.clientLegalPosition}\n기존 사건 설명: ${caseRow.description||'[없음]'}\n첨부 자료: ${fileName}\n자료 종류: ${source.kind}\n기존 설명과 첨부 원문을 함께 검토하여 다음 형식으로 한국어 작성: 1) 시간순 타임라인 2) 의뢰 배경 3) 클라이언트 주장 4) 상대방 주장 또는 쟁점 5) 확보 자료 6) 추가 확인 질문 7) 제안서·보고서 작성 시 관점 주의사항. 원문에 없는 항목은 '확인 필요'로 표시하세요.`},sourcePart]}],generationConfig:{maxOutputTokens:4096}})});
+  }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 의뢰 자료 정리 시간이 초과되었습니다.',code:'GEMINI_INTAKE_SOURCE_UNAVAILABLE'},504)}}
   clearTimeout(timeout);
   if(!response.ok){const safe=safeGeminiProviderError(await response.json().catch(()=>null),response.status);return{modelCode,response:json({...safe,providerStatus:response.status},response.status===401||response.status===403?503:502)}}
   const summary=extractGeminiText(await response.json().catch(()=>null));
-  if(!summary||summary.length>30000)return{modelCode,response:json({error:'Gemini 녹음 요약 형식이 올바르지 않습니다.',code:'GEMINI_MALFORMED_RESPONSE'},502)};
+  if(!summary||summary.length>30000)return{modelCode,response:json({error:'Gemini 의뢰 자료 정리 결과 형식이 올바르지 않습니다.',code:'GEMINI_MALFORMED_RESPONSE'},502)};
   return{summary,modelCode};
 }
 
-async function handlePreviewIntakeAudio(request:Request,env:CloudflareEnv,user:SessionUser,caseId:string):Promise<Response>{
+async function handlePreviewIntakeSource(request:Request,env:CloudflareEnv,user:SessionUser,caseId:string):Promise<Response>{
   if(!env.DB)return json({error:'D1 database is not bound',code:'D1_NOT_CONFIGURED'},503);
   if(request.method!=='POST')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
-  if(!user.roles.some((role)=>new Set(['admin','ceo','director','pm','staff']).has(role)))return json({error:'Role cannot upload intake audio',code:'FORBIDDEN'},403);
+  if(!user.roles.some((role)=>new Set(['admin','ceo','director','pm','staff']).has(role)))return json({error:'Role cannot upload intake source material',code:'FORBIDDEN'},403);
   const caseRow=await accessiblePreviewCase(env,user,caseId);
   if(!caseRow)return json({error:'Case was not found or is not assigned to this user',code:'CASE_NOT_FOUND'},404);
-  if(!['VICTIM','SUSPECT','OTHER'].includes(caseRow.clientLegalPosition))return json({error:'Select the client legal position before audio summarization',code:'CLIENT_POSITION_REQUIRED'},409);
+  if(!['VICTIM','SUSPECT','OTHER'].includes(caseRow.clientLegalPosition))return json({error:'Select the client legal position before AI source summarization',code:'CLIENT_POSITION_REQUIRED'},409);
   const key=request.headers.get('Idempotency-Key')??'';
   if(!GOOGLE_IDEMPOTENCY_KEY.test(key))return json({error:'A valid Idempotency-Key is required',code:'INVALID_IDEMPOTENCY_KEY'},400);
   const form=await request.formData().catch(()=>null); const file=form?.get('file');
-  if(!(file instanceof File)||!INTAKE_AUDIO_MIME_TYPES.has(file.type)||file.size<1||file.size>10_000_000)return json({error:'A supported audio file up to 10MB is required',code:'INVALID_INTAKE_AUDIO'},400);
+  if(!(file instanceof File)||file.size<1||file.size>10_000_000)return json({error:'A supported intake source file up to 10MB is required',code:'INVALID_INTAKE_SOURCE'},400);
   const bytes=new Uint8Array(await file.arrayBuffer());
-  if(!intakeAudioMagic(bytes,file.type))return json({error:'Audio file signature does not match its MIME type',code:'INVALID_AUDIO_SIGNATURE'},400);
-  const sha=await sha256Hex(bytes); const fingerprint=await sha256Hex(`${caseId}:${caseRow.clientLegalPosition}:${file.name}:${file.type}:${file.size}:${sha}`);
+  let source:IntakeSource;
+  try{source=await extractIntakeSource(file.name,file.type,bytes)}catch(reason){return reason instanceof IntakeSourceError?json({error:reason.message,code:reason.code},400):json({error:'Intake source validation failed',code:'INVALID_INTAKE_SOURCE'},400)}
+  const sha=await sha256Hex(bytes); const fingerprint=await sha256Hex(`${caseId}:${caseRow.clientLegalPosition}:${source.kind}:${file.name}:${source.mimeType}:${file.size}:${sha}`);
   const replay=await env.DB.prepare('SELECT o.status,s.id,s.summary_text AS summaryText,e.google_file_id AS googleFileId FROM preview_intake_audio_operations o LEFT JOIN preview_intake_audio_evidence e ON e.operation_id=o.id LEFT JOIN preview_intake_audio_summaries s ON s.evidence_id=e.id WHERE o.organization_id=? AND o.case_id=? AND o.idempotency_key=? AND o.request_fingerprint=?').bind(PREVIEW_ORGANIZATION_ID,caseId,key,fingerprint).first<{status:string;id:string|null;summaryText:string|null;googleFileId:string|null}>();
-  if(replay)return replay.status==='SUCCEEDED'?json({summary:{id:replay.id,text:replay.summaryText,googleFileId:replay.googleFileId},replay:true,phase:'CF36_CLIENT_POSITION_AUDIO'}):json({error:'이 녹음은 외부 저장 결과 확인이 필요합니다.',code:replay.status==='RECONCILIATION_REQUIRED'?'RECONCILIATION_REQUIRED':'UPLOAD_IN_PROGRESS_OR_FAILED'},409);
+  if(replay)return replay.status==='SUCCEEDED'?json({summary:{id:replay.id,text:replay.summaryText,googleFileId:replay.googleFileId,sourceKind:source.kind},replay:true,phase:'CF47_CLIENT_INTAKE_SOURCE'}):json({error:'이 의뢰 자료는 외부 저장 결과 확인이 필요합니다.',code:replay.status==='RECONCILIATION_REQUIRED'?'RECONCILIATION_REQUIRED':'UPLOAD_IN_PROGRESS_OR_FAILED'},409);
   const operationId=crypto.randomUUID(); const reservedAt=new Date().toISOString();
   const reserved=await env.DB.prepare("INSERT OR IGNORE INTO preview_intake_audio_operations (id,organization_id,case_id,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'PENDING',NULL,NULL,?,?,?)").bind(operationId,PREVIEW_ORGANIZATION_ID,caseId,key,fingerprint,user.id,reservedAt,reservedAt).run();
-  if(reserved.meta?.changes!==1)return json({error:'동일 녹음 처리가 이미 진행 중입니다.',code:'AUDIO_OPERATION_CONFLICT'},409);
-  const generated=await summarizeIntakeAudio(env,user,caseRow,bytes,file.type);
+  if(reserved.meta?.changes!==1)return json({error:'동일 의뢰 자료 처리가 이미 진행 중입니다.',code:'INTAKE_SOURCE_OPERATION_CONFLICT'},409);
+  const generated=await summarizeIntakeSource(env,user,caseRow,bytes,file.name,source);
   if(generated.response){await env.DB.prepare("UPDATE preview_intake_audio_operations SET status='FAILED',error_code='GEMINI_SUMMARY_FAILED',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run();return generated.response;}
   try{
     const token=await accessToken(env); const uploadedAt=new Date().toISOString(); const evidenceId=crypto.randomUUID(); const summaryId=crypto.randomUUID();
     const root=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'PROJECT_ROOT',period:'',name:`${caseRow.caseNumber} ${caseRow.title}`});
-    const categoryFolder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'INTAKE_AUDIO',period:'',name:'프로젝트 의뢰 녹음',parentId:root.id});
+    const categoryFolder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'INTAKE_SOURCE',period:'',name:'프로젝트 의뢰 원본',parentId:root.id});
     const period=uploadedAt.slice(0,7); const month=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'MONTH',period,name:period,parentId:categoryFolder.id});
-    const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:month.id,evidenceId,fileName:file.name,mimeType:file.type,sha256:sha,bytes,caseId,category:'INTAKE_AUDIO',uploadedById:user.id,uploadedAt});
+    const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:month.id,evidenceId,fileName:file.name,mimeType:source.mimeType,sha256:sha,bytes,caseId,category:'INTAKE_SOURCE',uploadedById:user.id,uploadedAt});
     if(!env.DB.batch)throw new GoogleDriveError('D1_BATCH_REQUIRED',503,'D1 batch is unavailable',true);
     const completedAt=new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString();
     const results=await env.DB.batch([
-      env.DB.prepare('INSERT INTO preview_intake_audio_evidence (id,organization_id,case_id,operation_id,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by,uploaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(evidenceId,PREVIEW_ORGANIZATION_ID,caseId,operationId,file.name,file.type,file.size,sha,uploaded.fileId,month.id,user.id,uploadedAt),
+      env.DB.prepare('INSERT INTO preview_intake_audio_evidence (id,organization_id,case_id,operation_id,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by,uploaded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(evidenceId,PREVIEW_ORGANIZATION_ID,caseId,operationId,file.name,source.mimeType,file.size,sha,uploaded.fileId,month.id,user.id,uploadedAt),
       env.DB.prepare("INSERT INTO preview_intake_audio_summaries (id,organization_id,case_id,evidence_id,client_legal_position,summary_text,provider_kind,model_code,created_by,created_at) VALUES (?,?,?,?,?,?,'GEMINI',?,?,?)").bind(summaryId,PREVIEW_ORGANIZATION_ID,caseId,evidenceId,caseRow.clientLegalPosition,generated.summary,generated.modelCode,user.id,uploadedAt),
       env.DB.prepare("UPDATE preview_intake_audio_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId,completedAt,operationId),
-      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'INTAKE_AUDIO_SUMMARIZED','의뢰 녹음 업로드·Gemini 요약',?,?)").bind(crypto.randomUUID(),caseId,user.id,`${file.name} · CLIENT_POSITION:${caseRow.clientLegalPosition}`,uploadedAt)
+      env.DB.prepare('UPDATE preview_cases SET description=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND deleted_at IS NULL').bind(generated.summary,completedAt,caseId,PREVIEW_ORGANIZATION_ID),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'INTAKE_SOURCE_SUMMARIZED','의뢰 자료 업로드·Gemini 정리',?,?)").bind(crypto.randomUUID(),caseId,user.id,`${file.name} · SOURCE:${source.kind} · CLIENT_POSITION:${caseRow.clientLegalPosition}`,uploadedAt)
     ]) as Array<{meta?:{changes?:number}}>;
-    if(results.some((result)=>result.meta?.changes!==1))throw new GoogleDriveError('INTAKE_AUDIO_COMMIT_FAILED',503,'Audio metadata did not commit atomically',true);
-    return json({summary:{id:summaryId,text:generated.summary,modelCode:generated.modelCode,googleFileId:uploaded.fileId,folderPath:`${caseRow.caseNumber}/프로젝트 의뢰 녹음/${period}`},replay:false,phase:'CF36_CLIENT_POSITION_AUDIO'},201);
+    if(results.some((result)=>result.meta?.changes!==1))throw new GoogleDriveError('INTAKE_SOURCE_COMMIT_FAILED',503,'Intake source metadata did not commit atomically',true);
+    return json({summary:{id:summaryId,text:generated.summary,modelCode:generated.modelCode,googleFileId:uploaded.fileId,sourceKind:source.kind,folderPath:`${caseRow.caseNumber}/프로젝트 의뢰 원본/${period}`},caseDescription:generated.summary,replay:false,phase:'CF47_CLIENT_INTAKE_SOURCE'},201);
   }catch(reason){const uncertain=reason instanceof GoogleDriveError&&reason.uncertain;await env.DB.prepare('UPDATE preview_intake_audio_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status=\'PENDING\'').bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED',new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run().catch(()=>undefined);return googleFailure(reason)}
 }
 
@@ -2310,8 +2309,8 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
-  const intakeAudioPath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/intake-audio$/iu);
-  if(intakeAudioPath)return handlePreviewIntakeAudio(request,env,user,intakeAudioPath[1]);
+  const intakeSourcePath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/(?:intake-source|intake-audio)$/iu);
+  if(intakeSourcePath)return handlePreviewIntakeSource(request,env,user,intakeSourcePath[1]);
   const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|allocations|ai-import))?$/iu);
   if (workflowPath) return handlePreviewCaseWorkflow(request, env, url, user, workflowPath[1], workflowPath[2]);
   const casePath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})(?:\/(status|parties|schedules))?$/iu);
@@ -3850,7 +3849,7 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
   let verifiedProposals: Record<string, unknown>[] = [];
   let proposalAwardDecisions: Record<string, unknown>[] = [];
   let evidenceCatalog: Record<string, unknown>[] = [];
-  let intakeAudioSummaries: Record<string, unknown>[] = [];
+  let intakeSourceSummaries: Record<string, unknown>[] = [];
   try {
     const [records, events] = await Promise.all([
       env.DB.prepare(
@@ -3894,7 +3893,7 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
       'SELECT s.id,s.client_legal_position AS clientLegalPosition,s.summary_text AS summaryText,s.provider_kind AS providerKind,s.model_code AS modelCode,s.created_at AS createdAt,e.original_name AS originalName,e.sha256 ' +
       'FROM preview_intake_audio_summaries s JOIN preview_intake_audio_evidence e ON e.id=s.evidence_id WHERE s.case_id=? AND s.organization_id=? ORDER BY s.created_at DESC LIMIT 20'
     ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>();
-    intakeAudioSummaries = summaries.results;
+    intakeSourceSummaries = summaries.results;
   } catch {
     // Older fixtures remain readable before the additive CF36 intake migration.
   }
@@ -3915,7 +3914,8 @@ async function previewReportAuthoringContext(env: CloudflareEnv, caseRow: Previe
       legalPosition: caseRow.clientLegalPosition,
       positionDetail: caseRow.clientPositionDetail,
       mandatoryRule: 'Write from the registered client position. Never silently swap claimant/respondent, victim/suspect, plaintiff/defendant, or infer a missing legal status.',
-      intakeAudioSummaries
+      intakeSourceSummaries,
+      intakeAudioSummaries: intakeSourceSummaries
     },
     litigation: { verifiedCases: verifiedLitigation, verifiedEvents: verifiedLitigationEvents },
     evidenceCatalog,
