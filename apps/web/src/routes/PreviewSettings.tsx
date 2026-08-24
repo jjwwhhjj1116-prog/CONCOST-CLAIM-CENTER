@@ -48,14 +48,26 @@ interface AiGovernance {
   version: number;
   updatedAt: string;
 }
-interface ProposalWritingPrompt {
+type ProposalTemplateCategory = 'REDEVELOPMENT_FINANCE'|'REDEVELOPMENT_COST'|'CLAIM_LITIGATION'|'PRICE_ESCALATION'|'PUBLIC_SUPPORT'|'GENERAL_CLAIM';
+interface ProposalTemplateChapterPrompt {
+  templateSourceId: string;
   chapterNumber: 1 | 2 | 3;
+  executionOrder: 1 | 2 | 3;
   chapterTitle: string;
   instructionText: string;
   isActive: boolean;
   version: number;
   updatedAt: string;
 }
+interface ProposalTemplatePromptProfile {
+  templateSourceId:string; templateSourceName:string; templateCategory:ProposalTemplateCategory;
+  systemInstruction:string; validationInstruction:string; isActive:boolean; version:number; updatedAt:string;
+  chapters:ProposalTemplateChapterPrompt[];
+}
+
+const PROPOSAL_TEMPLATE_CATEGORY_LABELS:Record<ProposalTemplateCategory,string>={
+  REDEVELOPMENT_FINANCE:'정비사업 금융·HUG',REDEVELOPMENT_COST:'정비사업 공사비',CLAIM_LITIGATION:'클레임·소송·감정',PRICE_ESCALATION:'물가변동·간접비',PUBLIC_SUPPORT:'공공지원·LH',GENERAL_CLAIM:'일반 건설클레임'
+};
 
 const PROVIDER_COPY: Record<ProviderKind, {
   short: string; use: string; placeholder: string; issueUrl: string; guideUrl: string; issueSteps: readonly string[];
@@ -86,7 +98,8 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [runtime, setRuntime] = useState<WorkspaceRuntime | null>(null);
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
   const [aiGovernance, setAiGovernance] = useState<AiGovernance | null>(null);
-  const [proposalPrompts, setProposalPrompts] = useState<ProposalWritingPrompt[]>([]);
+  const [proposalPromptProfiles, setProposalPromptProfiles] = useState<ProposalTemplatePromptProfile[]>([]);
+  const [selectedProposalPromptSourceId, setSelectedProposalPromptSourceId] = useState('');
   const [hermesBridge, setHermesBridge] = useState<HermesBridgeState | null>(null);
   const [hermesHmacKey, setHermesHmacKey] = useState('');
   const [aiGovernanceAck, setAiGovernanceAck] = useState('');
@@ -109,14 +122,15 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
           apiRequest<{ settings: WorkspacePolicy; runtime: WorkspaceRuntime }>('/api/settings/admin-workspace'),
           apiRequest<{ candidates: MemoryCandidate[] }>('/api/admin/report-memory'),
           apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance').catch(() => null),
-          apiRequest<{ writingPrompts: ProposalWritingPrompt[] }>('/api/proposal-studio/config'),
+          apiRequest<{ promptProfiles: ProposalTemplatePromptProfile[] }>('/api/proposal-studio/config'),
           apiRequest<{ bridge: HermesBridgeState }>('/api/settings/hermes-bridge')
         ]);
         setWorkspace(admin.settings);
         setRuntime(admin.runtime);
         setMemoryCandidates(memory.candidates);
         setAiGovernance(governance?.governance ?? null);
-        setProposalPrompts(proposalConfig.writingPrompts ?? []);
+        setProposalPromptProfiles(proposalConfig.promptProfiles ?? []);
+        setSelectedProposalPromptSourceId((current) => current || proposalConfig.promptProfiles?.[0]?.templateSourceId || '');
         setHermesBridge(bridgeConfig.bridge);
       }
     } catch (reason) {
@@ -234,18 +248,32 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     finally { setBusy(''); }
   };
 
-  const saveProposalPrompt = async (prompt: ProposalWritingPrompt) => {
-    setBusy(`proposal-prompt:${prompt.chapterNumber}`); setError(''); setNotice('');
+  const replaceProposalPromptProfile = (profile:ProposalTemplatePromptProfile) => setProposalPromptProfiles((current)=>current.map((item)=>item.templateSourceId===profile.templateSourceId?profile:item));
+
+  const updateSelectedProposalPromptProfile = (update:(profile:ProposalTemplatePromptProfile)=>ProposalTemplatePromptProfile) => setProposalPromptProfiles((current)=>current.map((profile)=>profile.templateSourceId===selectedProposalPromptSourceId?update(profile):profile));
+
+  const saveProposalPromptProfile = async (profile:ProposalTemplatePromptProfile) => {
+    setBusy(`proposal-profile:${profile.templateSourceId}`); setError(''); setNotice('');
     try {
-      const result = await apiRequest<{ prompt: ProposalWritingPrompt }>(`/api/proposal-studio/writing-prompts/${prompt.chapterNumber}`, {
+      const result = await apiRequest<{ profile: ProposalTemplatePromptProfile }>(`/api/proposal-studio/prompt-profiles/${encodeURIComponent(profile.templateSourceId)}`, {
         method:'PUT',
-        body:JSON.stringify({ chapterTitle:prompt.chapterTitle, instructionText:prompt.instructionText, isActive:prompt.isActive, version:prompt.version })
+        body:JSON.stringify({templateCategory:profile.templateCategory,systemInstruction:profile.systemInstruction,validationInstruction:profile.validationInstruction,isActive:profile.isActive,version:profile.version})
       });
-      setProposalPrompts((current) => current.map((item) => item.chapterNumber === result.prompt.chapterNumber ? result.prompt : item));
-      setNotice(`제안서 ${prompt.chapterNumber}장 작성 지침 v${result.prompt.version}을 관리자 설정에 저장했습니다.`);
+      replaceProposalPromptProfile(result.profile);
+      setNotice(`${result.profile.templateSourceName}의 공통·자가검증 지침 v${result.profile.version}을 저장했습니다.`);
     } catch (reason) {
-      setError(reason instanceof ApiError && reason.status === 409 ? '다른 관리자가 먼저 지침을 수정했습니다. 화면을 다시 불러와 주세요.' : reason instanceof Error ? reason.message : String(reason));
+      setError(reason instanceof ApiError && reason.status === 409 ? '다른 관리자가 먼저 이 템플릿 지침을 수정했습니다. 화면을 다시 불러와 주세요.' : reason instanceof Error ? reason.message : String(reason));
     } finally { setBusy(''); }
+  };
+
+  const saveProposalPrompt = async (profile:ProposalTemplatePromptProfile,prompt:ProposalTemplateChapterPrompt) => {
+    setBusy(`proposal-chapter:${profile.templateSourceId}:${prompt.chapterNumber}`);setError('');setNotice('');
+    try{
+      const result=await apiRequest<{profile:ProposalTemplatePromptProfile}>(`/api/proposal-studio/prompt-profiles/${encodeURIComponent(profile.templateSourceId)}/chapters/${prompt.chapterNumber}`,{method:'PUT',body:JSON.stringify({chapterTitle:prompt.chapterTitle,instructionText:prompt.instructionText,isActive:prompt.isActive,version:prompt.version})});
+      replaceProposalPromptProfile(result.profile);
+      setNotice(`${result.profile.templateSourceName} · ${prompt.chapterNumber}장 지침을 v${result.profile.chapters.find((item)=>item.chapterNumber===prompt.chapterNumber)?.version}으로 저장했습니다.`);
+    }catch(reason){setError(reason instanceof ApiError&&reason.status===409?'다른 관리자가 먼저 이 챕터 지침을 수정했습니다. 화면을 다시 불러와 주세요.':reason instanceof Error?reason.message:String(reason));}
+    finally{setBusy('');}
   };
 
   const changePassword = async () => {
@@ -335,16 +363,26 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     {section === 'ADMIN' && isAdmin && workspace && <>
       <PreviewGoogleDriveSetup onNavigate={onNavigate} />
       {renderCredentials('ORGANIZATION', '조직 공용 AI 설정', '개인 키가 없는 직원에게 적용되는 회사 공용 암호화 키입니다.')}
-      <Card title="제안서 1~3장 AI 작성 지침 · 관리자 전용" className="proposal-prompt-settings-card">
-        <p className="settings-honest-note"><strong>작동 방식</strong> 프로젝트 의뢰·회의록·1단계 입력을 근거로 Gemini가 1~3장의 최초 초안만 만듭니다. 이후에는 AI가 다시 덮어쓰지 않으며 작성자가 3단계에서 모든 문장을 직접 수정합니다. 4~11장은 회사 고정 모듈, 12장은 표준 맺음말입니다.</p>
-        <div className="proposal-prompt-settings-list">
-          {proposalPrompts.map((prompt) => <article key={prompt.chapterNumber}>
-            <header><span>{String(prompt.chapterNumber).padStart(2,'0')}</span><div><strong>{prompt.chapterNumber}장 작성 지침</strong><small>관리자 승인 v{prompt.version} · {prompt.updatedAt === 'FALLBACK' ? '기본 지침' : new Date(prompt.updatedAt).toLocaleString('ko-KR')}</small></div></header>
-            <label>챕터 제목<input value={prompt.chapterTitle} maxLength={200} onChange={(event) => setProposalPrompts((current) => current.map((item) => item.chapterNumber === prompt.chapterNumber ? { ...item, chapterTitle:event.target.value } : item))} /></label>
-            <label>Gemini 작성 지침<textarea value={prompt.instructionText} minLength={100} maxLength={12000} onChange={(event) => setProposalPrompts((current) => current.map((item) => item.chapterNumber === prompt.chapterNumber ? { ...item, instructionText:event.target.value } : item))} /></label>
-            <div className="action-row"><label className="settings-check"><input type="checkbox" checked={prompt.isActive} onChange={(event) => setProposalPrompts((current) => current.map((item) => item.chapterNumber === prompt.chapterNumber ? { ...item, isActive:event.target.checked } : item))} />AI 최초 초안에 사용</label><Button onClick={() => void saveProposalPrompt(prompt)} disabled={busy === `proposal-prompt:${prompt.chapterNumber}` || prompt.instructionText.trim().length < 100}>{busy === `proposal-prompt:${prompt.chapterNumber}` ? '저장 중…' : `${prompt.chapterNumber}장 지침 저장`}</Button></div>
-          </article>)}
-        </div>
+      <Card title="제안서 1~3장 AI 작성 지침 · 템플릿별 관리자 전용" className="proposal-prompt-settings-card">
+        <p className="settings-honest-note"><strong>템플릿마다 별도 관리됩니다.</strong> Gemini는 의뢰·회의록·1단계 입력을 근거로 <b>2장 쟁점 → 1장 목적 → 3장 수행업무 → 자가검증</b> 순서로 최초 초안을 한 번만 만듭니다. 이후 작성자는 사람 검수 단계에서 전부 수정합니다. 직원 계정에는 아래 지침 원문이 노출되지 않습니다.</p>
+        <label className="proposal-template-profile-picker">관리할 제안서 원본 템플릿<select value={selectedProposalPromptSourceId} onChange={(event)=>setSelectedProposalPromptSourceId(event.target.value)}>{proposalPromptProfiles.map((profile)=><option key={profile.templateSourceId} value={profile.templateSourceId}>{profile.templateSourceName} · {PROPOSAL_TEMPLATE_CATEGORY_LABELS[profile.templateCategory]} · v{profile.version}</option>)}</select></label>
+        {proposalPromptProfiles.filter((profile)=>profile.templateSourceId===selectedProposalPromptSourceId).map((profile)=><div className="proposal-template-profile" key={profile.templateSourceId}>
+          <section className="proposal-template-profile__common">
+            <header><div><span>TEMPLATE PROFILE</span><h3>{profile.templateSourceName}</h3><p>{PROPOSAL_TEMPLATE_CATEGORY_LABELS[profile.templateCategory]} · 관리자 승인 v{profile.version}</p></div><label className="settings-check"><input type="checkbox" checked={profile.isActive} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,isActive:event.target.checked}))}/>이 템플릿 AI 초안 활성</label></header>
+            <label>제안서 유형<select value={profile.templateCategory} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,templateCategory:event.target.value as ProposalTemplateCategory}))}>{Object.entries(PROPOSAL_TEMPLATE_CATEGORY_LABELS).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
+            <label>템플릿 공통 시스템 지침<textarea value={profile.systemInstruction} minLength={300} maxLength={20000} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,systemInstruction:event.target.value}))}/></label>
+            <label>1~3장 병합 자가검증 지침<textarea value={profile.validationInstruction} minLength={200} maxLength={12000} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,validationInstruction:event.target.value}))}/></label>
+            <div className="action-row"><small>공통 규칙과 검수 규칙은 이 원본 템플릿에만 적용됩니다.</small><Button onClick={()=>void saveProposalPromptProfile(profile)} disabled={busy===`proposal-profile:${profile.templateSourceId}`||profile.systemInstruction.trim().length<300||profile.validationInstruction.trim().length<200}>{busy===`proposal-profile:${profile.templateSourceId}`?'저장 중…':'공통·검수 지침 저장'}</Button></div>
+          </section>
+          <div className="proposal-prompt-settings-list">
+            {profile.chapters.slice().sort((a,b)=>a.executionOrder-b.executionOrder).map((prompt)=><article key={prompt.chapterNumber}>
+              <header><span>{prompt.executionOrder}</span><div><strong>{prompt.executionOrder}차 실행 · {prompt.chapterNumber}장</strong><small>관리자 승인 v{prompt.version} · {prompt.updatedAt==='FALLBACK'?'기본 지침':new Date(prompt.updatedAt).toLocaleString('ko-KR')}</small></div></header>
+              <label>챕터 제목<input value={prompt.chapterTitle} maxLength={200} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,chapters:item.chapters.map((chapter)=>chapter.chapterNumber===prompt.chapterNumber?{...chapter,chapterTitle:event.target.value}:chapter)}))}/></label>
+              <label>Gemini 작성 지침<textarea value={prompt.instructionText} minLength={300} maxLength={16000} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,chapters:item.chapters.map((chapter)=>chapter.chapterNumber===prompt.chapterNumber?{...chapter,instructionText:event.target.value}:chapter)}))}/></label>
+              <div className="action-row"><label className="settings-check"><input type="checkbox" checked={prompt.isActive} onChange={(event)=>updateSelectedProposalPromptProfile((item)=>({...item,chapters:item.chapters.map((chapter)=>chapter.chapterNumber===prompt.chapterNumber?{...chapter,isActive:event.target.checked}:chapter)}))}/>AI 최초 초안에 사용</label><Button onClick={()=>void saveProposalPrompt(profile,prompt)} disabled={busy===`proposal-chapter:${profile.templateSourceId}:${prompt.chapterNumber}`||prompt.instructionText.trim().length<300}>{busy===`proposal-chapter:${profile.templateSourceId}:${prompt.chapterNumber}`?'저장 중…':`${prompt.chapterNumber}장 지침 저장`}</Button></div>
+            </article>)}
+          </div>
+        </div>)}
       </Card>
       {aiGovernance && <Card title="외부 AI 자료 보안·비학습 정책"><div className="workspace-policy-grid">
         <label>Gemini 서비스 등급<select value={aiGovernance.providerServiceTier} onChange={(event) => setAiGovernance({ ...aiGovernance,providerServiceTier:event.target.value as AiGovernance['providerServiceTier'],confidentialExternalAiEnabled:event.target.value==='UNVERIFIED_OR_FREE'?false:aiGovernance.confidentialExternalAiEnabled })}><option value="UNVERIFIED_OR_FREE">무료 또는 결제상태 미확인 · 내부자료 전송 차단</option><option value="PAID_NO_PRODUCT_IMPROVEMENT">Cloud Billing 활성 유료 Gemini API</option><option value="VERTEX_AI_ENTERPRISE">Vertex AI 기업계약</option></select></label>

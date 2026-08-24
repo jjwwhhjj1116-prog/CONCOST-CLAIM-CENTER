@@ -193,7 +193,15 @@ test('CF39 proposal AI preserves the approved template and uses only the Admin o
   const providerBodies: Array<Record<string, unknown>> = [];
   env.GEMINI_TEST_FETCH = async (_input, init) => {
     providerBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-    return new Response(JSON.stringify({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: '승인 템플릿 구조를 유지한 건설 클레임 기술제안서 AI 초안입니다. [확인 필요]' }] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const sequence = providerBodies.length;
+    const content = sequence === 1
+      ? { chapter: 2, title: '당 현장의 핵심 쟁점 분석', issues: Array.from({ length: 5 }, (_, index) => ({ no: index + 1, heading: `핵심 쟁점 ${index + 1}`, body: `ㅇ 승인 템플릿과 의뢰 자료를 근거로 쟁점 ${index + 1}의 사실관계와 필요한 검토를 정리합니다.` })) }
+      : sequence === 2
+        ? { chapter: 1, title: '용역의 목적', slogan: '클라이언트의 권익을 지키는 것', bullets: Array.from({ length: 5 }, (_, index) => `ㅇ 확정된 쟁점 ${index + 1}을 근거로 검토하고 실행 가능한 대응 기준을 마련합니다.`), footnote: '※ 법률적 판단은 협력 법무법인이 전담합니다.' }
+        : sequence === 3
+          ? { chapter: 3, title: '업무 수행 내용', rows: Array.from({ length: 5 }, (_, index) => ({ no: index + 1, task: `수행 업무 ${index + 1}`, detail: ['자료 검토', '근거 정리'], deliverables: ['검토표'], mapping: `쟁점 ${Math.min(index + 1, 5)}` })) }
+          : { result: 'PASS', findings: [] };
+    return new Response(JSON.stringify({ status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text: JSON.stringify(content) }] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   const caseResponse = await worker.fetch(request(`/api/cases/${CASE_ID}`, PM_TOKEN), env);
   const project = (await caseResponse.json() as any).case;
@@ -208,10 +216,11 @@ test('CF39 proposal AI preserves the approved template and uses only the Admin o
   const version = (await generated.json() as any).proposal.versions[0];
   assert.equal(version.providerId, 'GEMINI');
   assert.equal(version.modelId, 'gemini-3.7-flash');
-  assert.equal(providerBodies.length, 1);
-  assert.match(String(providerBodies[0].system_instruction), /승인된 제안서 템플릿 구조/u);
-  assert.match(String(providerBodies[0].input), /approvedTemplate/u);
-  assert.match(String(providerBodies[0].input), /clientLegalPosition/u);
+  assert.equal(providerBodies.length, 4);
+  assert.match(String(providerBodies[0].system_instruction), /선택 템플릿/u);
+  assert.match(String(providerBodies[0].input), /sourcePriority/u);
+  assert.match(String(providerBodies[0].input), /template/u);
+  assert.match(String(providerBodies[3].system_instruction), /최종 자가검증/u);
   sql.close();
 });
 

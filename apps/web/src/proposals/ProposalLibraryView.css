@@ -32,6 +32,17 @@
 .proposal-project-card__rows a, .proposal-db-table a { color: #315f87; font-size: .76rem; font-weight: 800; text-decoration: none; }
 .proposal-project-card footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; }
 .proposal-project-card footer button { min-height: 36px; padding-block: 7px; font-size: .76rem; }
+.report-project-card > header { padding:22px 24px; }
+.report-project-card > header > div:first-child { gap:8px; }
+.report-project-card > header span { display:block; margin-bottom:2px; }
+.report-project-card h3 { font-size:1.2rem; line-height:1.45; }
+.report-project-card__body { display:grid; gap:10px; padding:20px 24px; }
+.report-project-card__body > strong { color:var(--text-primary); font-size:1rem; line-height:1.5; }
+.report-project-card__body > span { color:#315f87; font-weight:800; }
+.report-project-card__body > small { color:var(--text-muted); line-height:1.55; }
+.report-project-card__progress { overflow:hidden; height:7px; margin:2px 0; border-radius:999px; background:#dce6f1; }
+.report-project-card__progress i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#2563eb,#14b8a6); }
+.report-project-card footer { padding:14px 24px 18px; }
 .proposal-library em { display: inline-flex; width: max-content; padding: 4px 7px; border-radius: 999px; font-size: .68rem; font-style: normal; font-weight: 800; }
 .proposal-library .status-pending, .proposal-library .status-unverified { color: #9a5c12; background: #fff4d9; }
 .proposal-library .status-won, .proposal-library .status-verified { color: #187454; background: #def7eb; }
