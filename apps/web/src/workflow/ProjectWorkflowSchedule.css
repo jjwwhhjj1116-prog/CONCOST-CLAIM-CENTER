@@ -47,6 +47,12 @@
 .project-detail-modal__close:hover,
 .project-detail-modal__close:focus-visible { border-color: #5b93c9; color: #315f87; outline: 3px solid rgba(91, 147, 201, .2); }
 .project-detail-modal__body { display: grid; gap: 16px; max-height: calc(min(900px, 92vh) - 106px); overflow: auto; padding: 18px; color: var(--text-primary); }
+.project-modal-highlights { display:flex;align-items:center;gap:12px;padding:13px 15px;border:1px solid #c9d9e8;border-radius:13px;background:#f7fafc; }
+.project-modal-highlights > b { flex:none;color:#173f67;font-size:.78rem; }
+.project-modal-highlights > div { display:flex;flex-wrap:wrap;gap:7px; }
+.project-modal-highlights em { padding:5px 9px;border-radius:999px;background:#e9f2ff;color:#245d96;font-size:.68rem;font-style:normal;font-weight:800; }
+.project-modal-highlights em[data-tone='amber'] { background:#fff3d8;color:#9a5a08; }
+.project-modal-highlights em[data-tone='green'] { background:#e4f7ee;color:#187653; }
 
 .project-context-strip {
   position: sticky;

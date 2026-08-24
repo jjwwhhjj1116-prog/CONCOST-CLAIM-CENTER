@@ -1635,6 +1635,57 @@ const PROPOSAL_CHAPTER_TITLES = [
   '건설 클레임·소송·기술감정 실적', '자격 증명자료', '용역 조건 및 제안 범위', '맺음말'
 ] as const;
 
+const PROPOSAL_AI_WRITING_SYSTEM = `당신은 컨코스트의 건설 클레임·공사비 검증 제안서를 작성하는 20년 경력의 수석 제안서 디렉터입니다.
+승인된 제안서 템플릿 구조와 선택된 원본의 문체, 정보 밀도, 항목 수, 표 구조를 그대로 계승하되 프로젝트 사실에 맞게 새로 작성하십시오.
+짧은 요약문은 금지합니다. 의뢰 등록 정보, 작성자 입력, 최신 의뢰 첨부자료 요약을 우선 근거로 사용하고 서로 충돌하면 [확인 필요]로 표시하십시오.
+근거 없는 계약조건·판례·수치·일정은 만들지 말고, 모든 금액은 [비공개 협의금액]으로 표시하십시오.
+
+장별 작성 계약:
+1장 제안(용역)의 목적
+- 서로 중복되지 않는 목적 5~7개를 작성합니다.
+- 각 항목은 반드시 "- "로 시작하고, 항목마다 2~4개의 완전한 문장으로 프로젝트 문제, 수행 행동, 기대 성과를 설명합니다.
+- 클라이언트의 권익 보호, 사업 정상화 또는 분쟁 대응, 계약·정책·원가자료 검토, 협상·의사결정용 산출물을 구체적으로 포함합니다.
+- 최소 450자 이상 작성합니다.
+
+2장 당 현장의 핵심 쟁점 분석
+- 의뢰 단계에서 확인된 사실과 핵심 쟁점으로 3~5개의 쟁점을 선정합니다.
+- 각 쟁점은 "### 1) 쟁점 제목" 형식의 제목과 그 아래 2~4문장의 상세 분석으로 구성합니다.
+- 각 분석에는 확인된 상황, 검증할 자료·기준, 클라이언트에 미치는 영향, 대응 방향을 포함합니다.
+- 입력에 없는 사실은 [확인 필요]로 남기며 최소 600자 이상 작성합니다.
+
+3장 업무 수행 내용 및 추진 계획
+- 반드시 Markdown 표 하나로 작성합니다.
+- 열은 정확히 "단계 | 수행 업무 | 세부 내용 | 주요 산출물" 네 개를 사용합니다.
+- 데이터 행은 Fact Finding, 법리·원가 검증, 협상 지원, 총회·의결/최종 정산의 정확히 4단계로 구성합니다.
+- 각 행의 세부 내용은 2개 이상의 구체적인 행동을 포함하고 주요 산출물을 명시합니다. 최소 450자 이상 작성합니다.
+
+12장 맺음말
+- 프로젝트 쟁점에 대한 이해, 수행 원칙, 회사 전문성, 클라이언트 의사결정 지원을 3~5개 문단과 최소 250자로 작성합니다.
+
+오직 JSON 객체 하나만 출력하십시오. 형식은 {"chapter1":"...","chapter2":"...","chapter3":"...","chapter12":"..."}입니다.
+JSON 문자열 안의 줄바꿈은 올바르게 이스케이프하고 Markdown 코드펜스는 사용하지 마십시오.`;
+
+function proposalAiChapterQuality(chapterNumber: 1 | 2 | 3 | 12, body: string): { valid: boolean; reason: string } {
+  const text = body.trim();
+  if (chapterNumber === 1) {
+    const bullets = text.split('\n').filter((line) => /^\s*[-*•ㅇ]\s+/u.test(line)).length;
+    return { valid: text.length >= 450 && bullets >= 5, reason: '5개 이상의 목적 항목과 450자 이상의 상세 설명' };
+  }
+  if (chapterNumber === 2) {
+    const issues = text.split('\n').filter((line) => /^\s*###\s+\d+[.)]\s+\S/u.test(line)).length;
+    return { valid: text.length >= 600 && issues >= 3, reason: '3개 이상의 쟁점별 제목·상세 분석과 600자 이상의 본문' };
+  }
+  if (chapterNumber === 3) {
+    const lines = text.split('\n').filter((line) => line.trim());
+    const header = lines.some((line) => /단계\s*\|\s*수행 업무\s*\|\s*세부 내용\s*\|\s*주요 산출물/u.test(line));
+    const separatorIndex = lines.findIndex((line) => /^\s*\|?(?:\s*:?-{3,}:?\s*\|){3,}\s*$/u.test(line));
+    const dataRows = separatorIndex >= 0 ? lines.slice(separatorIndex + 1).filter((line) => (line.match(/\|/gu) ?? []).length >= 4).length : 0;
+    return { valid: text.length >= 450 && header && dataRows >= 4, reason: '4열 Markdown 표와 정확한 4단계 수행계획, 450자 이상의 상세 내용' };
+  }
+  const paragraphs = text.split(/\n\s*\n/u).filter((paragraph) => paragraph.trim()).length;
+  return { valid: text.length >= 250 && paragraphs >= 3, reason: '3개 이상의 문단과 250자 이상의 맺음말' };
+}
+
 const FALLBACK_PROPOSAL_MODULES: ProposalCompanyModule[] = [
   { code:'CH04_EXPERTS',chapterNumber:4,title:PROPOSAL_CHAPTER_TITLES[3],category:'EXPERTS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH04_EXPERTS,isActive:true,version:1,updatedAt:'HWP-260728' },
   { code:'CH05_STRENGTHS',chapterNumber:5,title:PROPOSAL_CHAPTER_TITLES[4],category:'STRENGTHS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH05_STRENGTHS,isActive:true,version:1,updatedAt:'HWP-260728' },
@@ -1966,7 +2017,10 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         const module=chapter.moduleCode?moduleByCode.get(chapter.moduleCode):undefined;
         if(chapter.number>=4&&chapter.number<=11){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
-          if(expected&&requestedModules.has(expected.code)&&expected.isActive)return{number:chapter.number,title:expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(expected.bodyMarkdown,50000)};
+          if(expected&&requestedModules.has(expected.code)&&expected.isActive){
+            const proposalCopy=sanitizeInput(chapter.body,50000);
+            return{number:chapter.number,title:expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:proposalCopy||sanitizeInput(expected.bodyMarkdown,50000)};
+          }
           return{number:chapter.number,title:expected?.title??chapter.title,kind:'FIXED' as const,...(expected?{moduleCode:expected.code}:{}),body:'[이 회사 모듈은 제안서에서 제외되었습니다.]'};
         }
         return{number:chapter.number,title:PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000)};
@@ -1985,8 +2039,20 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const generated = await generatePreviewAiText(
         env,
         route,
-        '당신은 컨코스트 건설 클레임 제안서 전담 작성자입니다. 승인된 제안서 템플릿 구조를 절대 훼손하지 마세요. 사실만 사용하고 금액은 모두 [비공개 협의금액]으로 표기하세요. 클라이언트의 관점과 상대방 주장을 구분하고, 근거 없는 계약조건·판례·수치·일정을 만들지 마세요. 확인할 수 없는 내용은 [확인 필요]로 표시하세요. 오직 JSON 객체 하나만 출력하세요. 형식: {"chapter1":"목적 본문","chapter2":"3~5대 쟁점 본문","chapter3":"Fact Finding→법리·원가 검증→협상 지원→총회·의결 4단계 본문","chapter12":"신뢰를 주는 맺음말"}. 마크다운 코드펜스를 사용하지 마세요.',
-        JSON.stringify({ approvedTemplate: current.templateBody, templateSource:{id:selectedSource.id,name:selectedSource.sourceName,format:selectedSource.sourceFormat,chapterMap:selectedSource.chapterMapJson}, project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, clientPositionDetail:caseRow.clientPositionDetail, description: caseRow.description }, writerInputs: {clientName:inputs.clientName,projectTitle:inputs.projectTitle,keyIssues:inputs.keyIssues,objective:inputs.objective,planNotes:inputs.planNotes,exclusions:inputs.exclusions}, latestIntakeSourceSummary: intakeSummary ?? null, latestIntakeAudioSummary: intakeSummary ?? null }),
+        PROPOSAL_AI_WRITING_SYSTEM,
+        JSON.stringify({
+          approvedTemplate: current.templateBody,
+          templateSource:{id:selectedSource.id,name:selectedSource.sourceName,format:selectedSource.sourceFormat,chapterMap:selectedSource.chapterMapJson},
+          selectedTemplateWritingReference: {
+            chapter1: '260728 원본과 같이 5~7개의 목적 항목으로 구성하고, 사업·분쟁의 문제 → 검토 행동 → 클라이언트가 얻는 의사결정 성과를 항목별로 충분히 설명합니다.',
+            chapter2: '260728 원본과 같이 3~5개의 핵심 쟁점을 번호와 제목으로 나누고 각 쟁점 아래에 상황, 검증기준, 영향, 대응방향을 서술합니다.',
+            chapter3: 'Fact Finding, 법리·원가 검증, 협상 지원, 총회·의결/최종 정산을 단계·수행 업무·세부 내용·주요 산출물 4열 표로 작성합니다.'
+          },
+          project: { caseNumber: caseRow.caseNumber, title: caseRow.title, claimType: caseRow.claimType, clientLegalPosition: caseRow.clientLegalPosition, clientPositionDetail:caseRow.clientPositionDetail, description: caseRow.description },
+          writerInputs: {clientName:inputs.clientName,projectTitle:inputs.projectTitle,keyIssues:inputs.keyIssues,objective:inputs.objective,planNotes:inputs.planNotes,exclusions:inputs.exclusions},
+          latestIntakeSourceSummary: intakeSummary ?? null,
+          sourcePriority: ['latestIntakeSourceSummary','project.description','writerInputs.keyIssues','writerInputs.objective','writerInputs.planNotes']
+        }),
         user.id,
         organizationGemini
       );
@@ -1999,7 +2065,8 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       if(ai){
         for(const [key,number] of [['chapter1',1],['chapter2',2],['chapter3',3],['chapter12',12]] as const){
           const generatedText=sanitizeInput(ai[key],50000);
-          if(generatedText.length<20)return json({error:`Gemini가 ${number}장 초안을 충분히 생성하지 못했습니다.`,code:'INCOMPLETE_PROPOSAL_AI_RESPONSE'},502);
+          const quality=proposalAiChapterQuality(number,generatedText);
+          if(!quality.valid)return json({error:`Gemini의 ${number}장 초안이 260728 템플릿 작성 기준에 미달하여 저장하지 않았습니다. 필요한 기준: ${quality.reason}. 다시 생성해 주세요.`,code:'INCOMPLETE_PROPOSAL_AI_RESPONSE',chapterNumber:number,requiredQuality:quality.reason},502);
           inputs.chapters[number-1].body=generatedText;
         }
         inputs.objective=inputs.chapters[0].body; inputs.keyIssues=inputs.chapters[1].body; inputs.planNotes=inputs.chapters[2].body;
@@ -2026,18 +2093,33 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
 
   if (action === 'reviews' && request.method === 'POST') {
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['action','comment','versionId','version']) || !['REQUEST_REVIEW','APPROVE','REJECT'].includes(String(body.action)) || typeof body.comment !== 'string' || typeof body.versionId !== 'string' || !Number.isInteger(body.version)) return json({ error: 'Proposal review payload is invalid', code: 'INVALID_REVIEW' }, 400);
+    if (!body || !exactObjectKeys(body, ['action','comment','versionId','version']) || !['REQUEST_REVIEW','APPROVE','REJECT','CONFIRM'].includes(String(body.action)) || typeof body.comment !== 'string' || typeof body.versionId !== 'string' || !Number.isInteger(body.version)) return json({ error: 'Proposal review payload is invalid', code: 'INVALID_REVIEW' }, 400);
     if (Number(body.version) !== Number(current.version) || body.versionId !== current.currentVersionId) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT' }, 409);
-    const reviewAction = String(body.action); const isApprover = user.roles.some((role) => ['admin','ceo','director','reviewer'].includes(role));
-    if (reviewAction === 'REQUEST_REVIEW' ? (!canEdit || current.status !== 'DRAFT') : (!isApprover || current.status !== 'IN_REVIEW' || current.createdBy === user.id)) return json({ error: 'Review role or state is invalid', code: 'FORBIDDEN_REVIEW' }, 403);
-    const nextStatus = reviewAction === 'REQUEST_REVIEW' ? 'IN_REVIEW' : reviewAction === 'APPROVE' ? 'APPROVED' : 'REJECTED'; const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
-    const results = await env.DB.batch?.([
+    const reviewAction = String(body.action); const isApprover = user.roles.some((role) => ['admin','ceo','director','reviewer'].includes(role)); const isDirectConfirmation = reviewAction === 'CONFIRM';
+    const invalidReview = isDirectConfirmation
+      ? (!canEdit || current.status !== 'DRAFT')
+      : reviewAction === 'REQUEST_REVIEW'
+        ? (!canEdit || current.status !== 'DRAFT')
+        : (!isApprover || current.status !== 'IN_REVIEW' || current.createdBy === user.id);
+    if (invalidReview) return json({ error: isDirectConfirmation ? '현재 편집 중인 최신 제안서 초안만 확정할 수 있습니다.' : '제안서 상태 또는 검토 권한이 올바르지 않습니다.', code: isDirectConfirmation ? 'PROPOSAL_CONFIRMATION_INVALID' : 'FORBIDDEN_REVIEW' }, 403);
+    const nextStatus = isDirectConfirmation || reviewAction === 'APPROVE' ? 'APPROVED' : reviewAction === 'REQUEST_REVIEW' ? 'IN_REVIEW' : 'REJECTED'; const storedAction = isDirectConfirmation ? 'APPROVE' : reviewAction; const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
+    const directReviewAt = new Date(Date.parse(now) + 1).toISOString();
+    const statements = isDirectConfirmation ? [
+      // The immutable D1 trigger intentionally allows only DRAFT -> IN_REVIEW -> APPROVED.
+      // A single writer-facing confirmation therefore advances both audited states atomically.
+      env.DB.prepare('UPDATE preview_proposals SET status=\'IN_REVIEW\',approved_version_id=NULL,version=version+1,updated_at=? WHERE id=? AND version=? AND status=\'DRAFT\'').bind(now, proposalId, current.version),
+      env.DB.prepare('UPDATE preview_proposals SET status=\'APPROVED\',approved_version_id=?,version=version+1,updated_at=? WHERE id=? AND version=? AND status=\'IN_REVIEW\'').bind(current.currentVersionId, directReviewAt, proposalId, current.version + 1),
+      env.DB.prepare('INSERT INTO preview_proposal_reviews (id,proposal_id,case_id,version_id,action,comment,reviewer_id,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), proposalId, caseId, current.currentVersionId, storedAction, body.comment.trim() || null, user.id, directReviewAt),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'PROPOSAL_CONFIRMED', '제안서 전체 합본 확정', 'APPROVED', directReviewAt)
+    ] : [
       env.DB.prepare('UPDATE preview_proposals SET status=?,approved_version_id=?,version=version+1,updated_at=? WHERE id=? AND version=? AND status=?').bind(nextStatus, reviewAction === 'APPROVE' ? current.currentVersionId : null, now, proposalId, current.version, current.status),
-      env.DB.prepare('INSERT INTO preview_proposal_reviews (id,proposal_id,case_id,version_id,action,comment,reviewer_id,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), proposalId, caseId, current.currentVersionId, reviewAction, body.comment.trim() || null, user.id, now),
+      env.DB.prepare('INSERT INTO preview_proposal_reviews (id,proposal_id,case_id,version_id,action,comment,reviewer_id,created_at) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), proposalId, caseId, current.currentVersionId, storedAction, body.comment.trim() || null, user.id, now),
       env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, `PROPOSAL_${reviewAction}`, '제안서 검토 상태 변경', nextStatus, now)
-    ]) as Array<{meta?:{changes?:number}}> | undefined;
-    if (!results || results[0]?.meta?.changes !== 1) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT' }, 409);
-    return json({ message: 'Proposal workflow updated', status: nextStatus, phase: 'CF27_D1_PROPOSAL_AUTHORING' });
+    ];
+    const results = await env.DB.batch?.(statements) as Array<{meta?:{changes?:number}}> | undefined;
+    const changed = isDirectConfirmation ? results?.[0]?.meta?.changes === 1 && results?.[1]?.meta?.changes === 1 : results?.[0]?.meta?.changes === 1;
+    if (!results || !changed) return json({ error: 'Proposal changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json({ message: isDirectConfirmation ? '제안서가 최종 확정되어 내려받기와 DB 보관이 활성화되었습니다.' : 'Proposal workflow updated', status: nextStatus, phase: isDirectConfirmation ? 'CF50_DIRECT_PROPOSAL_CONFIRMATION' : 'CF27_D1_PROPOSAL_AUTHORING' });
   }
 
   if (action === 'render' && request.method === 'POST') {
@@ -5402,23 +5484,23 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
         const token = await accessToken(env);
         const root = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: 'PROJECT_ROOT', period: '', name: `${caseRow.caseNumber} ${caseRow.title}` });
         const categoryName = CASE_EVIDENCE_CATEGORY_CONFIG[category].label;
-        const categoryFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: CASE_EVIDENCE_CATEGORY_CONFIG[category].folderKind, period: '', name: categoryName, parentId: root.id });
-        const period = uploadedAt.slice(0, 7);
-        const monthFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: 'MONTH', period, name: period, parentId: categoryFolder.id });
-        const uploaded = await uploadEvidenceToDrive(googleFetch(env), { accessToken: token, folderId: monthFolder.id, evidenceId, fileName: file.name, mimeType: validated.mimeType, sha256: validated.sha256, bytes: validated.bytes, caseId, category, uploadedById: user.id, uploadedAt });
+        const uploadDate = uploadedAt.slice(0, 10);
+        const datedFolderName = `${categoryName.replace(/\s+/gu, '')}(${user.displayName}_${uploadDate.replaceAll('-', '.')})`;
+        const datedFolder = await ensureClaimCenterFolder(googleFetch(env), { accessToken: token, caseId, kind: CASE_EVIDENCE_CATEGORY_CONFIG[category].folderKind, period: `${uploadDate}_${user.id}`, name: datedFolderName, parentId: root.id });
+        const uploaded = await uploadEvidenceToDrive(googleFetch(env), { accessToken: token, folderId: datedFolder.id, evidenceId, fileName: file.name, mimeType: validated.mimeType, sha256: validated.sha256, bytes: validated.bytes, caseId, category, uploadedById: user.id, uploadedAt });
         if (!db.batch) throw new GoogleDriveError('D1_BATCH_REQUIRED', 503, 'D1 batch is unavailable', true);
         const completedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();
         const results = await db.batch([
           workflowSchema
             ? db.prepare('INSERT INTO preview_google_case_evidence (id,organization_id,case_id,category,workflow_category,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-              .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, category, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, monthFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId)
+              .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, category, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, datedFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId)
             : db.prepare('INSERT INTO preview_google_case_evidence (id,organization_id,case_id,category,original_name,mime_type,byte_size,sha256,google_file_id,google_folder_id,uploaded_by_id,uploaded_by_name,uploaded_at,idempotency_key,request_fingerprint,operation_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-              .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, monthFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId),
+              .bind(evidenceId, PREVIEW_ORGANIZATION_ID, caseId, legacyCategory, file.name, validated.mimeType, file.size, validated.sha256, uploaded.fileId, datedFolder.id, user.id, user.displayName, uploadedAt, idempotencyKey, fingerprint, operationId),
           db.prepare("UPDATE preview_google_case_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId, completedAt, operationId),
-          db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED_TO_GOOGLE_DRIVE', `${categoryName} 업로드`, `${file.name} · ${period} · ${user.displayName}`, uploadedAt)
+          db.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(), caseId, user.id, 'EVIDENCE_UPLOADED_TO_GOOGLE_DRIVE', `${categoryName} 업로드`, `${file.name} · ${uploadDate} · ${user.displayName}`, uploadedAt)
         ]) as Array<{ meta?: { changes?: number } }>;
         if (results.some((result) => result.meta?.changes !== 1)) throw new GoogleDriveError('GOOGLE_METADATA_COMMIT_FAILED', 503, 'Google upload metadata did not commit atomically', true);
-        return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, googleFileId: uploaded.fileId, googleFolderId: monthFolder.id }), replay: false, folderPath: `${caseRow.caseNumber}/${categoryName}/${period}`, phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }, 201);
+        return json({ file: caseEvidenceProjection({ id: evidenceId, category, originalName: file.name, mimeType: validated.mimeType, byteSize: file.size, sha256: validated.sha256, chunkCount: 0, storageProvider: 'GOOGLE_DRIVE', uploadedBy: user.displayName, uploadedAt, googleFileId: uploaded.fileId, googleFolderId: datedFolder.id }), replay: false, folderPath: `${caseRow.caseNumber}/${datedFolderName}`, folderNaming: 'ATTRIBUTED_DAILY', phase: 'CF30_GOOGLE_DRIVE_PROJECT_EVIDENCE' }, 201);
       } catch (reason) {
         const uncertain = reason instanceof GoogleDriveError && reason.uncertain;
         const failedAt = new Date(Math.max(Date.now(), Date.parse(reservedAt) + 1)).toISOString();

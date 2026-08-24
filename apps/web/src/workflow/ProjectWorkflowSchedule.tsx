@@ -152,13 +152,6 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
 
       {showOverview ? (
         <>
-          <div className="workflow-summary" aria-label="프로젝트 일정 요약">
-            <article><span>전체 프로젝트</span><strong>{projects.length}</strong><small>D1 실제 단계 기록만 표시</small></article>
-            <article><span>수주 검토</span><strong>{projects.filter((project) => project.awardStatus === 'PENDING').length}</strong><small>의뢰·제안서 회신 대기</small></article>
-            <article><span>팀 배정 프로젝트</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 5 && stage.status !== 'PLANNED')).length}</strong><small>실제 수량산출·내역 투입 기록</small></article>
-            <article><span>보고서 작성 대기</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 6 && stage.status !== 'DONE')).length}</strong><small>전담 작성자 5명</small></article>
-          </div>
-
           <div className="schedule-toolbar" aria-label="일정표 보기 설정">
             <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
             <div className="schedule-toolbar-actions">
@@ -169,33 +162,6 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
               <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}>다음 ›</Button>
             </div>
           </div>
-
-          <aside className="schedule-manager-callout" aria-label="PM과 일정 설정 사용 방법">
-            <span aria-hidden="true">PM</span>
-            <div><strong>프로젝트별 담당 PM·기준 일정 설정</strong><p>아래 프로젝트의 <b>“PM·일정 설정”</b>을 누르면 담당 PM 지정과 착수회의·현장조사·물량산출·보고서 작성의 시작일·종료일을 바로 저장하고 수정할 수 있습니다.</p></div>
-          </aside>
-
-          <section className="project-brief-board" aria-labelledby="project-brief-title">
-            <header>
-              <div><span>PROJECT SNAPSHOT</span><h3 id="project-brief-title">프로젝트별 작업 특이사항</h3></div>
-              <p>산출 범위와 투입 팀처럼 일정만으로 놓치기 쉬운 내용을 함께 표시합니다.</p>
-            </header>
-            <div className="project-brief-list">
-              {projects.map((project) => (
-                <button key={project.id} type="button" className="project-brief-row" onClick={() => openProjectDialog(project)} aria-haspopup="dialog">
-                  <span className="project-brief-copy">
-                    <b>{project.code}</b>
-                    <strong>{project.name}</strong>
-                    <small>{project.claimType} · {project.client}</small>
-                  </span>
-                  <span className="project-highlight-list" aria-label={`${project.name} 작업 특이사항`}>
-                    {project.highlights.map((highlight) => <em key={highlight.label} data-tone={highlight.tone}>{highlight.label}</em>)}
-                  </span>
-                  <span className="project-brief-action"><small>{project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 지정 필요'}</small>PM·일정 설정 <b aria-hidden="true">›</b></span>
-                </button>
-              ))}
-            </div>
-          </section>
 
           <div className="schedule-board" role="table" aria-label="프로젝트 월간 일정표">
             <div className="schedule-board-header" role="row">
@@ -243,6 +209,18 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             <span>프로젝트를 클릭하면 1~6단계 세부 작업과 팀 배정이 열립니다.</span>
           </div>
 
+          <div className="workflow-summary" aria-label="프로젝트 일정 요약">
+            <article><span>전체 프로젝트</span><strong>{projects.length}</strong><small>D1 실제 단계 기록만 표시</small></article>
+            <article><span>수주 검토</span><strong>{projects.filter((project) => project.awardStatus === 'PENDING').length}</strong><small>의뢰·제안서 회신 대기</small></article>
+            <article><span>팀 배정 프로젝트</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 5 && stage.status !== 'PLANNED')).length}</strong><small>실제 수량산출·내역 투입 기록</small></article>
+            <article><span>보고서 작성 대기</span><strong>{projects.filter((project) => project.stages.some((stage) => stage.stageId === 6 && stage.status !== 'DONE')).length}</strong><small>전담 작성자 5명</small></article>
+          </div>
+
+          <aside className="schedule-manager-callout" aria-label="PM과 일정 설정 사용 방법">
+            <span aria-hidden="true">PM</span>
+            <div><strong>프로젝트별 담당 PM·기준 일정 설정</strong><p>캘린더 프로젝트의 PM·일정 설정 팝업에서 담당 PM 지정과 착수회의·현장조사·물량산출·보고서 작성의 시작일·종료일, 프로젝트 특이사항을 바로 저장하고 수정할 수 있습니다.</p></div>
+          </aside>
+
           {isProjectDialogOpen && (
             <div
               className="project-detail-modal-backdrop"
@@ -272,6 +250,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                   <button type="button" className="project-detail-modal__close" onClick={() => onNavigate('/projects/schedule')} autoFocus aria-label="프로젝트 상세 팝업 닫기">×</button>
                 </header>
                 <div className="project-detail-modal__body">
+                  <section className="project-modal-highlights" aria-label={`${selectedProject.name} 프로젝트 특이사항`}><b>프로젝트 특이사항</b><div>{selectedProject.highlights.map((highlight)=><em key={highlight.label} data-tone={highlight.tone}>{highlight.label}</em>)}</div></section>
                   <ProjectDetail
                     project={selectedProject}
                     focusedStageId={focusedStageId}

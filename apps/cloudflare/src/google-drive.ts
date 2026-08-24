@@ -352,7 +352,7 @@ export async function ensureClaimCenterFolder(
   fetcher: GoogleFetch,
   input: { accessToken: string; caseId: string; kind: ClaimCenterFolderKind; period: string; name: string; parentId?: string }
 ): Promise<{ id: string; name: string; created: boolean }> {
-  if (!/^[0-9a-f-]{36}$/iu.test(input.caseId) || !CLAIM_CENTER_FOLDER_KINDS.has(input.kind) || !/^(?:|\d{4}-\d{2})$/u.test(input.period)) {
+  if (!/^[0-9a-f-]{36}$/iu.test(input.caseId) || !CLAIM_CENTER_FOLDER_KINDS.has(input.kind) || !/^(?:|\d{4}-\d{2}|\d{4}-\d{2}-\d{2}_[0-9a-f-]{36})$/iu.test(input.period)) {
     throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder context is invalid');
   }
   const name = input.name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/gu, '-').replace(/\s+/gu, ' ').slice(0, 180);

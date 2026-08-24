@@ -6,6 +6,7 @@ import { ProposalLibraryView } from '../proposals/ProposalLibraryView';
 import { ReportTemplateCatalog } from '../templates/ReportTemplateCatalog';
 import { ReportStudio } from '../reports/ReportStudio';
 import { ReportList } from '../reports/ReportList';
+import { ReportLibraryView } from '../reports/ReportLibraryView';
 import { ApprovalInbox } from '../reports/ApprovalInbox';
 import { AiConfigManager } from '../ai/AiConfigManager';
 import { FeeSuccessCompensation } from '../fees/FeeSuccessCompensation';
@@ -73,6 +74,8 @@ export const ROUTES: RouteConfig[] = [
   { id: 'WF-06', path: '/workflow/report', name: '6. 보고서 작성' },
   { id: 'REPO-01', path: '/reports', name: '납품 보고서' },
   { id: 'REPO-02', path: '/reports/studio', name: '보고서 작성' },
+  { id: 'REPO-03', path: '/reports/projects', name: '프로젝트별 보고서 목록' },
+  { id: 'REPO-04', path: '/reports/database', name: '보고서 DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'APPR-01', path: '/approval', name: '검토·승인' },
   { id: 'POST-01', path: '/after-delivery', name: '법원 자료·소송 일정' },
   { id: 'OUTCOME-01', path: '/outcomes', name: '판결·성과 관리', allowedRoles: FINANCE_ROLES },
@@ -204,6 +207,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'WF-06') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'REPO-03') return <ReportLibraryView mode="projects" onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'REPO-04') return <ReportLibraryView mode="database" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
   if (previewMode && ['PROP-01', 'PROP-02'].includes(currentRoute.id)) {
     return (
@@ -254,6 +259,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   }
   if (currentRoute.id === 'PROP-03') return <ProposalLibraryView mode="projects" onNavigate={onNavigate} />;
   if (currentRoute.id === 'PROP-04') return <ProposalLibraryView mode="database" onNavigate={onNavigate} />;
+  if (currentRoute.id === 'REPO-03') return <ReportLibraryView mode="projects" onNavigate={onNavigate} />;
+  if (currentRoute.id === 'REPO-04') return <ReportLibraryView mode="database" onNavigate={onNavigate} />;
 
   if (currentRoute.id === 'TPL-01') {
     return (

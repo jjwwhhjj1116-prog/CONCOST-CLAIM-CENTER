@@ -10,7 +10,8 @@ const approvedExtensionIds = [
   'PROP-03', 'PROP-04',
   'PROJ-01', 'PROJ-02',
   'WF-01', 'WF-02', 'WF-03', 'WF-04', 'WF-05', 'WF-06',
-  'POST-01', 'OUTCOME-01', 'INTEG-01', 'MY-01'
+  'REPO-03', 'REPO-04',
+  'POST-01', 'OUTCOME-01', 'INTEG-01', 'MY-01',
 ];
 
 function validateRoutes(routes: RouteConfig[]): void {

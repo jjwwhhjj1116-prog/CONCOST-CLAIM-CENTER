@@ -18,7 +18,11 @@ const NAVIGATION_GROUPS: readonly {
     routeIds: ['CASE-02', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'],
     nestedGroups: [{ label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }]
   },
-  { label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work', routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02'] },
+  {
+    label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work',
+    routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
+    nestedGroups: [{ label: '프로젝트 보고서', eyebrow: 'PROJECT REPORTS', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
+  },
   { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
   { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품·품질관리', eyebrow: 'QUALITY & DELIVERY', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
@@ -217,7 +221,7 @@ export const AppShell: React.FC<AppShellProps> = ({
       <header className="topbar">
         <div className="brand-group">
           {isTablet && <Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button>}
-          <span className="brand-mark" aria-hidden="true">CS</span>
+          <span className="brand-mark" aria-hidden="true"><img src="/assets/claim-center-emblem.png" alt="" /></span>
           <div className="brand-copy"><h1>클레임센터 스튜디오</h1><small>CLAIM CENTER STUDIO</small></div>
         </div>
         <div className="session-tools">

@@ -59,8 +59,12 @@ test('CF22 applies the pastel overlay system and project-specific work tags', ()
   assert.match(theme, /\.navigation-group \.navigation-link\[aria-current='page'\].*background: #e5f0f8/u);
   assert.match(model, /highlights: readonly/u);
   assert.match(model, /마감팀 · 마감 물량 산출/u);
-  assert.match(schedule, /project-brief-board/u);
-  assert.match(schedule, /project\.highlights\.map/u);
+  assert.doesNotMatch(schedule, /project-brief-board/u);
+  assert.match(schedule, /project-modal-highlights/u);
+  assert.match(schedule, /selectedProject\.highlights\.map/u);
+  assert.ok(schedule.indexOf('className="schedule-board"') < schedule.indexOf('className="workflow-summary"'), '월간 캘린더가 요약 카드보다 먼저 렌더링되어야 합니다.');
+  assert.match(theme, /\.notice-box \*/u);
+  assert.match(theme, /color:#111827!important/u);
   for (const tone of ['finish', 'structure', 'civil', 'report', 'survey', 'pending']) {
     assert.match(scheduleCss, new RegExp(`data-tone='${tone}'`));
   }

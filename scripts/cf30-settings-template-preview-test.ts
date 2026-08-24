@@ -28,7 +28,7 @@ test('CF30 promotes the named yjw account to Admin and seeds six finished report
   db.close();
 });
 
-test('CF30 creates deterministic project/category/month Drive folders with server-owned provenance', async () => {
+test('CF30 creates deterministic project/category/month and uploader-dated Drive folders with server-owned provenance', async () => {
   const calls: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
   let ordinal = 0;
   const fetcher = async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -44,11 +44,17 @@ test('CF30 creates deterministic project/category/month Drive folders with serve
   const root = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'PROJECT_ROOT', period: '', name: 'CC-2026-001 Sample' });
   const category = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'TAKEOFF_SOURCE', period: '', name: '산출자료', parentId: root.id });
   const month = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'MONTH', period: '2026-08', name: '2026-08', parentId: category.id });
+  const attributed = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'MEETING_MINUTES', period: '2026-08-24_00000000-0000-4000-8000-000000000042', name: '회의록(유종욱_2026.08.24)', parentId: root.id });
   assert.equal(month.id, 'folder-id-3000');
-  assert.equal(calls.filter((call) => call.method === 'POST').length, 3);
-  const monthBody = calls.at(-1)?.body as { parents?: string[]; appProperties?: Record<string, string> };
+  assert.equal(attributed.id, 'folder-id-4000');
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 4);
+  const monthBody = calls.find((call) => call.body?.name === '2026-08')?.body as { parents?: string[]; appProperties?: Record<string, string> };
   assert.deepEqual(monthBody.parents, [category.id]);
   assert.deepEqual(monthBody.appProperties, { claimCenterCaseId: caseId, claimCenterFolderKind: 'MONTH', claimCenterPeriod: '2026-08' });
+  const attributedBody = calls.at(-1)?.body as { name?: string; parents?: string[]; appProperties?: Record<string, string> };
+  assert.equal(attributedBody.name, '회의록(유종욱_2026.08.24)');
+  assert.deepEqual(attributedBody.parents, [root.id]);
+  assert.equal(attributedBody.appProperties?.claimCenterPeriod, '2026-08-24_00000000-0000-4000-8000-000000000042');
   assert.ok(calls.every((call) => call.url.startsWith('https://www.googleapis.com/drive/v3/files')));
 });
 
