@@ -43,7 +43,7 @@ function dateLabel(value: string | null, withTime = false): string {
 
 function errorLabel(reason: unknown): string {
   if (reason instanceof ApiError && reason.status === 403) return '배정받은 프로젝트의 제안서만 볼 수 있습니다.';
-  return reason instanceof Error ? reason.message : '연동 제안서 DB를 불러오지 못했습니다.';
+  return reason instanceof Error ? reason.message : '저장된 제안서 DB를 불러오지 못했습니다.';
 }
 
 function downloadWorkbook(proposals: SentProposal[]): void {
@@ -54,7 +54,7 @@ function downloadWorkbook(proposals: SentProposal[]): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `클레임센터_연동제안서_DB_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  anchor.download = `클레임센터_프로젝트제안서_DB_${new Date().toISOString().slice(0, 10)}.xlsx`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -116,11 +116,11 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
     <section className="proposal-library" aria-labelledby="proposal-library-title">
       <header className="proposal-library__hero">
         <div>
-          <span>{mode === 'projects' ? 'LINKED PROPOSALS · PROJECT VIEW' : 'IMMUTABLE LINKED PROPOSAL LEDGER'}</span>
+          <span>{mode === 'projects' ? 'SAVED PROPOSALS · PROJECT VIEW' : 'D1 PROPOSAL VERSION LEDGER'}</span>
           <h2 id="proposal-library-title">{mode === 'projects' ? '프로젝트별 제안서 목록' : '제안서 DB관리'}</h2>
           <p>{mode === 'projects'
-            ? '프로젝트에 연동된 제안서를 모아 제안서 버전·회신·수주 상태를 한눈에 확인합니다.'
-            : '연동 당시의 제안서 번호·버전·원문 주소·SHA-256을 개별 행으로 보존한 관리자용 원장입니다. 확정본은 물리 삭제하지 않습니다.'}</p>
+            ? '제안서 스튜디오에 저장된 제안서를 프로젝트별로 모아 편집 버전·확정 여부·수주 상태를 한눈에 확인합니다.'
+            : '제안서 작성본의 현재 버전·본문 SHA-256·확정 상태를 보존하는 관리자용 D1 원장입니다. 목록에서 숨겨도 원장은 유지됩니다.'}</p>
         </div>
         <div className="proposal-library__actions">
           <button type="button" onClick={() => onNavigate('/proposals/editor')}>제안서 작성·Excel 가져오기</button>
@@ -128,11 +128,11 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
         </div>
       </header>
 
-      <div className="proposal-library__summary" aria-label="연동 제안서 요약">
-        <article><span>연동 프로젝트</span><strong>{summary.projects}</strong><small>프로젝트별 묶음</small></article>
-        <article><span>확정본 DB</span><strong>{summary.proposals}</strong><small>버전별 개별 보관</small></article>
-        <article><span>회신 대기</span><strong>{summary.pending}</strong><small>후속 확인 필요</small></article>
-        <article><span>원문 검증</span><strong>{summary.verified}</strong><small>URL·SHA 고정</small></article>
+      <div className="proposal-library__summary" aria-label="저장 제안서 요약">
+        <article><span>저장 프로젝트</span><strong>{summary.projects}</strong><small>프로젝트별 묶음</small></article>
+        <article><span>제안서 DB</span><strong>{summary.proposals}</strong><small>스튜디오 저장본</small></article>
+        <article><span>접수 대기</span><strong>{summary.pending}</strong><small>수주 여부 확인 전</small></article>
+        <article><span>확정 제안서</span><strong>{summary.verified}</strong><small>본문 SHA-256 고정</small></article>
       </div>
 
       <div className="proposal-library__filters">
@@ -142,8 +142,8 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
 
       {error && <div className="proposal-library__message is-error" role="alert">{error}</div>}
       {notice && <div className="proposal-library__message" role="status">{notice}</div>}
-      {loading && <div className="proposal-library__message" role="status">D1 연동 제안서 원장을 불러오고 있습니다.</div>}
-      {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 연동된 제안서가 없습니다.</strong><span>제안서 작성 후 프로젝트 접수 화면에서 확정본을 연동하면 이곳에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
+      {loading && <div className="proposal-library__message" role="status">D1 제안서 스튜디오 저장본을 불러오고 있습니다.</div>}
+      {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 저장된 제안서가 없습니다.</strong><span>제안서 작성 화면에서 초안을 저장하면 이 목록과 관리자 DB에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
 
       {!loading && !error && mode === 'projects' && projects.length > 0 && (
         <div className="proposal-project-list">
@@ -151,7 +151,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
             const latest = project.proposals[0];
             return <article key={project.caseId} className="proposal-project-card">
               <header>
-                <div><span>{project.caseNumber}</span><h3>{project.caseTitle}</h3><small>최근 연동 {dateLabel(latest.sentAt, true)}</small></div>
+                <div><span>{project.caseNumber}</span><h3>{project.caseTitle}</h3><small>최근 저장 {dateLabel(latest.sentAt, true)}</small></div>
                 <div><b>{project.proposals.length}건</b><em className={`status-${latest.awardStatus.toLowerCase()}`}>{awardLabels[latest.awardStatus]}</em></div>
               </header>
               <div className="proposal-project-card__rows">
@@ -170,9 +170,9 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
 
       {!loading && !error && mode === 'database' && proposals.length > 0 && (
         <div className="proposal-db-card">
-          <div className="proposal-db-card__note"><strong>D1 확정본 원장</strong><span>행 삭제·연동 스냅샷 덮어쓰기를 금지하고, 수주 결정만 별도 감사 이력으로 추가합니다.</span></div>
-          <div className="proposal-db-table" role="region" aria-label="연동 제안서 데이터베이스 원장" tabIndex={0}>
-            <table><thead><tr><th>프로젝트</th><th>연동 제안서</th><th>버전·확정일</th><th>검증·수주</th><th>원문 무결성</th><th>등록·관리</th></tr></thead>
+          <div className="proposal-db-card__note"><strong>D1 제안서 원장</strong><span>프로젝트별 작성본과 현재 버전을 보존하고, 목록 숨김·Drive 보관 작업은 별도 감사 이력으로 남깁니다.</span></div>
+          <div className="proposal-db-table" role="region" aria-label="저장 제안서 데이터베이스 원장" tabIndex={0}>
+            <table><thead><tr><th>프로젝트</th><th>저장 제안서</th><th>버전·최근 저장</th><th>확정·수주</th><th>본문 무결성</th><th>등록·관리</th></tr></thead>
               <tbody>{proposals.map((proposal) => <tr key={proposal.id}>
                 <td><strong>{proposal.caseNumber}</strong><span>{proposal.caseTitle}</span></td>
                 <td><strong>{proposal.proposalTitle}</strong><span>{proposal.proposalNumber}</span><small>{proposal.clientName}</small></td>

@@ -1384,15 +1384,38 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
     if(mode==='database'&&!user.roles.includes('admin'))return json({error:'관리자만 제안서 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN'},403);
     const q=(url.searchParams.get('q')??'').trim().slice(0,120);const award=url.searchParams.get('awardStatus')??'';const like=`%${q}%`;const admin=user.roles.includes('admin')?1:0;
     const rows=await env.DB.prepare(
-      'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,p.proposal_number AS proposalNumber,p.proposal_title AS proposalTitle,p.revision_label AS revisionLabel,p.client_name AS clientName,p.sent_at AS sentAt,p.response_due_on AS responseDueOn,p.proposed_amount_krw AS proposedAmountKrw,p.document_url AS documentUrl,p.document_sha256 AS documentSha256,p.verification_status AS verificationStatus,p.award_status AS awardStatus,p.award_decided_at AS awardDecidedAt,p.contract_amount_krw AS contractAmountKrw,p.project_start_on AS projectStartOn,p.project_end_on AS projectEndOn,p.version,creator.display_name AS createdByName,p.created_at AS createdAt,p.updated_at AS updatedAt,COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,cr.drive_archive_url AS driveArchiveUrl,cr.drive_archived_at AS driveArchivedAt '+
-      'FROM preview_proposal_links p JOIN preview_cases c ON c.id=p.case_id JOIN preview_users creator ON creator.id=p.created_by LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'PROPOSAL\' AND cr.record_id=p.id WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) AND COALESCE(cr.db_deleted,0)=0 '+
-      `${mode==='projects'?'AND COALESCE(cr.list_hidden,0)=0 ':''}`+'AND (?=\'\' OR p.award_status=?) AND (?=\'\' OR p.proposal_number LIKE ? OR p.proposal_title LIKE ? OR p.client_name LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ORDER BY p.sent_at DESC LIMIT 200'
-    ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,award,award,q,like,like,like,like,like).all<Record<string,unknown>>();
-    return json({proposals:rows.results.map((row)=>proposalProjection(row as unknown as PreviewProposalRow)).map((row,index)=>({...row,listHidden:Boolean(rows.results[index].listHidden),dbDeleted:Boolean(rows.results[index].dbDeleted),catalogVersion:Number(rows.results[index].catalogVersion??0),driveArchiveUrl:rows.results[index].driveArchiveUrl??null,driveArchivedAt:rows.results[index].driveArchivedAt??null})),mode,phase:'CF52_PROPOSAL_CATALOG'});
+      'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,'+
+      '(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AS proposalNumber,p.title AS proposalTitle,'+
+      '(CASE WHEN p.status=\'APPROVED\' THEN \'확정 v\' ELSE \'편집 v\' END||COALESCE(v.version_number,1)) AS revisionLabel,'+
+      'COALESCE(NULLIF(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\'),\'[클라이언트명 확인 필요]\') AS clientName,'+
+      'p.updated_at AS sentAt,NULL AS responseDueOn,link.proposed_amount_krw AS proposedAmountKrw,NULL AS documentUrl,v.sha256 AS documentSha256,'+
+      'CASE WHEN p.status=\'APPROVED\' THEN \'VERIFIED\' ELSE \'UNVERIFIED\' END AS verificationStatus,COALESCE(link.award_status,\'PENDING\') AS awardStatus,'+
+      'link.award_decided_at AS awardDecidedAt,link.contract_amount_krw AS contractAmountKrw,link.project_start_on AS projectStartOn,link.project_end_on AS projectEndOn,'+
+      'p.version,creator.display_name AS createdByName,p.created_at AS createdAt,p.updated_at AS updatedAt,'+
+      'COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,cr.drive_archive_url AS driveArchiveUrl,cr.drive_archived_at AS driveArchivedAt '+
+      'FROM preview_proposals p JOIN preview_cases c ON c.id=p.case_id AND c.organization_id=p.organization_id JOIN preview_users creator ON creator.id=p.created_by '+
+      'LEFT JOIN preview_proposal_versions v ON v.id=p.current_version_id AND v.proposal_id=p.id '+
+      'LEFT JOIN preview_proposal_links link ON link.id=(SELECT linked.id FROM preview_proposal_links linked WHERE linked.case_id=p.case_id AND linked.organization_id=p.organization_id ORDER BY linked.updated_at DESC LIMIT 1) '+
+      'LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'PROPOSAL\' AND cr.record_id=p.id '+
+      'WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) AND COALESCE(cr.db_deleted,0)=0 '+
+      `${mode==='projects'?'AND COALESCE(cr.list_hidden,0)=0 ':''}`+
+      'AND (?=\'\' OR COALESCE(link.award_status,\'PENDING\')=?) AND (?=\'\' OR p.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ORDER BY p.updated_at DESC LIMIT 200'
+    ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,award,award,q,like,like,like,like).all<Record<string,unknown>>();
+    return json({proposals:rows.results.map((row)=>proposalProjection(row as unknown as PreviewProposalRow)).map((row,index)=>({...row,listHidden:Boolean(rows.results[index].listHidden),dbDeleted:Boolean(rows.results[index].dbDeleted),catalogVersion:Number(rows.results[index].catalogVersion??0),driveArchiveUrl:rows.results[index].driveArchiveUrl??null,driveArchivedAt:rows.results[index].driveArchivedAt??null})),mode,source:'preview_proposals',phase:'CF55_PROPOSAL_STUDIO_CATALOG'});
   }
   if(!actionMatch||request.method!=='POST')return json({error:'Proposal catalog route was not found',code:'PROPOSAL_CATALOG_NOT_FOUND'},404);
   if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
-  const row=await env.DB.prepare('SELECT p.id,p.case_id AS caseId,p.proposal_number AS proposalNumber,p.proposal_title AS proposalTitle,p.revision_label AS revisionLabel,p.client_name AS clientName,p.sent_at AS sentAt,p.document_url AS documentUrl,p.document_sha256 AS documentSha256,p.verification_status AS verificationStatus,p.award_status AS awardStatus,c.case_number AS caseNumber,c.title AS caseTitle FROM preview_proposal_links p JOIN preview_cases c ON c.id=p.case_id WHERE p.id=? AND p.organization_id=?').bind(actionMatch[1],PREVIEW_ORGANIZATION_ID).first<Record<string,unknown>>();
+  const row=await env.DB.prepare(
+    'SELECT p.id,p.case_id AS caseId,(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AS proposalNumber,p.title AS proposalTitle,'+
+    '(CASE WHEN p.status=\'APPROVED\' THEN \'확정 v\' ELSE \'편집 v\' END||COALESCE(v.version_number,1)) AS revisionLabel,'+
+    'COALESCE(NULLIF(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\'),\'[클라이언트명 확인 필요]\') AS clientName,p.updated_at AS sentAt,'+
+    'NULL AS documentUrl,v.sha256 AS documentSha256,CASE WHEN p.status=\'APPROVED\' THEN \'VERIFIED\' ELSE \'UNVERIFIED\' END AS verificationStatus,'+
+    'COALESCE(link.award_status,\'PENDING\') AS awardStatus,c.case_number AS caseNumber,c.title AS caseTitle '+
+    'FROM preview_proposals p JOIN preview_cases c ON c.id=p.case_id AND c.organization_id=p.organization_id '+
+    'LEFT JOIN preview_proposal_versions v ON v.id=p.current_version_id AND v.proposal_id=p.id '+
+    'LEFT JOIN preview_proposal_links link ON link.id=(SELECT linked.id FROM preview_proposal_links linked WHERE linked.case_id=p.case_id AND linked.organization_id=p.organization_id ORDER BY linked.updated_at DESC LIMIT 1) '+
+    'WHERE p.id=? AND p.organization_id=?'
+  ).bind(actionMatch[1],PREVIEW_ORGANIZATION_ID).first<Record<string,unknown>>();
   if(!row||!await accessiblePreviewCase(env,user,String(row.caseId)))return json({error:'제안서를 찾을 수 없습니다.',code:'PROPOSAL_NOT_FOUND'},404);
   const body=await request.json().catch(()=>null) as Record<string,unknown>|null;const action=typeof body?.action==='string'?body.action:'';const expectedVersion=Number(body?.expectedVersion);
   if(!body||!exactObjectKeys(body,['action','expectedVersion'])||!['HIDE_FROM_LIST','RESTORE_TO_LIST','ARCHIVE_TO_DRIVE','ADMIN_DELETE'].includes(action)||!Number.isInteger(expectedVersion)||expectedVersion<0)return json({error:'제안서 목록/DB 작업 요청이 올바르지 않습니다.',code:'INVALID_CATALOG_ACTION'},400);
@@ -1405,7 +1428,7 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
   const write=current?env.DB.prepare('UPDATE preview_catalog_records SET list_hidden=?,db_deleted=?,drive_archive_file_id=?,drive_archive_url=?,drive_archived_at=?,drive_archived_by=?,version=version+1,updated_by=?,updated_at=? WHERE record_kind=\'PROPOSAL\' AND record_id=? AND version=?').bind(nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:current.driveArchivedBy,user.id,now,actionMatch[1],expectedVersion):env.DB.prepare('INSERT INTO preview_catalog_records (record_kind,record_id,organization_id,list_hidden,db_deleted,drive_archive_file_id,drive_archive_url,drive_archived_at,drive_archived_by,version,updated_by,created_at,updated_at) SELECT \'PROPOSAL\',?,?,?, ?,?,?,?,?,1,?,?,? WHERE ?=0').bind(actionMatch[1],PREVIEW_ORGANIZATION_ID,nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:null,user.id,now,now,expectedVersion);
   const results=await env.DB.batch([write,env.DB.prepare('INSERT INTO preview_catalog_actions (id,record_kind,record_id,action_code,detail_json,actor_id,created_at) SELECT ?,\'PROPOSAL\',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_catalog_records WHERE record_kind=\'PROPOSAL\' AND record_id=? AND version=?)').bind(crypto.randomUUID(),actionMatch[1],action,JSON.stringify({driveFileId,driveUrl}),user.id,now,actionMatch[1],nextVersion)]) as Array<{meta?:{changes?:number}}>;
   if(results.some((entry)=>entry.meta?.changes!==1))return json({error:'제안서 원장이 동시에 변경되었습니다.',code:'VERSION_CONFLICT'},409);
-  return json({catalog:previewCatalogProjection({...await previewCatalogRecord(env,'PROPOSAL',actionMatch[1]) as unknown as Record<string,unknown>}),action,phase:'CF52_PROPOSAL_CATALOG'});
+  return json({catalog:previewCatalogProjection({...await previewCatalogRecord(env,'PROPOSAL',actionMatch[1]) as unknown as Record<string,unknown>}),action,phase:'CF55_PROPOSAL_STUDIO_CATALOG'});
 }
 
 const LITIGATION_STAGES = new Set(['FILED', 'PLEADING', 'APPRAISAL', 'HEARING', 'JUDGEMENT', 'APPEAL', 'CLOSED']);
