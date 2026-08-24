@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input, Select, Table, Timeline } from '@claim-studio/ui';
 import { ApiError, apiDownload, apiRequest } from '../api';
+import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { StatusFeedbackState, type StatusFeedbackType } from '../layout/StatusFeedbackState';
 import { CLAIM_TYPES } from '../routes/Router';
 
@@ -256,20 +257,35 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
   const [clientLegalPosition, setClientLegalPosition] = useState<'VICTIM' | 'SUSPECT' | 'OTHER'>('VICTIM');
   const [clientPositionDetail, setClientPositionDetail] = useState('');
   const [intakeFile, setIntakeFile] = useState<File | null>(null);
+  const [intakeDraft, setIntakeDraft] = useState<{title:string;claimType:string;clientLegalPosition:'VICTIM'|'SUSPECT'|'OTHER';clientPositionDetail:string;description:string;reviewChecklist:string[]}|null>(null);
+  const [aiGeneration, setAiGeneration] = useState<{status:AiGenerationStatus;error?:string}|null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
   const [createdCase, setCreatedCase] = useState<CaseRecord | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const [intakeSourceIdempotencyKey, setIntakeSourceIdempotencyKey] = useState(() => crypto.randomUUID());
+  const generateDraft = async () => {
+    if (!intakeFile) { setError('먼저 녹음·TXT·CSV·Excel(.xlsx) 자료를 선택해 주세요.'); return; }
+    setError(''); setReviewConfirmed(false); setReviewOpen(false); setAiGeneration({status:'running'});
+    try {
+      const form = new FormData();
+      form.set('file', intakeFile); form.set('title', title); form.set('claimType', claimType); form.set('clientLegalPosition', clientLegalPosition); form.set('clientPositionDetail', clientPositionDetail); form.set('description', description);
+      const result = await apiRequest<{draft:{title:string;claimType:string;clientLegalPosition:'VICTIM'|'SUSPECT'|'OTHER';clientPositionDetail:string;description:string;reviewChecklist:string[]}}>('/api/cases/intake-source/draft', { method:'POST', body:form });
+      setIntakeDraft(result.draft); setTitle(result.draft.title); setClaimType(result.draft.claimType); setClientLegalPosition(result.draft.clientLegalPosition); setClientPositionDetail(result.draft.clientPositionDetail); setDescription(result.draft.description); setAiGeneration({status:'complete'});
+    } catch (reason) { setAiGeneration({status:'error',error:reason instanceof Error?reason.message:String(reason)}); }
+  };
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError('');
     try {
+      if (intakeFile && !reviewConfirmed) throw new Error('AI 자동작성 결과를 원문과 대조한 뒤 “검수 완료”를 눌러 주세요.');
       const result = createdCase ? { case: createdCase } : await apiRequest<{ case: CaseRecord }>('/api/cases', {
         method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, clientLegalPosition, clientPositionDetail, category: { major: '건설 클레임', middle: claimType, minor: '사건 업무' } })
       });
       setCreatedCase(result.case);
       if (intakeFile) {
-        const form = new FormData(); form.set('file', intakeFile);
+        const form = new FormData(); form.set('file', intakeFile); form.set('useReviewedCaseDescription','true');
         await apiRequest(`/api/cases/${encodeURIComponent(result.case.id)}/intake-source`, { method: 'POST', headers: { 'Idempotency-Key': intakeSourceIdempotencyKey }, body: form });
         setIntakeSourceIdempotencyKey(crypto.randomUUID());
       }
@@ -279,6 +295,8 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
     finally { setSaving(false); }
   };
   return <div className="case-create-page">
+    <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title="Gemini가 의뢰 자료를 읽고 있습니다" description="녹음·TXT·CSV·Excel 원문에서 사건명, 클레임 유형, 클라이언트 지위와 사건 설명 초안을 작성합니다." stages={['파일 형식·원문 확인','사건 사실·당사자 구분','기본정보·사건 설명 작성','사람 검수 항목 생성']} completeMessage="AI 초안 작성이 완료되었습니다. 확인을 누른 뒤 원문과 반드시 대조해 주세요." errorMessage={aiGeneration?.error} confirmLabel="초안 열고 검수하기" onConfirm={()=>{setAiGeneration(null);setReviewOpen(true);}} onClose={()=>setAiGeneration(null)}/>
+    {reviewOpen&&intakeDraft&&<div className="case-intake-review-overlay" role="presentation"><section className="case-intake-review-dialog" role="dialog" aria-modal="true" aria-labelledby="case-intake-review-title"><span className="gemini-star" aria-hidden="true">✦</span><div><small>GEMINI AI DRAFT · HUMAN REVIEW REQUIRED</small><h2 id="case-intake-review-title">자동작성 결과를 꼭 검수해 주세요.</h2><p>AI 결과는 확정 사실이 아닙니다. 아래 항목을 첨부 원문과 대조한 뒤에만 저장할 수 있습니다.</p></div><dl><div><dt>사건명</dt><dd>{intakeDraft.title}</dd></div><div><dt>유형·클라이언트 지위</dt><dd>{intakeDraft.claimType} · {intakeDraft.clientLegalPosition}</dd></div><div className="wide"><dt>사건 설명 초안</dt><dd>{intakeDraft.description}</dd></div></dl><ol>{intakeDraft.reviewChecklist.map((item)=><li key={item}>{item}</li>)}</ol><div className="case-intake-review-actions"><Button variant="secondary" type="button" onClick={()=>{setReviewOpen(false);setReviewConfirmed(false);}}>입력 화면에서 수정</Button><Button className="gemini-action-button" type="button" onClick={()=>{setReviewConfirmed(true);setReviewOpen(false);}}>✓ 원문 대조 · 검수 완료</Button></div></section></div>}
     <section className="workspace-hero case-create-hero"><div><span className="workspace-eyebrow">NEW PROJECT INTAKE</span><h3>새 프로젝트 의뢰를 등록합니다.</h3><p>저장하면 해당 의뢰가 선택된 제안서 작성 화면으로 바로 이어집니다.</p></div><div className="case-create-number"><strong>01</strong><span>INTAKE → PROPOSAL</span></div></section>
     <Card title="사건 기본정보" className="case-create-card">
       <form className="case-create-form" onSubmit={(event) => void submit(event)}>
@@ -287,7 +305,7 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
         <Select label="우리 클라이언트의 법적 지위" value={clientLegalPosition} options={[{value:'VICTIM',label:'피해자·원고 측'},{value:'SUSPECT',label:'피의자·피고 측'},{value:'OTHER',label:'기타 이해관계인'}]} onChange={(event) => setClientLegalPosition(event.target.value as 'VICTIM'|'SUSPECT'|'OTHER')} />
         <Input label="클라이언트 입장 상세" value={clientPositionDetail} maxLength={2000} required={clientLegalPosition === 'OTHER'} placeholder="예: 원고 조합, 피고 시공사, 감정 신청인" onChange={(event) => setClientPositionDetail(event.target.value)} />
         <label className="case-description-field" htmlFor="case-description"><span>사건 설명 · 반드시 클라이언트 관점으로 작성</span><textarea id="case-description" value={description} maxLength={5000} placeholder="우리 클라이언트가 무엇을 주장하고 어떤 피해·책임 쟁점을 다투는지, 확보 자료와 함께 입력하세요." onChange={(event) => setDescription(event.target.value)} /></label>
-        <label className="case-intake-audio" htmlFor="case-intake-source"><span>AI 사건 설명 정리용 자료 · 선택</span><input id="case-intake-source" type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/webm,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.mp3,.m4a,.wav,.ogg,.webm,.txt,.csv,.xlsx" onChange={(event) => setIntakeFile(event.target.files?.[0] ?? null)} /><small>{intakeFile ? `${intakeFile.name} · ${(intakeFile.size/1024/1024).toFixed(1)}MB · 저장 후 Gemini가 클라이언트 관점의 사건 설명으로 정리합니다.` : '녹음·TXT·CSV·Excel(.xlsx), 최대 10MB. 원본은 회사 Google Drive에, AI 정리문은 D1에 저장됩니다.'}</small></label>
+        <section className="case-intake-assistant"><div className="case-intake-assistant__heading"><span className="gemini-star" aria-hidden="true">✦</span><div><strong>Gemini AI 의뢰 자동작성</strong><small>녹음뿐 아니라 TXT·CSV·Excel(.xlsx)의 문장과 셀을 읽어 위 기본정보와 사건 설명 초안을 채웁니다.</small></div></div><label className="case-intake-audio" htmlFor="case-intake-source"><span>분석할 의뢰 자료 · 녹음 / TXT / CSV / Excel</span><input id="case-intake-source" type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/ogg,audio/webm,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.mp3,.m4a,.wav,.ogg,.webm,.txt,.csv,.xlsx" onChange={(event) => {setIntakeFile(event.target.files?.[0] ?? null);setIntakeDraft(null);setReviewConfirmed(false);}} /><small>{intakeFile ? `${intakeFile.name} · ${(intakeFile.size/1024/1024).toFixed(1)}MB · “AI 자동 작성”을 눌러 초안을 만든 뒤 반드시 검수하세요.` : '지원 형식: MP3·M4A·WAV·OGG·WEBM·TXT·CSV·XLSX / 최대 10MB'}</small></label><div className="case-intake-assistant__actions"><Button type="button" className="gemini-action-button" size="lg" disabled={!intakeFile||aiGeneration?.status==='running'} onClick={()=>void generateDraft()}><span className="gemini-button-star" aria-hidden="true">✦</span> AI 자동 작성</Button><span className={reviewConfirmed?'is-reviewed':'is-pending'}>{reviewConfirmed?'✓ 원문 대조·검수 완료':'AI 초안 작성 후 사람 검수가 필요합니다.'}</span></div></section>
         <div className="case-create-summary"><span>저장 후 다음 단계</span><p>대분류·중분류·소분류와 담당자를 D1에 함께 저장한 뒤, 이 프로젝트가 선택된 제안서 작성 1단계로 이동합니다.</p></div>
         {error && <ErrorBox error={error} />}
         <div className="case-create-actions"><Button type="button" variant="secondary" onClick={() => onNavigate('/dashboard')}>취소</Button><Button type="submit" isLoading={saving}>의뢰 저장 후 제안서 작성</Button></div>

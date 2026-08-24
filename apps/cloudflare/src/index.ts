@@ -26,6 +26,7 @@ import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from '.
 import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
 import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportChapter } from './proposal-docx';
 import { extractIntakeSource, IntakeSourceError, type IntakeSource } from './intake-source';
+import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './proposal-company-content';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -1618,14 +1619,14 @@ const PROPOSAL_CHAPTER_TITLES = [
 ] as const;
 
 const FALLBACK_PROPOSAL_MODULES: ProposalCompanyModule[] = [
-  { code:'CH04_EXPERTS',chapterNumber:4,title:PROPOSAL_CHAPTER_TITLES[3],category:'EXPERTS',bodyMarkdown:'현동명 대표이사는 건설법무학 박사로서 건설공사비 및 클레임 업무를 30년간 수행해 왔습니다. 이원희 부사장, 이경훈 클레임센터장, 최영배 본부장, 장범선 실장이 계약·원가·현장·보고서 실무를 분담합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH05_STRENGTHS',chapterNumber:5,title:PROPOSAL_CHAPTER_TITLES[4],category:'STRENGTHS',bodyMarkdown:'주식회사 컨코스트는 1999년 설립 이후 공사비 산정·검증, 물가변동, 설계변경, 기술감정과 건설 클레임 업무를 수행해 왔습니다. 법무법인과의 협업 경험 및 한국부동산원 협력 업무를 바탕으로 기술·원가·법리 검토를 하나의 실행안으로 연결합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH06_ORGANIZATION',chapterNumber:6,title:PROPOSAL_CHAPTER_TITLES[5],category:'ORGANIZATION',bodyMarkdown:'본사, 클레임센터, 아파트공사비연구원이 프로젝트 특성에 따라 협업합니다. 본사는 사업·계약 관리를, 클레임센터는 쟁점 분석과 협상·송무 지원을, 아파트공사비연구원은 수량·단가·공사비 검증을 담당합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH07_REDEVELOPMENT',chapterNumber:7,title:PROPOSAL_CHAPTER_TITLES[6],category:'TRACK_RECORD_REDEVELOPMENT',bodyMarkdown:'우동3구역, 오류현대연립, 부곡가구역, 상인천초교 주변구역 등 도시정비사업에서 공사비 검증과 협상 지원을 수행했습니다. 상세 실적은 관리자 승인 DB에서 프로젝트 성격에 맞는 항목만 선택하여 첨부합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH08_REB',chapterNumber:8,title:PROPOSAL_CHAPTER_TITLES[7],category:'TRACK_RECORD_REB',bodyMarkdown:'신촌 재개발, 학동4구역, 신반포4지구, 수원 111-3구역 등 한국부동산원 공사비검증 관련 업무를 수행했습니다. 최신성과 공개 가능 범위는 관리자 승인 실적 DB를 기준으로 적용합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH09_CLAIM',chapterNumber:9,title:PROPOSAL_CHAPTER_TITLES[8],category:'TRACK_RECORD_CLAIM',bodyMarkdown:'설계변경, 공기연장, 간접비, 공사타절·정산, 하자 및 공사대금 분쟁에 관한 기술검토와 감정·송무 지원을 수행했습니다. 사건명과 당사자는 비식별 처리된 승인 실적만 제안서에 병합합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH10_CERTIFICATES',chapterNumber:10,title:PROPOSAL_CHAPTER_TITLES[9],category:'CERTIFICATIONS',bodyMarkdown:'광운대학교 건설법무학 박사 학위, 법원감정 건설감정사 자격, 「건축견적이야기」 및 「건축시공이야기」 등 전문 저서와 승인된 증빙자료를 첨부합니다.',isActive:true,version:1,updatedAt:'SYSTEM' },
-  { code:'CH11_TERMS',chapterNumber:11,title:PROPOSAL_CHAPTER_TITLES[10],category:'TERMS',bodyMarkdown:'세부 수행기간, 투입인력, 계약조건과 용역대가는 자료 확인 후 협의합니다. 용역대가는 [클라이언트 맞춤 견적 별도 제시]로 표기하고 공개 제안서·DB에는 원금액을 저장하지 않습니다.',isActive:true,version:1,updatedAt:'SYSTEM' }
+  { code:'CH04_EXPERTS',chapterNumber:4,title:PROPOSAL_CHAPTER_TITLES[3],category:'EXPERTS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH04_EXPERTS,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH05_STRENGTHS',chapterNumber:5,title:PROPOSAL_CHAPTER_TITLES[4],category:'STRENGTHS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH05_STRENGTHS,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH06_ORGANIZATION',chapterNumber:6,title:PROPOSAL_CHAPTER_TITLES[5],category:'ORGANIZATION',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH06_ORGANIZATION,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH07_REDEVELOPMENT',chapterNumber:7,title:PROPOSAL_CHAPTER_TITLES[6],category:'TRACK_RECORD_REDEVELOPMENT',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH07_REDEVELOPMENT,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH08_REB',chapterNumber:8,title:PROPOSAL_CHAPTER_TITLES[7],category:'TRACK_RECORD_REB',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH08_REB,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH09_CLAIM',chapterNumber:9,title:PROPOSAL_CHAPTER_TITLES[8],category:'TRACK_RECORD_CLAIM',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH09_CLAIM,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH10_CERTIFICATES',chapterNumber:10,title:PROPOSAL_CHAPTER_TITLES[9],category:'CERTIFICATIONS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH10_CERTIFICATES,isActive:true,version:1,updatedAt:'HWP-260728' },
+  { code:'CH11_TERMS',chapterNumber:11,title:PROPOSAL_CHAPTER_TITLES[10],category:'TERMS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH11_TERMS,isActive:true,version:1,updatedAt:'HWP-260728' }
 ];
 
 function sanitizeProposalCostData(source: string): { value: string; count: number } {
@@ -1647,7 +1648,11 @@ async function proposalCompanyModules(env: CloudflareEnv): Promise<ProposalCompa
   if (!env.DB) return FALLBACK_PROPOSAL_MODULES;
   try {
     const rows = await env.DB.prepare('SELECT code,chapter_number AS chapterNumber,title,category,body_markdown AS bodyMarkdown,is_active AS isActive,version,updated_at AS updatedAt FROM preview_proposal_company_modules ORDER BY chapter_number').all<{code:string;chapterNumber:number;title:string;category:string;bodyMarkdown:string;isActive:number;version:number;updatedAt:string}>();
-    return rows.results.map((row) => ({ ...row, chapterNumber:Number(row.chapterNumber), isActive:row.isActive===1, version:Number(row.version) }));
+    return rows.results.map((row) => {
+      const canonical=PROPOSAL_COMPANY_MODULE_CONTENT[row.code];
+      const bodyMarkdown=canonical&&row.bodyMarkdown.trim().length<canonical.length*.7?canonical:row.bodyMarkdown;
+      return { ...row, bodyMarkdown, chapterNumber:Number(row.chapterNumber), isActive:row.isActive===1, version:Number(row.version) };
+    });
   } catch {
     return FALLBACK_PROPOSAL_MODULES;
   }
@@ -1671,7 +1676,7 @@ function defaultProposalChapters(caseRow: PreviewCaseRow, modules: ProposalCompa
     if (number === 1) body = `${caseRow.description || '[의뢰 배경 확인 필요]'}\n\n본 제안은 의뢰인의 권익을 보호하고 객관적인 기술·원가·계약 근거를 마련하는 것을 목적으로 합니다.`;
     if (number === 2) body = `- 계약·과업 범위 확인\n- 기준일 및 단가조정 조건 확인\n- 제출 자료의 신뢰성·누락 여부 확인\n- 상대방 주장과 의뢰인 관점의 구분`;
     if (number === 3) body = `1. Fact Finding: 계약서·도면·내역·회의록 및 현장자료 수집\n2. 법리·원가 검증: 쟁점별 계약·수량·단가 검토\n3. 협상 지원: 검토 결과와 대응 논리 정리\n4. 총회·의결 지원: 의사결정 자료와 최종 성과물 제공`;
-    if (number === 12) body = '주식회사 컨코스트 클레임센터는 확인된 자료와 객관적인 기술근거를 토대로 프로젝트의 합리적인 해결을 지원하겠습니다. 세부 일정과 수행 범위는 착수 전 협의를 거쳐 확정합니다.';
+    if (number === 12) body = PROPOSAL_STANDARD_CLOSING;
     if (module) body = module.bodyMarkdown;
     return { number, title:module?.title ?? title, kind:module ? 'FIXED' : 'VARIABLE', ...(module ? {moduleCode:module.code} : {}), body:sanitizeProposalCostData(body).value };
   });
@@ -1971,6 +1976,77 @@ function bytesToBase64(bytes: Uint8Array): string {
   for(let offset=0;offset<bytes.length;offset+=0x8000) binary+=String.fromCharCode(...bytes.subarray(offset,Math.min(bytes.length,offset+0x8000)));
   return btoa(binary);
 }
+
+interface IntakeAssistantDraft {
+  title: string;
+  claimType: string;
+  clientLegalPosition: 'VICTIM'|'SUSPECT'|'OTHER';
+  clientPositionDetail: string;
+  description: string;
+  reviewChecklist: string[];
+}
+
+function intakeGeminiSourcePart(bytes:Uint8Array,source:IntakeSource):Record<string,unknown>{
+  return source.kind==='AUDIO'
+    ? {inline_data:{mime_type:source.mimeType,data:bytesToBase64(bytes)}}
+    : {text:`첨부 파일에서 서버가 안전하게 추출한 원문입니다. 셀 주소·시트 표시는 원문 위치 표식입니다.\n\n${source.extractedText??''}`};
+}
+
+function intakeDraftText(value:unknown,maxLength:number,fallback=''):string{
+  return typeof value==='string'&&value.trim()?value.trim().slice(0,maxLength):fallback;
+}
+
+function parseIntakeAssistantDraft(raw:string,current:Record<string,string>):IntakeAssistantDraft|null{
+  try{
+    const cleaned=raw.replace(/^```(?:json)?\s*/iu,'').replace(/\s*```$/u,'').trim();
+    const start=cleaned.indexOf('{'); const end=cleaned.lastIndexOf('}');
+    if(start<0||end<=start)return null;
+    const value=JSON.parse(cleaned.slice(start,end+1)) as Record<string,unknown>;
+    const allowedClaimTypes=new Set(PREVIEW_CLAIM_TYPES);
+    const allowedPositions=new Set(['VICTIM','SUSPECT','OTHER']);
+    const checklist=Array.isArray(value.reviewChecklist)?value.reviewChecklist.filter((item):item is string=>typeof item==='string'&&Boolean(item.trim())).slice(0,8).map((item)=>item.trim().slice(0,240)):[];
+    const title=intakeDraftText(value.title,500,current.title||'사건명 확인 필요');
+    const description=intakeDraftText(value.description,5000,current.description||'첨부 원문을 기준으로 사건 설명을 확인해 주세요.');
+    if(!title||!description)return null;
+    return{
+      title,
+      claimType:allowedClaimTypes.has(String(value.claimType))?String(value.claimType):(allowedClaimTypes.has(current.claimType)?current.claimType:'TYPE-01'),
+      clientLegalPosition:(allowedPositions.has(String(value.clientLegalPosition))?String(value.clientLegalPosition):(allowedPositions.has(current.clientLegalPosition)?current.clientLegalPosition:'OTHER')) as IntakeAssistantDraft['clientLegalPosition'],
+      clientPositionDetail:intakeDraftText(value.clientPositionDetail,2000,current.clientPositionDetail||'원문에서 당사자 지위를 확인해 주세요.'),
+      description,
+      reviewChecklist:checklist.length?checklist:['사건명과 당사자 명칭을 원문과 대조','클라이언트가 피해자·원고인지 피의자·피고인지 확인','날짜·금액·계약 쟁점의 정확성 확인']
+    };
+  }catch{return null;}
+}
+
+async function generateIntakeAssistantDraft(env:CloudflareEnv,bytes:Uint8Array,fileName:string,source:IntakeSource,current:Record<string,string>):Promise<{draft?:IntakeAssistantDraft;modelCode:string;response?:Response}>{
+  const credential=await resolveOrganizationAiCredential(env,'GEMINI');
+  if(!credential)return{modelCode:'gemini-3.7-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
+  const modelCode='gemini-3.7-flash'; const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
+  let response:Response;
+  try{
+    response=await(env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 접수 보조자입니다. 첨부 원문에 명시된 사실만 사용하고 추측하지 마세요. 클라이언트와 상대방을 구분하고 불확실한 값은 반드시 확인 필요라고 표시하세요.'}]},contents:[{role:'user',parts:[{text:`첨부 자료 ${fileName} (${source.kind})를 읽고 프로젝트 의뢰 기본정보 초안을 만드세요. 현재 입력값은 참고만 하며 원문과 충돌하면 reviewChecklist에 적으세요.\n현재 사건명: ${current.title||'[없음]'}\n현재 유형: ${current.claimType||'[없음]'}\n현재 법적 지위: ${current.clientLegalPosition||'[없음]'}\n현재 입장 상세: ${current.clientPositionDetail||'[없음]'}\n현재 설명: ${current.description||'[없음]'}\n\nJSON 객체 하나만 반환하세요: {"title":"사건명","claimType":"TYPE-01~TYPE-06 중 하나","clientLegalPosition":"VICTIM|SUSPECT|OTHER","clientPositionDetail":"우리 클라이언트의 구체적 지위","description":"클라이언트 관점의 사건 설명. 시간순 사실·주장·상대방 주장·핵심 쟁점·확보자료·확인필요 사항 포함","reviewChecklist":["사람이 원문과 대조할 항목"]}`},intakeGeminiSourcePart(bytes,source)]}],generationConfig:{temperature:0.1,maxOutputTokens:4096,responseMimeType:'application/json'}})});
+  }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 의뢰 초안 작성 시간이 초과되었습니다.',code:'GEMINI_INTAKE_DRAFT_UNAVAILABLE'},504)}}
+  clearTimeout(timeout);
+  if(!response.ok){const safe=safeGeminiProviderError(await response.json().catch(()=>null),response.status);return{modelCode,response:json({...safe,providerStatus:response.status},response.status===401||response.status===403?503:502)}}
+  const text=extractGeminiText(await response.json().catch(()=>null)); const draft=text?parseIntakeAssistantDraft(text,current):null;
+  if(!draft)return{modelCode,response:json({error:'Gemini 의뢰 초안 결과 형식이 올바르지 않습니다.',code:'GEMINI_MALFORMED_INTAKE_DRAFT'},502)};
+  return{draft,modelCode};
+}
+
+async function handlePreviewIntakeDraft(request:Request,env:CloudflareEnv,user:SessionUser):Promise<Response>{
+  if(request.method!=='POST')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
+  if(!user.roles.some((role)=>new Set(['admin','ceo','director','pm','staff']).has(role)))return json({error:'Role cannot use the intake assistant',code:'FORBIDDEN'},403);
+  const form=await request.formData().catch(()=>null); const file=form?.get('file');
+  if(!(file instanceof File)||file.size<1||file.size>10_000_000)return json({error:'녹음·TXT·CSV·Excel(.xlsx) 파일을 10MB 이하로 선택해 주세요.',code:'INVALID_INTAKE_SOURCE'},400);
+  const bytes=new Uint8Array(await file.arrayBuffer()); let source:IntakeSource;
+  try{source=await extractIntakeSource(file.name,file.type,bytes)}catch(reason){return reason instanceof IntakeSourceError?json({error:reason.message,code:reason.code},400):json({error:'의뢰 자료를 읽지 못했습니다.',code:'INVALID_INTAKE_SOURCE'},400)}
+  const current={title:String(form?.get('title')??'').slice(0,500),claimType:String(form?.get('claimType')??'').slice(0,20),clientLegalPosition:String(form?.get('clientLegalPosition')??'').slice(0,20),clientPositionDetail:String(form?.get('clientPositionDetail')??'').slice(0,2000),description:String(form?.get('description')??'').slice(0,5000)};
+  const generated=await generateIntakeAssistantDraft(env,bytes,file.name,source,current);
+  if(generated.response)return generated.response;
+  return json({draft:generated.draft,source:{fileName:file.name,kind:source.kind,mimeType:source.mimeType},modelCode:generated.modelCode,requiresHumanReview:true,phase:'CF48_INTAKE_AI_DRAFT'});
+}
+
 async function summarizeIntakeSource(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,fileName:string,source:IntakeSource): Promise<{summary?:string;modelCode:string;response?:Response}> {
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
   if(!credential) return {modelCode:'gemini-3.7-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
@@ -1978,9 +2054,7 @@ async function summarizeIntakeSource(env: CloudflareEnv,user: SessionUser,caseRo
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
   let response:Response;
   try{
-    const sourcePart=source.kind==='AUDIO'
-      ? {inline_data:{mime_type:source.mimeType,data:bytesToBase64(bytes)}}
-      : {text:`첨부 파일에서 서버가 안전하게 추출한 원문입니다. 셀 주소·시트 표시는 원문 위치 표식입니다.\n\n${source.extractedText??''}`};
+    const sourcePart=intakeGeminiSourcePart(bytes,source);
     response=await (env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 자료 정리 담당자입니다. 녹음·텍스트·표에서 확인되는 사실만 사용하고, 추측하지 말며, 클라이언트 관점과 상대방 주장을 명확히 구분하세요.'}]},contents:[{role:'user',parts:[{text:`프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n클라이언트 법적 지위: ${caseRow.clientLegalPosition}\n기존 사건 설명: ${caseRow.description||'[없음]'}\n첨부 자료: ${fileName}\n자료 종류: ${source.kind}\n기존 설명과 첨부 원문을 함께 검토하여 다음 형식으로 한국어 작성: 1) 시간순 타임라인 2) 의뢰 배경 3) 클라이언트 주장 4) 상대방 주장 또는 쟁점 5) 확보 자료 6) 추가 확인 질문 7) 제안서·보고서 작성 시 관점 주의사항. 원문에 없는 항목은 '확인 필요'로 표시하세요.`},sourcePart]}],generationConfig:{maxOutputTokens:4096}})});
   }catch{clearTimeout(timeout);return{modelCode,response:json({error:'Gemini 의뢰 자료 정리 시간이 초과되었습니다.',code:'GEMINI_INTAKE_SOURCE_UNAVAILABLE'},504)}}
   clearTimeout(timeout);
@@ -2010,7 +2084,10 @@ async function handlePreviewIntakeSource(request:Request,env:CloudflareEnv,user:
   const operationId=crypto.randomUUID(); const reservedAt=new Date().toISOString();
   const reserved=await env.DB.prepare("INSERT OR IGNORE INTO preview_intake_audio_operations (id,organization_id,case_id,idempotency_key,request_fingerprint,status,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?,?,'PENDING',NULL,NULL,?,?,?)").bind(operationId,PREVIEW_ORGANIZATION_ID,caseId,key,fingerprint,user.id,reservedAt,reservedAt).run();
   if(reserved.meta?.changes!==1)return json({error:'동일 의뢰 자료 처리가 이미 진행 중입니다.',code:'INTAKE_SOURCE_OPERATION_CONFLICT'},409);
-  const generated=await summarizeIntakeSource(env,user,caseRow,bytes,file.name,source);
+  const useReviewedDraft=form?.get('useReviewedCaseDescription')==='true'&&Boolean(caseRow.description?.trim());
+  const generated=useReviewedDraft
+    ? {summary:caseRow.description as string,modelCode:'gemini-3.7-flash+human-reviewed'}
+    : await summarizeIntakeSource(env,user,caseRow,bytes,file.name,source);
   if(generated.response){await env.DB.prepare("UPDATE preview_intake_audio_operations SET status='FAILED',error_code='GEMINI_SUMMARY_FAILED',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run();return generated.response;}
   try{
     const token=await accessToken(env); const uploadedAt=new Date().toISOString(); const evidenceId=crypto.randomUUID(); const summaryId=crypto.randomUUID();
@@ -2309,6 +2386,7 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if(url.pathname==='/api/cases/intake-source/draft')return handlePreviewIntakeDraft(request,env,user);
   const intakeSourcePath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/(?:intake-source|intake-audio)$/iu);
   if(intakeSourcePath)return handlePreviewIntakeSource(request,env,user,intakeSourcePath[1]);
   const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|allocations|ai-import))?$/iu);

@@ -28,7 +28,7 @@ function readCookie(name: string): string {
 function requestHeaders(init: RequestInit): Headers {
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
     const csrf = readCookie('csrf_token');
     if (csrf) headers.set('X-CSRF-Token', csrf);

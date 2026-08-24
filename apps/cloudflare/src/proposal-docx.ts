@@ -72,13 +72,33 @@ const textRun = (value: string, properties = ''): string => `<w:r>${properties ?
 const paragraph = (value: string, style = 'Normal', extraProperties = '', runProperties = ''): string =>
   `<w:p><w:pPr><w:pStyle w:val="${style}"/>${extraProperties}</w:pPr>${textRun(value, runProperties)}</w:p>`;
 
+const markdownCells = (line: string): string[] => line.trim().replace(/^\|/u, '').replace(/\|$/u, '').split('|').map((cell) => cell.trim().replace(/^\*\*(.+)\*\*$/u, '$1'));
+
+function markdownTable(header: string[], rows: string[][]): string {
+  const cellWidth = Math.max(900, Math.floor(9300 / Math.max(1, header.length)));
+  const row = (cells: string[], heading: boolean): string => `<w:tr>${header.map((_column, index) => `<w:tc><w:tcPr><w:tcW w:w="${cellWidth}" w:type="dxa"/>${heading ? '<w:shd w:fill="EAF2FF"/>' : ''}<w:vAlign w:val="center"/></w:tcPr>${paragraph(cells[index] ?? '', 'Normal', '<w:spacing w:after="40"/>', heading ? '<w:b/><w:color w:val="17326D"/><w:sz w:val="17"/>' : '<w:sz w:val="16"/>')}</w:tc>`).join('')}</w:tr>`;
+  return `<w:tbl><w:tblPr><w:tblW w:w="9300" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="B8C8DA"/><w:left w:val="single" w:sz="6" w:color="B8C8DA"/><w:bottom w:val="single" w:sz="6" w:color="B8C8DA"/><w:right w:val="single" w:sz="6" w:color="B8C8DA"/><w:insideH w:val="single" w:sz="4" w:color="D6E0EA"/><w:insideV w:val="single" w:sz="4" w:color="D6E0EA"/></w:tblBorders><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>${row(header, true)}${rows.map((cells) => row(cells, false)).join('')}</w:tbl>${paragraph('', 'Normal', '<w:spacing w:after="100"/>')}`;
+}
+
 function markdownParagraphs(body: string): string {
   const lines = body.replaceAll('\r\n', '\n').split('\n');
   const output: string[] = [];
-  for (const sourceLine of lines) {
-    const line = sourceLine.trim();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
     if (!line) {
       output.push('<w:p><w:pPr><w:spacing w:after="80"/></w:pPr></w:p>');
+      continue;
+    }
+    if (line.includes('|') && lines[index + 1] && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/u.test(lines[index + 1])) {
+      const header = markdownCells(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+        rows.push(markdownCells(lines[index]));
+        index += 1;
+      }
+      index -= 1;
+      output.push(markdownTable(header, rows));
       continue;
     }
     if (line.startsWith('### ')) {

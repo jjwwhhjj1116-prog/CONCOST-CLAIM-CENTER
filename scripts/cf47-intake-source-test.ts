@@ -64,6 +64,7 @@ async function integrationSetup(): Promise<{ sql: Database; env: CloudflareEnv }
   const geminiFetch: typeof fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as any;
     assert.match(body.contents[0].parts[1].text, /발주처가 추가 공사를 지시/u);
+    if (body.contents[0].parts[0].text.includes('JSON 객체 하나만 반환')) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ title:'추가공사비 검토 의뢰', claimType:'TYPE-01', clientLegalPosition:'VICTIM', clientPositionDetail:'원고 조합', description:'2026-08-01 발주처의 추가 공사 지시에 대해 클라이언트가 공사비 검토를 요청했습니다.', reviewChecklist:['추가 공사 지시일 대조','클라이언트 법적 지위 확인'] }) }] } }] });
     return Response.json({ candidates: [{ content: { parts: [{ text: '1) 시간순 타임라인\n- 2026-08-01 발주처 추가 공사 지시\n2) 의뢰 배경\n추가 공사비 검토 요청' }] } }] });
   };
   return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: 'AQ.CF47_SYNTHETIC_GEMINI_KEY', GEMINI_TEST_FETCH: geminiFetch, GOOGLE_CLIENT_ID: '123456789012-cf47.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'cf47-client-secret-value', GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY: MASTER_KEY, GOOGLE_OAUTH_REDIRECT_ORIGIN: 'https://preview.example', GOOGLE_ALLOWED_DOMAIN: 'con-cost.com', ALLOW_TEST_GOOGLE_MODES: 'true', GOOGLE_TEST_FETCH: googleFetch } };
@@ -144,9 +145,39 @@ test('CF47 intake-source endpoint atomically stores Drive metadata, Gemini summa
   sql.close();
 });
 
+test('CF48 intake assistant drafts all case fields from TXT before case creation and requires human review', async () => {
+  const { sql, env } = await integrationSetup();
+  const form = new FormData();
+  form.set('file', new File([new TextEncoder().encode(INTAKE_TEXT)], '의뢰정리.txt', { type:'text/plain' }));
+  form.set('title',''); form.set('claimType','TYPE-01'); form.set('clientLegalPosition','VICTIM'); form.set('clientPositionDetail',''); form.set('description','');
+  const response = await worker.fetch(new Request('https://preview.example/api/cases/intake-source/draft', { method:'POST', headers:{'X-Session-Token':SESSION_TOKEN}, body:form }), env);
+  assert.equal(response.status,200,await response.clone().text());
+  const body=await response.json() as any;
+  assert.equal(body.phase,'CF48_INTAKE_AI_DRAFT');
+  assert.equal(body.requiresHumanReview,true);
+  assert.equal(body.draft.title,'추가공사비 검토 의뢰');
+  assert.equal(body.draft.clientLegalPosition,'VICTIM');
+  assert.match(body.draft.description,/추가 공사 지시/u);
+  assert.deepEqual(body.draft.reviewChecklist,['추가 공사 지시일 대조','클라이언트 법적 지위 확인']);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_intake_audio_evidence')[0].values[0][0],0,'draft preview must not persist or upload before review');
+  sql.close();
+});
+
+test('CF48 final upload preserves the human-reviewed case description instead of overwriting it with a second AI response', async () => {
+  const { sql, env } = await integrationSetup();
+  const reviewed='초기 메모';
+  const form=new FormData(); form.set('file',new File([new TextEncoder().encode(INTAKE_TEXT)],'의뢰정리.txt',{type:'text/plain'})); form.set('useReviewedCaseDescription','true');
+  const response=await worker.fetch(new Request(`https://preview.example/api/cases/${CASE_ID}/intake-source`,{method:'POST',headers:{'X-Session-Token':SESSION_TOKEN,'Idempotency-Key':'cf48-reviewed-source-0001'},body:form}),env);
+  assert.equal(response.status,201,await response.clone().text());
+  const body=await response.json() as any; assert.equal(body.caseDescription,reviewed); assert.match(body.summary.modelCode,/human-reviewed/u);
+  assert.equal(sql.exec('SELECT description FROM preview_cases WHERE id=?',[CASE_ID])[0].values[0][0],reviewed);
+  sql.close();
+});
+
 test('CF47 UI and Worker connect the generic source route to Drive, D1, Gemini, and case description', () => {
   const worker = readFileSync('apps/cloudflare/src/index.ts', 'utf8');
   const ui = readFileSync('apps/web/src/case-management/CaseManagement.tsx', 'utf8');
   for (const marker of ['intake-source|intake-audio', 'extractIntakeSource', 'INTAKE_SOURCE_SUMMARIZED', '프로젝트 의뢰 원본', "SET description=?", 'latestIntakeSourceSummary']) assert.match(worker, new RegExp(marker));
-  for (const marker of ['/intake-source', '.txt,.csv,.xlsx', 'AI 사건 설명 정리용 자료', '녹음·TXT·CSV·Excel']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
+  for (const marker of ['/intake-source/draft', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '자동작성 결과를 꼭 검수해 주세요.', 'useReviewedCaseDescription']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
+  const api = readFileSync('apps/web/src/api.ts','utf8'); assert.match(api,/!\(init\.body instanceof FormData\)/u);
 });
