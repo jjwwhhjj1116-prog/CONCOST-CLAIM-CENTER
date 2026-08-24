@@ -323,6 +323,6 @@ test('CF40 external AI is default-deny for internal documents, then minimizes id
   const columns = sql.exec("PRAGMA table_info('preview_workflow_ai_imports')")[0].values.map((row) => row[1]);
   assert.equal(columns.includes('raw_payload'), false); assert.equal(columns.includes('response_text'), false);
   const ui = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'workflow', 'WorkflowOperations.tsx'), 'utf8');
-  assert.match(ui, /끌어 놓으면/u); assert.match(ui, /Excel 양식\(\.csv\) 내보내기/u); assert.match(ui, /비학습 조건/u);
+  assert.match(ui, /끌어 놓으면/u); assert.match(ui, /회사 회의록 XLSX 내보내기/u); assert.match(ui, /CONCOST_회의록_양식\.xlsx/u); assert.match(ui, /비학습 조건/u);
   sql.close();
 });

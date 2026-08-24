@@ -93,13 +93,19 @@ function markdownTable(header: string[], rows: string[][]): string {
   return `<w:tbl><w:tblPr><w:tblW w:w="9300" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="B8C8DA"/><w:left w:val="single" w:sz="6" w:color="B8C8DA"/><w:bottom w:val="single" w:sz="6" w:color="B8C8DA"/><w:right w:val="single" w:sz="6" w:color="B8C8DA"/><w:insideH w:val="single" w:sz="4" w:color="D6E0EA"/><w:insideV w:val="single" w:sz="4" w:color="D6E0EA"/></w:tblBorders><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>${row(header, true)}${rows.map((cells) => row(cells, false)).join('')}</w:tbl>${paragraph('', 'Normal', '<w:spacing w:after="100"/>')}`;
 }
 
-function markdownParagraphs(body: string): string {
+function markdownParagraphs(body: string, imageXmlByKey: ReadonlyMap<string,string> = new Map()): string {
   const lines = body.replaceAll('\r\n', '\n').split('\n');
   const output: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index].trim();
     if (!line) {
       output.push('<w:p><w:pPr><w:spacing w:after="80"/></w:pPr></w:p>');
+      continue;
+    }
+    const assetMarker = line.match(/^\[PROPOSAL_ASSET:([A-Z0-9_]+)\]$/u);
+    if (assetMarker) {
+      const image = imageXmlByKey.get(assetMarker[1]);
+      if (image) output.push(image);
       continue;
     }
     if (line.includes('|') && lines[index + 1] && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/u.test(lines[index + 1])) {
@@ -135,6 +141,34 @@ function markdownParagraphs(body: string): string {
     output.push(paragraph(strong?.[1] ?? line, 'Normal', '<w:jc w:val="both"/>', strong ? '<w:b/>' : ''));
   }
   return output.join('');
+}
+
+const proposalAssetAnchor: Readonly<Record<string,RegExp>> = {
+  CH04_EXPERT_PROFILE:/대표이사|전문가 현황|현동명/u,
+  CH06_ORG_CHART:/조직 체계|조직도|조직 구성/u,
+  CH06_BUSINESS_AREAS:/업무 영역/u,
+  CH10_DEGREE:/학위/u,
+  CH10_APPRAISER:/감정사|자격증/u,
+  CH10_PUBLICATIONS:/저서|논문/u
+};
+
+function proposalBodyWithAssetMarkers(body:string, assets:readonly ProposalExportAsset[]):string {
+  const lines=body.replaceAll('\r\n','\n').split('\n');
+  const pending=[...assets];
+  const output:string[]=[];
+  for(const line of lines){
+    output.push(line);
+    for(let index=pending.length-1;index>=0;index-=1){
+      const asset=pending[index];
+      const anchor=proposalAssetAnchor[asset.assetKey];
+      if(anchor?.test(line)){
+        output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');
+        pending.splice(index,1);
+      }
+    }
+  }
+  for(const asset of pending)output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');
+  return output.join('\n');
 }
 
 function proposalImageDrawing(asset: ProposalExportAsset, relationshipId: string, drawingId: number): string {
@@ -181,47 +215,67 @@ const proposalPdfHex = (value: string): string => Array.from(value)
   .join('')
   .toUpperCase();
 
-const proposalPdfLines = (input: ProposalExportDocument): string[] => {
-  const raw = [
-    'CONCOST CLAIM CENTER · APPROVED PROPOSAL',
-    input.projectTitle,
-    input.subtitle,
+type ProposalPdfBlock = { kind:'text'; lines:string[] } | { kind:'image'; asset:ProposalExportAsset };
+
+const wrapProposalPdfLines = (lines: readonly string[]): string[] => lines.flatMap((line) => line.length > 42
+  ? Array.from({ length: Math.ceil(line.length / 42) }, (_, index) => line.slice(index * 42, (index + 1) * 42))
+  : [line]);
+
+function proposalPdfBlocks(input: ProposalExportDocument): ProposalPdfBlock[] {
+  const assets=(input.assets??[]).filter((asset)=>asset.mimeType==='image/jpeg'&&asset.data.byteLength>0);
+  const blocks:ProposalPdfBlock[]=[];
+  const pushText=(lines:readonly string[])=>{
+    const wrapped=wrapProposalPdfLines(lines);
+    for(let index=0;index<wrapped.length;index+=42)blocks.push({kind:'text',lines:wrapped.slice(index,index+42)});
+  };
+  pushText([
+    'CONCOST CLAIM CENTER · APPROVED PROPOSAL',input.projectTitle,input.subtitle,
     `클라이언트 ${input.clientName} · 제출일 ${input.submissionDate}`,
-    `프로젝트 ${input.caseNumber} · ${input.claimType} · v${input.versionNumber}`,
-    '',
-    ...generateProposalMarkdown(input).split(/\r?\n/u)
-  ];
-  return raw.flatMap((line) => line.length > 42
-    ? Array.from({ length: Math.ceil(line.length / 42) }, (_, index) => line.slice(index * 42, (index + 1) * 42))
-    : [line]);
-};
+    `프로젝트 ${input.caseNumber} · ${input.claimType} · v${input.versionNumber}`,'','목 차',
+    ...input.chapters.map((chapter)=>`${chapter.number}. ${chapter.title}`)
+  ]);
+  for(const chapter of input.chapters){
+    const chapterAssets=assets.filter((asset)=>asset.chapterNumber===chapter.number);
+    const marked=proposalBodyWithAssetMarkers(chapter.body,chapterAssets).replaceAll('\r\n','\n').split('\n');
+    let textLines=[`${chapter.number}. ${chapter.title}`];
+    for(const line of marked){
+      const marker=line.trim().match(/^\[PROPOSAL_ASSET:([A-Z0-9_]+)\]$/u);
+      if(!marker){textLines.push(line);continue;}
+      if(textLines.some((value)=>value.trim()))pushText(textLines);
+      textLines=[];
+      const asset=chapterAssets.find((item)=>item.assetKey===marker[1]);
+      if(asset)blocks.push({kind:'image',asset});
+    }
+    if(textLines.some((value)=>value.trim()))pushText(textLines);
+  }
+  pushText([`문서 무결성 ${input.contentSha256}`,`제안서 ${input.proposalId} · 버전 ${input.versionNumber}`]);
+  return blocks;
+}
 
 export function generateProposalPdf(input: ProposalExportDocument): Uint8Array {
-  const lines = proposalPdfLines(input);
-  const textPages = Array.from({ length: Math.max(1, Math.ceil(lines.length / 42)) }, (_, index) => lines.slice(index * 42, (index + 1) * 42));
-  const imageAssets = (input.assets ?? []).filter((asset) => asset.mimeType === 'image/jpeg' && asset.data.byteLength > 0);
+  const blocks=proposalPdfBlocks(input);
   const objects = new Map<number, Uint8Array>();
-  const textPageIds = textPages.map((_, index) => 5 + index * 2);
-  let nextObjectId = 5 + textPages.length * 2;
-  const imagePages = imageAssets.map((asset) => {
-    const pageId = nextObjectId;
-    nextObjectId += 3;
-    return { asset, pageId, contentId:pageId + 1, imageId:pageId + 2 };
+  let nextObjectId=5;
+  const pages=blocks.map((block)=>{
+    const pageId=nextObjectId;
+    nextObjectId+=block.kind==='text'?2:3;
+    return block.kind==='text'?{...block,pageId,contentId:pageId+1}:{...block,pageId,contentId:pageId+1,imageId:pageId+2};
   });
-  const pageIds = [...textPageIds, ...imagePages.map((page) => page.pageId)];
+  const pageIds=pages.map((page)=>page.pageId);
   const objectText = (id: number, value: string): void => { objects.set(id, encoder.encode(value)); };
   objectText(1, '<< /Type /Catalog /Pages 2 0 R >>');
   objectText(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`);
   objectText(3, '<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>');
   objectText(4, '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYSMyeongJo-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 2 >> >>');
-  textPages.forEach((pageLines, index) => {
-    const pageId = textPageIds[index];
-    const contentId = pageId + 1;
-    const commands = ['BT', '/F1 10 Tf', '45 794 Td', '16 TL', ...pageLines.flatMap((line, lineIndex) => [`<${proposalPdfHex(line)}> Tj`, lineIndex === pageLines.length - 1 ? '' : 'T*']).filter(Boolean), 'ET'].join('\n');
-    objectText(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
-    objectText(contentId, `<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
-  });
-  for (const {asset,pageId,contentId,imageId} of imagePages) {
+  for(const page of pages){
+    const {pageId,contentId}=page;
+    if(page.kind==='text'){
+      const commands=['BT','/F1 10 Tf','45 794 Td','16 TL',...page.lines.flatMap((line,lineIndex)=>[`<${proposalPdfHex(line)}> Tj`,lineIndex===page.lines.length-1?'':'T*']).filter(Boolean),'ET'].join('\n');
+      objectText(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+      objectText(contentId,`<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
+      continue;
+    }
+    const {asset,imageId}=page;
     const maxWidth=505; const maxHeight=752; const scale=Math.min(maxWidth/asset.width,maxHeight/asset.height);
     const width=Math.max(1,asset.width*scale); const height=Math.max(1,asset.height*scale); const x=(595-width)/2; const y=(842-height)/2;
     const commands=`q\n${width.toFixed(2)} 0 0 ${height.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im1 Do\nQ`;
@@ -263,8 +317,10 @@ export function generateProposalDocx(input: ProposalExportDocument): Uint8Array 
     '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
   ].join('');
   const chapters = input.chapters.map((chapter) => {
-    const images=imageRelationships.filter((item)=>item.asset.chapterNumber===chapter.number).map((item)=>proposalImageDrawing(item.asset,item.relationshipId,item.index+1)).join('');
-    return `${paragraph(`${chapter.number}. ${chapter.title}`, 'Heading1')}${markdownParagraphs(chapter.body)}${images}`;
+    const chapterImages=imageRelationships.filter((item)=>item.asset.chapterNumber===chapter.number);
+    const imageXmlByKey=new Map(chapterImages.map((item)=>[item.asset.assetKey,proposalImageDrawing(item.asset,item.relationshipId,item.index+1)]));
+    const markedBody=proposalBodyWithAssetMarkers(chapter.body,chapterImages.map((item)=>item.asset));
+    return `${paragraph(`${chapter.number}. ${chapter.title}`, 'Heading1')}${markdownParagraphs(markedBody,imageXmlByKey)}`;
   }).join('');
   const metadata = paragraph(`문서 무결성 SHA-256 ${input.contentSha256} · 제안서 ${input.proposalId} · 버전 ${input.versionNumber}`, 'Normal', '<w:spacing w:before="360"/><w:jc w:val="center"/>', '<w:i/><w:color w:val="64748B"/><w:sz w:val="16"/>');
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${cover}${toc}${chapters}${metadata}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567"/><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr></w:body></w:document>`;

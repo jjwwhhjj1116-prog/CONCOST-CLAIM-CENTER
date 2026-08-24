@@ -805,7 +805,7 @@ async function generateWorkflowAiImport(
   const textLike = mimeType === 'text/plain' || mimeType === 'text/csv';
   const redacted = textLike ? redactExternalAiText(new TextDecoder('utf-8', { fatal: false }).decode(bytes)) : { text: '', count: 0 };
   const system = kind === 'KICKOFF'
-    ? '당신은 건설 클레임 착수회의 기록 담당자입니다. 원문에 없는 이름, 날짜, 장소, 금액, 결정은 만들지 마세요. 참석자·장소·안건·결정·미결 쟁점·담당·기한을 분리하고 JSON만 출력하세요.'
+    ? '당신은 건설 클레임 착수회의 기록 담당자입니다. CONCOST 표준 회의록의 작성자, 회의일시와 시간, 회의장소, 거래처명, 보고부서, 참조부서, 참석자(컨코스트), 참석자(거래처), 회의명, 첨부파일, 회의내용 및 지시사항을 읽습니다. 원문에 없는 이름, 날짜, 장소, 금액, 결정은 만들지 마세요. 참석자·장소·안건·결정사항·미결 쟁점·담당자·기한·후속 업무를 분리하고 JSON만 출력하세요.'
     : '당신은 건설 클레임 현장조사 기록 담당자입니다. 원문에 없는 위치, 하자, 물량, 판단은 만들지 마세요. 조사 일자·위치·범위·관찰·추가 확인 항목을 분리하고 JSON만 출력하세요.';
   const schema = '{"meetingAt":"ISO 또는 null","surveyDate":"YYYY-MM-DD 또는 null","location":"","agenda":"회의 안건 또는 조사 범위","participants":[""],"leadUnit":"","sourceNotes":"원문 근거를 보존한 정리문","summary":"검토용 요약","timeline":[{"title":"","detail":""}],"missingFields":[""]}';
   const prompt = `프로젝트: ${caseRow.caseNumber} ${caseRow.title}\n유형: ${caseRow.claimType}\n자료종류: ${kind}\n파일명: ${file.name}\n반드시 이 JSON 스키마만 반환: ${schema}\n확인되지 않은 필드는 빈 값/null로 두고 missingFields에 넣으세요.`;
@@ -1659,13 +1659,27 @@ const PROPOSAL_AI_WRITING_SYSTEM = `당신은 컨코스트의 건설 클레임·
 - 데이터 행은 Fact Finding, 법리·원가 검증, 협상 지원, 총회·의결/최종 정산의 정확히 4단계로 구성합니다.
 - 각 행의 세부 내용은 2개 이상의 구체적인 행동을 포함하고 주요 산출물을 명시합니다. 최소 450자 이상 작성합니다.
 
-12장 맺음말
-- 프로젝트 쟁점에 대한 이해, 수행 원칙, 회사 전문성, 클라이언트 의사결정 지원을 3~5개 문단과 최소 250자로 작성합니다.
-
-오직 JSON 객체 하나만 출력하십시오. 형식은 {"chapter1":"...","chapter2":"...","chapter3":"...","chapter12":"..."}입니다.
+오직 JSON 객체 하나만 출력하십시오. 형식은 {"chapter1":"...","chapter2":"...","chapter3":"..."}입니다.
 JSON 문자열 안의 줄바꿈은 올바르게 이스케이프하고 Markdown 코드펜스는 사용하지 마십시오.`;
 
-function proposalAiChapterQuality(chapterNumber: 1 | 2 | 3 | 12, body: string): { valid: boolean; reason: string } {
+interface ProposalWritingPrompt { chapterNumber: 1 | 2 | 3; chapterTitle: string; instructionText: string; isActive: boolean; version: number; updatedAt: string }
+
+const FALLBACK_PROPOSAL_WRITING_PROMPTS: ProposalWritingPrompt[] = [
+  { chapterNumber:1, chapterTitle:PROPOSAL_CHAPTER_TITLES[0], instructionText:'서로 중복되지 않는 목적 5~7개를 작성한다. 각 항목은 "- "로 시작하고 2~4개의 완전한 문장으로 프로젝트 문제, 수행 행동, 기대 성과를 설명한다. 의뢰 배경과 제안 목적을 최우선 근거로 사용하며 최소 450자 이상 작성한다.', isActive:true, version:1, updatedAt:'FALLBACK' },
+  { chapterNumber:2, chapterTitle:PROPOSAL_CHAPTER_TITLES[1], instructionText:'의뢰 단계의 핵심 쟁점과 첨부자료 요약을 바탕으로 3~5개 쟁점을 선정한다. 각 쟁점은 "### 1) 쟁점 제목" 형식과 2~4문장의 상세 분석으로 구성하고 상황, 검증 자료·기준, 영향, 대응 방향을 포함한다. 최소 600자 이상 작성한다.', isActive:true, version:1, updatedAt:'FALLBACK' },
+  { chapterNumber:3, chapterTitle:PROPOSAL_CHAPTER_TITLES[2], instructionText:'"단계 | 수행 업무 | 세부 내용 | 주요 산출물" 4열 Markdown 표로 작성한다. Fact Finding, 법리·원가 검증, 협상 지원, 총회·의결/최종 정산의 정확한 4단계로 구성하고 수행 계획 메모를 최우선으로 반영한다. 최소 450자 이상 작성한다.', isActive:true, version:1, updatedAt:'FALLBACK' }
+];
+
+async function proposalWritingPrompts(env: CloudflareEnv): Promise<ProposalWritingPrompt[]> {
+  if (!env.DB) return FALLBACK_PROPOSAL_WRITING_PROMPTS;
+  try {
+    const rows = await env.DB.prepare('SELECT chapter_number AS chapterNumber,chapter_title AS chapterTitle,instruction_text AS instructionText,is_active AS isActive,version,updated_at AS updatedAt FROM preview_proposal_writing_prompts ORDER BY chapter_number').all<Record<string,unknown>>();
+    const prompts = rows.results.map((row) => ({ chapterNumber:Number(row.chapterNumber) as 1|2|3, chapterTitle:String(row.chapterTitle), instructionText:String(row.instructionText), isActive:Boolean(row.isActive), version:Number(row.version), updatedAt:String(row.updatedAt) })).filter((row) => row.chapterNumber >= 1 && row.chapterNumber <= 3);
+    return prompts.length === 3 ? prompts : FALLBACK_PROPOSAL_WRITING_PROMPTS;
+  } catch { return FALLBACK_PROPOSAL_WRITING_PROMPTS; }
+}
+
+function proposalAiChapterQuality(chapterNumber: 1 | 2 | 3, body: string): { valid: boolean; reason: string } {
   const text = body.trim();
   if (chapterNumber === 1) {
     const bullets = text.split('\n').filter((line) => /^\s*[-*•ㅇ]\s+/u.test(line)).length;
@@ -1682,8 +1696,7 @@ function proposalAiChapterQuality(chapterNumber: 1 | 2 | 3 | 12, body: string): 
     const dataRows = separatorIndex >= 0 ? lines.slice(separatorIndex + 1).filter((line) => (line.match(/\|/gu) ?? []).length >= 4).length : 0;
     return { valid: text.length >= 450 && header && dataRows >= 4, reason: '4열 Markdown 표와 정확한 4단계 수행계획, 450자 이상의 상세 내용' };
   }
-  const paragraphs = text.split(/\n\s*\n/u).filter((paragraph) => paragraph.trim()).length;
-  return { valid: text.length >= 250 && paragraphs >= 3, reason: '3개 이상의 문단과 250자 이상의 맺음말' };
+  return { valid: false, reason: '지원하지 않는 제안서 AI 작성 챕터' };
 }
 
 const FALLBACK_PROPOSAL_MODULES: ProposalCompanyModule[] = [
@@ -1796,7 +1809,7 @@ function defaultProposalChapters(caseRow: PreviewCaseRow, modules: ProposalCompa
     if (number === 3) body = `1. Fact Finding: 계약서·도면·내역·회의록 및 현장자료 수집\n2. 법리·원가 검증: 쟁점별 계약·수량·단가 검토\n3. 협상 지원: 검토 결과와 대응 논리 정리\n4. 총회·의결 지원: 의사결정 자료와 최종 성과물 제공`;
     if (number === 12) body = PROPOSAL_STANDARD_CLOSING;
     if (module) body = module.bodyMarkdown;
-    return { number, title:module?.title ?? title, kind:module ? 'FIXED' : 'VARIABLE', ...(module ? {moduleCode:module.code} : {}), body:sanitizeProposalCostData(body).value };
+    return { number, title:module?.title ?? title, kind:module || number===12 ? 'FIXED' : 'VARIABLE', ...(module ? {moduleCode:module.code} : {}), body:sanitizeProposalCostData(body).value };
   });
 }
 
@@ -1839,7 +1852,7 @@ const PREVIEW_PROPOSAL_TEMPLATES = [...PREVIEW_CLAIM_TYPES].sort().map((claimTyp
   id: `CF27-${claimType}`,
   name: `${claimType} 컨코스트 표준 제안서 · 12챕터`,
   claimType,
-  description: `${claimType} 프로젝트용 최신 실물 템플릿 기반 12개 챕터. 1·2·3·12장은 Gemini 초안, 4~11장은 관리자 승인 회사 DB를 병합합니다.`,
+  description: `${claimType} 프로젝트용 최신 실물 템플릿 기반 12개 챕터. 1~3장은 프로젝트당 최초 1회만 Gemini가 초안을 만들고 이후 사람이 편집하며, 4~11장은 관리자 승인 회사 DB, 12장은 표준 맺음말을 병합합니다.`,
   bodyTemplate: PROPOSAL_TEMPLATE_BODY,
   placeholdersJson: JSON.stringify(['clientName','projectTitle','subtitle','submissionDate','keyIssues','objective','planNotes','exclusions','chapters'])
 }));
@@ -1887,7 +1900,22 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
     const modules = await proposalCompanyModules(env);
     const sources = await proposalTemplateSources(env);
     const assets = await proposalCompanyAssets(env);
-    return json({ modules,sources,assets,chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF48_PROPOSAL_VISUAL_MODULES' });
+    const writingPrompts = await proposalWritingPrompts(env);
+    return json({ modules,sources,assets,writingPrompts,chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF51_PROPOSAL_PROMPT_MANAGEMENT' });
+  }
+  const writingPromptMatch=url.pathname.match(/^\/api\/proposal-studio\/writing-prompts\/([123])$/u);
+  if(writingPromptMatch&&request.method==='PUT'){
+    if(!isAdmin)return json({error:'Only Admin can update proposal writing prompts',code:'FORBIDDEN'},403);
+    const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
+    if(!body||!exactObjectKeys(body,['chapterTitle','instructionText','isActive','version'])||typeof body.chapterTitle!=='string'||typeof body.instructionText!=='string'||typeof body.isActive!=='boolean'||!Number.isInteger(body.version))return json({error:'Proposal writing prompt payload is invalid',code:'INVALID_PROPOSAL_PROMPT'},400);
+    const chapterNumber=Number(writingPromptMatch[1]) as 1|2|3; const chapterTitle=body.chapterTitle.trim().slice(0,200); const instructionText=body.instructionText.trim();
+    if(!chapterTitle||instructionText.length<100||instructionText.length>12000)return json({error:'제안서 작성 지침은 100~12,000자로 입력하세요.',code:'INVALID_PROPOSAL_PROMPT'},400);
+    const now=new Date().toISOString();
+    try{
+      const result=await env.DB.prepare('UPDATE preview_proposal_writing_prompts SET chapter_title=?,instruction_text=?,is_active=?,version=version+1,updated_by=?,updated_at=? WHERE chapter_number=? AND version=?').bind(chapterTitle,instructionText,body.isActive?1:0,user.id,now,chapterNumber,body.version).run();
+      if(result.meta?.changes!==1)return json({error:'Proposal writing prompt changed in another session',code:'VERSION_CONFLICT'},409);
+      return json({prompt:(await proposalWritingPrompts(env)).find((prompt)=>prompt.chapterNumber===chapterNumber),phase:'CF51_PROPOSAL_PROMPT_MANAGEMENT'});
+    }catch{return json({error:'Proposal writing prompt could not be updated',code:'PROPOSAL_PROMPT_UPDATE_FAILED'},409);}
   }
   const assetMatch=url.pathname.match(/^\/api\/proposal-studio\/assets\/([A-Z0-9_]+)$/u);
   if(assetMatch&&request.method==='GET'){
@@ -2018,11 +2046,11 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         if(chapter.number>=4&&chapter.number<=11){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
           if(expected&&requestedModules.has(expected.code)&&expected.isActive){
-            const proposalCopy=sanitizeInput(chapter.body,50000);
-            return{number:chapter.number,title:expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:proposalCopy||sanitizeInput(expected.bodyMarkdown,50000)};
+            return{number:chapter.number,title:expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(expected.bodyMarkdown,50000)};
           }
           return{number:chapter.number,title:expected?.title??chapter.title,kind:'FIXED' as const,...(expected?{moduleCode:expected.code}:{}),body:'[이 회사 모듈은 제안서에서 제외되었습니다.]'};
         }
+        if(chapter.number===12)return{number:12,title:PROPOSAL_CHAPTER_TITLES[11],kind:'FIXED' as const,body:PROPOSAL_STANDARD_CLOSING};
         return{number:chapter.number,title:PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000)};
       });
       inputs={clientName:sanitizeInput(body.clientName,200),projectTitle:sanitizeInput(body.projectTitle,300),subtitle:sanitizeInput(body.subtitle,300),submissionDate:proposalStudioText(body.submissionDate,30),keyIssues:sanitizeInput(body.keyIssues),objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.planNotes),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:[...requestedModules],templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
@@ -2030,8 +2058,12 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     let bodyText=proposalBodyFromChapters(inputs.chapters);
     let providerId: string | null = null; let modelId: string | null = null;
     if (body.generationMode === 'AI') {
+      const previousAiDraft=await env.DB.prepare("SELECT COUNT(*) AS count FROM preview_proposal_versions WHERE proposal_id=? AND generation_mode='AI'").bind(proposalId).first<{count:number}>();
+      if(Number(previousAiDraft?.count??0)>0)return json({error:'이 제안서는 최초 AI 초안이 이미 생성되었습니다. 3단계에서 사람이 직접 수정해 주세요.',code:'PROPOSAL_AI_DRAFT_ALREADY_CREATED'},409);
       const organizationGemini = await resolveOrganizationAiCredential(env, 'GEMINI');
       if (!organizationGemini) return json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503);
+      const writingPrompts = (await proposalWritingPrompts(env)).filter((prompt) => prompt.isActive);
+      if(writingPrompts.length!==3)return json({error:'관리자 설정에서 제안서 1~3장 작성 지침을 모두 활성화해 주세요.',code:'PROPOSAL_PROMPTS_NOT_READY'},503);
       const intakeSummary = await env.DB.prepare(
         'SELECT summary_text AS summaryText,client_legal_position AS clientLegalPosition,created_at AS createdAt FROM preview_intake_audio_summaries WHERE case_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1'
       ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ summaryText: string; clientLegalPosition: string; createdAt: string }>().catch(() => null);
@@ -2039,7 +2071,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const generated = await generatePreviewAiText(
         env,
         route,
-        PROPOSAL_AI_WRITING_SYSTEM,
+        `${PROPOSAL_AI_WRITING_SYSTEM}\n\n[관리자 승인 최신 1~3장 작성 지침 · 아래 지침이 최우선]\n${writingPrompts.map((prompt)=>`${prompt.chapterNumber}장 ${prompt.chapterTitle} · v${prompt.version}\n${prompt.instructionText}`).join('\n\n')}`,
         JSON.stringify({
           approvedTemplate: current.templateBody,
           templateSource:{id:selectedSource.id,name:selectedSource.sourceName,format:selectedSource.sourceFormat,chapterMap:selectedSource.chapterMapJson},
@@ -2060,15 +2092,16 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const raw=(generated.content??'').trim().replace(/^```(?:json)?\s*/iu,'').replace(/\s*```$/u,'');
       let ai:Record<string,unknown>|null=null;
       try{ai=JSON.parse(raw) as Record<string,unknown>;}catch{
-        if(!isLegacy)return json({error:'Gemini 제안서 초안이 안전한 4개 챕터 JSON 형식이 아닙니다. 다시 생성해 주세요.',code:'MALFORMED_PROPOSAL_AI_RESPONSE'},502);
+         if(!isLegacy)return json({error:'Gemini 제안서 초안이 안전한 1~3장 JSON 형식이 아닙니다. 다시 생성해 주세요.',code:'MALFORMED_PROPOSAL_AI_RESPONSE'},502);
       }
       if(ai){
-        for(const [key,number] of [['chapter1',1],['chapter2',2],['chapter3',3],['chapter12',12]] as const){
+        for(const [key,number] of [['chapter1',1],['chapter2',2],['chapter3',3]] as const){
           const generatedText=sanitizeInput(ai[key],50000);
           const quality=proposalAiChapterQuality(number,generatedText);
           if(!quality.valid)return json({error:`Gemini의 ${number}장 초안이 260728 템플릿 작성 기준에 미달하여 저장하지 않았습니다. 필요한 기준: ${quality.reason}. 다시 생성해 주세요.`,code:'INCOMPLETE_PROPOSAL_AI_RESPONSE',chapterNumber:number,requiredQuality:quality.reason},502);
           inputs.chapters[number-1].body=generatedText;
         }
+        inputs.chapters[11].body=PROPOSAL_STANDARD_CLOSING;
         inputs.objective=inputs.chapters[0].body; inputs.keyIssues=inputs.chapters[1].body; inputs.planNotes=inputs.chapters[2].body;
         bodyText=proposalBodyFromChapters(inputs.chapters);
       }else{
@@ -2932,6 +2965,7 @@ interface PreviewAiRouteRow extends PreviewAiSettingsRow {
 interface PreviewOutlineItem {
   chapterId: string;
   chapterCode: string;
+  chapterTitle: string;
   promptVersion: number;
   planningNote: string;
 }
@@ -2948,6 +2982,7 @@ function defaultPreviewOutline(prompts: PreviewPromptRow[]): PreviewOutlineItem[
   return prompts.filter((row) => Boolean(row.id)).map((row) => ({
     chapterId: row.id,
     chapterCode: row.chapterCode,
+    chapterTitle: row.title,
     promptVersion: Number(row.version),
     planningNote: ''
   }));
@@ -2962,7 +2997,7 @@ function parsePreviewOutline(value: string): PreviewOutlineItem[] {
       && typeof (item as PreviewOutlineItem).chapterCode === 'string'
       && Number.isInteger((item as PreviewOutlineItem).promptVersion)
       && typeof (item as PreviewOutlineItem).planningNote === 'string'
-    ));
+    )).map((item) => ({ ...item, chapterTitle: typeof item.chapterTitle === 'string' && item.chapterTitle.trim() ? item.chapterTitle.trim() : item.chapterCode }));
   } catch { return []; }
 }
 
@@ -2975,7 +3010,9 @@ async function previewOutlinePlan(env: CloudflareEnv, caseId: string, prompts: P
     ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewOutlineRow>();
     if (!row) return { persistenceAvailable: true, status: 'DRAFT', version: 0, updatedAt: null, updatedBy: null, items: defaultPreviewOutline(prompts) };
     const items = parsePreviewOutline(row.outlineJson);
-    return { persistenceAvailable: true, status: row.status, version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName, items: items.length ? items : defaultPreviewOutline(prompts) };
+    const promptById = new Map(prompts.map((prompt) => [prompt.id, prompt]));
+    const normalizedItems = items.map((item) => ({ ...item, chapterTitle: item.chapterTitle === item.chapterCode ? promptById.get(item.chapterId)?.title ?? item.chapterTitle : item.chapterTitle }));
+    return { persistenceAvailable: true, status: row.status, version: Number(row.version), updatedAt: row.updatedAt, updatedBy: row.updatedByName, items: normalizedItems.length ? normalizedItems : defaultPreviewOutline(prompts) };
   } catch {
     // Old isolated test fixtures may intentionally stop before the additive
     // outline migration. Production always applies migrations before deploy.
@@ -4306,20 +4343,20 @@ async function handlePreviewReportMemory(request: Request, env: CloudflareEnv, u
   return json({ candidates: await previewMemoryCandidates(env), phase: 'CF29_REPORT_MEMORY_LEARNING' });
 }
 
-function parsePreviewOutlineSuggestions(content: string, prompts: PreviewPromptRow[]): Array<{ chapterId: string; chapterCode: string; planningNote: string }> | null {
+function parsePreviewOutlineSuggestions(content: string, prompts: PreviewPromptRow[]): Array<{ chapterId: string; chapterCode: string; chapterTitle: string; planningNote: string }> | null {
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/iu)?.[1]?.trim() ?? content.trim();
   let parsed: unknown;
   try { parsed = JSON.parse(fenced); } catch { return null; }
   const rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).chapters : null;
   if (!Array.isArray(rows)) return null;
   const byCode = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.chapterCode, row]));
-  const suggestions: Array<{ chapterId: string; chapterCode: string; planningNote: string }> = [];
+  const suggestions: Array<{ chapterId: string; chapterCode: string; chapterTitle: string; planningNote: string }> = [];
   for (const item of rows) {
     if (!item || typeof item !== 'object') continue;
     const chapterCode = String((item as Record<string, unknown>).chapterCode ?? '');
     const planningNote = String((item as Record<string, unknown>).planningNote ?? '').trim();
     const prompt = byCode.get(chapterCode);
-    if (prompt && planningNote && planningNote.length <= 2000) suggestions.push({ chapterId: prompt.id, chapterCode, planningNote });
+    if (prompt && planningNote && planningNote.length <= 2000) suggestions.push({ chapterId: prompt.id, chapterCode, chapterTitle: prompt.title, planningNote });
   }
   return suggestions.length === byCode.size && new Set(suggestions.map((row) => row.chapterCode)).size === byCode.size ? suggestions : null;
 }
@@ -4427,11 +4464,11 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     const allowed = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.id, row]));
     const items: PreviewOutlineItem[] = [];
     for (const item of body.items) {
-      if (!item || typeof item !== 'object' || !exactObjectKeys(item as Record<string, unknown>, ['chapterId', 'chapterCode', 'promptVersion', 'planningNote'])) return json({ error: 'Outline item is invalid', code: 'INVALID_OUTLINE_PAYLOAD' }, 400);
+      if (!item || typeof item !== 'object' || !exactObjectKeys(item as Record<string, unknown>, ['chapterId', 'chapterCode', 'chapterTitle', 'promptVersion', 'planningNote'])) return json({ error: 'Outline item is invalid', code: 'INVALID_OUTLINE_PAYLOAD' }, 400);
       const row = item as Record<string, unknown>;
       const prompt = typeof row.chapterId === 'string' ? allowed.get(row.chapterId) : undefined;
-      if (!prompt || row.chapterCode !== prompt.chapterCode || Number(row.promptVersion) !== Number(prompt.version) || typeof row.planningNote !== 'string' || row.planningNote.length > 2000) return json({ error: 'Outline does not match the approved template', code: 'OUTLINE_TEMPLATE_MISMATCH' }, 409);
-      items.push({ chapterId: prompt.id, chapterCode: prompt.chapterCode, promptVersion: Number(prompt.version), planningNote: row.planningNote.trim() });
+      if (!prompt || row.chapterCode !== prompt.chapterCode || Number(row.promptVersion) !== Number(prompt.version) || typeof row.chapterTitle !== 'string' || !row.chapterTitle.trim() || row.chapterTitle.length > 300 || typeof row.planningNote !== 'string' || row.planningNote.length > 2000) return json({ error: 'Outline does not match the approved template', code: 'OUTLINE_TEMPLATE_MISMATCH' }, 409);
+      items.push({ chapterId: prompt.id, chapterCode: prompt.chapterCode, chapterTitle: row.chapterTitle.trim(), promptVersion: Number(prompt.version), planningNote: row.planningNote.trim() });
     }
     if (items.length !== allowed.size || new Set(items.map((item) => item.chapterId)).size !== allowed.size) return json({ error: 'Every approved chapter must appear exactly once', code: 'OUTLINE_TEMPLATE_MISMATCH' }, 409);
     let current: { status: string; version: number; updatedAt: string } | null;
@@ -5624,7 +5661,7 @@ const worker = {
       return handleProjectWorkflowManagement(request, env, url);
     }
 
-    if (url.pathname === '/api/proposal-studio/config' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/')) {
+    if (url.pathname === '/api/proposal-studio/config' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/') || url.pathname.startsWith('/api/proposal-studio/writing-prompts/')) {
       return handlePreviewProposalStudio(request, env, url);
     }
 

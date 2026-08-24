@@ -56,7 +56,7 @@ test('CF18 persists an exact optimistic outline before chapter generation', asyn
   const configResponse = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
   assert.equal(configResponse.status, 200);
   const configText = await configResponse.text();
-  const config = JSON.parse(configText) as { outlinePlan: { status: string; version: number; items: Array<{ chapterId: string; chapterCode: string; promptVersion: number; planningNote: string }> }; sourceGroups: Array<{ code: string; status: string; itemCount: number }>; chapters: Array<{ id: string; chapterCode: string; promptVersion: number }> };
+  const config = JSON.parse(configText) as { outlinePlan: { status: string; version: number; items: Array<{ chapterId: string; chapterCode: string; chapterTitle: string; promptVersion: number; planningNote: string }> }; sourceGroups: Array<{ code: string; status: string; itemCount: number }>; chapters: Array<{ id: string; chapterCode: string; title: string; promptVersion: number }> };
   assert.equal(config.outlinePlan.status, 'DRAFT'); assert.equal(config.outlinePlan.version, 0); assert.equal(config.outlinePlan.items.length, config.chapters.length);
   assert.equal(config.sourceGroups.find((entry) => entry.code === 'EVIDENCE')?.status, 'READY');
   assert.equal(config.sourceGroups.find((entry) => entry.code === 'EVIDENCE')?.itemCount, 1);
@@ -64,7 +64,7 @@ test('CF18 persists an exact optimistic outline before chapter generation', asyn
   const beforeConfirm = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId: config.chapters[0].id, expectedDraftVersion: 0 }) }), env);
   assert.equal(beforeConfirm.status, 409); assert.equal(providerBodies.length, 0);
 
-  const items = config.chapters.map((chapter, index) => ({ chapterId: chapter.id, chapterCode: chapter.chapterCode, promptVersion: chapter.promptVersion, planningNote: index === 0 ? '현장조사와 수량산출 차이를 우선 비교합니다.' : '' }));
+  const items = config.chapters.map((chapter, index) => ({ chapterId: chapter.id, chapterCode: chapter.chapterCode, chapterTitle: index === 0 ? '수행 결과와 핵심 차이 분석' : chapter.title, promptVersion: chapter.promptVersion, planningNote: index === 0 ? '현장조사와 수량산출 차이를 우선 비교합니다.' : '' }));
   const confirmed = await worker.fetch(request('/api/report-authoring/outline', STAFF_TOKEN, { method: 'PUT', body: JSON.stringify({ caseId: CASE_ID, items, status: 'CONFIRMED', expectedVersion: 0 }) }), env);
   assert.equal(confirmed.status, 200);
   assert.equal(sql.exec("SELECT status,version FROM preview_report_outline_plans WHERE case_id='40000000-0000-4000-8000-000000000010'")[0].values[0].join(':'), 'CONFIRMED:1');
@@ -90,7 +90,7 @@ test('CF18 DB and UI prevent outline tampering and expose source readiness hones
   const now = new Date().toISOString();
   const claimType = String(sql.exec(`SELECT claim_type FROM preview_cases WHERE id='${CASE_ID}'`)[0].values[0][0]);
   const prompt = sql.exec(`SELECT p.id,p.chapter_code,p.version FROM preview_report_chapter_prompts p JOIN preview_report_prompt_sets s ON s.id=p.prompt_set_id WHERE s.claim_type='${claimType}' ORDER BY p.ordinal LIMIT 1`)[0].values[0];
-  const oneItem = JSON.stringify([{ chapterId: String(prompt[0]), chapterCode: String(prompt[1]), promptVersion: Number(prompt[2]), planningNote: '' }]);
+  const oneItem = JSON.stringify([{ chapterId: String(prompt[0]), chapterCode: String(prompt[1]), chapterTitle: '검증용 목차 제목', promptVersion: Number(prompt[2]), planningNote: '' }]);
   assert.throws(() => sql.run('INSERT INTO preview_report_outline_plans VALUES (?,?,?,?,?,?,?,?,?)', [CASE_ID, 'concost', claimType, oneItem, 'CONFIRMED', 1, STAFF_ID, now, now]), /omits an approved chapter/u);
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_outline_plans')[0].values[0][0], 0);
   const studio = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewReportStudio.tsx'), 'utf8');
@@ -98,7 +98,7 @@ test('CF18 DB and UI prevent outline tampering and expose source readiness hones
   assert.match(studio, /renderStageHeader\(1\)/u);
   assert.match(studio, /report-stage-section report-source-readiness/u);
   assert.match(studio, /AI 참고자료 준비 상태/u);
-  assert.match(studio, /목차 기획 확정/u); assert.match(studio, /outlineStatus !== 'CONFIRMED'/u);
+  assert.match(studio, /목차 확정 · 다음 단계/u); assert.match(studio, /outlineStatus !== 'CONFIRMED'/u);
   assert.match(studio, /파일 본문을 확인하지 못한 내용은 추측하지 않고/u);
   assert.match(studio, /\[확인 필요\]/u);
   assert.match(studio, /report-chapter-source-pack/u); assert.match(css, /report-source-grid/u);

@@ -7,6 +7,7 @@ import {
   type WorkflowProject,
   type WorkflowStageId
 } from './workflow-model';
+import { scheduleDayInfo } from './schedule-holidays';
 
 const DAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -69,6 +70,10 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
   const calendarDays = useMemo(
     () => Array.from({ length: new Date(calendarYear, calendarMonthIndex + 1, 0).getDate() }, (_, index) => index + 1),
     [calendarMonthIndex, calendarYear]
+  );
+  const calendarDayDetails = useMemo(
+    () => new Map(calendarDays.map((day) => [day, scheduleDayInfo(calendarYear, calendarMonthIndex, day)])),
+    [calendarDays, calendarMonthIndex, calendarYear]
   );
   const now = new Date();
   const todayDay = now.getFullYear() === calendarYear && now.getMonth() === calendarMonthIndex ? now.getDate() : undefined;
@@ -163,13 +168,22 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             </div>
           </div>
 
+          <div className="schedule-holiday-guide" aria-label="한국과 베트남 휴일 표시 안내">
+            <strong>한국 본사 · VIETQS 휴일 캘린더</strong>
+            <span>날짜 칸의 무늬와 마우스 설명으로 어느 지사의 휴일인지 확인하세요.</span>
+            <div><i className="legend-korean-holiday" />한국 공휴일</div>
+            <div><i className="legend-vietnam-holiday" />베트남 휴일</div>
+            <div><i className="legend-shared-holiday" />양국 공통 휴일</div>
+          </div>
+
           <div className="schedule-board" role="table" aria-label="프로젝트 월간 일정표">
             <div className="schedule-board-header" role="row">
               <div className="schedule-left-heading" role="columnheader">프로젝트 정보 <span>공정률</span></div>
               <div className="schedule-days" role="row">
                 {calendarDays.map((day) => {
                   const weekday = DAY_LABELS[new Date(calendarYear, calendarMonthIndex, day).getDay()];
-                  return <div key={day} className={`schedule-day ${weekday === '토' || weekday === '일' ? 'is-weekend' : ''} ${day === todayDay ? 'is-today' : ''}`} role="columnheader" aria-label={`${isoDate(calendarYear, calendarMonthIndex, day)} ${weekday}요일`}><strong>{day}</strong><small>{weekday}</small></div>;
+                  const detail = calendarDayDetails.get(day)!;
+                  return <div key={day} title={detail.label} className={`schedule-day ${detail.className} ${day === todayDay ? 'is-today' : ''}`} role="columnheader" aria-label={`${detail.iso} ${weekday}요일 · ${detail.label}`}><strong>{day}</strong><small>{weekday}</small>{detail.holidays.length > 0 && <b aria-hidden="true">{detail.hasKoreanHoliday && detail.hasVietnamHoliday ? 'KR·VN' : detail.hasKoreanHoliday ? 'KR' : 'VN'}</b>}</div>;
                 })}
               </div>
             </div>
@@ -181,7 +195,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
                 </button>
                 <div className="schedule-track" role="cell" aria-label={`${project.name} ${project.start}부터 ${project.end}까지`}>
-                  {calendarDays.map((day) => <span key={day} className={`schedule-grid-cell ${day === todayDay ? 'is-today' : ''}`} />)}
+                  {calendarDays.map((day) => <span key={day} title={calendarDayDetails.get(day)?.label} className={`schedule-grid-cell ${calendarDayDetails.get(day)?.className ?? ''} ${day === todayDay ? 'is-today' : ''}`} />)}
                   {(() => {
                     const explicitStages = project.stages.filter((stage) => stage.scheduleExplicit && stage.startDate && stage.endDate);
                     const startDate = explicitStages.map((stage) => stage.startDate as string).sort()[0];
@@ -206,6 +220,8 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
             <span><i className="legend-project" />프로젝트 기간</span>
             <span><i className="legend-today" />오늘</span>
             <span><i className="legend-weekend" />주말</span>
+            <span><i className="legend-korean-holiday" />한국 공휴일</span>
+            <span><i className="legend-vietnam-holiday" />베트남 휴일</span>
             <span>프로젝트를 클릭하면 1~6단계 세부 작업과 팀 배정이 열립니다.</span>
           </div>
 
@@ -402,7 +418,10 @@ const ProjectDetail: React.FC<{
         <div className="detail-schedule-header" role="row">
           <div role="columnheader">1~6단계 업무 · 담당</div>
           <div className="schedule-days" role="row">
-            {calendar.days.map((day) => <div key={day} className={`schedule-day ${day === calendar.todayDay ? 'is-today' : ''}`} role="columnheader"><strong>{day}</strong></div>)}
+            {calendar.days.map((day) => {
+              const detail = scheduleDayInfo(calendar.year, calendar.monthIndex, day);
+              return <div key={day} title={detail.label} className={`schedule-day ${detail.className} ${day === calendar.todayDay ? 'is-today' : ''}`} role="columnheader" aria-label={`${detail.iso} · ${detail.label}`}><strong>{day}</strong>{detail.holidays.length > 0 && <b aria-hidden="true">{detail.hasKoreanHoliday && detail.hasVietnamHoliday ? 'KR·VN' : detail.hasKoreanHoliday ? 'KR' : 'VN'}</b>}</div>;
+            })}
           </div>
         </div>
         {WORKFLOW_STAGES.map((stage) => {
@@ -416,7 +435,10 @@ const ProjectDetail: React.FC<{
                 <b className={`stage-status status-${item.status.toLowerCase()}`}>{statusLabel(item.status)}</b>
               </button>
               <div className="schedule-track" role="cell">
-                {calendar.days.map((day) => <span key={day} className={`schedule-grid-cell ${day === calendar.todayDay ? 'is-today' : ''}`} />)}
+                {calendar.days.map((day) => {
+                  const detail = scheduleDayInfo(calendar.year, calendar.monthIndex, day);
+                  return <span key={day} title={detail.label} className={`schedule-grid-cell ${detail.className} ${day === calendar.todayDay ? 'is-today' : ''}`} />;
+                })}
                 {item.scheduleExplicit && monthBarStyle(item.startDate, item.endDate, calendar.year, calendar.monthIndex, calendar.days.length) ? <button
                   className={`stage-range-bar status-${item.status.toLowerCase()}`}
                   style={{ ...monthBarStyle(item.startDate, item.endDate, calendar.year, calendar.monthIndex, calendar.days.length), backgroundColor: stage.color }}

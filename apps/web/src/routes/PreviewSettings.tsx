@@ -44,6 +44,14 @@ interface AiGovernance {
   version: number;
   updatedAt: string;
 }
+interface ProposalWritingPrompt {
+  chapterNumber: 1 | 2 | 3;
+  chapterTitle: string;
+  instructionText: string;
+  isActive: boolean;
+  version: number;
+  updatedAt: string;
+}
 
 const PROVIDER_COPY: Record<ProviderKind, {
   short: string; use: string; placeholder: string; issueUrl: string; guideUrl: string; issueSteps: readonly string[];
@@ -74,6 +82,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [runtime, setRuntime] = useState<WorkspaceRuntime | null>(null);
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
   const [aiGovernance, setAiGovernance] = useState<AiGovernance | null>(null);
+  const [proposalPrompts, setProposalPrompts] = useState<ProposalWritingPrompt[]>([]);
   const [aiGovernanceAck, setAiGovernanceAck] = useState('');
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [currentPassword, setCurrentPassword] = useState('');
@@ -90,15 +99,17 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     try {
       setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials'));
       if (isAdmin) {
-        const [admin, memory, governance] = await Promise.all([
+        const [admin, memory, governance, proposalConfig] = await Promise.all([
           apiRequest<{ settings: WorkspacePolicy; runtime: WorkspaceRuntime }>('/api/settings/admin-workspace'),
           apiRequest<{ candidates: MemoryCandidate[] }>('/api/admin/report-memory'),
-          apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance').catch(() => null)
+          apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance').catch(() => null),
+          apiRequest<{ writingPrompts: ProposalWritingPrompt[] }>('/api/proposal-studio/config')
         ]);
         setWorkspace(admin.settings);
         setRuntime(admin.runtime);
         setMemoryCandidates(memory.candidates);
         setAiGovernance(governance?.governance ?? null);
+        setProposalPrompts(proposalConfig.writingPrompts ?? []);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -192,6 +203,20 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     finally { setBusy(''); }
   };
 
+  const saveProposalPrompt = async (prompt: ProposalWritingPrompt) => {
+    setBusy(`proposal-prompt:${prompt.chapterNumber}`); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ prompt: ProposalWritingPrompt }>(`/api/proposal-studio/writing-prompts/${prompt.chapterNumber}`, {
+        method:'PUT',
+        body:JSON.stringify({ chapterTitle:prompt.chapterTitle, instructionText:prompt.instructionText, isActive:prompt.isActive, version:prompt.version })
+      });
+      setProposalPrompts((current) => current.map((item) => item.chapterNumber === result.prompt.chapterNumber ? result.prompt : item));
+      setNotice(`제안서 ${prompt.chapterNumber}장 작성 지침 v${result.prompt.version}을 관리자 설정에 저장했습니다.`);
+    } catch (reason) {
+      setError(reason instanceof ApiError && reason.status === 409 ? '다른 관리자가 먼저 지침을 수정했습니다. 화면을 다시 불러와 주세요.' : reason instanceof Error ? reason.message : String(reason));
+    } finally { setBusy(''); }
+  };
+
   const changePassword = async () => {
     if (newPassword !== confirmPassword) { setError('새 비밀번호 확인이 일치하지 않습니다.'); return; }
     setBusy('password'); setError(''); setNotice('');
@@ -279,6 +304,17 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     {section === 'ADMIN' && isAdmin && workspace && <>
       <PreviewGoogleDriveSetup onNavigate={onNavigate} />
       {renderCredentials('ORGANIZATION', '조직 공용 AI 설정', '개인 키가 없는 직원에게 적용되는 회사 공용 암호화 키입니다.')}
+      <Card title="제안서 1~3장 AI 작성 지침 · 관리자 전용" className="proposal-prompt-settings-card">
+        <p className="settings-honest-note"><strong>작동 방식</strong> 프로젝트 의뢰·회의록·1단계 입력을 근거로 Gemini가 1~3장의 최초 초안만 만듭니다. 이후에는 AI가 다시 덮어쓰지 않으며 작성자가 3단계에서 모든 문장을 직접 수정합니다. 4~11장은 회사 고정 모듈, 12장은 표준 맺음말입니다.</p>
+        <div className="proposal-prompt-settings-list">
+          {proposalPrompts.map((prompt) => <article key={prompt.chapterNumber}>
+            <header><span>{String(prompt.chapterNumber).padStart(2,'0')}</span><div><strong>{prompt.chapterNumber}장 작성 지침</strong><small>관리자 승인 v{prompt.version} · {prompt.updatedAt === 'FALLBACK' ? '기본 지침' : new Date(prompt.updatedAt).toLocaleString('ko-KR')}</small></div></header>
+            <label>챕터 제목<input value={prompt.chapterTitle} maxLength={200} onChange={(event) => setProposalPrompts((current) => current.map((item) => item.chapterNumber === prompt.chapterNumber ? { ...item, chapterTitle:event.target.value } : item))} /></label>
+            <label>Gemini 작성 지침<textarea value={prompt.instructionText} minLength={100} maxLength={12000} onChange={(event) => setProposalPrompts((current) => current.map((item) => item.chapterNumber === prompt.chapterNumber ? { ...item, instructionText:event.target.value } : item))} /></label>
+            <div className="action-row"><label className="settings-check"><input type="checkbox" checked={prompt.isActive} onChange={(event) => setProposalPrompts((current) => current.map((item) => item.chapterNumber === prompt.chapterNumber ? { ...item, isActive:event.target.checked } : item))} />AI 최초 초안에 사용</label><Button onClick={() => void saveProposalPrompt(prompt)} disabled={busy === `proposal-prompt:${prompt.chapterNumber}` || prompt.instructionText.trim().length < 100}>{busy === `proposal-prompt:${prompt.chapterNumber}` ? '저장 중…' : `${prompt.chapterNumber}장 지침 저장`}</Button></div>
+          </article>)}
+        </div>
+      </Card>
       {aiGovernance && <Card title="외부 AI 자료 보안·비학습 정책"><div className="workspace-policy-grid">
         <label>Gemini 서비스 등급<select value={aiGovernance.providerServiceTier} onChange={(event) => setAiGovernance({ ...aiGovernance,providerServiceTier:event.target.value as AiGovernance['providerServiceTier'],confidentialExternalAiEnabled:event.target.value==='UNVERIFIED_OR_FREE'?false:aiGovernance.confidentialExternalAiEnabled })}><option value="UNVERIFIED_OR_FREE">무료 또는 결제상태 미확인 · 내부자료 전송 차단</option><option value="PAID_NO_PRODUCT_IMPROVEMENT">Cloud Billing 활성 유료 Gemini API</option><option value="VERTEX_AI_ENTERPRISE">Vertex AI 기업계약</option></select></label>
         <label className="settings-check"><input type="checkbox" checked={aiGovernance.confidentialExternalAiEnabled} disabled={aiGovernance.providerServiceTier==='UNVERIFIED_OR_FREE'} onChange={(event) => setAiGovernance({ ...aiGovernance,confidentialExternalAiEnabled:event.target.checked })}/>내부·기밀 자료의 외부 AI 전송 허용</label>

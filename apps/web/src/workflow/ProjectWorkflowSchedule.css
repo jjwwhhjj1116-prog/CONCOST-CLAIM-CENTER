@@ -143,6 +143,11 @@
 .schedule-toolbar strong { font-size: 1rem; }
 .schedule-toolbar span { color: #8f9ab4; font-size: 0.78rem; }
 .schedule-toolbar-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.schedule-holiday-guide { display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 13px;border:1px solid #d7e2ee;border-radius:12px;background:#fff;color:#475569;font-size:.72rem; }
+.schedule-holiday-guide > strong { color:#173f67;font-size:.78rem; }
+.schedule-holiday-guide > span { margin-right:auto;color:#64748b; }
+.schedule-holiday-guide > div { display:inline-flex;align-items:center;gap:6px;font-weight:800; }
+.schedule-holiday-guide i { width:20px;height:12px;border-radius:3px; }
 
 .project-brief-board { overflow: hidden; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--surface-card); box-shadow: var(--panel-shadow); }
 .project-brief-board > header { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 17px 19px; border-bottom: 1px solid #e4eaf1; }
@@ -213,9 +218,13 @@
 
 .schedule-left-heading span { color: #8190b0; }
 .schedule-days { display: grid; grid-template-columns: repeat(31, minmax(32px, 1fr)); }
-.schedule-day { display: grid; place-items: center; align-content: center; gap: 2px; min-width: 32px; border-right: 1px solid #25304d; color: #b8c3db; font-size: 0.69rem; }
+.schedule-day { position:relative;display: grid; place-items: center; align-content: center; gap: 2px; min-width: 32px; border-right: 1px solid #25304d; color: #b8c3db; font-size: 0.69rem; }
 .schedule-day small { color: #73809c; font-size: 0.61rem; }
+.schedule-day b { position:absolute;right:2px;bottom:2px;padding:1px 3px;border-radius:3px;background:rgb(255 255 255 / 88%);color:#334155;font-size:.43rem;line-height:1.1;letter-spacing:-.03em; }
 .schedule-day.is-weekend { background: rgba(75, 87, 123, 0.22); color: #93a0bd; }
+.schedule-day.is-korean-holiday,.schedule-grid-cell.is-korean-holiday { background-color:#fff3f4;background-image:repeating-linear-gradient(45deg,transparent 0,transparent 5px,rgba(232,91,111,.2) 5px,rgba(232,91,111,.2) 7px),repeating-linear-gradient(-45deg,transparent 0,transparent 5px,rgba(232,91,111,.14) 5px,rgba(232,91,111,.14) 7px); }
+.schedule-day.is-vietnam-holiday,.schedule-grid-cell.is-vietnam-holiday { background-color:#eef8ff;background-image:repeating-linear-gradient(135deg,transparent 0,transparent 6px,rgba(39,151,213,.22) 6px,rgba(39,151,213,.22) 8px); }
+.schedule-day.is-shared-holiday,.schedule-grid-cell.is-shared-holiday { background-color:#f3f0ff;background-image:repeating-linear-gradient(45deg,transparent 0,transparent 5px,rgba(223,75,102,.18) 5px,rgba(223,75,102,.18) 7px),repeating-linear-gradient(135deg,transparent 0,transparent 9px,rgba(37,145,205,.22) 9px,rgba(37,145,205,.22) 11px); }
 .schedule-day.is-today { color: #7af1ff; background: rgba(33, 207, 232, 0.13); box-shadow: inset 1px 0 #27d8ed, inset -1px 0 #27d8ed; }
 
 .schedule-project-row,
@@ -288,6 +297,9 @@
 .legend-project { background: linear-gradient(90deg, #6556dd, #228fb7); }
 .legend-today { background: #26d4e9; }
 .legend-weekend { background: #3d4662; }
+.legend-korean-holiday { border:1px solid #efb2bc;background-color:#fff3f4!important;background-image:repeating-linear-gradient(45deg,transparent 0,transparent 4px,rgba(218,63,88,.35) 4px,rgba(218,63,88,.35) 6px)!important; }
+.legend-vietnam-holiday { border:1px solid #a7d5ee;background-color:#eef8ff!important;background-image:repeating-linear-gradient(135deg,transparent 0,transparent 4px,rgba(26,131,190,.35) 4px,rgba(26,131,190,.35) 6px)!important; }
+.legend-shared-holiday { border:1px solid #c9b7ee;background:linear-gradient(135deg,#ffdfe5 0 50%,#dff3ff 50% 100%)!important; }
 
 .project-workflow-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
 .project-workflow-summary strong { display: block; margin-top: 6px; overflow: hidden; color: #edf2ff; font-size: .82rem; text-overflow: ellipsis; white-space: nowrap; }
