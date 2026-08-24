@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type StatusType = 'approved' | 'ai_draft' | 'review' | 'request_changes' | 'unwritten' | 'draft' | 'in_review' | 'rejected';
+export type StatusType = 'approved' | 'completed' | 'ai_draft' | 'review' | 'request_changes' | 'unwritten' | 'draft' | 'in_review' | 'rejected';
 
 export interface StatusBadgeProps {
   status: StatusType;
@@ -9,6 +9,7 @@ export interface StatusBadgeProps {
 export const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   const config: Record<string, { label: string; color: string; bg: string }> = {
     approved: { label: '🟢 승인됨', color: '#4ade80', bg: 'rgba(74, 222, 128, 0.15)' },
+    completed: { label: '🟢 등록 완료', color: '#22c55e', bg: 'rgba(34, 197, 94, 0.14)' },
     ai_draft: { label: '🟣 AI초안', color: '#c084fc', bg: 'rgba(192, 132, 252, 0.15)' },
     review: { label: '🔵 검토중', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.15)' },
     in_review: { label: '🔵 검토중', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.15)' },

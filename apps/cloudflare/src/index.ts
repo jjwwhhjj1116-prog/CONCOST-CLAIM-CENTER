@@ -24,7 +24,7 @@ import {
 } from './google-drive';
 import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
 import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
-import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportChapter } from './proposal-docx';
+import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportAsset, type ProposalExportChapter } from './proposal-docx';
 import { extractIntakeSource, IntakeSourceError, type IntakeSource } from './intake-source';
 import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './proposal-company-content';
 
@@ -1574,6 +1574,23 @@ interface ProposalCompanyModule {
   updatedAt: string;
 }
 
+interface ProposalCompanyAssetMetadata {
+  assetKey: string;
+  chapterNumber: number;
+  displayOrder: number;
+  title: string;
+  altText: string;
+  mimeType: string | null;
+  fileName: string | null;
+  sha256: string | null;
+  width: number | null;
+  height: number | null;
+  hasContent: boolean;
+  isActive: boolean;
+  version: number;
+  updatedAt: string | null;
+}
+
 interface ProposalTemplateSource {
   id: string;
   sourceName: string;
@@ -1629,6 +1646,16 @@ const FALLBACK_PROPOSAL_MODULES: ProposalCompanyModule[] = [
   { code:'CH11_TERMS',chapterNumber:11,title:PROPOSAL_CHAPTER_TITLES[10],category:'TERMS',bodyMarkdown:PROPOSAL_COMPANY_MODULE_CONTENT.CH11_TERMS,isActive:true,version:1,updatedAt:'HWP-260728' }
 ];
 
+const FALLBACK_PROPOSAL_ASSETS: ProposalCompanyAssetMetadata[] = [
+  {assetKey:'CH04_EXPERT_PROFILE',chapterNumber:4,displayOrder:1,title:'현동명 원장 전문가 프로필',altText:'현동명 원장의 학력·경력·논문·저서 소개',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:true,version:0,updatedAt:null},
+  {assetKey:'CH06_ORG_CHART',chapterNumber:6,displayOrder:1,title:'컨코스트 조직도',altText:'경영진·컨코스트 본사·클레임센터·베트남 지사의 조직 구성',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:true,version:0,updatedAt:null},
+  {assetKey:'CH06_BUSINESS_AREAS',chapterNumber:6,displayOrder:2,title:'업무 영역과 수행 역량',altText:'개산견적·수량산출·현장검증·클레임·공사비검증 등 업무 영역',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:true,version:0,updatedAt:null},
+  {assetKey:'CH10_DEGREE',chapterNumber:10,displayOrder:1,title:'박사학위 수여증명서',altText:'건설법무학 박사학위 수여 증명자료',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:true,version:0,updatedAt:null},
+  {assetKey:'CH10_APPRAISER',chapterNumber:10,displayOrder:2,title:'건설감정사 자격증',altText:'한국건설법무학회의 건설감정사 자격 증명자료',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:true,version:0,updatedAt:null},
+  {assetKey:'CH10_PUBLICATIONS',chapterNumber:10,displayOrder:3,title:'논문·저서 실물 자료',altText:'건축견적이야기·박사학위 논문·건축시공이야기 표지',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:true,version:0,updatedAt:null},
+  {assetKey:'BRAND_LOGO',chapterNumber:4,displayOrder:99,title:'CONCOST 로고',altText:'주식회사 컨코스트 로고',mimeType:null,fileName:null,sha256:null,width:null,height:null,hasContent:false,isActive:false,version:0,updatedAt:null}
+];
+
 function sanitizeProposalCostData(source: string): { value: string; count: number } {
   let value = source;
   let count = 0;
@@ -1656,6 +1683,46 @@ async function proposalCompanyModules(env: CloudflareEnv): Promise<ProposalCompa
   } catch {
     return FALLBACK_PROPOSAL_MODULES;
   }
+}
+
+async function proposalCompanyAssets(env: CloudflareEnv): Promise<ProposalCompanyAssetMetadata[]> {
+  if (!env.DB) return FALLBACK_PROPOSAL_ASSETS;
+  try {
+    const rows=await env.DB.prepare('SELECT asset_key AS assetKey,chapter_number AS chapterNumber,display_order AS displayOrder,title,alt_text AS altText,mime_type AS mimeType,file_name AS fileName,file_sha256 AS sha256,width,height,(file_data IS NOT NULL) AS hasContent,is_active AS isActive,version,updated_at AS updatedAt FROM preview_proposal_company_assets WHERE organization_id=? ORDER BY chapter_number,display_order').bind(PREVIEW_ORGANIZATION_ID).all<Record<string,unknown>>();
+    return rows.results.map((row)=>({assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),displayOrder:Number(row.displayOrder),title:String(row.title),altText:String(row.altText),mimeType:row.mimeType?String(row.mimeType):null,fileName:row.fileName?String(row.fileName):null,sha256:row.sha256?String(row.sha256):null,width:row.width==null?null:Number(row.width),height:row.height==null?null:Number(row.height),hasContent:Boolean(row.hasContent),isActive:Boolean(row.isActive),version:Number(row.version),updatedAt:row.updatedAt?String(row.updatedAt):null}));
+  } catch {
+    return FALLBACK_PROPOSAL_ASSETS;
+  }
+}
+
+function jpegDimensions(bytes:Uint8Array):{width:number;height:number}|null{
+  if(bytes.length<12||bytes[0]!==0xff||bytes[1]!==0xd8||bytes[2]!==0xff)return null;
+  let offset=2;
+  while(offset+8<bytes.length){
+    if(bytes[offset]!==0xff){offset+=1;continue;}
+    const marker=bytes[offset+1];
+    if(marker===0xd9||marker===0xda)break;
+    const length=(bytes[offset+2]<<8)|bytes[offset+3];
+    if(length<2||offset+length+2>bytes.length)break;
+    if([0xc0,0xc1,0xc2,0xc3,0xc5,0xc6,0xc7,0xc9,0xca,0xcb,0xcd,0xce,0xcf].includes(marker))return{height:(bytes[offset+5]<<8)|bytes[offset+6],width:(bytes[offset+7]<<8)|bytes[offset+8]};
+    offset+=length+2;
+  }
+  return null;
+}
+
+function proposalAssetBytes(value:unknown):Uint8Array|null{
+  if(value instanceof Uint8Array)return value;
+  if(value instanceof ArrayBuffer)return new Uint8Array(value);
+  if(Array.isArray(value)&&value.every((item)=>Number.isInteger(item)&&Number(item)>=0&&Number(item)<=255))return new Uint8Array(value as number[]);
+  return null;
+}
+
+async function proposalExportAssets(env:CloudflareEnv):Promise<ProposalExportAsset[]>{
+  if(!env.DB)return[];
+  try{
+    const rows=await env.DB.prepare("SELECT asset_key AS assetKey,chapter_number AS chapterNumber,title,alt_text AS altText,mime_type AS mimeType,file_name AS fileName,file_data AS fileData,width,height FROM preview_proposal_company_assets WHERE organization_id=? AND is_active=1 AND file_data IS NOT NULL AND mime_type='image/jpeg' ORDER BY chapter_number,display_order").bind(PREVIEW_ORGANIZATION_ID).all<Record<string,unknown>>();
+    return rows.results.flatMap((row)=>{const data=proposalAssetBytes(row.fileData);return data?[{assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),title:String(row.title),altText:String(row.altText),mimeType:'image/jpeg' as const,fileName:String(row.fileName??`${row.assetKey}.jpg`),width:Number(row.width),height:Number(row.height),data}]:[];});
+  }catch{return[];}
 }
 
 async function proposalTemplateSources(env: CloudflareEnv): Promise<ProposalTemplateSource[]> {
@@ -1768,7 +1835,30 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
   if (url.pathname === '/api/proposal-studio/config' && request.method === 'GET') {
     const modules = await proposalCompanyModules(env);
     const sources = await proposalTemplateSources(env);
-    return json({ modules,sources,chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF42_PROPOSAL_STUDIO' });
+    const assets = await proposalCompanyAssets(env);
+    return json({ modules,sources,assets,chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF48_PROPOSAL_VISUAL_MODULES' });
+  }
+  const assetMatch=url.pathname.match(/^\/api\/proposal-studio\/assets\/([A-Z0-9_]+)$/u);
+  if(assetMatch&&request.method==='GET'){
+    try{
+      const row=await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256,version FROM preview_proposal_company_assets WHERE organization_id=? AND asset_key=? AND is_active=1 AND file_data IS NOT NULL').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1]).first<Record<string,unknown>>();
+      const bytes=proposalAssetBytes(row?.fileData); if(!row||!bytes)return json({error:'Proposal company image was not found',code:'PROPOSAL_ASSET_NOT_FOUND'},404);
+      return new Response(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer,{headers:{'Content-Type':String(row.mimeType),'Content-Disposition':`inline; filename*=UTF-8''${encodeURIComponent(String(row.fileName))}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Content-SHA256':String(row.sha256),'X-Proposal-Asset-Version':String(row.version)}});
+    }catch{return json({error:'Proposal company image store is not ready',code:'PROPOSAL_ASSET_STORE_NOT_READY'},503);}
+  }
+  if(assetMatch&&request.method==='PUT'){
+    if(!isAdmin)return json({error:'Only Admin can update proposal company images',code:'FORBIDDEN'},403);
+    const form=await request.formData().catch(()=>null); const file=form?.get('file');
+    if(!(file instanceof File)||file.size<100||file.size>2_000_000)return json({error:'2MB 이하의 JPG 회사 이미지가 필요합니다.',code:'INVALID_PROPOSAL_ASSET'},400);
+    const bytes=new Uint8Array(await file.arrayBuffer()); const dimensions=jpegDimensions(bytes);
+    if(file.type!=='image/jpeg'||!dimensions||dimensions.width<100||dimensions.height<100||dimensions.width>6000||dimensions.height>6000)return json({error:'유효한 JPG 이미지(100~6000px)만 등록할 수 있습니다.',code:'INVALID_PROPOSAL_ASSET'},415);
+    const sha256=await sha256Hex(bytes); const now=new Date().toISOString();
+    try{
+      const result=await env.DB.prepare("UPDATE preview_proposal_company_assets SET mime_type='image/jpeg',file_name=?,file_data=?,file_sha256=?,width=?,height=?,is_active=1,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND asset_key=?").bind(file.name.slice(0,200),bytes,sha256,dimensions.width,dimensions.height,user.id,now,PREVIEW_ORGANIZATION_ID,assetMatch[1]).run();
+      if(result.meta?.changes!==1)return json({error:'Proposal company image slot was not found',code:'PROPOSAL_ASSET_NOT_FOUND'},404);
+      const asset=(await proposalCompanyAssets(env)).find((item)=>item.assetKey===assetMatch[1]);
+      return json({asset,phase:'CF48_PROPOSAL_VISUAL_MODULES'});
+    }catch{return json({error:'Proposal company image could not be saved',code:'PROPOSAL_ASSET_SAVE_FAILED'},409);}
   }
   const moduleMatch = url.pathname.match(/^\/api\/proposal-studio\/modules\/(CH(?:0[4-9]|1[01])_[A-Z_]+)$/u);
   if (moduleMatch && request.method === 'PUT') {
@@ -1959,7 +2049,8 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     const modules=await proposalCompanyModules(env); const fallback=defaultProposalChapters(caseRow,modules); const inputs=parseProposalInputs(version.structuredInputsJson,fallback);
     let sanitizationCount=Number(inputs.sanitizationCount||0);
     const chapters:ProposalExportChapter[]=inputs.chapters.sort((a,b)=>a.number-b.number).map((chapter)=>{const safe=sanitizeProposalCostData(chapter.body);sanitizationCount+=safe.count;return{number:chapter.number,title:chapter.title,body:safe.value};});
-    const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters};
+    const assets=await proposalExportAssets(env);
+    const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters,assets};
     const format=String(body.format); const output=format==='docx'?generateProposalDocx(doc):format==='pdf'?generateProposalPdf(doc):new TextEncoder().encode(generateProposalMarkdown(doc)); const outputSha=await sha256Hex(output);
     const safeCase=caseRow.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu,'_'); const extension=format==='docx'?'docx':format==='pdf'?'pdf':'md'; const fileName=`${safeCase}_컨코스트_제안서_v${version.versionNumber}.${extension}`; const now=new Date().toISOString();
     const exportFormat=format==='docx'?'DOCX':format==='pdf'?'PDF':'MARKDOWN';
@@ -5451,7 +5542,7 @@ const worker = {
       return handleProjectWorkflowManagement(request, env, url);
     }
 
-    if (url.pathname === '/api/proposal-studio/config' || url.pathname.startsWith('/api/proposal-studio/modules/')) {
+    if (url.pathname === '/api/proposal-studio/config' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/')) {
       return handlePreviewProposalStudio(request, env, url);
     }
 

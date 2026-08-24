@@ -4,6 +4,18 @@ export interface ProposalExportChapter {
   body: string;
 }
 
+export interface ProposalExportAsset {
+  assetKey: string;
+  chapterNumber: number;
+  title: string;
+  altText: string;
+  mimeType: 'image/jpeg';
+  fileName: string;
+  width: number;
+  height: number;
+  data: Uint8Array;
+}
+
 export interface ProposalExportDocument {
   proposalId: string;
   versionId: string;
@@ -17,6 +29,7 @@ export interface ProposalExportDocument {
   preparedBy: string;
   contentSha256: string;
   chapters: ProposalExportChapter[];
+  assets?: ProposalExportAsset[];
 }
 
 const encoder = new TextEncoder();
@@ -50,13 +63,13 @@ const crc32 = (bytes: Uint8Array): number => {
   return (crc ^ 0xffffffff) >>> 0;
 };
 
-function zipStore(files: Array<{ name: string; content: string }>): Uint8Array {
+function zipStore(files: Array<{ name: string; content: string | Uint8Array }>): Uint8Array {
   const local: Uint8Array[] = [];
   const central: Uint8Array[] = [];
   let offset = 0;
   for (const file of files) {
     const name = encoder.encode(file.name);
-    const data = encoder.encode(file.content);
+    const data = typeof file.content === 'string' ? encoder.encode(file.content) : file.content;
     const crc = crc32(data);
     const header = concat([u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), name]);
     local.push(header, data);
@@ -124,6 +137,15 @@ function markdownParagraphs(body: string): string {
   return output.join('');
 }
 
+function proposalImageDrawing(asset: ProposalExportAsset, relationshipId: string, drawingId: number): string {
+  const maxWidth = 5_850_000;
+  const maxHeight = 7_300_000;
+  const scale = Math.min(maxWidth / asset.width, maxHeight / asset.height);
+  const width = Math.max(1, Math.round(asset.width * scale));
+  const height = Math.max(1, Math.round(asset.height * scale));
+  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="180" w:after="80"/></w:pPr><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${width}" cy="${height}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${drawingId}" name="${xml(asset.title)}" descr="${xml(asset.altText)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${drawingId}" name="${xml(asset.fileName)}" descr="${xml(asset.altText)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${width}" cy="${height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>${paragraph(asset.title, 'Subtitle', '<w:spacing w:after="180"/>', '<w:b/><w:color w:val="17326D"/><w:sz w:val="18"/>')}`;
+}
+
 const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="맑은 고딕"/><w:sz w:val="21"/><w:szCs w:val="21"/><w:lang w:val="ko-KR" w:eastAsia="ko-KR"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="140" w:line="320" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
@@ -176,34 +198,56 @@ const proposalPdfLines = (input: ProposalExportDocument): string[] => {
 
 export function generateProposalPdf(input: ProposalExportDocument): Uint8Array {
   const lines = proposalPdfLines(input);
-  const pages = Array.from({ length: Math.max(1, Math.ceil(lines.length / 42)) }, (_, index) => lines.slice(index * 42, (index + 1) * 42));
-  const objects = new Map<number, string>();
-  const pageIds = pages.map((_, index) => 5 + index * 2);
-  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
-  objects.set(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
-  objects.set(3, '<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>');
-  objects.set(4, '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYSMyeongJo-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 2 >> >>');
-  pages.forEach((pageLines, index) => {
-    const pageId = pageIds[index];
+  const textPages = Array.from({ length: Math.max(1, Math.ceil(lines.length / 42)) }, (_, index) => lines.slice(index * 42, (index + 1) * 42));
+  const imageAssets = (input.assets ?? []).filter((asset) => asset.mimeType === 'image/jpeg' && asset.data.byteLength > 0);
+  const objects = new Map<number, Uint8Array>();
+  const textPageIds = textPages.map((_, index) => 5 + index * 2);
+  let nextObjectId = 5 + textPages.length * 2;
+  const imagePages = imageAssets.map((asset) => {
+    const pageId = nextObjectId;
+    nextObjectId += 3;
+    return { asset, pageId, contentId:pageId + 1, imageId:pageId + 2 };
+  });
+  const pageIds = [...textPageIds, ...imagePages.map((page) => page.pageId)];
+  const objectText = (id: number, value: string): void => { objects.set(id, encoder.encode(value)); };
+  objectText(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objectText(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`);
+  objectText(3, '<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>');
+  objectText(4, '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYSMyeongJo-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 2 >> >>');
+  textPages.forEach((pageLines, index) => {
+    const pageId = textPageIds[index];
     const contentId = pageId + 1;
     const commands = ['BT', '/F1 10 Tf', '45 794 Td', '16 TL', ...pageLines.flatMap((line, lineIndex) => [`<${proposalPdfHex(line)}> Tj`, lineIndex === pageLines.length - 1 ? '' : 'T*']).filter(Boolean), 'ET'].join('\n');
-    objects.set(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
-    objects.set(contentId, `<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
+    objectText(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objectText(contentId, `<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
   });
-  let output = '%PDF-1.7\n%CONCOST-PROPOSAL\n';
-  const offsets: number[] = [0];
-  for (let id = 1; id <= objects.size; id += 1) {
-    offsets[id] = encoder.encode(output).length;
-    output += `${id} 0 obj\n${objects.get(id)}\nendobj\n`;
+  for (const {asset,pageId,contentId,imageId} of imagePages) {
+    const maxWidth=505; const maxHeight=752; const scale=Math.min(maxWidth/asset.width,maxHeight/asset.height);
+    const width=Math.max(1,asset.width*scale); const height=Math.max(1,asset.height*scale); const x=(595-width)/2; const y=(842-height)/2;
+    const commands=`q\n${width.toFixed(2)} 0 0 ${height.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm\n/Im1 Do\nQ`;
+    objectText(pageId,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /XObject << /Im1 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objectText(contentId,`<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
+    objects.set(imageId,concat([encoder.encode(`<< /Type /XObject /Subtype /Image /Width ${asset.width} /Height ${asset.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${asset.data.byteLength} >>\nstream\n`),asset.data,encoder.encode('\nendstream')]));
   }
-  const xref = encoder.encode(output).length;
-  output += `xref\n0 ${objects.size + 1}\n0000000000 65535 f \n`;
-  for (let id = 1; id <= objects.size; id += 1) output += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
-  output += `trailer\n<< /Size ${objects.size + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return encoder.encode(output);
+  const chunks:Uint8Array[]=[encoder.encode('%PDF-1.7\n%CONCOST-PROPOSAL\n')];
+  let outputLength=chunks[0].byteLength;
+  const offsets: number[] = [0];
+  for (let id = 1; id < nextObjectId; id += 1) {
+    offsets[id] = outputLength;
+    const object=objects.get(id) ?? encoder.encode('<<>>');
+    const prefix=encoder.encode(`${id} 0 obj\n`); const suffix=encoder.encode('\nendobj\n');
+    chunks.push(prefix,object,suffix); outputLength+=prefix.byteLength+object.byteLength+suffix.byteLength;
+  }
+  let trailer=`xref\n0 ${nextObjectId}\n0000000000 65535 f \n`;
+  for(let id=1;id<nextObjectId;id+=1)trailer+=`${String(offsets[id]).padStart(10,'0')} 00000 n \n`;
+  trailer+=`trailer\n<< /Size ${nextObjectId} /Root 1 0 R >>\nstartxref\n${outputLength}\n%%EOF`;
+  chunks.push(encoder.encode(trailer));
+  return concat(chunks);
 }
 
 export function generateProposalDocx(input: ProposalExportDocument): Uint8Array {
+  const assets=(input.assets??[]).filter((asset)=>asset.mimeType==='image/jpeg'&&asset.data.byteLength>0);
+  const imageRelationships=assets.map((asset,index)=>({asset,index,relationshipId:`rIdImage${index+1}`,target:`media/company-${String(index+1).padStart(2,'0')}.jpg`}));
   const cover = [
     paragraph('CONCOST CLAIM CENTER', 'Subtitle', '', '<w:b/><w:color w:val="E36B2C"/>'),
     paragraph(input.projectTitle, 'Title'),
@@ -218,12 +262,15 @@ export function generateProposalDocx(input: ProposalExportDocument): Uint8Array 
     ...input.chapters.map((chapter) => paragraph(`${chapter.number}. ${chapter.title}`, 'TOC1')),
     '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
   ].join('');
-  const chapters = input.chapters.map((chapter) => `${paragraph(`${chapter.number}. ${chapter.title}`, 'Heading1')}${markdownParagraphs(chapter.body)}`).join('');
+  const chapters = input.chapters.map((chapter) => {
+    const images=imageRelationships.filter((item)=>item.asset.chapterNumber===chapter.number).map((item)=>proposalImageDrawing(item.asset,item.relationshipId,item.index+1)).join('');
+    return `${paragraph(`${chapter.number}. ${chapter.title}`, 'Heading1')}${markdownParagraphs(chapter.body)}${images}`;
+  }).join('');
   const metadata = paragraph(`문서 무결성 SHA-256 ${input.contentSha256} · 제안서 ${input.proposalId} · 버전 ${input.versionNumber}`, 'Normal', '<w:spacing w:before="360"/><w:jc w:val="center"/>', '<w:i/><w:color w:val="64748B"/><w:sz w:val="16"/>');
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${cover}${toc}${chapters}${metadata}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567"/><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/></w:sectPr></w:body></w:document>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>`;
   const rootRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>`;
-  const documentRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>`;
+  const documentRelationships = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/><Relationship Id="rIdSettings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/><Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>${imageRelationships.map((item)=>`<Relationship Id="${item.relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${item.target}"/>`).join('')}</Relationships>`;
   const settings = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:updateFields w:val="true"/><w:defaultTabStop w:val="720"/></w:settings>`;
   const header = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="right"/><w:pBdr><w:bottom w:val="single" w:sz="8" w:space="4" w:color="31A6D8"/></w:pBdr></w:pPr>${textRun(`CONCOST CLAIM CENTER · ${input.caseNumber}`, '<w:b/><w:color w:val="17326D"/><w:sz w:val="16"/>')}</w:p></w:hdr>`;
   const footer = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:color w:val="64748B"/><w:sz w:val="16"/></w:rPr><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>`;
@@ -238,6 +285,7 @@ export function generateProposalDocx(input: ProposalExportDocument): Uint8Array 
     { name: 'word/settings.xml', content: settings },
     { name: 'word/header1.xml', content: header },
     { name: 'word/footer1.xml', content: footer },
-    { name: 'docProps/core.xml', content: core }
+    { name: 'docProps/core.xml', content: core },
+    ...imageRelationships.map((item)=>({name:`word/${item.target}`,content:item.asset.data}))
   ]);
 }
