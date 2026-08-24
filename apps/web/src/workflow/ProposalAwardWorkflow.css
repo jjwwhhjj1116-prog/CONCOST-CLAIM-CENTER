@@ -80,6 +80,53 @@
 .proposal-flow-welcome { min-height: 320px; place-content: center; }
 .proposal-flow-welcome span { color: #54d2ff; font-size: .72rem; font-weight: 900; letter-spacing: .13em; }
 .proposal-flow-welcome h3, .proposal-flow-welcome p { margin: 0; }
+.reception-flow { max-width: 1260px; margin: 0 auto; }
+.reception-hero p b { color: #ffffff; }
+.reception-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.reception-kpis article { padding: 18px 20px; border: 1px solid #2c3955; border-radius: 13px; background: #101727; }
+.reception-kpis span { color: #63d4ff; font-size: .75rem; font-weight: 900; }
+.reception-kpis strong { display: block; margin: 6px 0 2px; color: #ffffff; font-size: 2rem; }
+.reception-kpis small { color: #91a0b7; }
+.reception-card { padding: 24px; border: 1px solid #2b3956; border-radius: 15px; background: #101727; }
+.reception-step { display: flex; align-items: center; gap: 16px; padding-bottom: 20px; border-bottom: 1px solid #2b3956; }
+.reception-step > span { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 14px; color: #ffffff; background: linear-gradient(135deg, #5368ff, #128edb); font-size: 1.15rem; font-weight: 950; }
+.reception-step small { color: #55d9ff; font-weight: 900; letter-spacing: .08em; }
+.reception-step h3 { margin: 4px 0; color: #ffffff; font-size: 1.35rem; }
+.reception-step p { margin: 0; color: #91a0b7; }
+.reception-selector { display: grid; gap: 8px; margin: 22px 0; color: #a6b4c9; font-size: .82rem; font-weight: 850; }
+.reception-selector select { min-height: 52px; padding: 12px 14px; font-size: 1rem; font-weight: 800; }
+.reception-summary { overflow: hidden; border: 1px solid #344360; border-radius: 13px; background: #0b1424; }
+.reception-summary-title { display: flex; align-items: center; gap: 14px; padding: 20px; border-bottom: 1px solid #2b3956; }
+.reception-summary-title h3 { margin: 4px 0 0; color: #ffffff; font-size: 1.28rem; }
+.reception-summary-title small { color: #8291aa; }
+.reception-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0; background: #2b3956; }
+.reception-summary dl div { padding: 16px 20px; background: #0d1728; }
+.reception-summary dt { margin-bottom: 5px; color: #8291aa; font-size: .73rem; }
+.reception-summary dd { margin: 0; color: #edf4ff; font-weight: 800; }
+.reception-actions { display: flex; justify-content: flex-end; gap: 12px; padding: 20px; }
+.reception-actions button { min-height: 50px; padding: 13px 22px; font-size: 1rem; }
+.reception-actions button.is-cancel { border: 1px solid #687891; color: #dce5f2; background: #27334a; }
+.reception-actions button.is-confirm { min-width: 270px; background: linear-gradient(135deg, #0468e8, #0998e8); box-shadow: 0 8px 20px rgba(3, 111, 225, .25); }
+.reception-complete { display: flex; align-items: center; gap: 12px; padding: 18px 20px; color: #a7f3d7; background: rgba(30, 185, 126, .09); }
+.reception-complete > span { color: #91a0b7; }
+.reception-complete button { margin-left: auto; }
+.reception-complete.is-lost { color: #d5deeb; background: #202b3d; }
+.reception-empty { display: grid; justify-items: center; gap: 10px; padding: 52px 20px; color: #8f9eb4; text-align: center; }
+.reception-empty strong { color: #e9f1ff; font-size: 1.15rem; }
+.reception-empty button { margin-top: 8px; }
+:root[data-theme='light'] .reception-kpis article,
+:root[data-theme='light'] .reception-card { border-color: #d1dce8; background: #ffffff; box-shadow: 0 8px 22px rgba(35, 59, 88, .06); }
+:root[data-theme='light'] .reception-kpis strong,
+:root[data-theme='light'] .reception-step h3,
+:root[data-theme='light'] .reception-summary-title h3,
+:root[data-theme='light'] .reception-empty strong { color: #172033; }
+:root[data-theme='light'] .reception-summary { border-color: #c7d4e3; background: #ffffff; }
+:root[data-theme='light'] .reception-summary-title { border-color: #dbe4ed; }
+:root[data-theme='light'] .reception-summary dl { background: #dbe4ed; }
+:root[data-theme='light'] .reception-summary dl div { background: #f7f9fc; }
+:root[data-theme='light'] .reception-summary dd { color: #172033; }
+:root[data-theme='light'] .reception-actions button.is-cancel { border-color: #d5a1a8; color: #9f2434; background: #fff4f5; }
+:root[data-theme='light'] .reception-complete { color: #176b51; background: #edf9f4; }
 @media (max-width: 1024px) {
   .proposal-flow-layout { grid-template-columns: 1fr; }
   .proposal-flow-list { position: static; max-height: 360px; }
@@ -98,4 +145,9 @@
   .proposal-flow-heading small { text-align: left; }
   .proposal-flow-submit > span { margin: 0; }
   .proposal-flow-submit button { width: 100%; }
+  .reception-kpis, .reception-summary dl { grid-template-columns: 1fr; }
+  .reception-card { padding: 17px; }
+  .reception-actions, .reception-complete { align-items: stretch; flex-direction: column; }
+  .reception-actions button, .reception-actions button.is-confirm { width: 100%; min-width: 0; }
+  .reception-complete button { margin-left: 0; }
 }

@@ -75,6 +75,28 @@ interface DecisionForm {
   decision: 'WON' | 'LOST';
 }
 
+type ReceptionStatus = 'READY' | 'WON' | 'LOST';
+
+interface ProposalReception {
+  proposalId: string;
+  caseId: string;
+  caseNumber: string;
+  caseTitle: string;
+  caseStatus: string;
+  caseVersion: number;
+  proposalTitle: string;
+  proposalVersion: number;
+  versionNumber: number;
+  clientName: string;
+  documentSha256: string;
+  confirmedAt: string;
+  proposalNumber: string;
+  revisionLabel: string;
+  receptionStatus: ReceptionStatus;
+  awardDecidedAt: string | null;
+  awardDecidedByName: string | null;
+}
+
 const MUTATION_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm'];
 const awardLabel: Record<AwardStatus, string> = { PENDING: '회신 대기', WON: '수주 확정', LOST: '미수주' };
 const verificationLabel: Record<VerificationStatus, string> = { UNVERIFIED: '원문 미확인', VERIFIED: '원문 검증', CONFLICT: '자료 충돌' };
@@ -130,6 +152,9 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [receptions, setReceptions] = useState<ProposalReception[]>([]);
+  const [selectedReceptionId, setSelectedReceptionId] = useState('');
+  const [receptionLoading, setReceptionLoading] = useState(routeId === 'WF-02');
   const keysRef = useRef(new Map<string, string>());
   const detailEpoch = useRef(0);
   const canMutate = roles.some((role) => MUTATION_ROLES.includes(role));
@@ -154,8 +179,25 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
     finally { setLoading(false); }
   }, [awardFilter, query, selectedId]);
 
+  const loadReceptions = useCallback(async (preferredId?: string) => {
+    setReceptionLoading(true); setError('');
+    try {
+      const params = new URLSearchParams();
+      if (query.trim()) params.set('q', query.trim());
+      const result = await apiRequest<{ receptions: ProposalReception[] }>(`/api/proposal-workflow/receptions?${params}`);
+      setReceptions(result.receptions);
+      setSelectedReceptionId((current) => {
+        const preferred = preferredId || current;
+        if (result.receptions.some((item) => item.proposalId === preferred)) return preferred;
+        return result.receptions.find((item) => item.receptionStatus === 'READY')?.proposalId ?? result.receptions[0]?.proposalId ?? '';
+      });
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { setReceptionLoading(false); }
+  }, [query]);
+
   useEffect(() => {
-    void Promise.all([loadCases(), loadProposals()]).catch((reason) => setError(errorMessage(reason)));
+    if (routeId === 'WF-02') void loadReceptions();
+    else void Promise.all([loadCases(), loadProposals()]).catch((reason) => setError(errorMessage(reason)));
   }, []);
 
   useEffect(() => {
@@ -214,6 +256,78 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setBusy(''); }
   };
+
+  const selectedReception = receptions.find((item) => item.proposalId === selectedReceptionId) ?? null;
+
+  const submitReception = async (decision: 'WON' | 'LOST') => {
+    if (!selectedReception || selectedReception.receptionStatus !== 'READY') return;
+    const prompt = decision === 'WON'
+      ? `${selectedReception.caseNumber} · ${selectedReception.caseTitle}\n\n이 제안서의 수주를 확인하고 프로젝트를 접수할까요?\n접수 후 바로 프로젝트 일정표로 이동합니다.`
+      : `${selectedReception.caseNumber} · ${selectedReception.caseTitle}\n\n이 제안서를 접수 취소 처리할까요?\n취소 이력은 보존되며 수행 프로젝트로 전환되지 않습니다.`;
+    if (!window.confirm(prompt)) return;
+    const payload = {
+      proposalId: selectedReception.proposalId,
+      decision,
+      expectedProposalVersion: selectedReception.proposalVersion,
+      expectedCaseVersion: selectedReception.caseVersion
+    };
+    const stable = stableKey(keysRef.current, `reception-${selectedReception.proposalId}`, payload);
+    setBusy('reception'); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ reception: ProposalReception; erpSync?: { status: 'PENDING' | 'SYNCED' | 'FAILED' } | null }>('/api/proposal-workflow/receptions', {
+        method: 'POST', headers: { 'Idempotency-Key': stable.key }, body: JSON.stringify(payload)
+      });
+      keysRef.current.delete(stable.fingerprint);
+      if (decision === 'WON') {
+        setNotice('프로젝트 접수가 완료되었습니다. 단계별 기준 일정을 입력하세요.');
+        onNavigate(`/projects/schedule?projectId=${encodeURIComponent(`project-${result.reception.caseId}`)}&edit=1&erpSync=${encodeURIComponent(result.erpSync?.status ?? 'PENDING')}`);
+        return;
+      }
+      setNotice('접수 취소가 저장되었습니다. 제안서와 취소 이력은 그대로 보존됩니다.');
+      await loadReceptions(selectedReception.proposalId);
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { setBusy(''); }
+  };
+
+  if (routeId === 'WF-02') {
+    if (receptionLoading && receptions.length === 0) return <StatusFeedbackState type="loading" message="D1에서 확정 제안서를 불러오고 있습니다." />;
+    const readyCount = receptions.filter((item) => item.receptionStatus === 'READY').length;
+    const wonCount = receptions.filter((item) => item.receptionStatus === 'WON').length;
+    const lostCount = receptions.filter((item) => item.receptionStatus === 'LOST').length;
+    return (
+      <section className="route-view proposal-flow reception-flow" aria-labelledby="proposal-reception-title">
+        <header className="proposal-flow-hero reception-hero">
+          <div><span>PROJECT RECEPTION · ONE CLICK</span><h2 id="proposal-reception-title">확정 제안서를 수주 프로젝트로 접수합니다.</h2><p>제안서를 고른 뒤 <b>수주 확인</b> 또는 <b>접수 취소</b>만 누르세요. 별도 항목을 다시 입력하지 않습니다.</p></div>
+          <div className="proposal-flow-actions"><button type="button" className="is-secondary" onClick={() => onNavigate('/proposals/editor')}>제안서 작성 열기</button></div>
+        </header>
+
+        <div className="reception-kpis" aria-label="프로젝트 접수 현황">
+          <article><span>접수 대기</span><strong>{readyCount}</strong><small>확정 제안서</small></article>
+          <article><span>수주 확인</span><strong>{wonCount}</strong><small>수행 프로젝트</small></article>
+          <article><span>접수 취소</span><strong>{lostCount}</strong><small>이력 보존</small></article>
+        </div>
+
+        {error && <div className="proposal-flow-error" role="alert"><span>{error}</span><button type="button" onClick={() => void loadReceptions()}>최신 데이터 다시 불러오기</button></div>}
+        {notice && <div className="proposal-flow-notice" role="status">{notice}</div>}
+
+        <section className="reception-card">
+          <div className="reception-step"><span>01</span><div><small>확정 제안서 선택</small><h3>접수할 프로젝트를 고르세요.</h3><p>제안서 작성 4단계에서 확정된 제안서만 표시됩니다.</p></div></div>
+          {receptions.length === 0 ? (
+            <div className="reception-empty"><strong>접수 가능한 확정 제안서가 없습니다.</strong><span>제안서 작성에서 사람 검수를 마치고 4단계 ‘제안서 확정’을 먼저 완료하세요.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>제안서 작성으로 이동</button></div>
+          ) : (
+            <>
+              <label className="reception-selector"><span>확정 제안서</span><select value={selectedReceptionId} disabled={busy === 'reception'} onChange={(event) => { setSelectedReceptionId(event.target.value); setError(''); setNotice(''); }}>{receptions.map((item) => <option key={item.proposalId} value={item.proposalId}>{item.caseNumber} · {item.caseTitle} · {item.revisionLabel} · {item.receptionStatus === 'READY' ? '접수 대기' : item.receptionStatus === 'WON' ? '수주 확인' : '접수 취소'}</option>)}</select></label>
+              {selectedReception && <div className="reception-summary">
+                <div className="reception-summary-title"><span className={`proposal-award is-${selectedReception.receptionStatus === 'READY' ? 'pending' : selectedReception.receptionStatus.toLowerCase()}`}>{selectedReception.receptionStatus === 'READY' ? '접수 대기' : selectedReception.receptionStatus === 'WON' ? '수주 확인 완료' : '접수 취소 완료'}</span><div><small>{selectedReception.proposalNumber} · {selectedReception.revisionLabel}</small><h3>{selectedReception.proposalTitle}</h3></div></div>
+                <dl><div><dt>프로젝트</dt><dd>{selectedReception.caseNumber} · {selectedReception.caseTitle}</dd></div><div><dt>클라이언트</dt><dd>{selectedReception.clientName}</dd></div><div><dt>제안서 확정일</dt><dd>{dateLabel(selectedReception.confirmedAt, true)}</dd></div><div><dt>현재 프로젝트 상태</dt><dd>{selectedReception.caseStatus}</dd></div></dl>
+                {selectedReception.receptionStatus === 'READY' ? <div className="reception-actions"><button type="button" className="is-cancel" disabled={!canMutate || busy === 'reception'} onClick={() => void submitReception('LOST')}>접수 취소</button><button type="button" className="is-confirm" disabled={!canMutate || busy === 'reception'} onClick={() => void submitReception('WON')}>{busy === 'reception' ? '접수 저장 중…' : '✓ 수주 확인 · 프로젝트 접수'}</button></div> : <div className={`reception-complete is-${selectedReception.receptionStatus.toLowerCase()}`}><strong>{selectedReception.receptionStatus === 'WON' ? '프로젝트 접수가 완료되었습니다.' : '접수 취소가 완료되었습니다.'}</strong><span>{selectedReception.awardDecidedByName ?? '담당자'} · {dateLabel(selectedReception.awardDecidedAt, true)}</span>{selectedReception.receptionStatus === 'WON' && <button type="button" onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(`project-${selectedReception.caseId}`)}`)}>프로젝트 일정표 열기 →</button>}</div>}
+              </div>}
+            </>
+          )}
+        </section>
+      </section>
+    );
+  }
 
   if (loading && proposals.length === 0 && cases.length === 0) return <StatusFeedbackState type="loading" message="D1에서 연동 제안서와 수주 결정을 불러오고 있습니다." />;
 

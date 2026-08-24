@@ -1240,11 +1240,154 @@ async function dispatchErpProjectSync(env: CloudflareEnv, syncId: string): Promi
   }
 }
 
+interface ProposalReceptionCandidateRow {
+  proposalId: string;
+  caseId: string;
+  caseNumber: string;
+  caseTitle: string;
+  caseStatus: string;
+  caseVersion: number;
+  caseDescription: string | null;
+  claimType: string;
+  proposalTitle: string;
+  proposalVersion: number;
+  proposalStatus: string;
+  versionNumber: number;
+  clientName: string;
+  documentSha256: string;
+  confirmedAt: string;
+  proposalNumber: string;
+  revisionLabel: string;
+  proposalLinkId: string | null;
+  awardStatus: string | null;
+  linkVersion: number | null;
+  awardDecidedAt: string | null;
+  awardDecidedByName: string | null;
+}
+
+const proposalReceptionSelect =
+  'SELECT p.id AS proposalId,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,' +
+  'c.description AS caseDescription,c.claim_type AS claimType,p.title AS proposalTitle,p.version AS proposalVersion,p.status AS proposalStatus,' +
+  'v.version_number AS versionNumber,COALESCE(NULLIF(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\'),\'[클라이언트명 확인 필요]\') AS clientName,' +
+  'v.sha256 AS documentSha256,p.updated_at AS confirmedAt,(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AS proposalNumber,' +
+  '(\'확정 v\'||v.version_number) AS revisionLabel,link.id AS proposalLinkId,link.award_status AS awardStatus,link.version AS linkVersion,' +
+  'link.award_decided_at AS awardDecidedAt,decider.display_name AS awardDecidedByName ' +
+  'FROM preview_proposals p JOIN preview_cases c ON c.id=p.case_id AND c.organization_id=p.organization_id ' +
+  'JOIN preview_proposal_versions v ON v.id=p.current_version_id AND v.id=p.approved_version_id AND v.proposal_id=p.id ' +
+  'LEFT JOIN preview_proposal_links link ON link.organization_id=p.organization_id AND link.case_id=p.case_id ' +
+  'AND link.proposal_number=(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AND link.revision_label=(\'확정 v\'||v.version_number) ' +
+  'LEFT JOIN preview_users decider ON decider.id=link.award_decided_by ';
+
+function proposalReceptionProjection(row: ProposalReceptionCandidateRow): Record<string, unknown> {
+  return {
+    ...row,
+    proposalVersion: Number(row.proposalVersion),
+    caseVersion: Number(row.caseVersion),
+    versionNumber: Number(row.versionNumber),
+    linkVersion: row.linkVersion === null ? null : Number(row.linkVersion),
+    receptionStatus: row.awardStatus ?? 'READY'
+  };
+}
+
+async function proposalReceptionDetail(env: CloudflareEnv, user: SessionUser, proposalId: string): Promise<ProposalReceptionCandidateRow | null> {
+  if (!env.DB) return null;
+  const admin = user.roles.includes('admin') ? 1 : 0;
+  return env.DB.prepare(
+    proposalReceptionSelect +
+    'WHERE p.id=? AND p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL ' +
+    'AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?))'
+  ).bind(proposalId, PREVIEW_ORGANIZATION_ID, admin, user.id).first<ProposalReceptionCandidateRow>();
+}
+
 async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   const detailMatch = url.pathname.match(/^\/api\/proposal-workflow\/links\/([0-9a-f-]{36})(?:\/(decision))?$/iu);
+
+  if (url.pathname === '/api/proposal-workflow/receptions' && request.method === 'GET') {
+    const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
+    const like = `%${q}%`;
+    const admin = user.roles.includes('admin') ? 1 : 0;
+    const rows = await env.DB.prepare(
+      proposalReceptionSelect +
+      'WHERE p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL ' +
+      'AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) ' +
+      'AND (?=\'\' OR p.title LIKE ? OR c.case_number LIKE ? OR c.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ?) ' +
+      'ORDER BY CASE COALESCE(link.award_status,\'READY\') WHEN \'READY\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.updated_at DESC LIMIT 200'
+    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, q, like, like, like, like).all<ProposalReceptionCandidateRow>();
+    return json({ receptions: rows.results.map(proposalReceptionProjection), phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
+  }
+
+  if (url.pathname === '/api/proposal-workflow/receptions' && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error: '프로젝트를 접수하거나 취소할 권한이 없습니다.', code: 'FORBIDDEN' }, 403);
+    if (!env.DB.batch) return json({ error: 'D1 일괄 저장 기능을 사용할 수 없습니다.', code: 'D1_BATCH_REQUIRED' }, 503);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['proposalId','decision','expectedProposalVersion','expectedCaseVersion'])) return json({ error: '프로젝트 접수 요청이 올바르지 않습니다.', code: 'INVALID_RECEPTION_PAYLOAD' }, 400);
+    const proposalId = typeof body.proposalId === 'string' && PREVIEW_DRAFT_KEY.test(body.proposalId) ? body.proposalId : '';
+    const decision = body.decision === 'WON' || body.decision === 'LOST' ? body.decision : '';
+    const expectedProposalVersion = Number(body.expectedProposalVersion);
+    const expectedCaseVersion = Number(body.expectedCaseVersion);
+    const current = proposalId ? await proposalReceptionDetail(env, user, proposalId) : null;
+    if (!current) return json({ error: '확정된 제안서를 찾을 수 없습니다. 제안서 4단계에서 먼저 확정하세요.', code: 'APPROVED_PROPOSAL_NOT_FOUND' }, 404);
+    if (!decision || !Number.isInteger(expectedProposalVersion) || !Number.isInteger(expectedCaseVersion)) return json({ error: '수주 확인 또는 접수 취소를 선택하세요.', code: 'INVALID_RECEPTION_PAYLOAD' }, 400);
+    if (Number(current.proposalVersion) !== expectedProposalVersion || Number(current.caseVersion) !== expectedCaseVersion) return json({ error: '제안서 또는 프로젝트가 변경되었습니다. 최신 데이터를 다시 불러오세요.', code: 'VERSION_CONFLICT' }, 409);
+    if (current.awardStatus) {
+      if (current.awardStatus !== decision) return json({ error: '이미 반대 결과로 확정된 접수입니다.', code: 'RECEPTION_ALREADY_DECIDED' }, 409);
+      return json({ reception: proposalReceptionProjection(current), erpSync: null, phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
+    }
+    const requestKey = request.headers.get('Idempotency-Key') ?? '';
+    if (!PREVIEW_CASE_CREATE_KEY.test(requestKey) || requestKey.length > 118) return json({ error: '올바른 중복 방지 키가 필요합니다.', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+    const decisionRequestKey = `${requestKey}:decision`;
+    const fingerprint = await sha256Hex(JSON.stringify({ proposalId, decision, expectedProposalVersion, expectedCaseVersion }));
+    const replay = await env.DB.prepare('SELECT proposal_link_id AS proposalLinkId,request_fingerprint AS fingerprint FROM preview_award_decisions WHERE request_key=?').bind(decisionRequestKey).first<{proposalLinkId:string;fingerprint:string}>();
+    if (replay) {
+      if (replay.fingerprint !== fingerprint) return json({ error: '동일 요청 키가 다른 접수 작업에 사용되었습니다.', code: 'IDEMPOTENCY_MISMATCH' }, 409);
+      const reception = await proposalReceptionDetail(env, user, proposalId);
+      return json({ reception: reception ? proposalReceptionProjection(reception) : null, erpSync: null, phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
+    }
+    const now = new Date().toISOString();
+    const decidedAt = new Date(Date.parse(now) + 1).toISOString();
+    const linkId = crypto.randomUUID();
+    const linkFingerprint = await sha256Hex(JSON.stringify({ sourceProposalId: proposalId, proposalNumber: current.proposalNumber, revisionLabel: current.revisionLabel }));
+    const decisionNote = decision === 'WON' ? '확정 제안서의 수주를 확인하여 수행 프로젝트로 접수했습니다.' : '확정 제안서가 취소되어 수행 프로젝트로 접수하지 않았습니다.';
+    const contractAmountKrw = decision === 'WON' ? 1 : null;
+    const projectDate = decision === 'WON' ? now.slice(0, 10) : null;
+    const nextCaseStatus = decision === 'WON' ? 'CONTRACT' : current.caseStatus;
+    const erpReady = decision === 'WON' && await erpProjectSyncSchema(env);
+    const erpSyncId = erpReady ? crypto.randomUUID() : '';
+    const erpSource = {
+      id: linkId, caseId: current.caseId, caseNumber: current.caseNumber, caseTitle: current.caseTitle,
+      caseStatus: current.caseStatus, caseVersion: Number(current.caseVersion), caseDescription: current.caseDescription,
+      claimType: current.claimType, proposalNumber: current.proposalNumber, proposalTitle: current.proposalTitle,
+      revisionLabel: current.revisionLabel, clientName: current.clientName
+    } as PreviewProposalRow;
+    const erpPayloadJson = erpReady ? JSON.stringify(erpProjectPayload(erpSource, user, decidedAt)) : '';
+    const erpPayloadSha256 = erpReady ? await sha256Hex(erpPayloadJson) : '';
+    const statements:D1StatementLike[] = [
+      env.DB.prepare('INSERT INTO preview_proposal_links (id,organization_id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,response_due_on,proposed_amount_krw,document_url,document_sha256,verification_status,award_status,version,request_key,request_fingerprint,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,\'UNVERIFIED\',\'PENDING\',1,?,?,?,?,?)')
+        .bind(linkId, PREVIEW_ORGANIZATION_ID, current.caseId, current.proposalNumber, current.proposalTitle, current.revisionLabel, current.clientName, current.confirmedAt, current.documentSha256, requestKey, linkFingerprint, user.id, now, now),
+      env.DB.prepare('INSERT INTO preview_award_decisions (id,proposal_link_id,case_id,decision,decision_note,decided_at,contract_amount_krw,project_start_on,project_end_on,expected_link_version,request_key,request_fingerprint,decided_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?)')
+        .bind(crypto.randomUUID(), linkId, current.caseId, decision, decisionNote, decidedAt, contractAmountKrw, projectDate, projectDate, decisionRequestKey, fingerprint, user.id, decidedAt),
+      env.DB.prepare('UPDATE preview_proposal_links SET award_status=?,award_decided_at=?,award_decided_by=?,contract_amount_krw=?,project_start_on=?,project_end_on=?,version=2,updated_at=? WHERE id=? AND version=1 AND award_status=\'PENDING\'')
+        .bind(decision, decidedAt, user.id, contractAmountKrw, projectDate, projectDate, decidedAt, linkId),
+      env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL')
+        .bind(nextCaseStatus, decidedAt, current.caseId, PREVIEW_ORGANIZATION_ID, expectedCaseVersion),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,\'PROPOSAL_LINKED\',?,?,?)')
+        .bind(crypto.randomUUID(), current.caseId, user.id, '확정 제안서 자동 연동', `${current.proposalNumber} · ${current.revisionLabel}`, decidedAt),
+      env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,\'AWARD_DECIDED\',?,?,?)')
+        .bind(crypto.randomUUID(), current.caseId, user.id, decision === 'WON' ? '프로젝트 접수 완료' : '프로젝트 접수 취소', decisionNote, decidedAt)
+    ];
+    if (erpReady) statements.push(
+      env.DB.prepare("INSERT INTO preview_erp_project_syncs (id,organization_id,case_id,proposal_link_id,event_kind,status,payload_json,payload_sha256,attempts,created_by,created_at,updated_at) VALUES (?,?,?,?,'PROJECT_AWARDED','PENDING',?,?,0,?,?,?)")
+        .bind(erpSyncId, PREVIEW_ORGANIZATION_ID, current.caseId, linkId, erpPayloadJson, erpPayloadSha256, user.id, decidedAt, decidedAt)
+    );
+    await env.DB.batch(statements);
+    const canonical = await proposalReceptionDetail(env, user, proposalId);
+    if (!canonical || canonical.awardStatus !== decision || Number(canonical.caseVersion) !== expectedCaseVersion + 1) return json({ error: '접수 저장 중 다른 변경이 감지되었습니다. 최신 데이터를 확인하세요.', code: 'VERSION_CONFLICT' }, 409);
+    const erpSync = decision === 'WON' ? (erpReady ? await dispatchErpProjectSync(env, erpSyncId) : { status:'PENDING',configured:false,erpProjectId:null,errorCode:'ERP_BRIDGE_SCHEMA_NOT_READY' } satisfies ErpSyncProjection) : null;
+    return json({ reception: proposalReceptionProjection(canonical), erpSync, phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
+  }
 
   if (url.pathname === '/api/proposal-workflow' && request.method === 'GET') {
     const awardStatus = url.searchParams.get('awardStatus') ?? '';
