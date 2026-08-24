@@ -39,7 +39,7 @@
   --field-bg: #ffffff;
   --text-primary: #17202e;
   --text-secondary: #4b5b70;
-  --text-muted: #8693a6;
+  --text-muted: #64748b;
   --border-soft: #e4eaf1;
   --border-strong: #cbd6e2;
   --action-primary: linear-gradient(135deg, #315f87, #4a86b7);
@@ -470,7 +470,7 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] select,
 :root[data-theme='light'] textarea { background-color: var(--field-bg) !important; color: var(--text-primary) !important; border-color: var(--border-strong) !important; }
 :root[data-theme='light'] input::placeholder,
-:root[data-theme='light'] textarea::placeholder { color: #8492a6; opacity: 1; }
+:root[data-theme='light'] textarea::placeholder { color: #64748b; opacity: 1; }
 :root[data-theme='light'] .case-create-summary p { color: #526178; }
 
 :root[data-theme='light'] .workflow-operations,
@@ -695,6 +695,21 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .litigation-list > button:hover,
 :root[data-theme='light'] .litigation-list > button.is-active { border-color: rgba(var(--section-accent-rgb), .32); background: rgba(var(--section-accent-rgb), .07); }
 :root[data-theme='light'] .litigation-center { color: #1b2738; }
+:root[data-theme='light'] .litigation-hero,
+:root[data-theme='light'] .litigation-hero h2 {
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc !important;
+}
+:root[data-theme='light'] .litigation-hero p { color: #dbeafe !important; }
+:root[data-theme='light'] .litigation-hero .litigation-eyebrow { color: #7ddfff !important; }
+:root[data-theme='light'] .litigation-trust-note {
+  border-color: #d3a236;
+  background: #fff7e6;
+  color: #334155;
+  box-shadow: inset 4px 0 #a86408;
+}
+:root[data-theme='light'] .litigation-trust-note strong { color: #7c3f00; }
+:root[data-theme='light'] .litigation-trust-note span { color: #334155; }
 :root[data-theme='light'] .litigation-search label,
 :root[data-theme='light'] .litigation-form-grid label,
 :root[data-theme='light'] .litigation-check { color: #536176; }

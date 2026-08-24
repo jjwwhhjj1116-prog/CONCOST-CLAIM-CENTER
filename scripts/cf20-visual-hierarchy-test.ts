@@ -4,6 +4,18 @@ import test from 'node:test';
 
 const read = (path: string) => readFileSync(path, 'utf8');
 
+const relativeLuminance = (hex: string) => {
+  const channels = hex.match(/[a-f\d]{2}/giu)?.map((value) => Number.parseInt(value, 16) / 255) ?? [];
+  const linear = channels.map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+};
+
+const contrastRatio = (foreground: string, background: string) => {
+  const light = Math.max(relativeLuminance(foreground), relativeLuminance(background));
+  const dark = Math.min(relativeLuminance(foreground), relativeLuminance(background));
+  return (light + 0.05) / (dark + 0.05);
+};
+
 test('CF20 exposes a persisted accessible light and dark theme toggle', () => {
   const shell = read('apps/web/src/layout/AppShell.tsx');
   const html = read('apps/web/index.html');
@@ -109,4 +121,20 @@ test('CF24 renders report authoring as a gated one-step-at-a-time wizard', () =>
   assert.match(css, /data-wizard-step='1'.*report-step-card--1/u);
   assert.match(css, /data-wizard-step='5'.*report-step-card--final/u);
   assert.match(css, /\.report-wizard-footer/u);
+});
+
+test('CF51 keeps dark court heroes and light feedback surfaces readable', () => {
+  const litigation = read('apps/web/src/routes/PreviewLitigationCenter.css');
+  const theme = read('apps/web/src/theme-system.css');
+
+  assert.match(litigation, /\.litigation-hero h2 \{[^}]*color: #f8fafc[^}]*-webkit-text-fill-color: #f8fafc/su);
+  assert.match(litigation, /\.litigation-hero p \{[^}]*color: #dbeafe/su);
+  assert.match(theme, /:root\[data-theme='light'\] \.litigation-trust-note \{[^}]*background: #fff7e6[^}]*color: #334155/su);
+  assert.match(theme, /--text-muted: #64748b/su);
+  assert.match(theme, /textarea::placeholder \{ color: #64748b/su);
+
+  assert.ok(contrastRatio('#f8fafc', '#0b1330') >= 7, '법원 배너 제목은 짙은 배경에서 AAA 수준이어야 합니다.');
+  assert.ok(contrastRatio('#dbeafe', '#0b1330') >= 7, '법원 배너 설명도 짙은 배경에서 AAA 수준이어야 합니다.');
+  assert.ok(contrastRatio('#334155', '#fff7e6') >= 7, '라이트 안내문 본문은 밝은 배경에서 AAA 수준이어야 합니다.');
+  assert.ok(contrastRatio('#64748b', '#ffffff') >= 4.5, '보조 문구 토큰은 흰 배경에서 WCAG AA를 충족해야 합니다.');
 });

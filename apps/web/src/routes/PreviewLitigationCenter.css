@@ -1,7 +1,8 @@
 .litigation-center { color: #edf3ff; }
 .litigation-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; padding: 30px 32px; border: 1px solid rgba(71, 123, 255, .56); border-radius: 18px; background: radial-gradient(circle at 75% 25%, rgba(23, 191, 255, .17), transparent 34%), linear-gradient(135deg, #20104a 0%, #0b1330 58%, #052f3b 100%); box-shadow: 0 24px 70px rgba(3, 9, 30, .35); }
-.litigation-hero h2 { margin: 7px 0 12px; font-size: clamp(2rem, 4vw, 3.35rem); line-height: .96; letter-spacing: -.055em; }
-.litigation-hero p { max-width: 720px; margin: 0; color: #becbe3; line-height: 1.65; }
+.litigation-hero h2 { margin: 7px 0 12px; color: #f8fafc; font-size: clamp(2rem, 4vw, 3.35rem); line-height: .96; letter-spacing: -.055em; -webkit-text-fill-color: #f8fafc; text-shadow: 0 2px 18px rgba(0, 0, 0, .38); }
+.litigation-hero p { max-width: 720px; margin: 0; color: #dbeafe; line-height: 1.65; }
+.litigation-hero .litigation-eyebrow { color: #7ddfff; }
 .litigation-eyebrow, .litigation-section-heading span { color: #55d6ff; font-size: .72rem; font-weight: 800; letter-spacing: .13em; }
 .litigation-primary, .litigation-secondary { min-height: 42px; padding: 0 17px; border: 0; border-radius: 9px; font-weight: 800; cursor: pointer; }
 .litigation-primary { color: white; background: linear-gradient(135deg, #6f4dff, #168cff); box-shadow: 0 10px 30px rgba(57, 94, 255, .28); }
