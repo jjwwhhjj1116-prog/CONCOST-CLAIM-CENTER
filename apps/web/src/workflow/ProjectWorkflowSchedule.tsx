@@ -145,6 +145,13 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
     } finally { setErpRetryBusy(false); }
   };
 
+  const openSchedulePrint = () => {
+    const month = `${calendarYear}-${String(calendarMonthIndex + 1).padStart(2, '0')}`;
+    const printUrl = `/print/projects/month-a4?month=${month}&lang=ko&colorMode=color`;
+    const printWindow = window.open(printUrl, '_blank', 'noopener,noreferrer');
+    if (!printWindow) setLiveError('일정표 출력 창이 차단되었습니다. 브라우저의 팝업 허용 후 다시 눌러 주세요.');
+  };
+
   return (
     <section className="workflow-page" aria-labelledby="workflow-page-title">
       {!showOverview && <nav className="project-context-strip" aria-label="현재 프로젝트 경로">
@@ -184,6 +191,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
           <div className="schedule-toolbar" aria-label="일정표 보기 설정">
             <div><strong>{calendarYear}년 {calendarMonthIndex + 1}월</strong><span>저장된 기준 일정만 표시</span></div>
             <div className="schedule-toolbar-actions">
+              <Button className="schedule-print-launch" size="sm" onClick={openSchedulePrint}>🖨 일정표 출력</Button>
               <Button size="sm" variant={viewMode === '30days' ? 'primary' : 'secondary'} onClick={() => setViewMode('30days')}>30일</Button>
               <Button size="sm" variant={viewMode === 'month' ? 'primary' : 'secondary'} onClick={() => setViewMode('month')}>월별 보기</Button>
               <Button size="sm" variant="secondary" onClick={() => setMonthCursor((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}>‹ 이전</Button>

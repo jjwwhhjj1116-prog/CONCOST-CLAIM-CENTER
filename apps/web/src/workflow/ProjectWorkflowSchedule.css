@@ -435,3 +435,4 @@
 :root[data-theme='dark'] .schedule-manager-callout { border-color:#075985; background:#082f49; color:#e0f2fe; }
 :root[data-theme='dark'] .schedule-manager-callout strong { color:#7dd3fc; }
 :root[data-theme='dark'] .schedule-manager-callout p { color:#cbd5e1; }
+.schedule-print-launch{background:linear-gradient(135deg,#1663dc,#10a5c2)!important;border-color:#145cc7!important;color:#fff!important;box-shadow:0 5px 14px #1764d62b!important;font-weight:900!important}

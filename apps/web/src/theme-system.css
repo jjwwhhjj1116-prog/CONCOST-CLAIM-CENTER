@@ -313,6 +313,8 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .proposal-compact-tools { display:flex;align-items:center;justify-content:space-between;gap:14px;margin:10px 0 16px;padding:11px 14px;border:1px solid #cbd9e7;border-radius:12px;background:#f8fafc; }
 .proposal-compact-tools>b { color:#263b56;font-size:.88rem; }
 .proposal-compact-tools .ui-button { min-height:40px!important;font-weight:900!important; }
+.proposal-action-hwp{background:#215dc9!important;border-color:#194ca8!important;color:#fff!important}.proposal-action-hwp-new{border-color:#2390a5!important;color:#087286!important;background:#effcff!important}
+.report-hwp-tools{display:flex;align-items:center;gap:9px;margin:10px 0 14px;padding:12px 14px;border:1px solid #b9cce0;border-radius:12px;background:#f2f8ff}.report-hwp-tools>div{display:grid;margin-right:auto}.report-hwp-tools b{color:#163e74}.report-hwp-tools span{color:#627791;font-size:.78rem}.report-hwp-tools .ui-button{min-height:42px!important;font-weight:900!important}.report-action-hwp{background:#225fcf!important;border-color:#174aa8!important;color:#fff!important}
 .proposal-action-export { background:#ea580c!important;color:#fff!important; }
 .proposal-action-import { background:#0f6cbd!important;color:#fff!important; }
 .proposal-template-import { display:grid;grid-template-columns:minmax(230px,.8fr) minmax(360px,1.2fr) auto;gap:14px;align-items:end;margin:10px 0 14px;padding:15px 16px;border:1px solid #d8c9f1;border-left:5px solid #766bb5;border-radius:12px;background:linear-gradient(120deg,#fbf9ff,#f4f8ff); }

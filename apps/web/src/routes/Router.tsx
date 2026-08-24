@@ -69,6 +69,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'PROP-04', path: '/proposals/database', name: '제안서 DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'PROJ-01', path: '/projects/schedule', name: '프로젝트 일정표' },
   { id: 'PROJ-02', path: '/projects/workflow', name: '프로젝트 세부 워크플로우' },
+  { id: 'PROJ-PRINT', path: '/print/projects/month-a4', name: '프로젝트 일정표 A4 출력' },
   { id: 'WF-01', path: '/workflow/proposal-link', name: '1. 제안서 연동' },
   { id: 'WF-02', path: '/workflow/award', name: '프로젝트 접수' },
   { id: 'WF-03', path: '/workflow/kickoff', name: '착수회의' },

@@ -2,6 +2,7 @@ import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiDownload, apiRequest, triggerBrowserDownload } from '../api';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
+import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
@@ -112,6 +113,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [resumeCaseId, setResumeCaseId] = useState('');
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [navigationBusy, setNavigationBusy] = useState(false);
+  const [hwpEditorOpen, setHwpEditorOpen] = useState(false);
+  const [hwpSourceFile, setHwpSourceFile] = useState<File | null>(null);
+  const hwpInputRef = useRef<HTMLInputElement | null>(null);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
@@ -577,6 +581,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
+      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형 확인','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 D1에 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
@@ -696,7 +701,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </>}
           </div>
           <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·다운로드</h3>
-          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX/PDF 출력이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
+          <div className="report-hwp-tools" aria-label="보고서 HWP 가져오기와 편집 도구">
+            <div><b>한글 문서 편집</b><span>기존 HWP/HWPX 보고서를 팝업에서 열어 수정하고 HWP·HWPX로 내려받습니다.</span></div>
+            <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>{const file=event.target.files?.[0];if(file){setHwpSourceFile(file);setHwpEditorOpen(true);}event.target.value='';}} />
+            <Button className="report-action-hwp" onClick={()=>hwpInputRef.current?.click()}>HWP 가져오기·편집</Button>
+            <Button variant="secondary" onClick={()=>{setHwpSourceFile(null);setHwpEditorOpen(true);}}>새 HWP 편집기</Button>
+          </div>
+          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX/PDF 출력이 열립니다. HWP/HWPX 편집기는 승인 전에도 사용할 수 있습니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
             <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
           </div> : <div className="form-stack">

@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card } from '@claim-studio/ui';
 import { ApiError, apiDownload, apiRequest } from '../api';
 import type { UserRole } from '../routes/Router';
+import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
 
 export interface ReportStudioProps {
   reportId?: string;
@@ -226,6 +227,9 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
   const [reviewComment, setReviewComment] = useState('');
   const [finalizing, setFinalizing] = useState(false);
   const [generatingOutput, setGeneratingOutput] = useState(false);
+  const [hwpEditorOpen, setHwpEditorOpen] = useState(false);
+  const [hwpSourceFile, setHwpSourceFile] = useState<File | null>(null);
+  const hwpInputRef = useRef<HTMLInputElement | null>(null);
 
   const canEdit = roles.some((role) => ['admin', 'pm', 'staff'].includes(role));
   const canApprove = roles.some((role) => ['admin', 'director', 'reviewer'].includes(role));
@@ -840,6 +844,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
 
   return (
     <div className="p09-studio" data-report-id={report.id}>
+      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${report.case.caseNumber}_${report.title}.hwp`} documentLabel="프로젝트 보고서" onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <header className="p09-header">
         <div>
           <p className="p09-eyebrow">{report.case.caseNumber} · {report.case.claimType} · P08 snapshot {report.reportInstance.snapshotSha256.slice(0, 12)}</p>
@@ -1267,6 +1272,12 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
 
           <section className="p12-outputs-section" style={{ marginTop: '16px', borderTop: '1px solid #e2e8f0', paddingTop: '12px' }}>
             <h4>P12 출력 아티팩트 및 다운로드</h4>
+            <div className="report-hwp-tools">
+              <div><b>한글 문서 편집</b><span>HWP/HWPX를 열어 팝업에서 수정하고 다시 내려받습니다.</span></div>
+              <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>{const file=event.target.files?.[0];if(file){setHwpSourceFile(file);setHwpEditorOpen(true);}event.target.value='';}} />
+              <Button size="sm" className="report-action-hwp" onClick={()=>hwpInputRef.current?.click()}>HWP 가져오기·편집</Button>
+              <Button size="sm" variant="secondary" onClick={()=>{setHwpSourceFile(null);setHwpEditorOpen(true);}}>새 HWP 편집기</Button>
+            </div>
             {finalizations.length > 0 ? (
               <div>
                 <p className="p09-muted">최종 확정 스냅샷 ({finalizations[0].canonicalSnapshotHash.slice(0, 10)}...)</p>

@@ -4,6 +4,7 @@ import { apiRequest } from './api';
 import { AppShell } from './layout/AppShell';
 import { requestNavigation } from './navigation-guard';
 import { isSafeReturnTo, RouterView, type UserRole } from './routes/Router';
+import { ProjectSchedulePrint } from './workflow/ProjectSchedulePrint';
 
 interface SessionUser {
   id: string;
@@ -157,6 +158,19 @@ export const App: React.FC = () => {
         </section>
       </main>
     );
+  }
+
+  if (currentPath === '/print/projects/month-a4') {
+    return <ProjectSchedulePrint
+      currentSearch={currentSearch}
+      userName={session.name}
+      onClose={() => {
+        window.close();
+        window.setTimeout(() => {
+          if (!window.closed) navigate('/projects/schedule');
+        }, 80);
+      }}
+    />;
   }
 
   const workspacePath = currentPath === '/' ? '/dashboard' : currentPath;

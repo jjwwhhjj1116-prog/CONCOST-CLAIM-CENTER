@@ -60,6 +60,9 @@ importers:
       '@claim-studio/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@rhwp/editor':
+        specifier: 0.8.4
+        version: 0.8.4
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -838,6 +841,10 @@ packages:
 
   '@prisma/get-platform@6.19.3':
     resolution: {integrity: sha512-xFj1VcJ1N3MKooOQAGO0W5tsd0W2QzIvW7DD7c/8H14Zmp4jseeWAITm+w2LLoLrlhoHdPPh0NMZ8mfL6puoHA==}
+
+  '@rhwp/editor@0.8.4':
+    resolution: {integrity: sha512-ZBl7b9UWbfvDfJ7roH0w1G0s8WRarBsl5BQmAoZTzD/8i7sQ5h8VILbVkOvbQm4CLw0fwDrabcbD6pv5GHbAuw==}
+    engines: {node: '>=18.0.0'}
 
   '@rolldown/pluginutils@1.0.0-beta.27':
     resolution: {integrity: sha512-+d0F4MKMCbeVUJwG96uQ4SgAznZNSq93I3V+9NHA4OpvqG8mRCpGdKmK8l/dl02h2CCDHwW2FqilnTyDcAnqjA==}
@@ -2309,6 +2316,8 @@ snapshots:
   '@prisma/get-platform@6.19.3':
     dependencies:
       '@prisma/debug': 6.19.3
+
+  '@rhwp/editor@0.8.4': {}
 
   '@rolldown/pluginutils@1.0.0-beta.27': {}
 
