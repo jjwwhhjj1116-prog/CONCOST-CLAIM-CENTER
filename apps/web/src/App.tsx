@@ -103,7 +103,7 @@ export const App: React.FC = () => {
     return (
       <main className="login-page" id="main-content">
         <section className="login-visual" aria-labelledby="login-visual-title">
-          <div className="login-visual-brand"><span>CS</span><strong>CONCOST · CLAIM INTELLIGENCE</strong></div>
+          <div className="login-visual-brand"><span><img src="/assets/claim-center-emblem.png" alt="" /></span><strong>CONCOST · CLAIM INTELLIGENCE</strong></div>
           <div className="login-visual-copy">
             <span>CLAIM EVIDENCE · WORKFLOW · REPORT</span>
             <h1 id="login-visual-title">복잡한 클레임을<br />명확한 근거와<br />하나의 흐름으로.</h1>
@@ -118,7 +118,7 @@ export const App: React.FC = () => {
         <section className="login-panel" aria-labelledby="login-title">
           <div className="login-panel-inner">
             <header className="login-wordmark">
-              <span className="login-wordmark-symbol" aria-hidden="true">CS</span>
+              <span className="login-wordmark-symbol" aria-hidden="true"><img src="/assets/claim-center-emblem.png" alt="" /></span>
               <div><strong>클레임센터 스튜디오</strong><small>CLAIM CENTER STUDIO</small></div>
             </header>
 
