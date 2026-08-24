@@ -28,15 +28,15 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     eyebrow: 'PROPOSAL · 제안서 작성', title: '의뢰 내용을 제안서로 이어갑니다.',
-    explanation: '방금 등록한 프로젝트를 다시 고르지 않아도 같은 프로젝트가 선택됩니다. 제안서 작성과 발송본을 고정하세요.',
-    tasks: ['연결 프로젝트 확인', '제안서 작성', '발송 버전과 원문 해시 고정'],
+    explanation: '방금 등록한 프로젝트를 다시 고르지 않아도 같은 프로젝트가 선택됩니다. 제안서를 작성하고 확정본을 연동하세요.',
+    tasks: ['연결 프로젝트 확인', '제안서 작성', '제안서 버전과 원문 해시 고정'],
     completion: '거래처에 보낸 제안서가 프로젝트에 연결되면 완료입니다.', path: '/proposals/editor', pathLabel: '제안서 작성 열고 확인',
     targetSelectors: ['.proposal-intake-context', '.proposal-step-card', '.proposal-step-button']
   },
   {
     eyebrow: 'AWARD · 프로젝트 접수', title: '수주 여부를 확인하고 프로젝트로 전환합니다.',
     explanation: '수주 확정된 제안서만 계약 금액과 수행 기간을 가진 실제 프로젝트가 됩니다.',
-    tasks: ['발송 제안서 연결', '수주 또는 미수주 결정', '수행 기간과 담당자 확인'],
+    tasks: ['제안서 연동 확인', '수주 확정 또는 접수 취소', '수주 시 일정표에서 PM·기간 설정'],
     completion: '수주 프로젝트가 일정표에 나타나면 완료입니다.', path: '/workflow/award', pathLabel: '프로젝트 접수 열고 확인',
     targetSelectors: ['.proposal-flow-list', '.proposal-flow-detail', '.proposal-flow-kpis']
   },
@@ -125,11 +125,13 @@ export const CATEGORY_HELP: Record<string, HelpArticle> = {
 };
 
 export const ROUTE_HELP: Record<string, { title: string; steps: readonly string[]; next: string }> = {
-  'CASE-02': { title: '프로젝트 의뢰', steps: ['필수 의뢰정보 입력', '클레임 유형·클라이언트 지위 선택', '녹음·TXT·CSV·Excel 자료를 Gemini로 정리', '저장 후 제안서 작성으로 이동'], next: '제안서 작성' },
+  'CASE-02': { title: '프로젝트 의뢰서 작성', steps: ['필수 의뢰정보 입력', '클레임 유형·클라이언트 지위 선택', '녹음·TXT·CSV·Excel 자료를 Gemini로 정리', '저장 후 제안서 작성으로 이동'], next: '프로젝트 의뢰 목록' },
+  'CASE-07': { title: '프로젝트 의뢰 목록', steps: ['등록된 의뢰 검색', '의뢰 원문과 상태 확인', '제안서 작성으로 연결', '완료 항목은 일반 목록에서 숨기기'], next: '프로젝트 제안서' },
+  'CASE-08': { title: '프로젝트 의뢰 DB관리', steps: ['숨긴 의뢰까지 전체 확인', '일반 목록 복원', 'Google Drive 감사본 보관', '관리자 삭제 처리'], next: '감사 원장 확인' },
   'PROP-02': { title: '제안서 작성', steps: ['의뢰 프로젝트 선택', '제안 내용 작성', '발송본 버전 고정', '수주 회신 대기'], next: '프로젝트 접수' },
   'PROP-03': { title: '프로젝트별 제안서 목록', steps: ['제안서를 발송한 프로젝트 확인', '프로젝트별 발송 버전 비교', '회신·수주 상태 확인', '필요 시 작성 화면에서 이어서 수정'], next: '프로젝트 접수' },
   'PROP-04': { title: '제안서 DB관리', steps: ['발송본 개별 원장 확인', '원문 URL·SHA-256 검증', '등록자·발송시각 감사', '필요한 원장을 Excel로 내보내기'], next: '감사로그' },
-  'WF-02': { title: '프로젝트 접수', steps: ['발송 제안서 연결', '수주 확정 확인', '프로젝트 담당자 배정'], next: '프로젝트 일정표' },
+  'WF-02': { title: '프로젝트 접수', steps: ['연동 제안서 확인', '수주 확정 또는 접수 취소', '수주 시 ERP 등록 요청 후 일정표 열기'], next: '프로젝트 일정표' },
   'PROJ-01': { title: '프로젝트 일정표', steps: ['프로젝트 검색', '세부 팝업 열기', '단계·팀·기간 확인', '충돌 일정 조정'], next: '현재 프로젝트 단계' },
   'WF-03': { title: '착수회의', steps: ['회의 일시·참석자 기록', '회의 메모 저장', 'AI 회의록·타임라인 생성', '후속 업무 확인'], next: '현장조사' },
   'WF-04': { title: '현장조사', steps: ['조사 범위 확인', '사진·녹음 업로드', '날짜·사용자·자료 유형 확인', '특이사항 기록'], next: '물량산출 및 내역' },

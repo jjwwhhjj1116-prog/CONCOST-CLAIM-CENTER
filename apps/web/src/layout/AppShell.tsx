@@ -15,8 +15,11 @@ const NAVIGATION_GROUPS: readonly {
   { label: 'CLAIM CENTER HOME', eyebrow: 'HOME', icon: 'home', routeIds: ['DASH-01'] },
   {
     label: '프로젝트 제안 및 수주', eyebrow: 'PROJECT INTAKE & AWARD', icon: 'proposal',
-    routeIds: ['CASE-02', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'],
-    nestedGroups: [{ label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }]
+    routeIds: ['CASE-02', 'CASE-07', 'CASE-08', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'],
+    nestedGroups: [
+      { label: '프로젝트 의뢰', eyebrow: 'PROJECT INTAKES', routeIds: ['CASE-02', 'CASE-07', 'CASE-08'] },
+      { label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }
+    ]
   },
   {
     label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work',

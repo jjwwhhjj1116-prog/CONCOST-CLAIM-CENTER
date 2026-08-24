@@ -31,7 +31,8 @@ const migrations = [
   '0016_cf18_report_outline_evidence.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0019_cf27_proposal_authoring.sql','0020_cf28_workspace_settings.sql',
   '0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql',
   '0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0029_cf37_report_workspace_resume.sql',
-  '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql','0035_cf43_navigation_pm_password.sql'
+  '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql','0035_cf43_navigation_pm_password.sql',
+  '0041_cf53_erp_project_bridge.sql'
 ];
 
 async function sha256(value: string): Promise<string> {
@@ -108,6 +109,11 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
 
 test('CF43 PM choices are exactly the requested five members while the workspace Admin is excluded', async () => {
   const { sql, env } = await setup();
+  const seededCase = sql.exec('SELECT version,updated_at FROM preview_cases WHERE id=?', [CASE_ID])[0].values[0];
+  const seededCaseVersion = Number(seededCase[0]);
+  const seededCaseUpdatedAt = new Date(Date.parse(String(seededCase[1])) + 1).toISOString();
+  sql.run("UPDATE preview_cases SET status='CONTRACT',version=version+1,updated_at=? WHERE id=? AND version=?", [seededCaseUpdatedAt,CASE_ID,seededCaseVersion]);
+  sql.run("INSERT INTO preview_proposal_links (id,organization_id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,response_due_on,proposed_amount_krw,document_url,document_sha256,verification_status,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,project_end_on,version,request_key,request_fingerprint,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ['40000000-0000-4000-8000-000000000099','concost',CASE_ID,'PROP-CF43-ROSTER','PM 명단 검증 제안서','V1','합성 발주처','2026-08-21T00:00:00.000Z',null,1,null,null,'UNVERIFIED','WON','2026-08-21T00:00:00.000Z',ADMIN_ID,1,'2026-08-21','2026-08-21',2,'cf43-roster-seed-0001','a'.repeat(64),ADMIN_ID,'2026-08-21T00:00:00.000Z','2026-08-21T00:00:00.000Z']);
   sql.run('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) VALUES (?,?,?,?)', [CASE_ID,ADMIN_ID,ADMIN_ID,'2026-08-21T00:00:01.000Z']);
   sql.run('DROP TRIGGER preview_schedule_profile_insert_guard');
   sql.run('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)', [CASE_ID,'concost',ADMIN_ID,1,ADMIN_ID,'2026-08-21T00:00:01.000Z','2026-08-21T00:00:01.000Z']);
@@ -267,8 +273,19 @@ test('CF40 responsible PM owns explicit stage schedules and approved change requ
   sql.close();
 });
 
-test('CF40 project intake confirmation requires an assigned PM and opens project-work schedule management', async () => {
+test('CF53 project intake needs only the linked proposal result, then PM and dates are set on the schedule page', async () => {
   const { sql, env } = await setup();
+  let erpRequest: { url: string; headers: Headers; payload: Record<string, unknown> } | null = null;
+  env.ERP_PROJECT_WEBHOOK_URL = 'https://erp.example.com/api/integrations/claim-center/projects';
+  env.ERP_PROJECT_WEBHOOK_SECRET = 'synthetic-cf53-webhook-secret';
+  env.ERP_TEST_FETCH = async (input, init) => {
+    erpRequest = {
+      url: String(input),
+      headers: new Headers(init?.headers),
+      payload: JSON.parse(String(init?.body)) as Record<string, unknown>
+    };
+    return new Response(JSON.stringify({ projectId:'ERP-PRJ-CF53-001' }), { status:200,headers:{'Content-Type':'application/json'} });
+  };
   const caseVersion = Number(sql.exec('SELECT version FROM preview_cases WHERE id=?', [CASE_ID])[0].values[0][0]);
   const proposalPayload = {
     caseId: CASE_ID, proposalNumber: 'PROP-CF40-001', proposalTitle: 'CF40 프로젝트 접수 제안서', revisionLabel: 'V1-SENT',
@@ -278,17 +295,39 @@ test('CF40 project intake confirmation requires an assigned PM and opens project
   const linked = await worker.fetch(request('/api/proposal-workflow/links', ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf40-proposal-link-0001' }, body: JSON.stringify(proposalPayload) }), env);
   assert.equal(linked.status, 200);
   const proposal = (await linked.json() as any).proposal;
-  const withoutPm = await worker.fetch(request(`/api/proposal-workflow/links/${proposal.id}/decision`, ADMIN_TOKEN, {
-    method: 'POST', headers: { 'Idempotency-Key': 'cf40-award-no-pm-0001' }, body: JSON.stringify({ decision:'WON',decisionNote:'계약서 확인',decidedAt:'2026-08-21T03:00:00.000Z',contractAmountKrw:44000000,projectStartOn:'2026-09-01',projectEndOn:'2026-12-31',responsiblePmId:null,expectedLinkVersion:proposal.version,expectedCaseVersion:proposal.caseVersion })
-  }), env);
-  assert.equal(withoutPm.status, 409);
   const confirmed = await worker.fetch(request(`/api/proposal-workflow/links/${proposal.id}/decision`, ADMIN_TOKEN, {
-    method: 'POST', headers: { 'Idempotency-Key': 'cf40-award-with-pm-0001' }, body: JSON.stringify({ decision:'WON',decisionNote:'계약서와 발주서를 확인하고 프로젝트 접수를 확정합니다.',decidedAt:'2026-08-21T03:00:00.000Z',contractAmountKrw:44000000,projectStartOn:'2026-09-01',projectEndOn:'2026-12-31',responsiblePmId:PM_ID,expectedLinkVersion:proposal.version,expectedCaseVersion:proposal.caseVersion })
+    method: 'POST', headers: { 'Idempotency-Key': 'cf53-award-simple-0001' }, body: JSON.stringify({ decision:'WON',expectedLinkVersion:proposal.version,expectedCaseVersion:proposal.caseVersion })
   }), env);
   assert.equal(confirmed.status, 200);
-  assert.deepEqual(sql.exec('SELECT responsible_pm_id,version FROM preview_project_schedule_profiles WHERE case_id=?', [CASE_ID])[0].values[0], [PM_ID, 1]);
+  const confirmedBody = await confirmed.json() as any;
+  assert.equal(confirmedBody.erpSync.status,'SYNCED');
+  assert.equal(confirmedBody.erpSync.erpProjectId,'ERP-PRJ-CF53-001');
+  assert.ok(erpRequest);
+  const capturedErpRequest = erpRequest as unknown as { url: string; headers: Headers; payload: Record<string, unknown> };
+  assert.equal(capturedErpRequest.url,'https://erp.example.com/api/integrations/claim-center/projects');
+  assert.equal(capturedErpRequest.headers.get('Idempotency-Key'),`claim-center-project:${CASE_ID}`);
+  assert.match(capturedErpRequest.headers.get('X-CONCOST-Signature') ?? '',/^sha256=[0-9a-f]{64}$/u);
+  assert.equal(Object.hasOwn(capturedErpRequest.payload,'contractAmountKrw'),false);
+  assert.equal(Object.hasOwn(capturedErpRequest.payload,'proposedAmountKrw'),false);
+  assert.equal(capturedErpRequest.payload.source,'CLAIM_CENTER_STUDIO');
+  assert.equal((capturedErpRequest.payload.project as any).externalId,CASE_ID);
+  const syncRow = sql.exec('SELECT status,erp_project_id,attempts FROM preview_erp_project_syncs WHERE case_id=?',[CASE_ID])[0].values[0];
+  assert.deepEqual(syncRow,['SYNCED','ERP-PRJ-CF53-001',1]);
+  const retried = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/erp-sync`,PM_TOKEN,{ method:'POST' }),env);
+  assert.equal(retried.status,200);
+  assert.equal((await retried.json() as any).erpSync.status,'SYNCED');
+  assert.equal(sql.exec('SELECT attempts FROM preview_erp_project_syncs WHERE case_id=?',[CASE_ID])[0].values[0][0],1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_project_schedule_profiles WHERE case_id=?', [CASE_ID])[0].values[0][0], 0);
   const schedule = await worker.fetch(request('/api/project-workflow/schedule', PM_TOKEN), env);
-  const project = (await schedule.json() as any).projects.find((item: any) => item.caseId === CASE_ID);
+  assert.equal(schedule.status, 200);
+  const scheduleBody = await schedule.json() as any;
+  let project = scheduleBody.projects.find((item: any) => item.caseId === CASE_ID);
+  assert.ok(project, JSON.stringify(scheduleBody));
+  assert.equal(project.responsiblePm, null);
+  const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({ responsiblePmId:PM_ID,expectedProfileVersion:0 }) }), env);
+  assert.equal(assigned.status, 200);
+  const refreshed = await worker.fetch(request('/api/project-workflow/schedule', PM_TOKEN), env);
+  project = (await refreshed.json() as any).projects.find((item: any) => item.caseId === CASE_ID);
   assert.equal(project.responsiblePm.id, PM_ID); assert.equal(project.canManageSchedule, true);
   assert.ok(project.stages.filter((item: any) => ['KICKOFF','SITE_SURVEY','TAKEOFF_COST','REPORT_WRITING'].includes(item.stageCode)).every((item: any) => item.scheduleExplicit === false));
   sql.close();
@@ -324,5 +363,13 @@ test('CF40 external AI is default-deny for internal documents, then minimizes id
   assert.equal(columns.includes('raw_payload'), false); assert.equal(columns.includes('response_text'), false);
   const ui = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'workflow', 'WorkflowOperations.tsx'), 'utf8');
   assert.match(ui, /끌어 놓으면/u); assert.match(ui, /회사 회의록 XLSX 내보내기/u); assert.match(ui, /CONCOST_회의록_양식\.xlsx/u); assert.match(ui, /비학습 조건/u);
+  assert.match(ui, /PROJECT CALENDAR · SINGLE SOURCE/u);
+  assert.match(ui, /persistSharedSchedule/u);
+  assert.match(ui, /착수회의·기준 일정 저장/u);
+  assert.match(ui, /현장조사·기준 일정 저장/u);
+  assert.match(ui, /팀 투입·기준 일정 저장/u);
+  const scheduleUi = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'workflow', 'ProjectWorkflowSchedule.tsx'), 'utf8');
+  assert.match(scheduleUi, /전체 일정 저장 완료/u);
+  assert.match(scheduleUi, /확인하고 닫기/u);
   sql.close();
 });

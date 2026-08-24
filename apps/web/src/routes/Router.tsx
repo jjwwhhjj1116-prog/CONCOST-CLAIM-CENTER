@@ -3,6 +3,7 @@ import { Button, Card, ComponentCatalog, Dialog, Input, Select, StateView, Statu
 import { CaseManagement } from '../case-management/CaseManagement';
 import { ProposalView } from '../proposals/ProposalView';
 import { ProposalLibraryView } from '../proposals/ProposalLibraryView';
+import { IntakeLibraryView } from '../intakes/IntakeLibraryView';
 import { ReportTemplateCatalog } from '../templates/ReportTemplateCatalog';
 import { ReportStudio } from '../reports/ReportStudio';
 import { ReportList } from '../reports/ReportList';
@@ -54,7 +55,9 @@ export const ROUTES: RouteConfig[] = [
   { id: 'AUTH-01', path: '/login', name: '로그인' },
   { id: 'DASH-01', path: '/dashboard', name: 'CLAIM CENTER HOME' },
   { id: 'CASE-01', path: '/cases', name: '전체 프로젝트' },
-  { id: 'CASE-02', path: '/cases/new', name: '프로젝트 의뢰', allowedRoles: CASE_CREATE_ROLES },
+  { id: 'CASE-02', path: '/cases/new', name: '프로젝트 의뢰서 작성', allowedRoles: CASE_CREATE_ROLES },
+  { id: 'CASE-07', path: '/cases/intakes', name: '프로젝트 의뢰 목록' },
+  { id: 'CASE-08', path: '/cases/database', name: '프로젝트 의뢰 DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'CASE-03', path: '/cases/detail', name: '사건 상세-개요' },
   { id: 'CASE-04', path: '/cases/schedule', name: '사건 상세-일정' },
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
@@ -124,6 +127,7 @@ export interface RouterProps {
   roles: UserRole[];
   onNavigate: (path: string) => void;
   userName?: string;
+  userEmail?: string;
   previewMode?: boolean;
 }
 
@@ -165,7 +169,7 @@ const ReportStudioActions: React.FC<{ roles: UserRole[] }> = ({ roles }) => {
   );
 };
 
-export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch = '', roles, userName = 'Preview User', previewMode = false, onNavigate }) => {
+export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch = '', roles, userName = 'Preview User', userEmail = '', previewMode = false, onNavigate }) => {
   const [uiState, setUiState] = useState<'normal' | 'loading' | 'empty' | 'error' | 'forbidden'>('normal');
   const resolvedRoute = resolveRoute(currentPath);
   const currentRoute = resolvedRoute?.route;
@@ -204,6 +208,8 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     );
   }
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CASE-07') return <IntakeLibraryView mode="projects" onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CASE-08') return <IntakeLibraryView mode="database" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'WF-06') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
@@ -217,7 +223,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
           <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
           <span className="preview-pill">D1 LIVE PROPOSAL</span>
         </div>
-        <ProposalView routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
+        <ProposalView routeId={currentRoute.id} roles={roles} userEmail={userEmail} onNavigate={onNavigate} />
       </section>
     );
   }
@@ -253,12 +259,14 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
         <div className="route-heading">
           <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
         </div>
-        <ProposalView routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
+        <ProposalView routeId={currentRoute.id} roles={roles} userEmail={userEmail} onNavigate={onNavigate} />
       </section>
     );
   }
   if (currentRoute.id === 'PROP-03') return <ProposalLibraryView mode="projects" onNavigate={onNavigate} />;
   if (currentRoute.id === 'PROP-04') return <ProposalLibraryView mode="database" onNavigate={onNavigate} />;
+  if (currentRoute.id === 'CASE-07') return <IntakeLibraryView mode="projects" onNavigate={onNavigate} />;
+  if (currentRoute.id === 'CASE-08') return <IntakeLibraryView mode="database" onNavigate={onNavigate} />;
   if (currentRoute.id === 'REPO-03') return <ReportLibraryView mode="projects" onNavigate={onNavigate} />;
   if (currentRoute.id === 'REPO-04') return <ReportLibraryView mode="database" onNavigate={onNavigate} />;
 

@@ -10,6 +10,7 @@ import './workflow/ProjectWorkflowSchedule.css';
 import './workflow/ProposalAwardWorkflow.css';
 import './workflow/WorkflowOperations.css';
 import './proposals/ProposalLibraryView.css';
+import './intakes/IntakeLibraryView.css';
 import './evidence/CaseEvidencePanel.css';
 import './routes/PreviewAiAdmin.css';
 import './routes/PreviewReportStudio.css';

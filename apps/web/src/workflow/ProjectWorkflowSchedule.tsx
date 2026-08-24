@@ -10,6 +10,7 @@ import {
 import { scheduleDayInfo } from './schedule-holidays';
 
 const DAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
+const PROJECT_SCHEDULE_CODES: readonly string[] = ['KICKOFF', 'SITE_SURVEY', 'TAKEOFF_COST', 'REPORT_WRITING'];
 
 const isoDate = (year: number, monthIndex: number, day: number) => `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 const monthBarStyle = (startDate: string | null | undefined, endDate: string | null | undefined, year: number, monthIndex: number, dayCount: number): React.CSSProperties | undefined => {
@@ -57,7 +58,11 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
   const [projects, setProjects] = useState<WorkflowProject[]>([]);
   const [liveError, setLiveError] = useState('');
   const focusedStageId = workflowStageFromRoute(routeId);
-  const requestedProjectId = new URLSearchParams(window.location.search).get('projectId');
+  const routeParams = new URLSearchParams(window.location.search);
+  const requestedProjectId = routeParams.get('projectId');
+  const erpSyncStatus = routeParams.get('erpSync');
+  const [erpState, setErpState] = useState(erpSyncStatus ?? '');
+  const [erpRetryBusy, setErpRetryBusy] = useState(false);
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === requestedProjectId) ?? projects[0],
     [projects, requestedProjectId]
@@ -95,6 +100,8 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
     return () => { active = false; };
   }, []);
 
+  useEffect(() => { setErpState(erpSyncStatus ?? ''); }, [erpSyncStatus]);
+
   useEffect(() => {
     if (!isProjectDialogOpen) return undefined;
     const previousOverflow = document.body.style.overflow;
@@ -127,6 +134,17 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
     onNavigate(action.path);
   };
 
+  const retryErpSync = async () => {
+    setErpRetryBusy(true);
+    try {
+      const result = await apiRequest<{ erpSync: { status: 'PENDING' | 'SYNCED' | 'FAILED' } }>(`/api/project-workflow/projects/${encodeURIComponent(selectedProject.caseId)}/erp-sync`, { method:'POST' });
+      setErpState(result.erpSync.status);
+      setLiveError('');
+    } catch (reason) {
+      setLiveError(reason instanceof Error ? reason.message : 'ERP 프로젝트 등록을 재시도하지 못했습니다.');
+    } finally { setErpRetryBusy(false); }
+  };
+
   return (
     <section className="workflow-page" aria-labelledby="workflow-page-title">
       {!showOverview && <nav className="project-context-strip" aria-label="현재 프로젝트 경로">
@@ -152,6 +170,12 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
           <span className="workflow-live-badge">D1 LIVE PROJECTS · 신규 의뢰 자동 반영</span>
         </div>
       </header>
+
+      {erpState && <div className={`erp-sync-banner is-${erpState.toLowerCase()}`} role="status">
+        <strong>{erpState === 'SYNCED' ? 'ERP 프로젝트 등록 완료' : erpState === 'FAILED' ? '프로젝트 접수 완료 · ERP 재전송 대기' : '프로젝트 접수 완료 · ERP 연결 설정 대기'}</strong>
+        <span>{erpState === 'SYNCED' ? 'ERP 본체에 수주 프로젝트가 등록되었습니다.' : '접수 기록은 D1에 안전하게 저장되었습니다. ERP 주소·인증키를 연결하면 같은 프로젝트 번호로 중복 없이 전송됩니다.'}</span>
+        {erpState !== 'SYNCED' && <button type="button" disabled={erpRetryBusy} onClick={() => void retryErpSync()}>{erpRetryBusy ? 'ERP 확인 중…' : 'ERP 등록 다시 시도'}</button>}
+      </div>}
 
       {liveError && <p className="error-box" role="alert">{liveError}</p>}
 
@@ -273,6 +297,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
                     onNavigate={onNavigate}
                     onAction={navigateAction}
                     onReload={loadProjects}
+                    onClose={() => onNavigate('/projects/schedule')}
                     calendar={{ year: calendarYear, monthIndex: calendarMonthIndex, days: calendarDays, todayDay }}
                   />
                 </div>
@@ -300,8 +325,9 @@ const ProjectDetail: React.FC<{
   onNavigate: (path: string) => void;
   onAction: (stageId: WorkflowStageId) => void;
   onReload: () => Promise<void>;
+  onClose?: () => void;
   calendar: { year: number; monthIndex: number; days: number[]; todayDay?: number };
-}> = ({ project, focusedStageId, onNavigate, onAction, onReload, calendar }) => {
+}> = ({ project, focusedStageId, onNavigate, onAction, onReload, onClose, calendar }) => {
   const selectedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
   const [pmOptions, setPmOptions] = useState<Array<{ id: string; displayName: string; email: string }>>([]);
   const [pmId, setPmId] = useState(project.responsiblePm?.id ?? '');
@@ -345,12 +371,54 @@ const ProjectDetail: React.FC<{
     finally { setScheduleBusy(''); }
   };
 
+  const ensurePmAssigned = async () => {
+    if (!pmId) throw new Error('담당 PM을 먼저 선택해 주세요.');
+    if (project.responsiblePm?.id === pmId) return;
+    await apiRequest(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/profile`, {
+      method: 'PUT',
+      body: JSON.stringify({ responsiblePmId: pmId, expectedProfileVersion: project.profileVersion ?? 0 })
+    });
+  };
+
   const saveStage = async (stageCode: string, expectedVersion: number) => {
     const draft = drafts[stageCode]; if (!draft?.startDate || !draft.endDate) return;
+    if (draft.endDate < draft.startDate) { setScheduleError('종료일은 시작일보다 빠를 수 없습니다.'); return; }
     setScheduleBusy(stageCode); setScheduleError(''); setScheduleNotice('');
     try {
+      await ensurePmAssigned();
       await apiRequest(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/stages/${stageCode}`, { method: 'PUT', body: JSON.stringify({ startDate: draft.startDate, endDate: draft.endDate, status: draft.status, noteText: draft.noteText, expectedVersion }) });
-      setScheduleNotice('프로젝트 기준 일정을 저장했습니다. 배정된 직원의 홈 일정에도 반영됩니다.'); await onReload();
+      setScheduleNotice('일정을 저장했습니다. 착수회의·현장조사·물량산출 화면과 프로젝트 캘린더에 같은 날짜가 즉시 반영됩니다.'); await onReload();
+    } catch (reason) { setScheduleError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setScheduleBusy(''); }
+  };
+
+  const saveAllStages = async () => {
+    const items = project.stages.filter((stage) => stage.stageCode && PROJECT_SCHEDULE_CODES.includes(stage.stageCode));
+    const filled = items.filter((stage) => {
+      const draft = drafts[stage.stageCode ?? ''];
+      return Boolean(draft?.startDate || draft?.endDate);
+    });
+    if (!pmId) { setScheduleError('담당 PM을 먼저 선택해 주세요.'); return; }
+    if (!filled.length) { setScheduleError('저장할 단계의 시작일과 종료일을 입력해 주세요.'); return; }
+    const invalid = filled.find((stage) => {
+      const draft = drafts[stage.stageCode ?? ''];
+      return !draft?.startDate || !draft.endDate || draft.endDate < draft.startDate;
+    });
+    if (invalid) { setScheduleError('입력한 모든 단계의 시작일·종료일을 확인해 주세요.'); return; }
+    if (!window.confirm('입력한 단계 일정을 저장하고 프로젝트 캘린더와 각 업무 화면에 반영할까요?')) return;
+    setScheduleBusy('all'); setScheduleError(''); setScheduleNotice('');
+    try {
+      await ensurePmAssigned();
+      for (const stage of filled) {
+        const code = stage.stageCode ?? '';
+        const draft = drafts[code];
+        await apiRequest(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/stages/${code}`, {
+          method: 'PUT',
+          body: JSON.stringify({ startDate: draft.startDate, endDate: draft.endDate, status: draft.status, noteText: draft.noteText, expectedVersion: stage.scheduleVersion ?? 0 })
+        });
+      }
+      setScheduleNotice(`${filled.length}개 단계 일정을 저장 완료했습니다. 모든 업무 화면이 이 기준 일정을 함께 사용합니다.`);
+      await onReload();
     } catch (reason) { setScheduleError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setScheduleBusy(''); }
   };
@@ -387,7 +455,7 @@ const ProjectDetail: React.FC<{
       <section className="project-schedule-manager" aria-labelledby="project-schedule-manager-title">
         <header><div><span>RESPONSIBLE PM · EXPLICIT SCHEDULE</span><h3 id="project-schedule-manager-title">담당 PM과 단계별 기준 일정</h3><p>아래에 저장한 날짜만 캘린더와 직원 홈 알림의 기준이 됩니다. 자동으로 만든 임의 날짜는 사용하지 않습니다.</p></div><strong>{project.responsiblePm?.name ?? 'PM 미지정'}</strong></header>
         <div className="project-pm-control"><label>프로젝트 담당 PM<select value={pmId} onChange={(event) => setPmId(event.target.value)}><option value="">담당 PM 선택</option>{pmOptions.map((option) => <option value={option.id} key={option.id}>{option.displayName} · {option.email}</option>)}</select></label><Button onClick={() => void savePm()} disabled={!pmId || scheduleBusy === 'pm'}>{scheduleBusy === 'pm' ? '저장 중…' : project.responsiblePm ? '담당 PM 변경' : '담당 PM 지정'}</Button></div>
-        {!project.responsiblePm && <p className="schedule-policy-note">먼저 담당 PM을 지정해야 착수회의부터 보고서 작성까지 기준 일정을 저장할 수 있습니다.</p>}
+        {!project.responsiblePm && <p className="schedule-policy-note">담당 PM을 선택한 뒤 아래 날짜를 입력하고 <strong>전체 일정 저장 완료</strong>를 누르세요. PM 지정과 일정 저장을 한 번에 처리합니다.</p>}
         <div className="project-stage-editor-list">
           {project.stages.filter((stage) => stage.stageCode && ['KICKOFF','SITE_SURVEY','TAKEOFF_COST','REPORT_WRITING'].includes(stage.stageCode)).map((item) => {
             const stage = WORKFLOW_STAGES.find((candidate) => candidate.id === item.stageId);
@@ -397,12 +465,13 @@ const ProjectDetail: React.FC<{
             return <article key={code} style={{ borderTopColor: stage?.color }}>
               <header><span className="stage-number" style={{ background: stage?.color }}>{item.stageId}</span><div><strong>{stage?.name}</strong><small>{item.scheduleExplicit ? `저장된 기준 일정 · v${item.scheduleVersion}` : '일정 미입력'}</small></div><em>{item.owner}</em></header>
               <div className="project-stage-fields"><label>시작일<input type="date" value={draft.startDate} onChange={(event) => setDraft({ startDate:event.target.value })} /></label><label>종료일<input type="date" value={draft.endDate} min={draft.startDate} onChange={(event) => setDraft({ endDate:event.target.value })} /></label><label>상태<select value={draft.status} onChange={(event) => setDraft({ status:event.target.value })}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option><option value="DELAYED">지연</option></select></label><label className="project-stage-note">일정 메모<input value={draft.noteText} maxLength={5000} placeholder="현장·팀·마감 특이사항" onChange={(event) => setDraft({ noteText:event.target.value })} /></label></div>
-              {project.canManageSchedule ? <div className="project-stage-actions"><Button size="sm" onClick={() => void saveStage(code,item.scheduleVersion ?? 0)} disabled={!project.responsiblePm || !draft.startDate || !draft.endDate || scheduleBusy === code}>{scheduleBusy === code ? '저장 중…' : '기준 일정 저장·수정'}</Button></div> : <div className="project-change-request"><label>일정 변경 사유<input value={draft.reasonText} maxLength={5000} placeholder="담당 PM에게 보낼 변경 사유를 입력하세요" onChange={(event) => setDraft({ reasonText:event.target.value })} /></label><Button size="sm" variant="secondary" onClick={() => void requestChange(code,item.scheduleVersion ?? 0)} disabled={!project.responsiblePm || !draft.startDate || !draft.endDate || draft.reasonText.trim().length < 2 || scheduleBusy === `request:${code}`}>PM에게 변경 승인 요청</Button></div>}
+              {project.canManageSchedule ? <div className="project-stage-actions"><Button className="stage-schedule-save-button" size="sm" onClick={() => void saveStage(code,item.scheduleVersion ?? 0)} disabled={!pmId || !draft.startDate || !draft.endDate || Boolean(scheduleBusy)}>{scheduleBusy === code ? '저장 중…' : item.scheduleExplicit ? '수정 내용 저장' : '일정 저장'}</Button></div> : <div className="project-change-request"><label>일정 변경 사유<input value={draft.reasonText} maxLength={5000} placeholder="담당 PM에게 보낼 변경 사유를 입력하세요" onChange={(event) => setDraft({ reasonText:event.target.value })} /></label><Button size="sm" variant="secondary" onClick={() => void requestChange(code,item.scheduleVersion ?? 0)} disabled={!project.responsiblePm || !draft.startDate || !draft.endDate || draft.reasonText.trim().length < 2 || scheduleBusy === `request:${code}`}>PM에게 변경 승인 요청</Button></div>}
             </article>;
           })}
         </div>
         {Boolean(project.pendingChangeRequests?.length) && <section className="pending-schedule-requests"><h4>담당 PM 승인 대기</h4>{project.pendingChangeRequests?.map((request) => <article key={request.id}><div><strong>{request.requestedByName} · {WORKFLOW_STAGES.find((stage) => stage.id === ({KICKOFF:3,SITE_SURVEY:4,TAKEOFF_COST:5,REPORT_WRITING:6} as Record<string,number>)[request.stageCode])?.name}</strong><span>{request.proposedStartDate} ~ {request.proposedEndDate}</span><p>{request.reasonText}</p></div>{project.canManageSchedule && <div><Button size="sm" onClick={() => void decideChange(request.id,'APPROVED')} disabled={scheduleBusy === `decision:${request.id}`}>승인·일정 반영</Button><Button size="sm" variant="secondary" onClick={() => void decideChange(request.id,'REJECTED')} disabled={scheduleBusy === `decision:${request.id}`}>반려</Button></div>}</article>)}</section>}
         {scheduleNotice && <p className="notice-box" role="status">{scheduleNotice}</p>}{scheduleError && <p className="error-box" role="alert">{scheduleError}</p>}
+        {project.canManageSchedule && <footer className="project-schedule-completion-actions"><Button variant="secondary" onClick={() => onReload()} disabled={Boolean(scheduleBusy)}>최신 일정 다시 불러오기</Button><Button className="schedule-complete-button" onClick={() => void saveAllStages()} disabled={!pmId || Boolean(scheduleBusy)}>{scheduleBusy === 'all' ? '전체 일정 저장 중…' : '전체 일정 저장 완료'}</Button>{onClose && <Button className="schedule-confirm-button" variant="secondary" onClick={onClose} disabled={Boolean(scheduleBusy)}>확인하고 닫기</Button>}</footer>}
       </section>
 
       {selectedStage && (

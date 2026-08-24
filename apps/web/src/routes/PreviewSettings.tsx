@@ -29,6 +29,10 @@ interface WorkspacePolicy {
   updatedAt: string | null;
 }
 interface WorkspaceRuntime { localAi: string; hermes: string; memoryLearning: string; supportedLocalProviders: string[] }
+interface HermesBridgeState {
+  configured: boolean; baseUrl: string; keyId: string; version: number; updatedAt: string | null;
+  secretStored: boolean; status: 'NOT_CONFIGURED' | 'CONFIGURED_NOT_YET_TESTED' | 'CONNECTED';
+}
 interface MemoryCandidate {
   id: string; memoryScope: string; scopeKey: string; problemText: string; ruleText: string; tags: string[];
   analyzerCode: string; confidence: number; status: 'PENDING' | 'ACTIVE' | 'REJECTED' | 'DISABLED';
@@ -83,6 +87,8 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
   const [aiGovernance, setAiGovernance] = useState<AiGovernance | null>(null);
   const [proposalPrompts, setProposalPrompts] = useState<ProposalWritingPrompt[]>([]);
+  const [hermesBridge, setHermesBridge] = useState<HermesBridgeState | null>(null);
+  const [hermesHmacKey, setHermesHmacKey] = useState('');
   const [aiGovernanceAck, setAiGovernanceAck] = useState('');
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [currentPassword, setCurrentPassword] = useState('');
@@ -99,17 +105,19 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     try {
       setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials'));
       if (isAdmin) {
-        const [admin, memory, governance, proposalConfig] = await Promise.all([
+        const [admin, memory, governance, proposalConfig, bridgeConfig] = await Promise.all([
           apiRequest<{ settings: WorkspacePolicy; runtime: WorkspaceRuntime }>('/api/settings/admin-workspace'),
           apiRequest<{ candidates: MemoryCandidate[] }>('/api/admin/report-memory'),
           apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance').catch(() => null),
-          apiRequest<{ writingPrompts: ProposalWritingPrompt[] }>('/api/proposal-studio/config')
+          apiRequest<{ writingPrompts: ProposalWritingPrompt[] }>('/api/proposal-studio/config'),
+          apiRequest<{ bridge: HermesBridgeState }>('/api/settings/hermes-bridge')
         ]);
         setWorkspace(admin.settings);
         setRuntime(admin.runtime);
         setMemoryCandidates(memory.candidates);
         setAiGovernance(governance?.governance ?? null);
         setProposalPrompts(proposalConfig.writingPrompts ?? []);
+        setHermesBridge(bridgeConfig.bridge);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -189,6 +197,29 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         })
       });
       setWorkspace(result.settings); setRuntime(result.runtime); setNotice('관리자 워크스페이스 정책을 D1에 저장했습니다.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(''); }
+  };
+
+  const saveHermesBridge = async () => {
+    if (!hermesBridge || !hermesHmacKey.trim()) return;
+    setBusy('hermes-bridge'); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ bridge: HermesBridgeState }>('/api/settings/hermes-bridge', {
+        method:'PUT', body:JSON.stringify({ baseUrl:hermesBridge.baseUrl, keyId:hermesBridge.keyId, hmacKey:hermesHmacKey.trim(), expectedVersion:hermesBridge.version })
+      });
+      setHermesBridge(result.bridge); setHermesHmacKey('');
+      setNotice('Hermes Private Bridge 주소와 HMAC 공유키를 암호화해 저장했습니다. 연결 확인을 실행하세요.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(''); }
+  };
+
+  const testHermesBridge = async () => {
+    setBusy('hermes-test'); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{ bridge: HermesBridgeState; health: { serviceVersion: string; hermesRuntime: string; latencyMs: number } }>('/api/settings/hermes-bridge/test', { method:'POST' });
+      setHermesBridge(result.bridge);
+      setNotice(`Hermes 연결 확인 완료 · ${result.health.hermesRuntime} · ${result.health.serviceVersion} · ${result.health.latencyMs}ms`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(''); }
   };
@@ -320,6 +351,23 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         <label className="settings-check"><input type="checkbox" checked={aiGovernance.confidentialExternalAiEnabled} disabled={aiGovernance.providerServiceTier==='UNVERIFIED_OR_FREE'} onChange={(event) => setAiGovernance({ ...aiGovernance,confidentialExternalAiEnabled:event.target.checked })}/>내부·기밀 자료의 외부 AI 전송 허용</label>
         <label className="is-wide">관리자 확인 문구<input value={aiGovernanceAck} onChange={(event) => setAiGovernanceAck(event.target.value)} placeholder="유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다" /></label>
       </div><p className="settings-honest-note"><strong>기본값은 차단입니다.</strong> 무료 Gemini API에는 회사 내부·기밀 자료를 보내지 않습니다. 유료 서비스의 실제 Cloud Billing 상태와 회사 계약·개인정보 처리기준을 관리자가 확인한 뒤에만 허용하세요. 전송 전 주민번호·전화·이메일·키 패턴을 최소화하고, 공급자 원문 응답은 D1에 저장하지 않습니다.</p><div className="action-row"><Button onClick={() => void saveAiGovernance()} disabled={busy==='ai-governance'||aiGovernanceAck!=='유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다'}>{busy==='ai-governance'?'저장 중…':'보안정책 확인·저장'}</Button><a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noreferrer">Gemini 공식 이용약관 ↗</a><a href="https://ai.google.dev/gemini-api/docs/zdr" target="_blank" rel="noreferrer">Zero Data Retention 안내 ↗</a></div></Card>}
+      {hermesBridge && <Card title="Hermes Agent · 회사 전용 Memory Bridge" className="hermes-bridge-settings">
+        <div className="settings-runtime-status"><div><span>BRIDGE STATUS</span><strong>{hermesBridge.status}</strong></div><div><span>SECRET</span><strong>{hermesBridge.secretStored ? 'AES-256-GCM 저장' : '미설정'}</strong></div><div><span>FAILOVER</span><strong>D1 승인 메모리 유지</strong></div></div>
+        <p className="settings-honest-note"><strong>중요:</strong> Hermes Agent는 Python 프로그램이라 Cloudflare Worker 웹페이지 안에 직접 심을 수 없습니다. 베트남 서버·VPS처럼 항상 켜진 서버에 Hermes를 실행하고, 이 화면에는 그 서버 앞의 HTTPS/HMAC Bridge만 연결합니다. Ollama·LM Studio는 로컬 모델을 쓸 때만 선택 사항이며, Hermes 메모리 자체를 위해 반드시 설치할 필요는 없습니다.</p>
+        <div className="workspace-policy-grid">
+          <label>HTTPS Bridge 주소<input value={hermesBridge.baseUrl} placeholder="https://claim-memory.company.example" onChange={(event)=>setHermesBridge({...hermesBridge,baseUrl:event.target.value})}/></label>
+          <label>Key ID<input value={hermesBridge.keyId} placeholder="claim-center-prod" maxLength={80} onChange={(event)=>setHermesBridge({...hermesBridge,keyId:event.target.value})}/></label>
+          <label className="is-wide">HMAC 공유키<input type="password" autoComplete="new-password" value={hermesHmacKey} placeholder={hermesBridge.secretStored?'새 공유키로 교체할 때만 입력':'32자 이상의 무작위 공유키'} maxLength={512} onChange={(event)=>setHermesHmacKey(event.target.value)}/></label>
+        </div>
+        <div className="action-row"><Button onClick={()=>void saveHermesBridge()} disabled={busy==='hermes-bridge'||!hermesHmacKey.trim()||!hermesBridge.baseUrl.trim()||!hermesBridge.keyId.trim()}>{busy==='hermes-bridge'?'저장 중…':'Bridge 암호화 저장'}</Button><Button variant="secondary" onClick={()=>void testHermesBridge()} disabled={busy==='hermes-test'||!hermesBridge.configured}>{busy==='hermes-test'?'확인 중…':'실제 연결 확인'}</Button><a href="https://github.com/NousResearch/hermes-agent" target="_blank" rel="noreferrer">공식 Hermes GitHub ↗</a></div>
+        <details className="credential-issue-guide" open><summary>초등학생도 따라가는 설치·연결 순서</summary><ol>
+          <li><b>항상 켜지는 서버를 정합니다.</b> 지금 PC에서 시험은 가능하지만 PC를 끄면 멈춥니다. 실제 운영은 베트남 서버나 회사 VPS가 맞습니다.</li>
+          <li><b>Windows 시험 설치:</b> 관리자 PowerShell에서 <code>iex (irm https://hermes-agent.nousresearch.com/install.ps1)</code>을 실행합니다. Linux/WSL은 <code>curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash</code>입니다.</li>
+          <li><b>모델을 고릅니다.</b> 서버에서 <code>hermes model</code>을 실행합니다. 클라우드 모델을 쓰면 Ollama가 필요 없고, 사내 로컬 모델을 쓰려면 Ollama 또는 OpenAI 호환 서버를 연결합니다.</li>
+          <li><b>회사 Bridge를 띄웁니다.</b> 개발자가 <code>docs/runbooks/vietnam-hermes-private-bridge.md</code> 계약대로 <code>/v1/health</code>와 <code>/v1/memory/rank</code>를 구현하고 Cloudflare Tunnel/Access 뒤에 둡니다.</li>
+          <li><b>위 3개 값을 저장하고 ‘실제 연결 확인’을 누릅니다.</b> CONNECTED가 뜰 때만 Hermes가 승인된 D1 규칙의 순서를 보조합니다. 장애 시에는 자동으로 D1 승인 규칙만 사용합니다.</li>
+        </ol><div className="action-row"><a href="https://github.com/NousResearch/hermes-agent/blob/main/website/docs/getting-started/quickstart.md" target="_blank" rel="noreferrer">공식 빠른 시작 ↗</a><a href="https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/memory.md" target="_blank" rel="noreferrer">공식 Memory 설명 ↗</a><a href="https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/docker.md" target="_blank" rel="noreferrer">Docker 영속 설치 ↗</a></div></details>
+      </Card>}
       <Card title="조직·로컬 AI·Hermes Memory 정책"><div className="workspace-policy-grid">
         <label>조직 표시명<input value={workspace.organizationName} maxLength={80} onChange={(event) => setWorkspace({ ...workspace, organizationName: event.target.value })} /></label>
         <label>로컬 AI 정책<select value={workspace.localAiMode} onChange={(event) => setWorkspace({ ...workspace, localAiMode: event.target.value as WorkspacePolicy['localAiMode'] })}><option value="DISABLED">비활성</option><option value="PRIVATE_SERVER_BRIDGE">회사 전용 Server Bridge 준비</option></select></label>

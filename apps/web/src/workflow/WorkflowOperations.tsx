@@ -67,6 +67,26 @@ interface WorkflowPayload {
   googleDrive: { connected: boolean; deferredByUser: boolean; uploadEnabled: boolean };
 }
 
+type SharedStageCode = 'KICKOFF' | 'SITE_SURVEY' | 'TAKEOFF_COST';
+
+interface SharedScheduleStage {
+  stageCode: SharedStageCode | 'PROPOSAL' | 'AWARD' | 'REPORT_WRITING';
+  startDate: string | null;
+  endDate: string | null;
+  scheduleStatus: 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'DELAYED';
+  scheduleNote: string;
+  scheduleVersion: number;
+  scheduleExplicit: boolean;
+}
+
+interface SharedScheduleProject {
+  id: string;
+  caseId: string;
+  responsiblePm: { id: string; name: string } | null;
+  canManageSchedule: boolean;
+  stages: SharedScheduleStage[];
+}
+
 interface WorkflowAiImport {
   meetingAt: string | null;
   surveyDate: string | null;
@@ -81,6 +101,7 @@ interface WorkflowAiImport {
 }
 
 const stageRoute: Record<WorkflowRouteId, 3 | 4 | 5> = { 'WF-03': 3, 'WF-04': 4, 'WF-05': 5 };
+const sharedStageCode: Record<WorkflowRouteId, SharedStageCode> = { 'WF-03': 'KICKOFF', 'WF-04': 'SITE_SURVEY', 'WF-05': 'TAKEOFF_COST' };
 const WORKFORCE_OPTIONS = WORKFORCE_UNITS
   .filter((unit) => unit.discipline !== '클레임')
   .map((unit, index) => ({
@@ -117,14 +138,19 @@ export const WorkflowOperations: React.FC<{
   const stageId = stageRoute[routeId];
   const stage = WORKFLOW_STAGES.find((entry) => entry.id === stageId)!;
   const canEdit = roles.some((role) => ['admin', 'ceo', 'director', 'pm', 'staff'].includes(role));
+  const initialParams = new URLSearchParams(window.location.search);
+  const initialProjectId = initialParams.get('projectId') ?? '';
+  const initialCaseId = initialParams.get('caseId') ?? (initialProjectId.startsWith('project-') ? initialProjectId.slice('project-'.length) : '');
   const [cases, setCases] = useState<CaseSummary[]>([]);
-  const [selectedCaseId, setSelectedCaseId] = useState(new URLSearchParams(window.location.search).get('caseId') ?? '');
+  const [selectedCaseId, setSelectedCaseId] = useState(initialCaseId);
   const selectedCaseRef = useRef(selectedCaseId);
   const [data, setData] = useState<WorkflowPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
   const [failure, setFailure] = useState('');
+  const [scheduleProject, setScheduleProject] = useState<SharedScheduleProject | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState({ startDate: '', endDate: '', status: 'PLANNED', noteText: '', version: 0, explicit: false });
   const allocationKeys = useRef(new Map<string, string>());
 
   const [kickoff, setKickoff] = useState({
@@ -158,16 +184,38 @@ export const WorkflowOperations: React.FC<{
     else setSurvey({ surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', status: 'PLANNED', expectedVersion: 0 });
   };
 
+  const syncSharedSchedule = (projects: SharedScheduleProject[]) => {
+    const project = projects.find((entry) => entry.caseId === selectedCaseRef.current) ?? null;
+    const item = project?.stages.find((entry) => entry.stageCode === sharedStageCode[routeId]);
+    setScheduleProject(project);
+    setScheduleDraft({
+      startDate: item?.startDate ?? '',
+      endDate: item?.endDate ?? '',
+      status: item?.scheduleStatus ?? 'PLANNED',
+      noteText: item?.scheduleNote ?? '',
+      version: item?.scheduleVersion ?? 0,
+      explicit: item?.scheduleExplicit ?? false
+    });
+    if (!item?.startDate || !item.endDate) return;
+    if (routeId === 'WF-03') setKickoff((current) => ({ ...current, meetingAt: `${item.startDate}T${current.meetingAt.split('T')[1] ?? '10:00'}` }));
+    if (routeId === 'WF-04') setSurvey((current) => ({ ...current, surveyDate: item.startDate ?? current.surveyDate }));
+    if (routeId === 'WF-05') setAllocation((current) => ({ ...current, startDate: item.startDate ?? current.startDate, endDate: item.endDate ?? current.endDate }));
+  };
+
   const loadWorkflow = async (caseId: string, sync = true) => {
     const requestCaseId = caseId;
     if (!requestCaseId || requestCaseId !== selectedCaseRef.current) return;
     setLoading(true);
     setFailure('');
     try {
-      const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(requestCaseId)}/workflow`);
+      const [payload, schedule] = await Promise.all([
+        apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(requestCaseId)}/workflow`),
+        apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule')
+      ]);
       if (requestCaseId !== selectedCaseRef.current) return;
       setData(payload);
       if (sync) syncForms(payload);
+      syncSharedSchedule(schedule.projects);
     } catch (error) {
       if (requestCaseId === selectedCaseRef.current) setFailure(messageFrom(error));
     } finally {
@@ -202,6 +250,40 @@ export const WorkflowOperations: React.FC<{
     void loadWorkflow(caseId);
   };
 
+  const persistSharedSchedule = async (dates?: { startDate: string; endDate: string }) => {
+    if (!scheduleProject) throw new Error('수주 확정된 프로젝트만 기준 일정을 저장할 수 있습니다. 프로젝트 접수에서 먼저 수주 확정해 주세요.');
+    if (!scheduleProject.responsiblePm) throw new Error('프로젝트 일정표에서 담당 PM을 먼저 지정해 주세요.');
+    if (!scheduleProject.canManageSchedule) throw new Error('기준 일정은 담당 PM 또는 관리자가 직접 저장할 수 있습니다.');
+    const startDate = dates?.startDate ?? scheduleDraft.startDate;
+    const endDate = dates?.endDate ?? scheduleDraft.endDate;
+    if (!startDate || !endDate) throw new Error('시작일과 종료일을 모두 입력해 주세요.');
+    if (endDate < startDate) throw new Error('종료일은 시작일보다 빠를 수 없습니다.');
+    const result = await apiRequest<{ schedule: { startDate: string; endDate: string; status: string; noteText: string; version: number } }>(
+      `/api/project-workflow/projects/${encodeURIComponent(selectedCaseId)}/stages/${sharedStageCode[routeId]}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({
+          startDate,
+          endDate,
+          status: scheduleDraft.status,
+          noteText: scheduleDraft.noteText,
+          expectedVersion: scheduleDraft.version
+        })
+      }
+    );
+    setScheduleDraft((current) => ({ ...current, startDate: result.schedule.startDate, endDate: result.schedule.endDate, status: result.schedule.status, noteText: result.schedule.noteText, version: result.schedule.version, explicit: true }));
+  };
+
+  const saveSharedSchedule = async () => {
+    if (!selectedCaseId || busy) return;
+    setBusy('기준 일정 저장'); setFailure(''); setNotice('');
+    try {
+      await persistSharedSchedule();
+      setNotice(`${stage.name} 기준 일정 저장 완료 · 프로젝트 일정표와 이 화면에 같은 날짜가 반영되었습니다.`);
+    } catch (error) { setFailure(messageFrom(error)); }
+    finally { setBusy(''); }
+  };
+
   const mutate = async (label: string, work: () => Promise<WorkflowPayload>) => {
     if (!selectedCaseId || selectedCaseId !== selectedCaseRef.current || !canEdit) return;
     setBusy(label);
@@ -212,6 +294,8 @@ export const WorkflowOperations: React.FC<{
       if (selectedCaseId !== selectedCaseRef.current) return;
       setData(payload);
       syncForms(payload);
+      const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
+      syncSharedSchedule(schedule.projects);
       setNotice(`${label} 완료 · D1에 저장되었습니다.`);
     } catch (error) {
       setFailure(messageFrom(error));
@@ -220,14 +304,18 @@ export const WorkflowOperations: React.FC<{
     }
   };
 
-  const saveKickoff = () => mutate('착수회의 저장', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff`, {
-    method: 'PUT',
-    body: JSON.stringify({
-      ...kickoff,
-      meetingAt: new Date(kickoff.meetingAt).toISOString(),
-      participantUnits: kickoff.participantUnits.split(',').map((entry) => entry.trim()).filter(Boolean)
-    })
-  }));
+  const saveKickoff = () => mutate('착수회의·기준 일정 저장', async () => {
+    const meetingDate = kickoff.meetingAt.slice(0,10);
+    await persistSharedSchedule({ startDate: meetingDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= meetingDate ? scheduleDraft.endDate : meetingDate });
+    return apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...kickoff,
+        meetingAt: new Date(kickoff.meetingAt).toISOString(),
+        participantUnits: kickoff.participantUnits.split(',').map((entry) => entry.trim()).filter(Boolean)
+      })
+    });
+  });
 
   const generateSummary = () => mutate('Gemini 회의록·타임라인 정리', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff-summary`, {
     method: 'POST', body: JSON.stringify({ expectedVersion: kickoff.expectedVersion })
@@ -243,9 +331,12 @@ export const WorkflowOperations: React.FC<{
     })
   }));
 
-  const saveSurvey = () => mutate('현장조사 계획 저장', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey`, {
-    method: 'PUT', body: JSON.stringify(survey)
-  }));
+  const saveSurvey = () => mutate('현장조사·기준 일정 저장', async () => {
+    await persistSharedSchedule({ startDate: survey.surveyDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= survey.surveyDate ? scheduleDraft.endDate : survey.surveyDate });
+    return apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey`, {
+      method: 'PUT', body: JSON.stringify(survey)
+    });
+  });
 
   const saveAllocation = () => {
     if (!selectedUnit) return;
@@ -257,9 +348,12 @@ export const WorkflowOperations: React.FC<{
     const fingerprint = JSON.stringify(payload);
     const key = allocationKeys.current.get(fingerprint) ?? `workflow-${crypto.randomUUID()}`;
     allocationKeys.current.set(fingerprint, key);
-    return mutate('팀 투입 일정 저장', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/allocations`, {
-      method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload)
-    }));
+    return mutate('팀 투입·기준 일정 저장', async () => {
+      await persistSharedSchedule({ startDate: allocation.startDate, endDate: allocation.endDate });
+      return apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/allocations`, {
+        method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload)
+      });
+    });
   };
 
   return (
@@ -280,6 +374,19 @@ export const WorkflowOperations: React.FC<{
         </select>
         {data && <span>{data.case.claimType} · {data.case.status}</span>}
       </div>
+
+      {!loading && data && <section className="shared-stage-schedule" aria-labelledby="shared-stage-schedule-title">
+        <header><div><span>PROJECT CALENDAR · SINGLE SOURCE</span><h3 id="shared-stage-schedule-title">{stage.name} 기준 일정</h3><p>여기서 저장한 날짜와 프로젝트 일정표 팝업의 날짜는 같은 D1 일정입니다. 어느 화면에서 수정해도 양쪽에 즉시 반영됩니다.</p></div><em>{scheduleDraft.explicit ? `저장됨 · v${scheduleDraft.version}` : '일정 미입력'}</em></header>
+        {scheduleProject ? <>
+          <div className="shared-stage-schedule-fields">
+            <label>시작일<input type="date" value={scheduleDraft.startDate} disabled={Boolean(busy) || !scheduleProject.canManageSchedule} onChange={(event) => setScheduleDraft((current) => ({ ...current, startDate:event.target.value }))} /></label>
+            <label>종료일<input type="date" min={scheduleDraft.startDate} value={scheduleDraft.endDate} disabled={Boolean(busy) || !scheduleProject.canManageSchedule} onChange={(event) => setScheduleDraft((current) => ({ ...current, endDate:event.target.value }))} /></label>
+            <label>상태<select value={scheduleDraft.status} disabled={Boolean(busy) || !scheduleProject.canManageSchedule} onChange={(event) => setScheduleDraft((current) => ({ ...current, status:event.target.value }))}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option><option value="DELAYED">지연</option></select></label>
+            <label className="is-note">일정 메모<input value={scheduleDraft.noteText} maxLength={5000} disabled={Boolean(busy) || !scheduleProject.canManageSchedule} onChange={(event) => setScheduleDraft((current) => ({ ...current, noteText:event.target.value }))} placeholder="현장·담당팀·마감 특이사항" /></label>
+          </div>
+          <div className="shared-stage-schedule-actions"><div><strong>담당 PM</strong><span>{scheduleProject.responsiblePm?.name ?? '미지정 · 프로젝트 일정표에서 먼저 지정'}</span></div><Button variant="secondary" onClick={() => onNavigate(`/projects/schedule?projectId=${encodeURIComponent(scheduleProject.id)}`)}>전체 일정표에서 확인·수정</Button>{scheduleProject.canManageSchedule && <Button className="shared-schedule-save-button" onClick={() => void saveSharedSchedule()} disabled={Boolean(busy) || !scheduleDraft.startDate || !scheduleDraft.endDate}>{busy === '기준 일정 저장' ? '저장 중…' : scheduleDraft.explicit ? '일정 수정 저장' : '일정 저장'}</Button>}</div>
+        </> : <div className="shared-stage-schedule-empty"><strong>아직 수행 프로젝트가 아닙니다.</strong><span>프로젝트 접수에서 제안서를 연동하고 수주 확정하면 일정 저장 기능이 열립니다.</span><Button variant="secondary" onClick={() => onNavigate(`/workflow/award?caseId=${encodeURIComponent(selectedCaseId)}`)}>프로젝트 접수 확인</Button></div>}
+      </section>}
 
       {loading && <div className="workflow-feedback">프로젝트 업무 데이터를 불러오는 중입니다.</div>}
       {failure && <div className="workflow-feedback is-error" role="alert"><strong>처리하지 못했습니다.</strong><span>{failure}</span><Button size="sm" variant="secondary" onClick={() => void loadWorkflow(selectedCaseId)}>다시 불러오기</Button></div>}
@@ -383,7 +490,7 @@ const KickoffEditor: React.FC<{
         <label className="is-wide">참석 팀·담당자<input value={form.participantUnits} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, participantUnits: event.target.value }))} placeholder="쉼표로 구분" /></label>
         <label className="is-wide">회의 메모·녹취 텍스트<textarea className="is-tall" value={form.rawNotes} maxLength={50000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, rawNotes: event.target.value }))} placeholder="녹음 전사문 또는 회의 중 메모를 입력하세요." /></label>
       </div>
-      <div className="workflow-actions"><Button disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의 저장' ? '저장 중…' : '착수회의 저장'}</Button><Button variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? 'Gemini 정리 중…' : 'Gemini로 회의록·타임라인 정리'}</Button></div>
+      <div className="workflow-actions"><Button disabled={disabled || !form.agenda.trim()} onClick={onSave}>{busy === '착수회의·기준 일정 저장' ? '일정과 회의 저장 중…' : '착수회의·일정 저장'}</Button><Button variant="secondary" disabled={disabled || !record?.rawNotes.trim()} onClick={onGenerate}>{busy === 'Gemini 회의록·타임라인 정리' ? 'Gemini 정리 중…' : 'Gemini로 회의록·타임라인 정리'}</Button></div>
       <p className="workflow-honest-note">관리자 설정의 조직 공용 Gemini 키를 사용합니다. 키가 없는 테스트 환경에서는 원문을 보존한 로컬 구조화 초안만 만들며, 모든 결과는 담당자가 원문과 대조해 확정해야 합니다.</p>
     </article>
     <article className="workflow-editor-card is-output">
@@ -416,13 +523,13 @@ const SurveyEditor: React.FC<{
       <header><div><span>SITE SURVEY PLAN</span><h3>현장조사 계획·원본 분류</h3></div><em>v{form.expectedVersion}</em></header>
       <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onImported={(value) => setForm((current) => ({ ...current,surveyDate:value.surveyDate??current.surveyDate,location:value.location,scopeText:value.agenda||value.sourceNotes,leadUnit:value.leadUnit||current.leadUnit,status:'IN_PROGRESS',expectedVersion:current.expectedVersion }))}/>
       <div className="workflow-form-grid">
-        <label>조사 일자<input type="date" value={form.surveyDate} disabled={disabled || form.expectedVersion > 0} onChange={(event) => setForm((current) => ({ ...current, surveyDate: event.target.value, expectedVersion: 0 }))} /></label>
+        <label>조사 일자<input type="date" value={form.surveyDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, surveyDate: event.target.value }))} /></label>
         <label>진행 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option></select></label>
         <label className="is-wide">현장 위치<input value={form.location} maxLength={300} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, location: event.target.value }))} /></label>
         <label className="is-wide">조사 범위<textarea value={form.scopeText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, scopeText: event.target.value }))} placeholder="동·층·부위, 하자·기시공·미시공 구분, 조사 제외 범위" /></label>
         <label className="is-wide">조사 책임 팀<input value={form.leadUnit} maxLength={120} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, leadUnit: event.target.value }))} /></label>
       </div>
-      <Button disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사 계획 저장' ? '저장 중…' : '현장조사 계획 저장'}</Button>
+      <Button disabled={disabled || !form.scopeText.trim()} onClick={onSave}>{busy === '현장조사·기준 일정 저장' ? '일정과 계획 저장 중…' : '현장조사·일정 저장'}</Button>
       <p className="workflow-honest-note">조사 계획은 D1에 보존되고, 아래 원본 자료는 회사 Google Drive의 프로젝트/현장조사/월 폴더에 저장됩니다. 연결 상태: {drive.connected ? '연결됨' : '설정 확인 필요'}.</p>
     </article>
     <article className="workflow-editor-card is-output">
@@ -457,7 +564,7 @@ const AllocationEditor: React.FC<{
         <label>시작일<input type="date" value={form.startDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} /></label>
         <label>종료일<input type="date" value={form.endDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} /></label>
       </div>
-      <Button disabled={disabled || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입 일정 저장' ? '저장 중…' : '프로젝트 일정표에 반영'}</Button>
+      <Button disabled={disabled || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : '투입 일정 저장·프로젝트 일정표 반영'}</Button>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>ALLOCATION LEDGER</span><h3>프로젝트 투입 현황</h3></div><em>{allocations.length}건</em></header>

@@ -18,6 +18,10 @@ interface SentProposal extends SentProposalExcelRow {
   updatedAt: string;
   awardStatus: AwardStatus;
   verificationStatus: VerificationStatus;
+  listHidden: boolean;
+  catalogVersion: number;
+  driveArchiveUrl: string | null;
+  driveArchivedAt: string | null;
 }
 
 interface ProjectGroup {
@@ -39,7 +43,7 @@ function dateLabel(value: string | null, withTime = false): string {
 
 function errorLabel(reason: unknown): string {
   if (reason instanceof ApiError && reason.status === 403) return '배정받은 프로젝트의 제안서만 볼 수 있습니다.';
-  return reason instanceof Error ? reason.message : '발송 제안서 DB를 불러오지 못했습니다.';
+  return reason instanceof Error ? reason.message : '연동 제안서 DB를 불러오지 못했습니다.';
 }
 
 function downloadWorkbook(proposals: SentProposal[]): void {
@@ -50,7 +54,7 @@ function downloadWorkbook(proposals: SentProposal[]): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `클레임센터_발송제안서_DB_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  anchor.download = `클레임센터_연동제안서_DB_${new Date().toISOString().slice(0, 10)}.xlsx`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -61,21 +65,34 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
   const [awardStatus, setAwardStatus] = useState<AwardStatus | ''>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    const params = new URLSearchParams({ limit: '200' });
+    const params = new URLSearchParams({ limit: '200', mode });
     if (query.trim()) params.set('q', query.trim());
     if (awardStatus) params.set('awardStatus', awardStatus);
     const timeout = window.setTimeout(() => {
-      void apiRequest<{ proposals: SentProposal[] }>(`/api/proposal-workflow?${params.toString()}`)
+      void apiRequest<{ proposals: SentProposal[] }>(`/api/proposal-catalog?${params.toString()}`)
         .then((result) => { if (active) setProposals([...result.proposals].sort((left, right) => right.sentAt.localeCompare(left.sentAt))); })
         .catch((reason) => { if (active) setError(errorLabel(reason)); })
         .finally(() => { if (active) setLoading(false); });
     }, query ? 250 : 0);
     return () => { active = false; window.clearTimeout(timeout); };
-  }, [awardStatus, query]);
+  }, [awardStatus, mode, query]);
+
+  const catalogAction = async (proposal: SentProposal, action: 'HIDE_FROM_LIST'|'RESTORE_TO_LIST'|'ARCHIVE_TO_DRIVE'|'ADMIN_DELETE') => {
+    if (action === 'ADMIN_DELETE' && !window.confirm(`${proposal.proposalNumber} 제안서를 관리자 DB 화면에서 삭제 처리할까요? 감사 이력은 남습니다.`)) return;
+    setBusy(`${proposal.id}:${action}`); setError(''); setNotice('');
+    try {
+      await apiRequest(`/api/proposal-catalog/${proposal.id}`, { method:'POST', body:JSON.stringify({ action,expectedVersion:proposal.catalogVersion }) });
+      setNotice(action === 'HIDE_FROM_LIST' ? '일반 제안서 목록에서 숨겼습니다. 관리자 DB에는 남습니다.' : action === 'RESTORE_TO_LIST' ? '일반 목록에 복원했습니다.' : action === 'ARCHIVE_TO_DRIVE' ? '제안서 감사본을 회사 Google Drive에 보관했습니다.' : '관리자 DB에서 삭제 처리했습니다.');
+      setProposals((current)=>current.filter((row)=>row.id!==proposal.id));
+    } catch (reason) { setError(errorLabel(reason)); }
+    finally { setBusy(''); }
+  };
 
   const projects = useMemo<ProjectGroup[]>(() => {
     const grouped = new Map<string, ProjectGroup>();
@@ -99,11 +116,11 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
     <section className="proposal-library" aria-labelledby="proposal-library-title">
       <header className="proposal-library__hero">
         <div>
-          <span>{mode === 'projects' ? 'SENT PROPOSALS · PROJECT VIEW' : 'IMMUTABLE SENT PROPOSAL LEDGER'}</span>
+          <span>{mode === 'projects' ? 'LINKED PROPOSALS · PROJECT VIEW' : 'IMMUTABLE LINKED PROPOSAL LEDGER'}</span>
           <h2 id="proposal-library-title">{mode === 'projects' ? '프로젝트별 제안서 목록' : '제안서 DB관리'}</h2>
           <p>{mode === 'projects'
-            ? '거래처에 제안서를 보낸 프로젝트만 모아 프로젝트별 발송본·회신·수주 상태를 한눈에 확인합니다.'
-            : '발송 당시의 제안서 번호·버전·원문 주소·SHA-256을 개별 행으로 보존한 관리자용 원장입니다. 발송본은 물리 삭제하지 않습니다.'}</p>
+            ? '프로젝트에 연동된 제안서를 모아 제안서 버전·회신·수주 상태를 한눈에 확인합니다.'
+            : '연동 당시의 제안서 번호·버전·원문 주소·SHA-256을 개별 행으로 보존한 관리자용 원장입니다. 확정본은 물리 삭제하지 않습니다.'}</p>
         </div>
         <div className="proposal-library__actions">
           <button type="button" onClick={() => onNavigate('/proposals/editor')}>제안서 작성·Excel 가져오기</button>
@@ -111,9 +128,9 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
         </div>
       </header>
 
-      <div className="proposal-library__summary" aria-label="발송 제안서 요약">
-        <article><span>발송 프로젝트</span><strong>{summary.projects}</strong><small>프로젝트별 묶음</small></article>
-        <article><span>발송본 DB</span><strong>{summary.proposals}</strong><small>버전별 개별 보관</small></article>
+      <div className="proposal-library__summary" aria-label="연동 제안서 요약">
+        <article><span>연동 프로젝트</span><strong>{summary.projects}</strong><small>프로젝트별 묶음</small></article>
+        <article><span>확정본 DB</span><strong>{summary.proposals}</strong><small>버전별 개별 보관</small></article>
         <article><span>회신 대기</span><strong>{summary.pending}</strong><small>후속 확인 필요</small></article>
         <article><span>원문 검증</span><strong>{summary.verified}</strong><small>URL·SHA 고정</small></article>
       </div>
@@ -124,8 +141,9 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
       </div>
 
       {error && <div className="proposal-library__message is-error" role="alert">{error}</div>}
-      {loading && <div className="proposal-library__message" role="status">D1 발송 제안서 원장을 불러오고 있습니다.</div>}
-      {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 발송 등록된 제안서가 없습니다.</strong><span>제안서 작성 후 프로젝트 접수 화면에서 발송본 번호와 원문을 연결하면 이곳에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
+      {notice && <div className="proposal-library__message" role="status">{notice}</div>}
+      {loading && <div className="proposal-library__message" role="status">D1 연동 제안서 원장을 불러오고 있습니다.</div>}
+      {!loading && !error && proposals.length === 0 && <div className="proposal-library__empty"><strong>아직 연동된 제안서가 없습니다.</strong><span>제안서 작성 후 프로젝트 접수 화면에서 확정본을 연동하면 이곳에 자동으로 나타납니다.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>첫 제안서 작성하기</button></div>}
 
       {!loading && !error && mode === 'projects' && projects.length > 0 && (
         <div className="proposal-project-list">
@@ -133,7 +151,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
             const latest = project.proposals[0];
             return <article key={project.caseId} className="proposal-project-card">
               <header>
-                <div><span>{project.caseNumber}</span><h3>{project.caseTitle}</h3><small>최근 발송 {dateLabel(latest.sentAt, true)}</small></div>
+                <div><span>{project.caseNumber}</span><h3>{project.caseTitle}</h3><small>최근 연동 {dateLabel(latest.sentAt, true)}</small></div>
                 <div><b>{project.proposals.length}건</b><em className={`status-${latest.awardStatus.toLowerCase()}`}>{awardLabels[latest.awardStatus]}</em></div>
               </header>
               <div className="proposal-project-card__rows">
@@ -141,10 +159,10 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
                   <div><strong>{proposal.proposalTitle}</strong><span>{proposal.proposalNumber} · {proposal.revisionLabel}</span></div>
                   <div><span>{proposal.clientName}</span><small>{dateLabel(proposal.sentAt, true)}</small></div>
                   <em className={`status-${proposal.verificationStatus.toLowerCase()}`}>{verificationLabels[proposal.verificationStatus]}</em>
-                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">발송 원문 열기</a> : <span className="is-muted">원문 미연결</span>}
+                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 원문 열기</a> : <span className="is-muted">원문 미연결</span>}
                 </div>)}
               </div>
-              <footer><button type="button" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(project.caseId)}`)}>이 프로젝트 제안서 작성</button><button type="button" className="is-secondary" onClick={() => onNavigate('/workflow/award')}>접수·수주 상태 확인</button></footer>
+              <footer><button type="button" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(project.caseId)}`)}>이 프로젝트 제안서 작성</button><button type="button" className="is-secondary" onClick={() => onNavigate('/workflow/award')}>접수·수주 상태 확인</button><button type="button" className="is-secondary" disabled={Boolean(busy)} onClick={()=>void catalogAction(latest,'HIDE_FROM_LIST')}>목록에서 숨기기</button></footer>
             </article>;
           })}
         </div>
@@ -152,16 +170,16 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
 
       {!loading && !error && mode === 'database' && proposals.length > 0 && (
         <div className="proposal-db-card">
-          <div className="proposal-db-card__note"><strong>D1 발송본 원장</strong><span>행 삭제·발송 스냅샷 덮어쓰기를 금지하고, 수주 결정만 별도 감사 이력으로 추가합니다.</span></div>
-          <div className="proposal-db-table" role="region" aria-label="발송 제안서 데이터베이스 원장" tabIndex={0}>
-            <table><thead><tr><th>프로젝트</th><th>발송 제안서</th><th>버전·발송일</th><th>검증·수주</th><th>원문 무결성</th><th>등록</th></tr></thead>
+          <div className="proposal-db-card__note"><strong>D1 확정본 원장</strong><span>행 삭제·연동 스냅샷 덮어쓰기를 금지하고, 수주 결정만 별도 감사 이력으로 추가합니다.</span></div>
+          <div className="proposal-db-table" role="region" aria-label="연동 제안서 데이터베이스 원장" tabIndex={0}>
+            <table><thead><tr><th>프로젝트</th><th>연동 제안서</th><th>버전·확정일</th><th>검증·수주</th><th>원문 무결성</th><th>등록·관리</th></tr></thead>
               <tbody>{proposals.map((proposal) => <tr key={proposal.id}>
                 <td><strong>{proposal.caseNumber}</strong><span>{proposal.caseTitle}</span></td>
                 <td><strong>{proposal.proposalTitle}</strong><span>{proposal.proposalNumber}</span><small>{proposal.clientName}</small></td>
                 <td><strong>{proposal.revisionLabel}</strong><span>{dateLabel(proposal.sentAt, true)}</span></td>
                 <td><em className={`status-${proposal.verificationStatus.toLowerCase()}`}>{verificationLabels[proposal.verificationStatus]}</em><em className={`status-${proposal.awardStatus.toLowerCase()}`}>{awardLabels[proposal.awardStatus]}</em></td>
                 <td><code title={proposal.documentSha256 ?? ''}>{proposal.documentSha256 ? `${proposal.documentSha256.slice(0, 12)}…` : 'SHA 미등록'}</code>{proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">원문</a> : null}</td>
-                <td><strong>{proposal.createdByName}</strong><span>{dateLabel(proposal.createdAt, true)}</span><small>ID {proposal.id.slice(0, 8)}</small></td>
+                <td><strong>{proposal.createdByName}</strong><span>{dateLabel(proposal.createdAt, true)}</span><small>ID {proposal.id.slice(0, 8)}</small><div className="action-row"><button type="button" disabled={Boolean(busy)||!proposal.listHidden} onClick={()=>void catalogAction(proposal,'RESTORE_TO_LIST')}>목록 복원</button><button type="button" disabled={Boolean(busy)} onClick={()=>void catalogAction(proposal,'ARCHIVE_TO_DRIVE')}>Drive 보관</button>{proposal.driveArchiveUrl&&<a href={proposal.driveArchiveUrl} target="_blank" rel="noreferrer">보관본</a>}<button type="button" disabled={Boolean(busy)} onClick={()=>void catalogAction(proposal,'ADMIN_DELETE')}>삭제</button></div></td>
               </tr>)}</tbody>
             </table>
           </div>

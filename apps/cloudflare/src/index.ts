@@ -24,9 +24,11 @@ import {
 } from './google-drive';
 import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
 import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
+import { checkMemoryBridge, normalizeMemoryBridgeBaseUrl, rankMemoryRules, type MemoryBridgeCredential, type MemoryBridgeFetch } from './memory-bridge';
 import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportAsset, type ProposalExportChapter } from './proposal-docx';
 import { extractIntakeSource, IntakeSourceError, type IntakeSource } from './intake-source';
 import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './proposal-company-content';
+import { ErpBridgeError, registerProjectInErp } from './erp-bridge';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -66,6 +68,10 @@ export interface CloudflareEnv {
   PM_NOTIFICATION_WEBHOOK_URL?: string;
   PM_NOTIFICATION_WEBHOOK_SECRET?: string;
   GEMINI_DATA_GOVERNANCE_MODE?: string;
+  HERMES_TEST_FETCH?: MemoryBridgeFetch;
+  ERP_PROJECT_WEBHOOK_URL?: string;
+  ERP_PROJECT_WEBHOOK_SECRET?: string;
+  ERP_TEST_FETCH?: typeof fetch;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -1063,6 +1069,8 @@ interface PreviewProposalRow {
   caseTitle: string;
   caseStatus: string;
   caseVersion: number;
+  caseDescription: string | null;
+  claimType: string;
   proposalNumber: string;
   proposalTitle: string;
   revisionLabel: string;
@@ -1134,6 +1142,7 @@ function proposalProjection(row: PreviewProposalRow): Record<string, unknown> {
 
 const previewProposalSelect =
   'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,' +
+  'c.description AS caseDescription,c.claim_type AS claimType,' +
   'p.proposal_number AS proposalNumber,p.proposal_title AS proposalTitle,p.revision_label AS revisionLabel,p.client_name AS clientName,' +
   'p.sent_at AS sentAt,p.response_due_on AS responseDueOn,p.proposed_amount_krw AS proposedAmountKrw,p.document_url AS documentUrl,' +
   'p.document_sha256 AS documentSha256,p.verification_status AS verificationStatus,p.award_status AS awardStatus,' +
@@ -1158,6 +1167,77 @@ async function previewProposalDetail(env: CloudflareEnv, user: SessionUser, id: 
     'WHERE d.proposal_link_id=? ORDER BY d.created_at DESC LIMIT 100'
   ).bind(id).all<Record<string, unknown>>();
   return json({ proposal: proposalProjection(record), decisions: decisions.results, phase: 'CF14_PROPOSAL_AWARD_WORKFLOW' });
+}
+
+interface ErpSyncProjection {
+  status: 'PENDING' | 'SYNCED' | 'FAILED';
+  configured: boolean;
+  erpProjectId: string | null;
+  errorCode: string | null;
+}
+
+async function erpProjectSyncSchema(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  const row = await env.DB.prepare("SELECT 1 AS ready FROM sqlite_master WHERE type='table' AND name='preview_erp_project_syncs'").first<{ ready: number }>();
+  return row?.ready === 1;
+}
+
+function erpProjectPayload(current: PreviewProposalRow, user: SessionUser, receivedAt: string): Record<string, unknown> {
+  return {
+    schema: 'CONCOST_ERP_PROJECT_AWARDED_V1',
+    event: 'PROJECT_AWARDED',
+    source: 'CLAIM_CENTER_STUDIO',
+    receivedAt,
+    receivedBy: { id: user.id, name: user.displayName, email: user.email },
+    project: {
+      externalId: current.caseId,
+      projectNumber: current.caseNumber,
+      title: current.caseTitle,
+      status: 'CONTRACT',
+      claimType: current.claimType,
+      description: current.caseDescription,
+      clientName: current.clientName
+    },
+    proposal: {
+      externalId: current.id,
+      proposalNumber: current.proposalNumber,
+      title: current.proposalTitle,
+      revision: current.revisionLabel
+    }
+  };
+}
+
+async function dispatchErpProjectSync(env: CloudflareEnv, syncId: string): Promise<ErpSyncProjection> {
+  if (!env.DB) return { status: 'FAILED', configured: false, erpProjectId: null, errorCode: 'D1_NOT_CONFIGURED' };
+  const configured = Boolean(env.ERP_PROJECT_WEBHOOK_URL?.trim() && env.ERP_PROJECT_WEBHOOK_SECRET?.trim());
+  if (!configured) {
+    await env.DB.prepare("UPDATE preview_erp_project_syncs SET status='PENDING',last_error_code='ERP_BRIDGE_NOT_CONFIGURED',updated_at=? WHERE id=? AND status<>'SYNCED'")
+      .bind(new Date().toISOString(), syncId).run();
+    return { status: 'PENDING', configured: false, erpProjectId: null, errorCode: 'ERP_BRIDGE_NOT_CONFIGURED' };
+  }
+  const row = await env.DB.prepare('SELECT case_id AS caseId,payload_json AS payloadJson,status,erp_project_id AS erpProjectId FROM preview_erp_project_syncs WHERE id=?')
+    .bind(syncId).first<{ caseId: string; payloadJson: string; status: string; erpProjectId: string | null }>();
+  if (!row) return { status: 'FAILED', configured: true, erpProjectId: null, errorCode: 'ERP_SYNC_NOT_FOUND' };
+  if (row.status === 'SYNCED') return { status: 'SYNCED', configured: true, erpProjectId: row.erpProjectId, errorCode: null };
+  const attemptedAt = new Date().toISOString();
+  try {
+    const result = await registerProjectInErp(
+      env.ERP_TEST_FETCH ?? fetch,
+      { url: env.ERP_PROJECT_WEBHOOK_URL!, secret: env.ERP_PROJECT_WEBHOOK_SECRET! },
+      JSON.parse(row.payloadJson) as Record<string, unknown>,
+      `claim-center-project:${row.caseId}`
+    );
+    const syncedAt = new Date().toISOString();
+    await env.DB.prepare("UPDATE preview_erp_project_syncs SET status='SYNCED',attempts=attempts+1,erp_project_id=?,last_error_code=NULL,last_attempt_at=?,synced_at=?,updated_at=? WHERE id=? AND status<>'SYNCED'")
+      .bind(result.erpProjectId, attemptedAt, syncedAt, syncedAt, syncId).run();
+    return { status: 'SYNCED', configured: true, erpProjectId: result.erpProjectId, errorCode: null };
+  } catch (reason) {
+    const errorCode = reason instanceof ErpBridgeError ? reason.code : 'ERP_SYNC_FAILED';
+    const failedAt = new Date().toISOString();
+    await env.DB.prepare("UPDATE preview_erp_project_syncs SET status='FAILED',attempts=attempts+1,last_error_code=?,last_attempt_at=?,updated_at=? WHERE id=? AND status<>'SYNCED'")
+      .bind(errorCode, attemptedAt, failedAt, syncId).run();
+    return { status: 'FAILED', configured: true, erpProjectId: null, errorCode };
+  }
 }
 
 async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -1199,12 +1279,13 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
     const clientName = proposalText(body.clientName, 300);
     const sentAt = proposalDate(body.sentAt);
     const responseDueOn = proposalDate(body.responseDueOn, true, true);
-    const proposedAmountKrw = proposalMoney(body.proposedAmountKrw, true);
+    const proposedAmountKrw = body.proposedAmountKrw === null ? null : proposalMoney(body.proposedAmountKrw, true);
+    const proposedAmountValid = body.proposedAmountKrw === null || proposedAmountKrw !== null;
     const documentUrl = proposalDocumentUrl(body.documentUrl, true);
     const documentSha256 = typeof body.documentSha256 === 'string' && /^[0-9a-f]{64}$/i.test(body.documentSha256.trim()) ? body.documentSha256.trim().toLowerCase() : null;
     const verificationStatus = typeof body.verificationStatus === 'string' && PROPOSAL_VERIFICATION_STATUSES.has(body.verificationStatus) ? body.verificationStatus : null;
     const expectedCaseVersion = Number(body.expectedCaseVersion);
-    if (!project || !proposalNumber || !proposalTitle || !revisionLabel || !clientName || !sentAt || proposedAmountKrw === null || !verificationStatus || !Number.isInteger(expectedCaseVersion) || expectedCaseVersion < 1 || (verificationStatus === 'VERIFIED' && (!documentUrl || !documentSha256))) return json({ error: 'Proposal fields are invalid', code: 'INVALID_PROPOSAL_PAYLOAD' }, 400);
+    if (!project || !proposalNumber || !proposalTitle || !revisionLabel || !clientName || !sentAt || !proposedAmountValid || !verificationStatus || !Number.isInteger(expectedCaseVersion) || expectedCaseVersion < 1 || (verificationStatus === 'VERIFIED' && (!documentUrl || !documentSha256))) return json({ error: 'Proposal fields are invalid', code: 'INVALID_PROPOSAL_PAYLOAD' }, 400);
     const requestKey = request.headers.get('Idempotency-Key') ?? '';
     if (!PREVIEW_CASE_CREATE_KEY.test(requestKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
     const fingerprint = await sha256Hex(JSON.stringify({ caseId,proposalNumber,proposalTitle,revisionLabel,clientName,sentAt,responseDueOn,proposedAmountKrw,documentUrl,documentSha256,verificationStatus,expectedCaseVersion }));
@@ -1234,33 +1315,38 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     const awardKeys = ['decision','decisionNote','decidedAt','contractAmountKrw','projectStartOn','projectEndOn','expectedLinkVersion','expectedCaseVersion'];
-    if (!body || !awardKeys.every((key) => Object.prototype.hasOwnProperty.call(body,key)) || Object.keys(body).some((key) => ![...awardKeys,'responsiblePmId'].includes(key))) return json({ error: 'Award decision payload is invalid', code: 'INVALID_AWARD_PAYLOAD' }, 400);
+    const simpleAwardKeys = ['decision','expectedLinkVersion','expectedCaseVersion'];
+    const legacyPayload = Boolean(body && awardKeys.every((key) => Object.prototype.hasOwnProperty.call(body,key)) && !Object.keys(body).some((key) => ![...awardKeys,'responsiblePmId'].includes(key)));
+    const simplePayload = Boolean(body && exactObjectKeys(body, simpleAwardKeys));
+    if (!body || (!legacyPayload && !simplePayload)) return json({ error: 'Award decision payload is invalid', code: 'INVALID_AWARD_PAYLOAD' }, 400);
     const current = await env.DB.prepare(previewProposalSelect + 'WHERE p.id=? AND p.organization_id=?').bind(detailMatch[1],PREVIEW_ORGANIZATION_ID).first<PreviewProposalRow>();
     if (!current || !await accessiblePreviewCase(env,user,current.caseId)) return json({ error: 'Proposal link was not found or is outside your assigned projects', code: 'PROPOSAL_NOT_FOUND' }, 404);
     const decision = typeof body.decision === 'string' && ['WON','LOST'].includes(body.decision) ? body.decision : null;
-    const decisionNote = proposalText(body.decisionNote,5000);
-    const decidedAt = proposalDate(body.decidedAt);
+    const now = new Date().toISOString();
+    const decisionNote = legacyPayload ? proposalText(body.decisionNote,5000) : decision === 'WON' ? '연동된 제안서의 수주 확정에 따라 프로젝트를 접수했습니다.' : decision === 'LOST' ? '연동된 제안서가 취소되어 프로젝트 접수를 종료했습니다.' : null;
+    const decidedAt = legacyPayload ? proposalDate(body.decidedAt) : now;
     const expectedLinkVersion = Number(body.expectedLinkVersion);
     const expectedCaseVersion = Number(body.expectedCaseVersion);
-    const contractAmountKrw = decision === 'WON' ? proposalMoney(body.contractAmountKrw) : null;
-    const projectStartOn = decision === 'WON' ? proposalDate(body.projectStartOn,true) : null;
-    const projectEndOn = decision === 'WON' ? proposalDate(body.projectEndOn,true) : null;
-    const scheduleReady = decision === 'WON' && await projectScheduleSchema(env);
-    const existingProfile = scheduleReady ? await env.DB.prepare('SELECT responsible_pm_id AS responsiblePmId,version FROM preview_project_schedule_profiles WHERE case_id=? AND organization_id=?').bind(current.caseId,PREVIEW_ORGANIZATION_ID).first<{responsiblePmId:string;version:number}>() : null;
-    const requestedPmId = decision === 'WON' && typeof body.responsiblePmId === 'string' ? body.responsiblePmId : '';
-    const pmTargetId = requestedPmId || existingProfile?.responsiblePmId || '';
-    const responsiblePm = scheduleReady && pmTargetId ? await projectPmCandidate(env,current.caseId,pmTargetId) : null;
+    // CF14 columns remain populated for backwards-compatible audit rows. The user no longer enters
+    // these values during reception; the canonical PM and schedule are managed on the schedule page.
+    const contractAmountKrw = decision === 'WON' ? (legacyPayload ? proposalMoney(body.contractAmountKrw) : Math.max(1, Number(current.proposedAmountKrw ?? 0))) : null;
+    const projectStartOn = decision === 'WON' ? (legacyPayload ? proposalDate(body.projectStartOn,true) : now.slice(0,10)) : null;
+    const projectEndOn = decision === 'WON' ? (legacyPayload ? proposalDate(body.projectEndOn,true) : now.slice(0,10)) : null;
     if (!decision || !decisionNote || !decidedAt || (decision === 'WON' && (contractAmountKrw === null || !projectStartOn || !projectEndOn || projectEndOn < projectStartOn))) return json({ error: 'Award decision fields are invalid', code: 'INVALID_AWARD_PAYLOAD' }, 400);
-    if (scheduleReady && (!responsiblePm || (requestedPmId && responsiblePm.id !== requestedPmId) || (existingProfile && responsiblePm.id !== existingProfile.responsiblePmId))) return json({ error: '수주 확정 전에 이 프로젝트에 배정된 담당 PM을 선택하세요.', code: 'RESPONSIBLE_PM_REQUIRED' }, 409);
     const requestKey = request.headers.get('Idempotency-Key') ?? '';
     if (!PREVIEW_CASE_CREATE_KEY.test(requestKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
-    const fingerprint = await sha256Hex(JSON.stringify({ proposalLinkId:current.id,decision,decisionNote,decidedAt,contractAmountKrw,projectStartOn,projectEndOn,responsiblePmId:responsiblePm?.id??null,expectedLinkVersion,expectedCaseVersion }));
+    const fingerprint = await sha256Hex(JSON.stringify({ proposalLinkId:current.id,decision,decisionNote,decidedAt,contractAmountKrw,projectStartOn,projectEndOn,expectedLinkVersion,expectedCaseVersion }));
     const replay = await env.DB.prepare('SELECT proposal_link_id AS proposalLinkId,request_fingerprint AS fingerprint FROM preview_award_decisions WHERE request_key=?').bind(requestKey).first<{proposalLinkId:string;fingerprint:string}>();
     if (replay) return replay.fingerprint === fingerprint ? previewProposalDetail(env,user,replay.proposalLinkId) : json({ error: 'Idempotency-Key was used for another award decision', code: 'IDEMPOTENCY_MISMATCH' }, 409);
     const versionConflict = current.awardStatus !== 'PENDING' || current.version !== expectedLinkVersion || current.caseVersion !== expectedCaseVersion;
     if (versionConflict) return json({ error: 'Proposal or project changed. Reload before deciding.', code: 'VERSION_CONFLICT', currentLinkVersion: current.version, currentCaseVersion: current.caseVersion }, 409);
-    const now = new Date().toISOString();
-    const nextCaseStatus = decision === 'WON' && ['INQUIRY','PROPOSAL','ESTIMATE'].includes(current.caseStatus) ? 'CONTRACT' : current.caseStatus;
+    // Reception is the single gate into execution: every accepted linked proposal becomes
+    // a CONTRACT project, regardless of the legacy/demo status the intake record carried.
+    const nextCaseStatus = decision === 'WON' ? 'CONTRACT' : current.caseStatus;
+    const erpReady = decision === 'WON' && await erpProjectSyncSchema(env);
+    const erpSyncId = erpReady ? crypto.randomUUID() : '';
+    const erpPayloadJson = erpReady ? JSON.stringify(erpProjectPayload(current,user,decidedAt)) : '';
+    const erpPayloadSha256 = erpReady ? await sha256Hex(erpPayloadJson) : '';
     const awardStatements:D1StatementLike[] = [
       env.DB.prepare('INSERT INTO preview_award_decisions (id,proposal_link_id,case_id,decision,decision_note,decided_at,contract_amount_krw,project_start_on,project_end_on,expected_link_version,request_key,request_fingerprint,decided_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
         .bind(crypto.randomUUID(),current.id,current.caseId,decision,decisionNote,decidedAt,contractAmountKrw,projectStartOn,projectEndOn,expectedLinkVersion,requestKey,fingerprint,user.id,now),
@@ -1271,25 +1357,55 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
       env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'AWARD_DECIDED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id=? AND version=? AND updated_at=?)')
         .bind(crypto.randomUUID(),current.caseId,user.id,decision === 'WON' ? '수주 확정' : '미수주 결정',decisionNote,now,current.caseId,expectedCaseVersion+1,now)
     ];
-    if (scheduleReady && responsiblePm) {
-      awardStatements.push(
-        env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) VALUES (?,?,?,?)')
-          .bind(current.caseId,responsiblePm.id,user.id,now)
-      );
-      if (!existingProfile) awardStatements.push(
-        env.DB.prepare('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?)')
-          .bind(current.caseId,PREVIEW_ORGANIZATION_ID,responsiblePm.id,user.id,now,now)
-      );
-    }
+    if (erpReady) awardStatements.push(
+      env.DB.prepare("INSERT INTO preview_erp_project_syncs (id,organization_id,case_id,proposal_link_id,event_kind,status,payload_json,payload_sha256,attempts,created_by,created_at,updated_at) VALUES (?,?,?,?,'PROJECT_AWARDED','PENDING',?,?,0,?,?,?)")
+        .bind(erpSyncId,PREVIEW_ORGANIZATION_ID,current.caseId,current.id,erpPayloadJson,erpPayloadSha256,user.id,now,now)
+    );
     await env.DB.batch(awardStatements);
     const canonical = await env.DB.prepare('SELECT award_status AS awardStatus,version FROM preview_proposal_links WHERE id=?').bind(current.id).first<{awardStatus:string;version:number}>();
     const canonicalCase = await env.DB.prepare('SELECT version FROM preview_cases WHERE id=?').bind(current.caseId).first<{version:number}>();
-    const canonicalProfile = scheduleReady ? await env.DB.prepare('SELECT responsible_pm_id AS responsiblePmId FROM preview_project_schedule_profiles WHERE case_id=?').bind(current.caseId).first<{responsiblePmId:string}>() : null;
-    if (canonical?.awardStatus !== decision || Number(canonical.version) !== expectedLinkVersion + 1 || Number(canonicalCase?.version) !== expectedCaseVersion + 1 || (scheduleReady && canonicalProfile?.responsiblePmId !== responsiblePm?.id)) return json({ error: 'Concurrent award update detected', code: 'VERSION_CONFLICT' }, 409);
-    return previewProposalDetail(env,user,current.id);
+    if (canonical?.awardStatus !== decision || Number(canonical.version) !== expectedLinkVersion + 1 || Number(canonicalCase?.version) !== expectedCaseVersion + 1) return json({ error: 'Concurrent award update detected', code: 'VERSION_CONFLICT' }, 409);
+    const detailResponse = await previewProposalDetail(env,user,current.id);
+    if (decision !== 'WON') return detailResponse;
+    const detail = await detailResponse.json() as Record<string,unknown>;
+    const erpSync = erpReady ? await dispatchErpProjectSync(env,erpSyncId) : { status:'PENDING',configured:false,erpProjectId:null,errorCode:'ERP_BRIDGE_SCHEMA_NOT_READY' } satisfies ErpSyncProjection;
+    return json({ ...detail, erpSync, phase:'CF53_RECEPTION_ERP_BRIDGE' });
   }
 
   return json({ error: 'Proposal workflow route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
+}
+
+async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error:'D1 database is not bound',code:'D1_NOT_CONFIGURED' },503);
+  const user=await previewSessionUser(request,env); if(!user)return json({error:'Login is required',code:'AUTH_REQUIRED'},401);
+  const actionMatch=url.pathname.match(/^\/api\/proposal-catalog\/([0-9a-f-]{36})$/iu);
+  if(url.pathname==='/api/proposal-catalog'&&request.method==='GET'){
+    const mode=url.searchParams.get('mode')==='database'?'database':'projects';
+    if(mode==='database'&&!user.roles.includes('admin'))return json({error:'관리자만 제안서 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN'},403);
+    const q=(url.searchParams.get('q')??'').trim().slice(0,120);const award=url.searchParams.get('awardStatus')??'';const like=`%${q}%`;const admin=user.roles.includes('admin')?1:0;
+    const rows=await env.DB.prepare(
+      'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,p.proposal_number AS proposalNumber,p.proposal_title AS proposalTitle,p.revision_label AS revisionLabel,p.client_name AS clientName,p.sent_at AS sentAt,p.response_due_on AS responseDueOn,p.proposed_amount_krw AS proposedAmountKrw,p.document_url AS documentUrl,p.document_sha256 AS documentSha256,p.verification_status AS verificationStatus,p.award_status AS awardStatus,p.award_decided_at AS awardDecidedAt,p.contract_amount_krw AS contractAmountKrw,p.project_start_on AS projectStartOn,p.project_end_on AS projectEndOn,p.version,creator.display_name AS createdByName,p.created_at AS createdAt,p.updated_at AS updatedAt,COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,cr.drive_archive_url AS driveArchiveUrl,cr.drive_archived_at AS driveArchivedAt '+
+      'FROM preview_proposal_links p JOIN preview_cases c ON c.id=p.case_id JOIN preview_users creator ON creator.id=p.created_by LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'PROPOSAL\' AND cr.record_id=p.id WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) AND COALESCE(cr.db_deleted,0)=0 '+
+      `${mode==='projects'?'AND COALESCE(cr.list_hidden,0)=0 ':''}`+'AND (?=\'\' OR p.award_status=?) AND (?=\'\' OR p.proposal_number LIKE ? OR p.proposal_title LIKE ? OR p.client_name LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ORDER BY p.sent_at DESC LIMIT 200'
+    ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,award,award,q,like,like,like,like,like).all<Record<string,unknown>>();
+    return json({proposals:rows.results.map((row)=>proposalProjection(row as unknown as PreviewProposalRow)).map((row,index)=>({...row,listHidden:Boolean(rows.results[index].listHidden),dbDeleted:Boolean(rows.results[index].dbDeleted),catalogVersion:Number(rows.results[index].catalogVersion??0),driveArchiveUrl:rows.results[index].driveArchiveUrl??null,driveArchivedAt:rows.results[index].driveArchivedAt??null})),mode,phase:'CF52_PROPOSAL_CATALOG'});
+  }
+  if(!actionMatch||request.method!=='POST')return json({error:'Proposal catalog route was not found',code:'PROPOSAL_CATALOG_NOT_FOUND'},404);
+  if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
+  const row=await env.DB.prepare('SELECT p.id,p.case_id AS caseId,p.proposal_number AS proposalNumber,p.proposal_title AS proposalTitle,p.revision_label AS revisionLabel,p.client_name AS clientName,p.sent_at AS sentAt,p.document_url AS documentUrl,p.document_sha256 AS documentSha256,p.verification_status AS verificationStatus,p.award_status AS awardStatus,c.case_number AS caseNumber,c.title AS caseTitle FROM preview_proposal_links p JOIN preview_cases c ON c.id=p.case_id WHERE p.id=? AND p.organization_id=?').bind(actionMatch[1],PREVIEW_ORGANIZATION_ID).first<Record<string,unknown>>();
+  if(!row||!await accessiblePreviewCase(env,user,String(row.caseId)))return json({error:'제안서를 찾을 수 없습니다.',code:'PROPOSAL_NOT_FOUND'},404);
+  const body=await request.json().catch(()=>null) as Record<string,unknown>|null;const action=typeof body?.action==='string'?body.action:'';const expectedVersion=Number(body?.expectedVersion);
+  if(!body||!exactObjectKeys(body,['action','expectedVersion'])||!['HIDE_FROM_LIST','RESTORE_TO_LIST','ARCHIVE_TO_DRIVE','ADMIN_DELETE'].includes(action)||!Number.isInteger(expectedVersion)||expectedVersion<0)return json({error:'제안서 목록/DB 작업 요청이 올바르지 않습니다.',code:'INVALID_CATALOG_ACTION'},400);
+  if(!canMutatePreviewCases(user))return json({error:'제안서 목록을 변경할 권한이 없습니다.',code:'FORBIDDEN'},403);
+  if(['ARCHIVE_TO_DRIVE','ADMIN_DELETE'].includes(action)&&!user.roles.includes('admin'))return json({error:'Drive 보관과 DB 삭제는 관리자만 가능합니다.',code:'FORBIDDEN'},403);
+  const current=await previewCatalogRecord(env,'PROPOSAL',actionMatch[1]);if(Number(current?.version??0)!==expectedVersion)return json({error:'다른 화면에서 먼저 변경되었습니다.',code:'VERSION_CONFLICT'},409);
+  let driveFileId=current?.driveArchiveFileId??null,driveUrl=current?.driveArchiveUrl??null,archivedAt=current?.driveArchivedAt??null;
+  if(action==='ARCHIVE_TO_DRIVE')try{const token=await accessToken(env);const now=new Date().toISOString();const caseId=String(row.caseId);const root=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'PROJECT_ROOT',period:'',name:`${row.caseNumber} ${row.caseTitle}`});const folder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'PROPOSAL_DB_ARCHIVE',period:'',name:'제안서 DB 보관',parentId:root.id});const snapshot=JSON.stringify({schema:'CLAIM_CENTER_PROPOSAL_ARCHIVE_V1',archivedAt:now,archivedBy:{id:user.id,name:user.displayName},proposal:row},null,2);const bytes=new TextEncoder().encode(snapshot);const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:folder.id,evidenceId:crypto.randomUUID(),fileName:`${row.caseNumber}_${row.proposalNumber}_${now.slice(0,10)}.json`,mimeType:'application/json',sha256:await sha256Hex(snapshot),bytes,caseId,category:'PROPOSAL_DB_ARCHIVE',uploadedById:user.id,uploadedAt:now});driveFileId=uploaded.fileId;driveUrl=uploaded.webViewLink;archivedAt=now;}catch(reason){return googleFailure(reason);}
+  const now=new Date(Math.max(Date.now(),Date.parse(current?.updatedAt??'1970-01-01')+1)).toISOString();const nextHidden=action==='HIDE_FROM_LIST'?1:action==='RESTORE_TO_LIST'?0:Number(current?.listHidden??0);const nextDeleted=action==='ADMIN_DELETE'?1:Number(current?.dbDeleted??0);const nextVersion=expectedVersion+1;
+  const write=current?env.DB.prepare('UPDATE preview_catalog_records SET list_hidden=?,db_deleted=?,drive_archive_file_id=?,drive_archive_url=?,drive_archived_at=?,drive_archived_by=?,version=version+1,updated_by=?,updated_at=? WHERE record_kind=\'PROPOSAL\' AND record_id=? AND version=?').bind(nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:current.driveArchivedBy,user.id,now,actionMatch[1],expectedVersion):env.DB.prepare('INSERT INTO preview_catalog_records (record_kind,record_id,organization_id,list_hidden,db_deleted,drive_archive_file_id,drive_archive_url,drive_archived_at,drive_archived_by,version,updated_by,created_at,updated_at) SELECT \'PROPOSAL\',?,?,?, ?,?,?,?,?,1,?,?,? WHERE ?=0').bind(actionMatch[1],PREVIEW_ORGANIZATION_ID,nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:null,user.id,now,now,expectedVersion);
+  const results=await env.DB.batch([write,env.DB.prepare('INSERT INTO preview_catalog_actions (id,record_kind,record_id,action_code,detail_json,actor_id,created_at) SELECT ?,\'PROPOSAL\',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_catalog_records WHERE record_kind=\'PROPOSAL\' AND record_id=? AND version=?)').bind(crypto.randomUUID(),actionMatch[1],action,JSON.stringify({driveFileId,driveUrl}),user.id,now,actionMatch[1],nextVersion)]) as Array<{meta?:{changes?:number}}>;
+  if(results.some((entry)=>entry.meta?.changes!==1))return json({error:'제안서 원장이 동시에 변경되었습니다.',code:'VERSION_CONFLICT'},409);
+  return json({catalog:previewCatalogProjection({...await previewCatalogRecord(env,'PROPOSAL',actionMatch[1]) as unknown as Record<string,unknown>}),action,phase:'CF52_PROPOSAL_CATALOG'});
 }
 
 const LITIGATION_STAGES = new Set(['FILED', 'PLEADING', 'APPRAISAL', 'HEARING', 'JUDGEMENT', 'APPEAL', 'CLOSED']);
@@ -2363,7 +2479,8 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
       (SELECT r.status FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewStatus,
       (SELECT COALESCE(r.reviewed_at,r.requested_at) FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewAt,
       (SELECT f.finalized_at FROM preview_report_finalizations f WHERE f.case_id=c.id ORDER BY f.finalized_at DESC LIMIT 1) AS finalizedAt
-    FROM preview_cases c WHERE c.organization_id=? AND c.deleted_at IS NULL
+    FROM preview_cases c WHERE c.organization_id=? AND c.deleted_at IS NULL AND c.status='CONTRACT'
+      AND EXISTS (SELECT 1 FROM preview_proposal_links accepted WHERE accepted.case_id=c.id AND accepted.organization_id=c.organization_id AND accepted.award_status='WON')
       AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments x WHERE x.case_id=c.id AND x.user_id=?))
     ORDER BY c.updated_at DESC LIMIT 100`
   ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<RealWorkflowScheduleRow>();
@@ -2474,6 +2591,7 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   if (!await projectScheduleSchema(env)) return json({ error: 'Project schedule migration is required', code: 'D1_MIGRATION_REQUIRED' }, 503);
   const profileMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/profile$/iu);
+  const erpSyncMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/erp-sync$/iu);
   const stageMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/stages\/(KICKOFF|SITE_SURVEY|TAKEOFF_COST|REPORT_WRITING)$/u);
   const requestMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/change-requests$/iu);
   const decisionMatch = url.pathname.match(/^\/api\/project-workflow\/change-requests\/([0-9a-f-]{36})\/decision$/iu);
@@ -2490,13 +2608,22 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     return json({ users: rows.results, phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
   }
 
-  const caseId = profileMatch?.[1] ?? stageMatch?.[1] ?? requestMatch?.[1] ?? '';
+  const caseId = profileMatch?.[1] ?? erpSyncMatch?.[1] ?? stageMatch?.[1] ?? requestMatch?.[1] ?? '';
   const caseRow = caseId ? await accessiblePreviewCase(env,user,caseId) : null;
   if (caseId && !caseRow) return json({ error: 'Project was not found or is outside your assignment', code: 'CASE_NOT_FOUND' }, 404);
   const profileFor = async (targetCaseId: string) => env.DB?.prepare(
     'SELECT p.responsible_pm_id AS responsiblePmId,p.version,p.updated_at AS updatedAt,u.display_name AS responsiblePmName FROM preview_project_schedule_profiles p JOIN preview_users u ON u.id=p.responsible_pm_id WHERE p.case_id=? AND p.organization_id=?'
   ).bind(targetCaseId,PREVIEW_ORGANIZATION_ID).first<{ responsiblePmId: string; responsiblePmName: string; version: number; updatedAt: string }>();
   const canManage = (profile: { responsiblePmId: string } | null | undefined) => user.roles.includes('admin') || profile?.responsiblePmId === user.id;
+
+  if (erpSyncMatch && request.method === 'POST') {
+    if (!canMutatePreviewCases(user)) return json({ error:'Role cannot retry ERP project registration',code:'FORBIDDEN' },403);
+    if (!await erpProjectSyncSchema(env)) return json({ error:'ERP project bridge migration is required',code:'D1_MIGRATION_REQUIRED' },503);
+    const sync = await env.DB.prepare('SELECT id FROM preview_erp_project_syncs WHERE case_id=? AND organization_id=?')
+      .bind(caseId,PREVIEW_ORGANIZATION_ID).first<{ id:string }>();
+    if (!sync) return json({ error:'ERP project registration record was not found',code:'ERP_SYNC_NOT_FOUND' },404);
+    return json({ erpSync:await dispatchErpProjectSync(env,sync.id),phase:'CF53_RECEPTION_ERP_RETRY' });
+  }
 
   if (profileMatch && request.method === 'PUT') {
     if (!user.roles.some((role) => ['admin','ceo','director','pm'].includes(role))) return json({ error: 'Role cannot assign a responsible PM', code: 'FORBIDDEN' }, 403);
@@ -2588,10 +2715,92 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
   return json({ error:'Project workflow management route was not found',code:'PROJECT_WORKFLOW_ROUTE_NOT_FOUND' },404);
 }
 
+interface PreviewCatalogRecordRow {
+  listHidden: number; dbDeleted: number; driveArchiveFileId: string | null; driveArchiveUrl: string | null;
+  driveArchivedAt: string | null; driveArchivedBy: string | null; version: number; updatedAt: string | null;
+}
+
+async function previewCatalogRecord(env: CloudflareEnv, kind: 'INTAKE' | 'PROPOSAL', recordId: string): Promise<PreviewCatalogRecordRow | null> {
+  if (!env.DB) return null;
+  return env.DB.prepare('SELECT list_hidden AS listHidden,db_deleted AS dbDeleted,drive_archive_file_id AS driveArchiveFileId,drive_archive_url AS driveArchiveUrl,drive_archived_at AS driveArchivedAt,drive_archived_by AS driveArchivedBy,version,updated_at AS updatedAt FROM preview_catalog_records WHERE record_kind=? AND record_id=? AND organization_id=?')
+    .bind(kind,recordId,PREVIEW_ORGANIZATION_ID).first<PreviewCatalogRecordRow>().catch(() => null);
+}
+
+function previewCatalogProjection(row: Record<string, unknown>): Record<string, unknown> {
+  return { ...row, version:Number(row.version), catalogVersion:Number(row.catalogVersion ?? 0), listHidden:Boolean(row.listHidden), dbDeleted:Boolean(row.dbDeleted) };
+}
+
+async function handlePreviewIntakeCatalog(request: Request, env: CloudflareEnv, url: URL, user: SessionUser): Promise<Response> {
+  if (!env.DB) return json({ error:'D1 database is not bound',code:'D1_NOT_CONFIGURED' },503);
+  if (request.method !== 'GET') return json({ error:'Method not allowed',code:'METHOD_NOT_ALLOWED' },405);
+  const mode = url.searchParams.get('mode') === 'database' ? 'database' : 'projects';
+  if (mode === 'database' && !user.roles.includes('admin')) return json({ error:'관리자만 프로젝트 의뢰 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN' },403);
+  const q = (url.searchParams.get('q') ?? '').trim().slice(0,120);
+  const like = `%${q.replaceAll('%','\\%').replaceAll('_','\\_')}%`;
+  const admin = user.roles.includes('admin') ? 1 : 0;
+  const rows = await env.DB.prepare(
+    'SELECT c.id,c.case_number AS caseNumber,c.title,c.description,c.claim_type AS claimType,c.status,c.version,c.client_legal_position AS clientLegalPosition,c.client_position_detail AS clientPositionDetail,'+
+    'c.created_at AS createdAt,c.updated_at AS updatedAt,u.display_name AS createdByName,COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,'+
+    'cr.drive_archive_file_id AS driveArchiveFileId,cr.drive_archive_url AS driveArchiveUrl,cr.drive_archived_at AS driveArchivedAt,archiver.display_name AS driveArchivedByName '+
+    'FROM preview_cases c JOIN preview_users u ON u.id=c.created_by LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'INTAKE\' AND cr.record_id=c.id LEFT JOIN preview_users archiver ON archiver.id=cr.drive_archived_by '+
+    'WHERE c.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) '+
+    `AND COALESCE(cr.db_deleted,0)=0 ${mode === 'projects' ? 'AND COALESCE(cr.list_hidden,0)=0 ' : ''}`+
+    'AND (?=\'\' OR c.case_number LIKE ? ESCAPE \'\\\' OR c.title LIKE ? ESCAPE \'\\\' OR COALESCE(c.description,\'\') LIKE ? ESCAPE \'\\\') ORDER BY c.updated_at DESC LIMIT 200'
+  ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,q,like,like,like).all<Record<string,unknown>>();
+  return json({ intakes:rows.results.map(previewCatalogProjection), mode, phase:'CF52_INTAKE_CATALOG' });
+}
+
+async function handlePreviewIntakeCatalogAction(request: Request, env: CloudflareEnv, user: SessionUser, caseId: string): Promise<Response> {
+  if (!env.DB || !env.DB.batch) return json({ error:'D1 database is not bound',code:'D1_NOT_CONFIGURED' },503);
+  if (request.method !== 'POST') return json({ error:'Method not allowed',code:'METHOD_NOT_ALLOWED' },405);
+  const caseRow = await accessiblePreviewCase(env,user,caseId);
+  if (!caseRow) return json({ error:'프로젝트 의뢰를 찾을 수 없습니다.',code:'CASE_NOT_FOUND' },404);
+  const body = await request.json().catch(() => null) as Record<string,unknown> | null;
+  const action = typeof body?.action === 'string' ? body.action : '';
+  const expectedVersion = Number(body?.expectedVersion);
+  if (!body || !exactObjectKeys(body,['action','expectedVersion']) || !['HIDE_FROM_LIST','RESTORE_TO_LIST','ARCHIVE_TO_DRIVE','ADMIN_DELETE'].includes(action) || !Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error:'목록/DB 작업 요청이 올바르지 않습니다.',code:'INVALID_CATALOG_ACTION' },400);
+  if (!canMutatePreviewCases(user)) return json({ error:'프로젝트 의뢰 목록을 변경할 권한이 없습니다.',code:'FORBIDDEN' },403);
+  if (['ARCHIVE_TO_DRIVE','ADMIN_DELETE'].includes(action) && !user.roles.includes('admin')) return json({ error:'Drive 보관과 DB 삭제는 관리자만 가능합니다.',code:'FORBIDDEN' },403);
+  const current = await previewCatalogRecord(env,'INTAKE',caseId);
+  if (Number(current?.version ?? 0) !== expectedVersion) return json({ error:'다른 화면에서 먼저 변경되었습니다. 새로고침해 주세요.',code:'VERSION_CONFLICT',currentVersion:Number(current?.version ?? 0) },409);
+  let driveFileId = current?.driveArchiveFileId ?? null;
+  let driveUrl = current?.driveArchiveUrl ?? null;
+  let archivedAt = current?.driveArchivedAt ?? null;
+  if (action === 'ARCHIVE_TO_DRIVE') {
+    try {
+      const token = await accessToken(env);
+      const now = new Date().toISOString();
+      const root = await ensureClaimCenterFolder(googleFetch(env),{ accessToken:token,caseId,kind:'PROJECT_ROOT',period:'',name:`${caseRow.caseNumber} ${caseRow.title}` });
+      const folder = await ensureClaimCenterFolder(googleFetch(env),{ accessToken:token,caseId,kind:'INTAKE_DB_ARCHIVE',period:'',name:'프로젝트 의뢰 DB 보관',parentId:root.id });
+      const snapshot = JSON.stringify({ schema:'CLAIM_CENTER_INTAKE_ARCHIVE_V1',archivedAt:now,archivedBy:{ id:user.id,name:user.displayName },intake:previewCaseProjection(caseRow) },null,2);
+      const bytes = new TextEncoder().encode(snapshot); const sha = await sha256Hex(snapshot); const evidenceId = crypto.randomUUID();
+      const uploaded = await uploadEvidenceToDrive(googleFetch(env),{ accessToken:token,folderId:folder.id,evidenceId,fileName:`${caseRow.caseNumber}_프로젝트의뢰_${now.slice(0,10)}.json`,mimeType:'application/json',sha256:sha,bytes,caseId,category:'INTAKE_DB_ARCHIVE',uploadedById:user.id,uploadedAt:now });
+      driveFileId=uploaded.fileId; driveUrl=uploaded.webViewLink; archivedAt=now;
+    } catch (reason) { return googleFailure(reason); }
+  }
+  const now = new Date(Math.max(Date.now(),Date.parse(current?.updatedAt ?? '1970-01-01')+1)).toISOString();
+  const nextHidden = action === 'HIDE_FROM_LIST' ? 1 : action === 'RESTORE_TO_LIST' ? 0 : Number(current?.listHidden ?? 0);
+  const nextDeleted = action === 'ADMIN_DELETE' ? 1 : Number(current?.dbDeleted ?? 0);
+  const nextVersion = expectedVersion+1;
+  const write = current
+    ? env.DB.prepare('UPDATE preview_catalog_records SET list_hidden=?,db_deleted=?,drive_archive_file_id=?,drive_archive_url=?,drive_archived_at=?,drive_archived_by=?,version=version+1,updated_by=?,updated_at=? WHERE record_kind=\'INTAKE\' AND record_id=? AND version=?').bind(nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:current.driveArchivedBy,user.id,now,caseId,expectedVersion)
+    : env.DB.prepare('INSERT INTO preview_catalog_records (record_kind,record_id,organization_id,list_hidden,db_deleted,drive_archive_file_id,drive_archive_url,drive_archived_at,drive_archived_by,version,updated_by,created_at,updated_at) SELECT \'INTAKE\',?,?,?, ?,?,?,?,?,1,?,?,? WHERE ?=0').bind(caseId,PREVIEW_ORGANIZATION_ID,nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:null,user.id,now,now,expectedVersion);
+  const results = await env.DB.batch([
+    write,
+    env.DB.prepare('INSERT INTO preview_catalog_actions (id,record_kind,record_id,action_code,detail_json,actor_id,created_at) SELECT ?,\'INTAKE\',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_catalog_records WHERE record_kind=\'INTAKE\' AND record_id=? AND version=?)').bind(crypto.randomUUID(),caseId,action,JSON.stringify({ driveFileId,driveUrl }),user.id,now,caseId,nextVersion),
+    env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'INTAKE_CATALOG_CHANGED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_catalog_records WHERE record_kind=\'INTAKE\' AND record_id=? AND version=?)').bind(crypto.randomUUID(),caseId,user.id,'프로젝트 의뢰 목록·DB 관리',action,now,caseId,nextVersion)
+  ]) as Array<{meta?:{changes?:number}}>;
+  if (results.some((entry)=>entry.meta?.changes!==1)) return json({ error:'프로젝트 의뢰 원장이 동시에 변경되었습니다.',code:'VERSION_CONFLICT' },409);
+  return json({ catalog:previewCatalogProjection({ ...(await previewCatalogRecord(env,'INTAKE',caseId) as unknown as Record<string,unknown>) }), action, phase:'CF52_INTAKE_CATALOG' });
+}
+
 async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  if (url.pathname === '/api/cases/catalog') return handlePreviewIntakeCatalog(request, env, url, user);
+  const catalogActionPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/catalog$/iu);
+  if (catalogActionPath) return handlePreviewIntakeCatalogAction(request, env, user, catalogActionPath[1]);
   if(url.pathname==='/api/cases/intake-source/draft')return handlePreviewIntakeDraft(request,env,user);
   const intakeSourcePath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/(?:intake-source|intake-audio)$/iu);
   if(intakeSourcePath)return handlePreviewIntakeSource(request,env,user,intakeSourcePath[1]);
@@ -3994,6 +4203,85 @@ async function previewTutorialCompletionActionSchema(env: CloudflareEnv): Promis
   }
 }
 
+interface PreviewHermesBridgeRow {
+  baseUrl: string;
+  keyId: string;
+  encryptedHmacKey: string;
+  iv: string;
+  version: number;
+  updatedAt: string;
+}
+
+function previewHermesBridgeAad(): string {
+  return `claim-center:hermes-private-bridge:v1:${PREVIEW_ORGANIZATION_ID}`;
+}
+
+async function previewHermesBridgeRow(env: CloudflareEnv): Promise<PreviewHermesBridgeRow | null> {
+  if (!env.DB) return null;
+  return env.DB.prepare(
+    'SELECT base_url AS baseUrl,key_id AS keyId,encrypted_hmac_key AS encryptedHmacKey,iv,version,updated_at AS updatedAt FROM preview_hermes_bridge_settings WHERE organization_id=?'
+  ).bind(PREVIEW_ORGANIZATION_ID).first<PreviewHermesBridgeRow>().catch(() => null);
+}
+
+async function previewHermesBridgeCredential(env: CloudflareEnv): Promise<MemoryBridgeCredential | null> {
+  const row = await previewHermesBridgeRow(env);
+  const masterKey = previewAiMasterKey(env);
+  if (!row || !masterKey) return null;
+  const hmacKey = await decryptSecret(row.encryptedHmacKey, row.iv, masterKey, previewHermesBridgeAad());
+  if (!hmacKey || hmacKey.length < 32) return null;
+  return { baseUrl: row.baseUrl, keyId: row.keyId, hmacKey };
+}
+
+function previewHermesBridgePublic(row: PreviewHermesBridgeRow | null, env: CloudflareEnv): Record<string, unknown> {
+  return {
+    configured: Boolean(row && previewAiMasterKey(env)),
+    baseUrl: row?.baseUrl ?? '',
+    keyId: row?.keyId ?? '',
+    version: Number(row?.version ?? 0),
+    updatedAt: row?.updatedAt ?? null,
+    secretStored: Boolean(row?.encryptedHmacKey),
+    status: row ? 'CONFIGURED_NOT_YET_TESTED' : 'NOT_CONFIGURED'
+  };
+}
+
+async function handlePreviewHermesBridgeSettings(request: Request, env: CloudflareEnv, user: SessionUser, url: URL): Promise<Response> {
+  if (!env.DB || !env.DB.batch) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
+  const current = await previewHermesBridgeRow(env);
+  if (url.pathname === '/api/settings/hermes-bridge' && request.method === 'GET') {
+    return json({ bridge: previewHermesBridgePublic(current, env), phase: 'CF52_HERMES_PRIVATE_BRIDGE' });
+  }
+  if (url.pathname === '/api/settings/hermes-bridge/test' && request.method === 'POST') {
+    const credential = await previewHermesBridgeCredential(env);
+    if (!credential) return json({ error: 'Hermes Bridge 주소와 공유키를 먼저 암호화 저장하세요.', code: 'HERMES_BRIDGE_NOT_CONFIGURED' }, 409);
+    try {
+      const health = await checkMemoryBridge(env.HERMES_TEST_FETCH ?? fetch, credential);
+      return json({ bridge: { ...previewHermesBridgePublic(current, env), status: 'CONNECTED' }, health, checkedAt: new Date().toISOString(), phase: 'CF52_HERMES_PRIVATE_BRIDGE' });
+    } catch {
+      return json({ error: 'Hermes Private Bridge에 연결하지 못했습니다. 서버·Cloudflare Tunnel·HMAC 키를 확인하세요.', code: 'HERMES_BRIDGE_UNAVAILABLE' }, 503);
+    }
+  }
+  if (url.pathname !== '/api/settings/hermes-bridge' || request.method !== 'PUT') return json({ error: 'Hermes Bridge settings route was not found', code: 'HERMES_ROUTE_NOT_FOUND' }, 404);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  const baseUrl = typeof body?.baseUrl === 'string' ? normalizeMemoryBridgeBaseUrl(body.baseUrl) : null;
+  const keyId = typeof body?.keyId === 'string' ? body.keyId.trim() : '';
+  const hmacKey = typeof body?.hmacKey === 'string' ? body.hmacKey.trim() : '';
+  const expectedVersion = Number(body?.expectedVersion);
+  if (!body || !exactObjectKeys(body, ['baseUrl','keyId','hmacKey','expectedVersion']) || !baseUrl || !/^[A-Za-z0-9._:-]{3,80}$/u.test(keyId) || hmacKey.length < 32 || hmacKey.length > 512 || /[\u0000-\u001f\u007f]/u.test(hmacKey) || !Number.isInteger(expectedVersion) || expectedVersion !== Number(current?.version ?? 0)) {
+    return json({ error: 'HTTPS 주소, Key ID, 32자 이상의 HMAC 공유키, 최신 버전을 확인하세요.', code: 'INVALID_HERMES_BRIDGE_SETTINGS' }, expectedVersion !== Number(current?.version ?? 0) ? 409 : 400);
+  }
+  const masterKey = previewAiMasterKey(env);
+  if (!masterKey) return json({ error: '서버 암호화 Master Key가 준비되지 않았습니다.', code: 'CREDENTIAL_MASTER_KEY_REQUIRED' }, 503);
+  const encrypted = await encryptSecret(hmacKey, masterKey, previewHermesBridgeAad());
+  const now = new Date(Math.max(Date.now(), Date.parse(current?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+  const write = current
+    ? env.DB.prepare('UPDATE preview_hermes_bridge_settings SET base_url=?,key_id=?,encrypted_hmac_key=?,iv=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND version=?').bind(baseUrl,keyId,encrypted.ciphertextHex,encrypted.ivHex,user.id,now,PREVIEW_ORGANIZATION_ID,expectedVersion)
+    : env.DB.prepare('INSERT INTO preview_hermes_bridge_settings (organization_id,base_url,key_id,encrypted_hmac_key,iv,version,updated_by,created_at,updated_at) SELECT ?,?,?,?,?,1,?,?,? WHERE ?=0').bind(PREVIEW_ORGANIZATION_ID,baseUrl,keyId,encrypted.ciphertextHex,encrypted.ivHex,user.id,now,now,expectedVersion);
+  const result = await write.run();
+  if (result.meta?.changes !== 1) return json({ error: '다른 화면에서 Hermes 설정이 먼저 변경되었습니다.', code: 'VERSION_CONFLICT' }, 409);
+  return json({ bridge: previewHermesBridgePublic(await previewHermesBridgeRow(env), env), phase: 'CF52_HERMES_PRIVATE_BRIDGE' });
+}
+
 function previewTutorialApiProjection(state: PreviewTutorialStateProjection, includeAction: boolean): Record<string, unknown> {
   if (includeAction) return { ...state };
   const { completionAction: _completionAction, ...legacy } = state;
@@ -4005,6 +4293,10 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+  if (url.pathname === '/api/settings/hermes-bridge' || url.pathname === '/api/settings/hermes-bridge/test') {
+    return handlePreviewHermesBridgeSettings(request, env, user, url);
+  }
 
   if (url.pathname === '/api/settings/tutorial') {
     if (request.method === 'GET') {
@@ -4225,7 +4517,7 @@ async function previewReportMemoryContext(
   caseRow: PreviewCaseRow,
   chapterCode: string,
   userId: string
-): Promise<{ enabled: boolean; engineCode: 'D1_HERMES_COMPATIBLE_V2'; shortTerm: Record<string, unknown>; shortTermItems: number; longTermRules: PreviewMemoryRuleRow[] }> {
+): Promise<{ enabled: boolean; engineCode: 'D1_HERMES_COMPATIBLE_V2' | 'HERMES_PRIVATE_BRIDGE_V1'; shortTerm: Record<string, unknown>; shortTermItems: number; longTermRules: PreviewMemoryRuleRow[] }> {
   const policy = await previewWorkspaceSettings(env).catch(() => defaultPreviewWorkspaceSettings());
   if (policy.memoryProvider !== 'HERMES_AGENT' || policy.memoryApprovalMode !== 'ADMIN_REVIEW' || (!policy.shortTermMemoryEnabled && !policy.longTermMemoryEnabled)) {
     return { enabled: false, engineCode: 'D1_HERMES_COMPATIBLE_V2', shortTerm: {}, shortTermItems: 0, longTermRules: [] };
@@ -4253,7 +4545,29 @@ async function previewReportMemoryContext(
     ).bind(PREVIEW_ORGANIZATION_ID, PREVIEW_ORGANIZATION_ID, `${caseRow.claimType}:REPORT`, caseRow.claimType, `${caseRow.claimType}:${chapterCode}`, userId).all<PreviewMemoryRuleRow>().catch(() => ({ results: [] }));
     longTermRules = rows.results.map((row) => ({ ...row, confidence: Number(row.confidence) }));
   }
-  return { enabled: true, engineCode: 'D1_HERMES_COMPATIBLE_V2', shortTerm, shortTermItems, longTermRules };
+  let engineCode: 'D1_HERMES_COMPATIBLE_V2' | 'HERMES_PRIVATE_BRIDGE_V1' = 'D1_HERMES_COMPATIBLE_V2';
+  if (policy.localAiMode === 'PRIVATE_SERVER_BRIDGE' && longTermRules.length) {
+    const credential = await previewHermesBridgeCredential(env).catch(() => null);
+    if (credential) {
+      try {
+        const rankedIds = await rankMemoryRules(env.HERMES_TEST_FETCH ?? fetch, credential, {
+          organizationId: PREVIEW_ORGANIZATION_ID,
+          userId,
+          caseId: caseRow.id,
+          claimType: caseRow.claimType,
+          chapterCode
+        }, longTermRules);
+        const byId = new Map(longTermRules.map((rule) => [rule.id, rule]));
+        const ranked = rankedIds.map((id) => byId.get(id)).filter((rule): rule is PreviewMemoryRuleRow => Boolean(rule));
+        const rankedSet = new Set(rankedIds);
+        longTermRules = [...ranked, ...longTermRules.filter((rule) => !rankedSet.has(rule.id))].slice(0, 8);
+        engineCode = 'HERMES_PRIVATE_BRIDGE_V1';
+      } catch {
+        // The D1-approved rule set remains the fail-closed fallback.
+      }
+    }
+  }
+  return { enabled: true, engineCode, shortTerm, shortTermItems, longTermRules };
 }
 
 async function previewMemoryCandidates(env: CloudflareEnv): Promise<Array<Record<string, unknown>>> {
@@ -4407,8 +4721,8 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       outlineAiConnected: Boolean(outlineCredential),
       outlineProviderLabel: outlineRoute?.providerKind ?? 'OPENAI',
       outlineModelLabel: outlineRoute?.modelCode ?? 'gpt-5.6',
-      assistantConnected: Boolean(personalGeminiCredential),
-      assistantCredentialSource: personalGeminiCredential ? 'PERSONAL' : 'NONE',
+      assistantConnected: Boolean(await resolvePreviewAiCredential(env, user.id, 'GEMINI')),
+      assistantCredentialSource: personalGeminiCredential ? 'PERSONAL' : (await resolvePreviewAiCredential(env, user.id, 'GEMINI'))?.source ?? 'NONE',
       assistantProviderLabel: 'GEMINI',
       assistantModelLabel: assistantRoute.modelCode,
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
@@ -4587,8 +4901,8 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (Number(draft?.version ?? 0) !== Number(body.expectedDraftVersion)) return json({ error: 'Report draft changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(draft?.version ?? 0) }, 409);
     const routes = await previewAiRoutes(env);
     const settings = previewPersonalGeminiAssistantRoute(routes);
-    const personalGeminiCredential = await previewStoredAiCredential(env, 'GEMINI', 'USER', user.id);
-    if (!personalGeminiCredential) return json({ error: '설정에서 개인 Gemini API 키를 연결한 뒤 다시 시도해 주세요.', code: 'PERSONAL_GEMINI_NOT_CONFIGURED' }, 503);
+    const geminiCredential = await resolvePreviewAiCredential(env, user.id, 'GEMINI');
+    if (!geminiCredential) return json({ error: '설정에서 개인 또는 관리자 공용 Gemini API 키를 연결한 뒤 다시 시도해 주세요.', code: 'GEMINI_NOT_CONFIGURED' }, 503);
     const typeGuideline = (await previewTypeGuidelines(env, caseRow.claimType))[0] ?? null;
     const improved = await generatePreviewAiText(
       env,
@@ -4596,10 +4910,10 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       `당신은 건설 클레임 보고서 편집자입니다. 사용자가 준 사실·숫자·날짜·인용·근거 식별자를 추가하거나 삭제하지 마십시오. 문장 명료성, 구조, 전문 용어의 일관성만 개선하고 결과 본문만 반환하십시오.${typeGuideline ? `\n\n[관리자 승인 유형별 작성 지침]\n${typeGuideline.stage2Prompt}` : ''}`,
       `개선 요청: ${body.instruction.trim()}\n\n수정할 보고서 본문:\n${body.content}`,
       user.id,
-      personalGeminiCredential
+      geminiCredential
     );
     if (improved.response) return improved.response;
-    return json({ content: improved.content, providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: 'PERSONAL', phase: 'CF26_PERSONAL_GEMINI_ASSISTANT' });
+    return json({ content: improved.content, providerKind: settings.providerKind, modelCode: settings.modelCode, credentialSource: geminiCredential.source, phase: 'CF52_GEMINI_SELECTION_ASSISTANT' });
   }
 
   return json({ error: 'Report authoring route was not found', code: 'AUTHORING_ROUTE_NOT_FOUND' }, 404);
@@ -5638,7 +5952,7 @@ const worker = {
       return handlePreviewPasswordChange(request, env);
     }
 
-    if (url.pathname === '/api/settings/preferences' || url.pathname === '/api/settings/admin-workspace' || url.pathname === '/api/settings/tutorial') {
+    if (url.pathname === '/api/settings/preferences' || url.pathname === '/api/settings/admin-workspace' || url.pathname === '/api/settings/tutorial' || url.pathname.startsWith('/api/settings/hermes-bridge')) {
       return handlePreviewWorkspaceSettings(request, env, url);
     }
 
@@ -5652,6 +5966,9 @@ const worker = {
 
     if (url.pathname === '/api/proposal-workflow' || url.pathname.startsWith('/api/proposal-workflow/')) {
       return handlePreviewProposalWorkflow(request, env, url);
+    }
+    if (url.pathname === '/api/proposal-catalog' || url.pathname.startsWith('/api/proposal-catalog/')) {
+      return handlePreviewProposalCatalog(request, env, url);
     }
 
     if (url.pathname === '/api/project-workflow/schedule') {

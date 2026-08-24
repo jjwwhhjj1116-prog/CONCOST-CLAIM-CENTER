@@ -134,14 +134,14 @@ export function sentProposalArchiveWorkbook(rows: SentProposalExcelRow[]): Uint8
     { key: 'caseTitle', label: '프로젝트명', width: 34 },
     { key: 'proposalNumber', label: '제안서 번호', width: 20 },
     { key: 'proposalTitle', label: '제안서 제목', width: 42 },
-    { key: 'revisionLabel', label: '발송 버전', width: 14 },
+    { key: 'revisionLabel', label: '연동 버전', width: 14 },
     { key: 'clientName', label: '클라이언트', width: 24 },
-    { key: 'sentAt', label: '발송일시', width: 22 },
+    { key: 'sentAt', label: '연동일시', width: 22 },
     { key: 'responseDueOn', label: '회신기한', width: 18 },
     { key: 'proposedAmountKrw', label: '제안금액(원)', width: 18 },
     { key: 'verificationStatus', label: '원문 검증', width: 16 },
     { key: 'awardStatus', label: '수주 상태', width: 16 },
-    { key: 'documentUrl', label: '발송 원문 주소', width: 52 },
+    { key: 'documentUrl', label: '확정 원문 주소', width: 52 },
     { key: 'documentSha256', label: '원문 SHA-256', width: 68 },
     { key: 'createdByName', label: '등록자', width: 18 },
     { key: 'createdAt', label: 'DB 등록일시', width: 22 }
@@ -163,12 +163,12 @@ export function sentProposalArchiveWorkbook(rows: SentProposalExcelRow[]): Uint8
     return `<row r="${excelRow}" ht="32" customHeight="1">${values}</row>`;
   }).join('');
   const lastColumn = columnName(columns.length - 1);
-  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${widths}</cols><sheetData><row r="1" ht="30" customHeight="1">${cell('A1', '클레임센터 스튜디오 · 발송 제안서 DB 원장', '1')}</row><row r="2">${cell('A2', `내보낸 시각: ${new Date().toISOString()} · 총 ${rows.length}건`, '4')}</row><row r="3">${headers}</row>${dataRows}</sheetData><mergeCells count="2"><mergeCell ref="A1:${lastColumn}1"/><mergeCell ref="A2:${lastColumn}2"/></mergeCells><autoFilter ref="A3:${lastColumn}${Math.max(3, rows.length + 3)}"/></worksheet>`;
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols>${widths}</cols><sheetData><row r="1" ht="30" customHeight="1">${cell('A1', '클레임센터 스튜디오 · 연동 제안서 DB 원장', '1')}</row><row r="2">${cell('A2', `내보낸 시각: ${new Date().toISOString()} · 총 ${rows.length}건`, '4')}</row><row r="3">${headers}</row>${dataRows}</sheetData><mergeCells count="2"><mergeCell ref="A1:${lastColumn}1"/><mergeCell ref="A2:${lastColumn}2"/></mergeCells><autoFilter ref="A3:${lastColumn}${Math.max(3, rows.length + 3)}"/></worksheet>`;
   const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><color rgb="FF17326D"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF3155B8"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF4F7FB"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border></borders><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="1" applyFill="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>';
   return zipStore([
     { name: '[Content_Types].xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
     { name: '_rels/.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
-    { name: 'xl/workbook.xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="발송 제안서 DB" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+    { name: 'xl/workbook.xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="연동 제안서 DB" sheetId="1" r:id="rId1"/></sheets></workbook>' },
     { name: 'xl/_rels/workbook.xml.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
     { name: 'xl/styles.xml', content: styles },
     { name: 'xl/worksheets/sheet1.xml', content: worksheet }

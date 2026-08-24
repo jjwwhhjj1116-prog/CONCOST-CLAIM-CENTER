@@ -11,8 +11,8 @@ test('CF41 proposal sidebar separates authoring, sent projects and admin databas
   const shell = read('apps/web/src/layout/AppShell.tsx');
   const router = read('apps/web/src/routes/Router.tsx');
   assert.match(shell, /label: '프로젝트 제안 및 수주'/u);
-  assert.match(shell, /routeIds: \['CASE-02', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'\]/u);
-  assert.match(shell, /nestedGroups: \[\{ label: '프로젝트 제안서'.*routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\]/u);
+  assert.match(shell, /routeIds: \['CASE-02', 'CASE-07', 'CASE-08', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'\]/u);
+  assert.match(shell, /\{ label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\] \}/u);
   assert.match(router, /PROP-02'.*'제안서 작성'/u);
   assert.match(router, /PROP-03'.*'프로젝트별 제안서 목록'/u);
   assert.match(router, /PROP-04'.*'제안서 DB관리'.*ADMIN_ONLY/u);
@@ -24,7 +24,7 @@ test('CF41 proposal sidebar separates authoring, sent projects and admin databas
 test('CF41 sent project view and immutable DB ledger use the scoped proposal workflow API', () => {
   const view = read('apps/web/src/proposals/ProposalLibraryView.tsx');
   const migration = read('apps/cloudflare/migrations/0014_cf14_proposal_award_workflow.sql');
-  assert.match(view, /\/api\/proposal-workflow/u);
+  assert.match(view, /\/api\/proposal-catalog/u);
   assert.match(view, /프로젝트별 제안서 목록/u);
   assert.match(view, /제안서 DB관리/u);
   assert.match(view, /proposal\.caseId/u);
@@ -45,6 +45,6 @@ test('CF41 authoring has XLSX import and all sent proposal records export as a r
   }]);
   assert.deepEqual([...bytes.slice(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
   const payload = new TextDecoder().decode(bytes);
-  assert.match(payload, /발송 제안서 DB 원장/u);
+  assert.match(payload, /연동 제안서 DB 원장/u);
   assert.match(payload, /PROP-041/u);
 });

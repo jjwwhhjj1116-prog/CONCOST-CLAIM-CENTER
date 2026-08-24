@@ -340,6 +340,11 @@
 .project-stage-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
 .project-stage-note { grid-column:1/-1; }
 .project-stage-actions { display:flex; justify-content:flex-end; }
+.stage-schedule-save-button { min-width:132px!important; min-height:42px!important; border:0!important; background:linear-gradient(135deg,#1d64d8,#1687d8)!important; color:#fff!important; font-size:.76rem!important; font-weight:900!important; box-shadow:0 8px 18px rgb(29 100 216 / 24%); }
+.stage-schedule-save-button:disabled { background:#d7dfeb!important; color:#6d788a!important; box-shadow:none; opacity:1!important; }
+.project-schedule-completion-actions { position:sticky; bottom:0; z-index:5; display:flex; justify-content:flex-end; flex-wrap:wrap; gap:9px; padding:13px; border:1px solid #bdd7f2; border-radius:13px; background:rgb(248 252 255 / 96%); box-shadow:0 -8px 24px rgb(42 75 115 / 12%); backdrop-filter:blur(8px); }
+.schedule-complete-button { min-width:190px!important; min-height:50px!important; border:0!important; background:linear-gradient(135deg,#ec6a24,#d84b18)!important; color:#fff!important; font-size:.88rem!important; font-weight:950!important; box-shadow:0 10px 24px rgb(216 75 24 / 26%); }
+.schedule-confirm-button { min-width:130px!important; min-height:50px!important; border:2px solid #16805f!important; background:#ecfdf5!important; color:#116047!important; font-size:.82rem!important; font-weight:900!important; }
 .project-change-request { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:8px; padding-top:8px; border-top:1px dashed #d4dde8; }
 .pending-schedule-requests { display:grid; gap:8px; padding:13px; border:1px solid #f0d49c; border-radius:12px; background:#fff9ec; }
 .pending-schedule-requests h4 { margin:0; color:#8e641d; font-size:.78rem; }
