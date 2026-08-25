@@ -8,5 +8,5 @@
     "jsx": "react-jsx",
     "resolveJsonModule": true
   },
-  "include": ["scripts/**/*"]
+  "include": ["scripts/**/*", "apps/web/src/types/**/*"]
 }

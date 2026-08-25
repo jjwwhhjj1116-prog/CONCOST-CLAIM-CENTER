@@ -11,12 +11,28 @@
   "dependencies": {
     "@claim-studio/ui": "workspace:*",
     "@rhwp/editor": "0.8.4",
+    "@tiptap/core": "^3.30.3",
+    "@tiptap/extension-character-count": "^3.30.3",
+    "@tiptap/extension-highlight": "^3.30.3",
+    "@tiptap/extension-image": "^3.30.3",
+    "@tiptap/extension-placeholder": "^3.30.3",
+    "@tiptap/extension-table": "^3.30.3",
+    "@tiptap/extension-text-align": "^3.30.3",
+    "@tiptap/extension-underline": "^3.30.3",
+    "@tiptap/pm": "^3.30.3",
+    "@tiptap/react": "^3.30.3",
+    "@tiptap/starter-kit": "^3.30.3",
+    "dompurify": "^3.4.14",
+    "marked": "^18.0.11",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.9.3",
     "vite": "^6.0.7"

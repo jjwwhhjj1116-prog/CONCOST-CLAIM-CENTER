@@ -363,6 +363,18 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     {section === 'ADMIN' && isAdmin && workspace && <>
       <PreviewGoogleDriveSetup onNavigate={onNavigate} />
       {renderCredentials('ORGANIZATION', '조직 공용 AI 설정', '개인 키가 없는 직원에게 적용되는 회사 공용 암호화 키입니다.')}
+      <Card title="문서 제작 플랫폼 연결 상태" className="document-platform-status-card">
+        <p className="document-platform-status-card__intro">보고서·제안서 작성에 실제로 연결된 기능과 회사 서버가 준비된 뒤 연결할 기능을 구분했습니다. <strong>준비 중인 기능을 작동하는 것처럼 표시하지 않습니다.</strong></p>
+        <div className="document-platform-status-grid" aria-label="문서 제작 플랫폼 연결 상태">
+          <article data-platform-status="active"><header><span>ACTIVE</span><strong>Tiptap 구조화 편집기</strong></header><p>제목·목록·표·링크·이미지·찾기/바꾸기·전체화면·AI 선택영역 개선</p><small>보고서와 제안서 사람 검수 단계에서 사용</small></article>
+          <article data-platform-status="active"><header><span>ACTIVE</span><strong>D1 문서 원본 저장</strong></header><p>Tiptap JSON과 Markdown을 함께 보관해 이어쓰기·버전·내보내기 근거를 유지합니다.</p><small>향후 PostgreSQL로 옮길 때 같은 JSON 계약 사용</small></article>
+          <article data-platform-status="active"><header><span>ACTIVE</span><strong>HWP/HWPX · DOCX · PDF</strong></header><p>rhwp 편집과 문서 내보내기, 전체 미리보기, 프로젝트 일정표 A4 출력을 제공합니다.</p><small>최종 확정 전에는 D1 작업본만 갱신</small></article>
+          <article data-platform-status="server"><header><span>SERVER BRIDGE</span><strong>Gotenberg PDF 변환</strong></header><p>고정밀 서버 PDF 렌더링은 항상 켜진 회사 서버 연결 후 활성화합니다.</p><small>현재 Worker의 결정론적 PDF/A4 출력을 유지</small></article>
+          <article data-platform-status="server"><header><span>SERVER BRIDGE</span><strong>Yjs · Hocuspocus 협업</strong></header><p>실시간 공동편집과 충돌 병합은 WebSocket 서버가 준비되면 연결합니다.</p><small>현재는 D1 자동저장·낙관적 버전 충돌 방지 사용</small></article>
+          <article data-platform-status="planned"><header><span>VIETNAM SERVER</span><strong>Mem0 · LangGraph Memory</strong></header><p>관리자 승인 장기기억과 작성 워크플로우는 베트남 서버 배치 단계에서 연결합니다.</p><small>현재는 Hermes/D1 승인 메모리와 같은 보안 경계 유지</small></article>
+        </div>
+        <p className="settings-honest-note"><strong>개발자 인수 기준</strong>Tiptap JSON을 문서 원본으로 유지하고, 출력·협업·장기기억 서버는 별도 HTTPS Bridge로 연결합니다. 연결 실패 시 편집과 D1 저장은 계속 사용할 수 있어야 합니다.</p>
+      </Card>
       <Card title="제안서 1~3장 AI 작성 지침 · 템플릿별 관리자 전용" className="proposal-prompt-settings-card">
         <p className="settings-honest-note"><strong>템플릿마다 별도 관리됩니다.</strong> Gemini는 의뢰·회의록·1단계 입력을 근거로 <b>2장 쟁점 → 1장 목적 → 3장 수행업무 → 자가검증</b> 순서로 최초 초안을 한 번만 만듭니다. 이후 작성자는 사람 검수 단계에서 전부 수정합니다. 직원 계정에는 아래 지침 원문이 노출되지 않습니다.</p>
         <label className="proposal-template-profile-picker">관리할 제안서 원본 템플릿<select value={selectedProposalPromptSourceId} onChange={(event)=>setSelectedProposalPromptSourceId(event.target.value)}>{proposalPromptProfiles.map((profile)=><option key={profile.templateSourceId} value={profile.templateSourceId}>{profile.templateSourceName} · {PROPOSAL_TEMPLATE_CATEGORY_LABELS[profile.templateCategory]} · v{profile.version}</option>)}</select></label>

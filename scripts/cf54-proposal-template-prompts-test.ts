@@ -21,8 +21,9 @@ async function setup(){
   const now='2026-08-24T01:00:00.000Z';
   for(const [id,login,name,roles] of [[ADMIN,'yjw@con-cost.com','유종욱','["admin"]'],[STAFF,'staff@con-cost.com','직원','["staff"]']] as const)sql.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)',[id,login,'1'.repeat(32),'2'.repeat(64),100000,name,login,roles,now]);
   sql.exec(read('apps/cloudflare/migrations/0042_cf54_proposal_template_prompt_profiles.sql'));
-  sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)',[await sha256(ADMIN_TOKEN),ADMIN,now,'2026-08-25T01:00:00.000Z']);
-  sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)',[await sha256(STAFF_TOKEN),STAFF,now,'2026-08-25T01:00:00.000Z']);
+  const sessionExpiry=new Date(Date.now()+3_600_000).toISOString();
+  sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)',[await sha256(ADMIN_TOKEN),ADMIN,now,sessionExpiry]);
+  sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)',[await sha256(STAFF_TOKEN),STAFF,now,sessionExpiry]);
   return{sql,env:{DB:new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>} as CloudflareEnv};
 }
 

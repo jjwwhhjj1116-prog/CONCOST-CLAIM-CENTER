@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiDownload, apiRequest, triggerBrowserDownload } from '../api';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
+import { StructuredDocumentEditor, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
@@ -12,6 +13,7 @@ import type { PreviewReportReview } from './PreviewApprovalInbox';
 interface CaseSummary { id: string; caseNumber: string; title: string; claimType: string; status: string }
 interface ReportDraft {
   caseId: string; title: string; content: string; version: number; createdAt: string; updatedAt: string;
+  editorJson: import('@tiptap/core').JSONContent | null;
   wizardStep: number; selectedChapterId: string | null;
   updatedBy: { id: string; name: string };
 }
@@ -71,6 +73,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [loadedCaseId, setLoadedCaseId] = useState('');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [editorJson, setEditorJson] = useState<import('@tiptap/core').JSONContent | null>(null);
   const [version, setVersion] = useState(0);
   const [revisions, setRevisions] = useState<ReportRevision[]>([]);
   const [reviews, setReviews] = useState<PreviewReportReview[]>([]);
@@ -88,7 +91,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [improving, setImproving] = useState(false);
   const [aiGeneration, setAiGeneration] = useState<{ kind: 'outline' | 'chapter' | 'improve'; status: AiGenerationStatus; title: string; error?: string } | null>(null);
   const [improvementInstruction, setImprovementInstruction] = useState('사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬어 주세요.');
-  const [selectedTextRange, setSelectedTextRange] = useState({ start: 0, end: 0 });
+  const [selectedTextRange, setSelectedTextRange] = useState<StructuredSelection | null>(null);
   const [improvementPreview, setImprovementPreview] = useState<{ start: number; end: number; original: string; replacement: string } | null>(null);
   const [memoryFeedback, setMemoryFeedback] = useState('');
   const [memoryScope, setMemoryScope] = useState<MemoryScope>('CHAPTER');
@@ -120,7 +123,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
   const contentRef = useRef('');
-  const reportBodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const reportBodyRef = useRef<StructuredDocumentEditorHandle | null>(null);
   const activeStepRef = useRef<ReportWizardStep>(1);
   const selectedChapterRef = useRef('');
   const editable = roles.some((role) => EDIT_ROLES.includes(role));
@@ -164,6 +167,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       contentRef.current = loadedContent;
       setTitle(loadedTitle);
       setContent(loadedContent);
+      setEditorJson(result.draft?.editorJson ?? null);
       setVersion(result.draft?.version ?? 0);
       setSavedAt(result.draft?.updatedAt ?? null);
       setRevisions(result.revisions);
@@ -227,7 +231,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setSaving(true); setError('');
     try {
       const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(requestCaseId)}`, {
-        method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, expectedVersion: requestVersion, wizardStep: requestWizardStep, selectedChapterId: requestChapterId })
+        method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, editorJson, expectedVersion: requestVersion, wizardStep: requestWizardStep, selectedChapterId: requestChapterId })
       });
       if (selectedCaseRef.current !== requestCaseId || !result.draft) return false;
       setVersion(result.draft.version);
@@ -244,7 +248,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     } finally {
       if (selectedCaseRef.current === requestCaseId) setSaving(false);
     }
-  }, [activeStep, content, dirty, editable, loadedCaseId, loadSavedWorkspaces, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
+  }, [activeStep, content, dirty, editable, editorJson, loadedCaseId, loadSavedWorkspaces, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
     if ((!dirty && !workspaceDirty) || saving) return;
@@ -389,7 +393,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const escapedCode = result.chapter.chapterCode.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
       const existing = new RegExp(`<!-- AI-CHAPTER:${escapedCode}:START -->[\\s\\S]*?<!-- AI-CHAPTER:${escapedCode}:END -->`, 'u');
       const nextContent = existing.test(content) ? content.replace(existing, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
-      contentRef.current = nextContent; setContent(nextContent); setDirty(true);
+      contentRef.current = nextContent; setContent(nextContent); setEditorJson(null); setDirty(true);
       if (result.chapter.memory) setMemoryNotice(`이번 초안 메모리 적용 · 단기 ${result.chapter.memory.shortTermItems}개 · 승인 장기 ${result.chapter.memory.approvedLongTermRules}개(개인 ${result.chapter.memory.personalRules} · 조직 ${result.chapter.memory.organizationRules})`);
       setAiGeneration((current) => current?.kind === 'chapter' ? { ...current, status: 'complete' } : current);
     } catch (reason) {
@@ -412,24 +416,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         method: 'POST', body: JSON.stringify({ caseId: requestCaseId, content, instruction: improvementInstruction.trim(), expectedDraftVersion: version })
       });
       if (selectedCaseRef.current !== requestCaseId) return;
-      contentRef.current = result.content; setContent(result.content); setDirty(true); setAiGeneration((current) => current?.kind === 'improve' ? { ...current, status: 'complete' } : current);
+      contentRef.current = result.content; setContent(result.content); setEditorJson(null); setDirty(true); setAiGeneration((current) => current?.kind === 'improve' ? { ...current, status: 'complete' } : current);
     } catch (reason) { if (selectedCaseRef.current === requestCaseId) { const message=reason instanceof Error ? reason.message : String(reason);setError(message);setAiGeneration((current) => current?.kind === 'improve' ? { ...current, status: 'error', error: message } : current); } }
     finally { if (selectedCaseRef.current === requestCaseId) setImproving(false); }
   };
 
-  const captureTextSelection = () => {
-    const editor = reportBodyRef.current;
-    if (editor) setSelectedTextRange({ start: editor.selectionStart, end: editor.selectionEnd });
-  };
-
   const improveSelectedWriting = async (instruction = improvementInstruction) => {
-    const editor = reportBodyRef.current;
-    const start = editor?.selectionStart ?? selectedTextRange.start;
-    const end = editor?.selectionEnd ?? selectedTextRange.end;
-    const original = content.slice(start, end);
+    const selection = reportBodyRef.current?.getSelection() ?? selectedTextRange;
+    const start = selection?.from ?? 0;
+    const end = selection?.to ?? 0;
+    const original = selection?.text ?? '';
     if (!editable || !authoring?.assistantConnected || !original.trim() || original.length > 20_000 || saving || improving || loadedCaseId !== selectedCaseId) return;
     const requestCaseId = selectedCaseId;
-    setSelectedTextRange({ start, end });
+    setSelectedTextRange({ from: start, to: end, text: original });
     setImproving(true); setError(''); setAiGeneration({ kind: 'improve', status: 'running', title: '선택한 문장을 Gemini가 다듬고 있습니다' });
     try {
       const result = await apiRequest<{ content: string }>('/api/report-authoring/improve', {
@@ -448,11 +447,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const applySelectedImprovement = () => {
     if (!improvementPreview) return;
-    const next = `${content.slice(0, improvementPreview.start)}${improvementPreview.replacement}${content.slice(improvementPreview.end)}`;
-    contentRef.current = next;
-    setContent(next);
-    setDirty(true);
-    setSelectedTextRange({ start: improvementPreview.start, end: improvementPreview.start + improvementPreview.replacement.length });
+    reportBodyRef.current?.replaceRange(improvementPreview.start, improvementPreview.end, improvementPreview.replacement);
+    setSelectedTextRange(null);
     setImprovementPreview(null);
   };
 
@@ -669,7 +665,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <Button className="report-action-ai" onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '✦ 선택 챕터 AI 자동 작성'}</Button>
             </div>
             {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {outlineTitles[selectedChapter.id] || selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>자동 작성 기준</strong> 관리자 승인 프롬프트 + 현재 프로젝트 근거 + 확정 목차 제목을 사용합니다.</p></div>}
-            {editable && content.trim() && <section className="report-stage-inline-editor"><header><div><b>사람 직접 편집</b><span>AI 초안을 바로 고친 뒤 저장하세요. 다음 단계로 가기 전에도 수정할 수 있습니다.</span></div><Button className="report-action-review" variant="secondary" onClick={() => void saveNow()} disabled={!dirty || saving}>{saving ? '저장 중…' : '수정 본문 저장'}</Button></header><textarea aria-label="현재까지 작성된 보고서 초안 편집" value={content} maxLength={500000} onChange={(event) => { contentRef.current = event.target.value; setContent(event.target.value); setDirty(true); }} /></section>}
+            {editable && content.trim() && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>사람 직접 편집</b><span>AI 초안을 바로 고친 뒤 저장하세요. 제목·목록·표·이미지·찾기/바꾸기까지 사용할 수 있습니다.</span></div><Button className="report-action-review" variant="secondary" onClick={() => void saveNow()} disabled={!dirty || saving}>{saving ? '저장 중…' : '수정 본문 저장'}</Button></header><StructuredDocumentEditor compact documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" value={content} editorJson={editorJson} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></section>}
             <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? 'Cloudflare 서버 Secret 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
             {!authoring.aiConnected && <div className="error-box">설정의 개인 설정 또는 관리자 설정에서 {authoring.providerLabel} API 키를 연결해야 자동 작성 버튼이 열립니다.</div>}
@@ -680,9 +676,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           {renderStageHeader(4)}
           <div className="form-stack">
             <Input label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
-            <label htmlFor="preview-report-body">보고서 본문</label>
-            <textarea ref={reportBodyRef} id="preview-report-body" className="report-editor" value={content} maxLength={500000} readOnly={!editable} aria-readonly={!editable} onSelect={captureTextSelection} onMouseUp={captureTextSelection} onKeyUp={captureTextSelection} onChange={(event) => { contentRef.current = event.target.value; setContent(event.target.value); setDirty(true); }} onBlur={() => void saveNow()} />
-            {editable && <section className="report-writing-assistant" aria-label="Gemini 글쓰기 개선 도우미"><div><span>GEMINI WRITING ASSISTANT</span><strong>다듬을 문장을 드래그한 뒤 원하는 작업을 누르세요.</strong><small>원문은 바로 덮어쓰지 않습니다. Google Docs처럼 개선안을 비교한 뒤 적용하거나 취소합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="report-selection-assistant"><span>{selectedTextRange.end > selectedTextRange.start ? `${selectedTextRange.end - selectedTextRange.start}자 선택됨` : '먼저 본문에서 문장을 드래그하세요'}</span><div className="action-row"><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting('문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.')} disabled={!authoring?.assistantConnected || selectedTextRange.end <= selectedTextRange.start || improving}>✦ 전문적으로</Button><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting('중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.')} disabled={!authoring?.assistantConnected || selectedTextRange.end <= selectedTextRange.start || improving}>✦ 간결하게</Button><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting()} disabled={!authoring?.assistantConnected || selectedTextRange.end <= selectedTextRange.start || improving || improvementInstruction.trim().length < 3}>{improving ? '개선 중…' : '✦ 맞춤 요청'}</Button></div></div><div className="action-row"><Button className="report-action-review" variant="secondary" onClick={() => onNavigate('/settings')}>Gemini 설정 열기</Button><Button className="report-action-review" variant="secondary" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>원본 템플릿 다시 보기</Button><Button className="report-action-review" variant="secondary" onClick={() => void improveWriting()} disabled={!authoring?.assistantConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>본문 전체 개선</Button></div>{!authoring?.assistantConnected && <small>설정에서 개인 또는 관리자 공용 Gemini API 키를 연결하면 글 개선 버튼이 열립니다.</small>}</section>}
+            {activeStep === 4 && <StructuredDocumentEditor ref={reportBodyRef} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable} onSelectionChange={setSelectedTextRange} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} />}
+            {editable && <section className="report-writing-assistant" aria-label="Gemini 글쓰기 개선 도우미"><div><span>GEMINI WRITING ASSISTANT</span><strong>다듬을 문장을 드래그한 뒤 원하는 작업을 누르세요.</strong><small>원문은 바로 덮어쓰지 않습니다. Google Docs처럼 개선안을 비교한 뒤 적용하거나 취소합니다.</small></div><input aria-label="글쓰기 개선 요청" value={improvementInstruction} maxLength={2000} onChange={(event) => setImprovementInstruction(event.target.value)} /><div className="report-selection-assistant"><span>{selectedTextRange ? `${selectedTextRange.text.length}자 선택됨` : '먼저 본문에서 문장을 드래그하세요'}</span><div className="action-row"><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting('문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.')} disabled={!authoring?.assistantConnected || !selectedTextRange || improving}>✦ 전문적으로</Button><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting('중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.')} disabled={!authoring?.assistantConnected || !selectedTextRange || improving}>✦ 간결하게</Button><Button className="report-action-ai" onMouseDown={(event) => event.preventDefault()} onClick={() => void improveSelectedWriting()} disabled={!authoring?.assistantConnected || !selectedTextRange || improving || improvementInstruction.trim().length < 3}>{improving ? '개선 중…' : '✦ 맞춤 요청'}</Button></div></div><div className="action-row"><Button className="report-action-review" variant="secondary" onClick={() => onNavigate('/settings')}>Gemini 설정 열기</Button><Button className="report-action-review" variant="secondary" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>원본 템플릿 다시 보기</Button><Button className="report-action-review" variant="secondary" onClick={() => void improveWriting()} disabled={!authoring?.assistantConnected || !content.trim() || dirty || saving || improving || improvementInstruction.trim().length < 3}>본문 전체 개선</Button></div>{!authoring?.assistantConnected && <small>설정에서 개인 또는 관리자 공용 Gemini API 키를 연결하면 글 개선 버튼이 열립니다.</small>}</section>}
             {editable && selectedChapter && <section className="report-memory-feedback" aria-label="AI 학습 피드백"><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>D1 HERMES COMPATIBLE</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</section>}
             <p className="muted">{editable ? '입력 후 0.9초가 지나면 자동 저장됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}

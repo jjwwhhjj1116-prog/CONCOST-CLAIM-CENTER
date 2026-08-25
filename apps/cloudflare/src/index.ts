@@ -1922,33 +1922,6 @@ const PROPOSAL_CHAPTER_TITLES = [
   '건설 클레임·소송·기술감정 실적', '자격 증명자료', '용역 조건 및 제안 범위', '맺음말'
 ] as const;
 
-const PROPOSAL_AI_WRITING_SYSTEM = `당신은 컨코스트의 건설 클레임·공사비 검증 제안서를 작성하는 20년 경력의 수석 제안서 디렉터입니다.
-승인된 제안서 템플릿 구조와 선택된 원본의 문체, 정보 밀도, 항목 수, 표 구조를 그대로 계승하되 프로젝트 사실에 맞게 새로 작성하십시오.
-짧은 요약문은 금지합니다. 의뢰 등록 정보, 작성자 입력, 최신 의뢰 첨부자료 요약을 우선 근거로 사용하고 서로 충돌하면 [확인 필요]로 표시하십시오.
-근거 없는 계약조건·판례·수치·일정은 만들지 말고, 모든 금액은 [비공개 협의금액]으로 표시하십시오.
-
-장별 작성 계약:
-1장 제안(용역)의 목적
-- 서로 중복되지 않는 목적 5~7개를 작성합니다.
-- 각 항목은 반드시 "- "로 시작하고, 항목마다 2~4개의 완전한 문장으로 프로젝트 문제, 수행 행동, 기대 성과를 설명합니다.
-- 클라이언트의 권익 보호, 사업 정상화 또는 분쟁 대응, 계약·정책·원가자료 검토, 협상·의사결정용 산출물을 구체적으로 포함합니다.
-- 최소 450자 이상 작성합니다.
-
-2장 당 현장의 핵심 쟁점 분석
-- 의뢰 단계에서 확인된 사실과 핵심 쟁점으로 3~5개의 쟁점을 선정합니다.
-- 각 쟁점은 "### 1) 쟁점 제목" 형식의 제목과 그 아래 2~4문장의 상세 분석으로 구성합니다.
-- 각 분석에는 확인된 상황, 검증할 자료·기준, 클라이언트에 미치는 영향, 대응 방향을 포함합니다.
-- 입력에 없는 사실은 [확인 필요]로 남기며 최소 600자 이상 작성합니다.
-
-3장 업무 수행 내용 및 추진 계획
-- 반드시 Markdown 표 하나로 작성합니다.
-- 열은 정확히 "단계 | 수행 업무 | 세부 내용 | 주요 산출물" 네 개를 사용합니다.
-- 데이터 행은 Fact Finding, 법리·원가 검증, 협상 지원, 총회·의결/최종 정산의 정확히 4단계로 구성합니다.
-- 각 행의 세부 내용은 2개 이상의 구체적인 행동을 포함하고 주요 산출물을 명시합니다. 최소 450자 이상 작성합니다.
-
-오직 JSON 객체 하나만 출력하십시오. 형식은 {"chapter1":"...","chapter2":"...","chapter3":"..."}입니다.
-JSON 문자열 안의 줄바꿈은 올바르게 이스케이프하고 Markdown 코드펜스는 사용하지 마십시오.`;
-
 interface ProposalWritingPrompt { chapterNumber: 1 | 2 | 3; chapterTitle: string; instructionText: string; isActive: boolean; version: number; updatedAt: string }
 
 type ProposalTemplateCategory = 'REDEVELOPMENT_FINANCE'|'REDEVELOPMENT_COST'|'CLAIM_LITIGATION'|'PRICE_ESCALATION'|'PUBLIC_SUPPORT'|'GENERAL_CLAIM';
@@ -2049,26 +2022,6 @@ async function proposalWritingPrompts(env: CloudflareEnv): Promise<ProposalWriti
     const prompts = rows.results.map((row) => ({ chapterNumber:Number(row.chapterNumber) as 1|2|3, chapterTitle:String(row.chapterTitle), instructionText:String(row.instructionText), isActive:Boolean(row.isActive), version:Number(row.version), updatedAt:String(row.updatedAt) })).filter((row) => row.chapterNumber >= 1 && row.chapterNumber <= 3);
     return prompts.length === 3 ? prompts : FALLBACK_PROPOSAL_WRITING_PROMPTS;
   } catch { return FALLBACK_PROPOSAL_WRITING_PROMPTS; }
-}
-
-function proposalAiChapterQuality(chapterNumber: 1 | 2 | 3, body: string): { valid: boolean; reason: string } {
-  const text = body.trim();
-  if (chapterNumber === 1) {
-    const bullets = text.split('\n').filter((line) => /^\s*[-*•ㅇ]\s+/u.test(line)).length;
-    return { valid: text.length >= 450 && bullets >= 5, reason: '5개 이상의 목적 항목과 450자 이상의 상세 설명' };
-  }
-  if (chapterNumber === 2) {
-    const issues = text.split('\n').filter((line) => /^\s*###\s+\d+[.)]\s+\S/u.test(line)).length;
-    return { valid: text.length >= 600 && issues >= 3, reason: '3개 이상의 쟁점별 제목·상세 분석과 600자 이상의 본문' };
-  }
-  if (chapterNumber === 3) {
-    const lines = text.split('\n').filter((line) => line.trim());
-    const header = lines.some((line) => /단계\s*\|\s*수행 업무\s*\|\s*세부 내용\s*\|\s*주요 산출물/u.test(line));
-    const separatorIndex = lines.findIndex((line) => /^\s*\|?(?:\s*:?-{3,}:?\s*\|){3,}\s*$/u.test(line));
-    const dataRows = separatorIndex >= 0 ? lines.slice(separatorIndex + 1).filter((line) => (line.match(/\|/gu) ?? []).length >= 4).length : 0;
-    return { valid: text.length >= 450 && header && dataRows >= 4, reason: '4열 Markdown 표와 정확한 4단계 수행계획, 450자 이상의 상세 내용' };
-  }
-  return { valid: false, reason: '지원하지 않는 제안서 AI 작성 챕터' };
 }
 
 const FALLBACK_PROPOSAL_MODULES: ProposalCompanyModule[] = [
@@ -2268,6 +2221,24 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
   const user = await previewSessionUser(request,env);
   if (!user) return json({ error:'Login is required',code:'AUTH_REQUIRED' },401);
   const isAdmin = user.roles.includes('admin');
+  if (url.pathname === '/api/proposal-studio/improve' && request.method === 'POST') {
+    if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error:'Role cannot improve proposal text',code:'FORBIDDEN' },403);
+    const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
+    if(!body||!exactObjectKeys(body,['caseId','proposalId','chapterNumber','content','instruction','expectedProposalVersion'])||typeof body.caseId!=='string'||typeof body.proposalId!=='string'||!Number.isInteger(body.chapterNumber)||typeof body.content!=='string'||typeof body.instruction!=='string'||!Number.isInteger(body.expectedProposalVersion))return json({error:'제안서 문장 개선 입력값이 올바르지 않습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
+    const caseId=body.caseId;const proposalId=body.proposalId;const chapterNumber=Number(body.chapterNumber);const content=body.content.trim();const instruction=body.instruction.trim();
+    if(!PREVIEW_DRAFT_KEY.test(caseId)||!PREVIEW_DRAFT_KEY.test(proposalId)||chapterNumber<1||chapterNumber>3||!content||content.length>100_000||instruction.length<3||instruction.length>2_000)return json({error:'제안서 문장 개선 범위가 허용 기준을 벗어났습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
+    const caseRow=await accessiblePreviewCase(env,user,caseId);
+    if(!caseRow)return json({error:'프로젝트를 찾을 수 없거나 이 사용자에게 배정되지 않았습니다.',code:'CASE_NOT_FOUND'},404);
+    const proposal=await env.DB.prepare('SELECT version,status FROM preview_proposals WHERE id=? AND case_id=? AND organization_id=?').bind(proposalId,caseId,PREVIEW_ORGANIZATION_ID).first<{version:number;status:string}>();
+    if(!proposal)return json({error:'제안서를 찾을 수 없습니다.',code:'PROPOSAL_NOT_FOUND'},404);
+    if(proposal.status!=='DRAFT')return json({error:'확정된 제안서는 직접 바꿀 수 없습니다. 새 편집본을 만든 뒤 개선해 주세요.',code:'PROPOSAL_NOT_EDITABLE'},409);
+    if(Number(proposal.version)!==Number(body.expectedProposalVersion))return json({error:'다른 화면에서 제안서가 먼저 변경되었습니다. 최신 제안서를 다시 불러와 주세요.',code:'VERSION_CONFLICT',currentVersion:Number(proposal.version)},409);
+    const routes=await previewAiRoutes(env);const settings=previewPersonalGeminiAssistantRoute(routes);const geminiCredential=await resolvePreviewAiCredential(env,user.id,'GEMINI');
+    if(!geminiCredential)return json({error:'설정에서 개인 또는 관리자 공용 Gemini API 키를 연결한 뒤 다시 시도해 주세요.',code:'GEMINI_NOT_CONFIGURED'},503);
+    const improved=await generatePreviewAiText(env,settings,`당신은 건설 클레임 수주 제안서 편집자입니다. 현재 문장은 제안서 ${chapterNumber}장에 들어갑니다. 사용자가 준 사실·숫자·날짜·인명·고유명사·근거를 추가하거나 삭제하지 마십시오. 법률 판단, 성과 보장, 금액 추정, 입력에 없는 현장명은 만들지 마십시오. 요청한 문체와 구조만 개선하고 결과 본문만 반환하십시오.`, `개선 요청: ${instruction}\n\n수정할 제안서 본문:\n${content}`,user.id,geminiCredential);
+    if(improved.response)return improved.response;
+    return json({content:improved.content,providerKind:settings.providerKind,modelCode:settings.modelCode,credentialSource:geminiCredential.source,phase:'CF60_STRUCTURED_PROPOSAL_EDITOR'});
+  }
   if (url.pathname === '/api/proposal-studio/config' && request.method === 'GET') {
     const modules = await proposalCompanyModules(env);
     const sources = await proposalTemplateSources(env);
@@ -2448,7 +2419,6 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const requestedModules=new Set((body.includedModuleCodes as unknown[]).filter((item):item is string=>typeof item==='string'&&moduleByCode.has(item)));
       const submitted=body.chapters as ProposalStudioChapter[];
       const chapters=submitted.map((chapter)=>{
-        const module=chapter.moduleCode?moduleByCode.get(chapter.moduleCode):undefined;
         if(chapter.number>=4&&chapter.number<=11){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
           if(expected&&requestedModules.has(expected.code)&&expected.isActive){
@@ -3223,6 +3193,7 @@ interface PreviewReportDraftRow {
   caseId: string;
   title: string;
   content: string;
+  editorJson: string | null;
   version: number;
   wizardStep: number;
   selectedChapterId: string | null;
@@ -3242,11 +3213,32 @@ async function previewReportWorkspaceSchemaAvailable(env: CloudflareEnv): Promis
   }
 }
 
+async function previewReportEditorSchemaAvailable(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT editor_json FROM preview_report_drafts LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parsePreviewEditorJson(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
 async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
+  const editorSchema = await previewReportEditorSchemaAvailable(env);
   const draft = await env.DB.prepare(
-    `SELECT d.case_id AS caseId, d.title, d.content, d.version, ${workspaceSchema ? 'd.wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'd.selected_chapter_id' : 'NULL'} AS selectedChapterId, d.created_at AS createdAt, d.updated_at AS updatedAt, ` +
+    `SELECT d.case_id AS caseId, d.title, d.content, ${editorSchema ? 'd.editor_json' : 'NULL'} AS editorJson, d.version, ${workspaceSchema ? 'd.wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'd.selected_chapter_id' : 'NULL'} AS selectedChapterId, d.created_at AS createdAt, d.updated_at AS updatedAt, ` +
     'u.id AS updatedById, u.display_name AS updatedByName FROM preview_report_drafts d ' +
     'JOIN preview_users u ON u.id = d.updated_by WHERE d.case_id = ? AND d.organization_id = ?'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewReportDraftRow>();
@@ -3259,6 +3251,7 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
       caseId: draft.caseId,
       title: draft.title,
       content: draft.content,
+      editorJson: parsePreviewEditorJson(draft.editorJson),
       version: Number(draft.version),
       wizardStep: Number(draft.wizardStep),
       selectedChapterId: draft.selectedChapterId,
@@ -3292,16 +3285,18 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot edit report drafts', code: 'FORBIDDEN' }, 403);
   const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
+  const editorSchema = await previewReportEditorSchemaAvailable(env);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-  if (!body || !exactObjectKeys(body, ['title', 'content', 'expectedVersion', 'wizardStep', 'selectedChapterId']) || typeof body.title !== 'string' || typeof body.content !== 'string' || !Number.isInteger(body.expectedVersion) || (body.wizardStep !== undefined && !Number.isInteger(body.wizardStep)) || (body.selectedChapterId !== undefined && !(body.selectedChapterId === null || typeof body.selectedChapterId === 'string'))) {
+  if (!body || !exactObjectKeys(body, ['title', 'content', 'editorJson', 'expectedVersion', 'wizardStep', 'selectedChapterId']) || typeof body.title !== 'string' || typeof body.content !== 'string' || !Number.isInteger(body.expectedVersion) || (body.editorJson !== undefined && body.editorJson !== null && (typeof body.editorJson !== 'object' || Array.isArray(body.editorJson))) || (body.wizardStep !== undefined && !Number.isInteger(body.wizardStep)) || (body.selectedChapterId !== undefined && !(body.selectedChapterId === null || typeof body.selectedChapterId === 'string'))) {
     return json({ error: 'Report draft payload is invalid', code: 'INVALID_REPORT_PAYLOAD' }, 400);
   }
   const title = body.title.trim();
   const content = body.content;
+  const editorJson = body.editorJson === undefined || body.editorJson === null ? null : JSON.stringify(body.editorJson);
   const expectedVersion = Number(body.expectedVersion);
   const requestedWizardStep = body.wizardStep === undefined ? null : Number(body.wizardStep);
   const requestedChapterId = body.selectedChapterId === undefined ? undefined : typeof body.selectedChapterId === 'string' ? body.selectedChapterId.trim() : null;
-  if (!title || title.length > 300 || content.length > 500_000 || expectedVersion < 0 || (requestedWizardStep !== null && (requestedWizardStep < 1 || requestedWizardStep > 5)) || (typeof requestedChapterId === 'string' && (!requestedChapterId || requestedChapterId.length > 100 || !PREVIEW_DRAFT_KEY.test(requestedChapterId)))) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
+  if (!title || title.length > 300 || content.length > 500_000 || (editorJson?.length ?? 0) > 2_000_000 || expectedVersion < 0 || (requestedWizardStep !== null && (requestedWizardStep < 1 || requestedWizardStep > 5)) || (typeof requestedChapterId === 'string' && (!requestedChapterId || requestedChapterId.length > 100 || !PREVIEW_DRAFT_KEY.test(requestedChapterId)))) return json({ error: 'Report draft exceeds field limits', code: 'INVALID_REPORT_PAYLOAD' }, 400);
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
 
   const existing = await env.DB.prepare(`SELECT version, ${workspaceSchema ? 'wizard_step' : '1'} AS wizardStep, ${workspaceSchema ? 'selected_chapter_id' : 'NULL'} AS selectedChapterId, updated_at AS updatedAt FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?`).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; wizardStep: number; selectedChapterId: string | null; updatedAt: string }>();
@@ -3312,11 +3307,19 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
     if (expectedVersion !== 0) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: 0 }, 409);
     const now = new Date().toISOString();
     try {
+      const insertDraft = workspaceSchema
+        ? editorSchema
+          ? env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, editor_json, version, wizard_step, selected_chapter_id, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, editorJson, wizardStep, selectedChapterId, user.id, user.id, now, now)
+          : env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, wizard_step, selected_chapter_id, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, wizardStep, selectedChapterId, user.id, user.id, now, now)
+        : editorSchema
+          ? env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, editor_json, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, editorJson, user.id, user.id, now, now)
+          : env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, user.id, user.id, now, now);
+      const insertRevision = editorSchema
+        ? env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, editor_json, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, editorJson, contentSha256, user.id, now)
+        : env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, contentSha256, user.id, now);
       await env.DB.batch([
-        workspaceSchema
-          ? env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, wizard_step, selected_chapter_id, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, wizardStep, selectedChapterId, user.id, user.id, now, now)
-          : env.DB.prepare('INSERT INTO preview_report_drafts (case_id, organization_id, title, content, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)').bind(caseId, PREVIEW_ORGANIZATION_ID, title, content, user.id, user.id, now, now),
-        env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, title, content, contentSha256, user.id, now),
+        insertDraft,
+        insertRevision,
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', '보고서 초안 저장 · v1', title, now)
       ]);
     } catch {
@@ -3329,11 +3332,19 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   if (expectedVersion !== Number(existing.version)) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(existing.version) }, 409);
   const nextVersion = Number(existing.version) + 1;
   const now = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString();
+  const updateDraft = workspaceSchema
+    ? editorSchema
+      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, editor_json = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, editorJson, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+    : editorSchema
+      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, editor_json = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, editorJson, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion);
+  const insertRevision = editorSchema
+    ? env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, editor_json, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, editorJson, contentSha256, user.id, now, caseId, nextVersion)
+    : env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, contentSha256, user.id, now, caseId, nextVersion);
   const results = await env.DB.batch([
-    workspaceSchema
-      ? env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, wizard_step = ?, selected_chapter_id = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, wizardStep, selectedChapterId, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
-      : env.DB.prepare('UPDATE preview_report_drafts SET title = ?, content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE case_id = ? AND organization_id = ? AND version = ?').bind(title, content, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion),
-    env.DB.prepare('INSERT INTO preview_report_revisions (id, case_id, version, title, content, content_sha256, saved_by, saved_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, nextVersion, title, content, contentSha256, user.id, now, caseId, nextVersion),
+    updateDraft,
+    insertRevision,
     env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id = ? AND version = ?)').bind(crypto.randomUUID(), caseId, user.id, 'REPORT_AUTOSAVED', `보고서 초안 저장 · v${nextVersion}`, title, now, caseId, nextVersion)
   ]) as Array<{ meta?: { changes?: number } }>;
   if (results[0]?.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
@@ -4568,7 +4579,8 @@ async function handlePreviewHermesBridgeSettings(request: Request, env: Cloudfla
 
 function previewTutorialApiProjection(state: PreviewTutorialStateProjection, includeAction: boolean): Record<string, unknown> {
   if (includeAction) return { ...state };
-  const { completionAction: _completionAction, ...legacy } = state;
+  const legacy = { ...state } as Record<string, unknown>;
+  delete legacy.completionAction;
   return legacy;
 }
 
@@ -6262,7 +6274,7 @@ const worker = {
       return handleProjectWorkflowManagement(request, env, url);
     }
 
-    if (url.pathname === '/api/proposal-studio/config' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/') || url.pathname.startsWith('/api/proposal-studio/writing-prompts/') || url.pathname.startsWith('/api/proposal-studio/prompt-profiles/')) {
+    if (url.pathname === '/api/proposal-studio/config' || url.pathname === '/api/proposal-studio/improve' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/') || url.pathname.startsWith('/api/proposal-studio/writing-prompts/') || url.pathname.startsWith('/api/proposal-studio/prompt-profiles/')) {
       return handlePreviewProposalStudio(request, env, url);
     }
 
