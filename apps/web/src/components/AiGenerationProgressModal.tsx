@@ -11,6 +11,7 @@ interface AiGenerationProgressModalProps {
   completeMessage: string;
   errorMessage?: string;
   confirmLabel?: string;
+  timeoutHintSeconds?: number;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -24,6 +25,7 @@ export function AiGenerationProgressModal({
   completeMessage,
   errorMessage,
   confirmLabel = '확인하고 다음 단계로',
+  timeoutHintSeconds = 180,
   onConfirm,
   onClose
 }: AiGenerationProgressModalProps): React.ReactElement | null {
@@ -84,7 +86,7 @@ export function AiGenerationProgressModal({
       <div className="ai-generation-modal__actions">
         {status === 'complete' && <button ref={actionRef} type="button" className="ai-generation-modal__confirm" onClick={onConfirm}>✓ {confirmLabel}</button>}
         {status === 'error' && <button ref={actionRef} type="button" className="ai-generation-modal__close" onClick={onClose}>닫고 입력 확인</button>}
-        {status === 'running' && <small>{progress >= 90 ? 'Gemini 최종 응답과 보안 검증을 기다리고 있습니다. 180초를 넘기면 원인을 표시하고 자동 중단합니다.' : '창을 닫지 않아도 완료되면 자동으로 ✓ 표시가 나타납니다.'}</small>}
+        {status === 'running' && <small>{progress >= 90 ? `Gemini 최종 응답과 보안 검증을 기다리고 있습니다. ${timeoutHintSeconds}초를 넘기면 원인을 표시하고 자동 중단합니다.` : '창을 닫지 않아도 완료되면 자동으로 ✓ 표시가 나타납니다.'}</small>}
       </div>
     </section>
   </div>;
