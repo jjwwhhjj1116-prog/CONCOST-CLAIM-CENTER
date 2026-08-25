@@ -1,3 +1,6 @@
+import { HocuspocusProvider, WebSocketStatus, type StatesArray } from '@hocuspocus/provider';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import CharacterCount from '@tiptap/extension-character-count';
 import Highlight from '@tiptap/extension-highlight';
 import Image from '@tiptap/extension-image';
@@ -7,17 +10,27 @@ import TextAlign from '@tiptap/extension-text-align';
 import Underline from '@tiptap/extension-underline';
 import { Node, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+import { BubbleMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
+import * as Y from 'yjs';
 
 export interface StructuredSelection {
   from: number;
   to: number;
   text: string;
+}
+
+export type StructuredSelectionImprovementMode = 'professional' | 'concise' | 'custom';
+
+export interface StructuredSelectionAssistant {
+  busy?: boolean;
+  disabled?: boolean;
+  onImprove: (mode: StructuredSelectionImprovementMode, selection: StructuredSelection) => void;
 }
 
 export interface StructuredDocumentEditorHandle {
@@ -36,8 +49,28 @@ interface StructuredDocumentEditorProps {
   readOnly?: boolean;
   compact?: boolean;
   documentKey?: string;
+  collaboration?: {
+    documentId: string;
+    userName: string;
+    userEmail?: string;
+  };
+  selectionAssistant?: StructuredSelectionAssistant;
   onChange: (markdown: string, editorJson: JSONContent) => void;
   onSelectionChange?: (selection: StructuredSelection | null) => void;
+}
+
+interface CollaborationSession {
+  document: Y.Doc;
+  provider: HocuspocusProvider;
+  user: { name: string; color: string; email?: string };
+}
+
+interface StructuredDocumentEditorCoreProps extends StructuredDocumentEditorProps {
+  collaborationSession?: CollaborationSession | null;
+  collaborationStatus?: WebSocketStatus;
+  collaborationSynced?: boolean;
+  collaborationUsers?: Array<{ clientId: number; name: string; color: string }>;
+  collaborationError?: string;
 }
 
 const AiChapterMarker = Node.create({
@@ -108,7 +141,20 @@ const findMatches = (editor: Editor, query: string): Array<{ from: number; to: n
   return matches;
 };
 
-export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandle, StructuredDocumentEditorProps>(function StructuredDocumentEditor({
+const collaborationColor = (identity: string): string => {
+  const palette = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#0891b2', '#059669', '#4f46e5', '#be123c'];
+  let hash = 0;
+  for (const character of identity) hash = ((hash << 5) - hash + character.codePointAt(0)!) | 0;
+  return palette[Math.abs(hash) % palette.length];
+};
+
+const normalizeCollaborationUsers = (states: StatesArray): Array<{ clientId: number; name: string; color: string }> => states.flatMap((state) => {
+  const user = state.user as { name?: unknown; color?: unknown } | undefined;
+  if (!user || typeof user.name !== 'string' || !user.name.trim()) return [];
+  return [{ clientId: state.clientId, name: user.name.trim(), color: typeof user.color === 'string' ? user.color : collaborationColor(user.name) }];
+});
+
+const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, StructuredDocumentEditorCoreProps>(function StructuredDocumentEditorCore({
   value,
   editorJson,
   label,
@@ -116,6 +162,12 @@ export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandl
   readOnly = false,
   compact = false,
   documentKey,
+  collaborationSession = null,
+  collaborationStatus = WebSocketStatus.Disconnected,
+  collaborationSynced = false,
+  collaborationUsers = [],
+  collaborationError = '',
+  selectionAssistant,
   onChange,
   onSelectionChange
 }, ref) {
@@ -125,13 +177,15 @@ export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandl
   const [search, setSearch] = useState('');
   const [replacement, setReplacement] = useState('');
   const [searchStatus, setSearchStatus] = useState('');
+  const [activeSelection, setActiveSelection] = useState<StructuredSelection | null>(null);
+  const [copyStatus, setCopyStatus] = useState('');
   const lastEmitted = useRef(value);
   const selectionRef = useRef<StructuredSelection | null>(null);
-  const initialContent = useMemo(() => editorJson ?? markdownToEditorHtml(value), []);
+  const initialContent = useMemo(() => collaborationSession ? undefined : editorJson ?? markdownToEditorHtml(value), []);
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
+      StarterKit.configure(collaborationSession ? { undoRedo: false, link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } } : { link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Underline,
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
@@ -139,7 +193,11 @@ export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandl
       Image.configure({ allowBase64: false, inline: false }),
       Placeholder.configure({ placeholder }),
       CharacterCount,
-      AiChapterMarker
+      AiChapterMarker,
+      ...(collaborationSession ? [
+        Collaboration.configure({ document: collaborationSession.document }),
+        CollaborationCaret.configure({ provider: collaborationSession.provider, user: collaborationSession.user })
+      ] : [])
     ],
     content: initialContent,
     editable: !readOnly,
@@ -154,17 +212,25 @@ export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandl
       const text = from === to ? '' : activeEditor.state.doc.textBetween(from, to, '\n');
       const selection = text.trim() ? { from, to, text } : null;
       selectionRef.current = selection;
+      setActiveSelection(selection);
+      if (!selection) setCopyStatus('');
       onSelectionChange?.(selection);
     }
-  }, [documentKey]);
+  }, [documentKey, collaborationSession]);
 
   useEffect(() => { editor?.setEditable(!readOnly); }, [editor, readOnly]);
 
   useEffect(() => {
+    if (collaborationSession) return;
     if (!editor || value === lastEmitted.current) return;
     lastEmitted.current = value;
     editor.commands.setContent(editorJson ?? markdownToEditorHtml(value), { emitUpdate: false });
-  }, [editor, editorJson, value]);
+  }, [collaborationSession, editor, editorJson, value]);
+
+  useEffect(() => {
+    if (!collaborationSession || !collaborationSynced || !editor || !editor.isEmpty || !value.trim()) return;
+    editor.commands.setContent(editorJson ?? markdownToEditorHtml(value));
+  }, [collaborationSession, collaborationSynced, editor, editorJson, value]);
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -228,12 +294,37 @@ export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandl
     editor.chain().focus().setImage({ src: src.trim(), alt: alt.trim(), title: alt.trim() }).run();
   };
 
+  const copySelectedText = async () => {
+    const selection = selectionRef.current;
+    if (!selection?.text.trim()) return;
+    try {
+      await navigator.clipboard.writeText(selection.text);
+      setCopyStatus('복사됨');
+      window.setTimeout(() => setCopyStatus(''), 1400);
+    } catch {
+      setCopyStatus('복사 실패');
+    }
+  };
+
+  const runSelectionImprovement = (mode: StructuredSelectionImprovementMode) => {
+    const selection = selectionRef.current;
+    if (!selection || selectionAssistant?.disabled || selectionAssistant?.busy) return;
+    selectionAssistant?.onImprove(mode, selection);
+  };
+
   const wordCount = editor?.getText().trim().split(/\s+/u).filter(Boolean).length ?? 0;
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
 
   return <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label}>
     <header className="structured-editor__header">
-      <div><strong>{label}</strong><span>{readOnly ? '읽기 전용' : '자동 저장 호환 편집기'}</span></div>
+      <div><strong>{label}</strong><span>{readOnly ? '읽기 전용' : collaborationSession ? '실시간 공동 편집 + 자동 저장' : '자동 저장 호환 편집기'}</span></div>
+      {collaborationSession && <div className="structured-editor__collaboration" data-status={collaborationStatus}>
+        <span>{collaborationError ? '인증 확인 필요' : collaborationStatus === WebSocketStatus.Connected ? (collaborationSynced ? '실시간 연결됨' : '문서 동기화 중…') : collaborationStatus === WebSocketStatus.Connecting ? '협업 서버 연결 중…' : '오프라인 편집 중'}</span>
+        <div aria-label={`현재 공동 편집자 ${collaborationUsers.length}명`}>
+          {collaborationUsers.slice(0, 5).map((user) => <i key={user.clientId} title={user.name} style={{ backgroundColor: user.color }}>{user.name.slice(0, 1)}</i>)}
+          {collaborationUsers.length > 5 && <b>+{collaborationUsers.length - 5}</b>}
+        </div>
+      </div>}
       <div className="structured-editor__view-actions">
         <ToolbarButton label="찾기와 바꾸기" active={showSearch} onClick={() => setShowSearch((current) => !current)}>찾기</ToolbarButton>
         <ToolbarButton label="본문 미리보기" active={preview} onClick={() => setPreview((current) => !current)}>{preview ? '편집' : '미리보기'}</ToolbarButton>
@@ -283,8 +374,100 @@ export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandl
     </div>}
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
     <div className="structured-editor__canvas">
-      {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(editor?.getHTML() ?? '') }} /> : <EditorContent editor={editor} />}
+      {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(editor?.getHTML() ?? '') }} /> : <>
+        {selectionAssistant && editor && <BubbleMenu
+          editor={editor}
+          pluginKey={`structured-selection-assistant-${documentKey ?? label}`}
+          updateDelay={80}
+          shouldShow={({ editor: activeEditor, from, to }) => !readOnly && activeEditor.isEditable && activeEditor.isFocused && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim())}
+          className="structured-editor__selection-menu"
+          role="toolbar"
+          aria-label="선택 문장 빠른 작업"
+        >
+          <button type="button" className="is-copy" onMouseDown={(event) => event.preventDefault()} onClick={() => void copySelectedText()} aria-label="선택 문장 복사">{copyStatus || '복사'}</button>
+          <span aria-hidden="true" />
+          <button type="button" className="is-ai" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('professional')}>✦ 전문적으로</button>
+          <button type="button" className="is-ai" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('concise')}>✦ 간결하게</button>
+          <button type="button" className="is-ai is-primary" disabled={selectionAssistant.disabled || selectionAssistant.busy || !activeSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => runSelectionImprovement('custom')}>{selectionAssistant.busy ? '개선 중…' : '✦ Gemini 개선'}</button>
+        </BubbleMenu>}
+        <EditorContent editor={editor} />
+      </>}
     </div>
-    <footer><span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>Markdown + Tiptap JSON 호환</span></footer>
+    <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? 'Yjs + Hocuspocus CRDT' : 'Markdown + Tiptap JSON 호환'}</span></footer>
   </section>;
+});
+
+const CollaborativeDocumentEditor = forwardRef<StructuredDocumentEditorHandle, StructuredDocumentEditorProps>(function CollaborativeDocumentEditor(props, ref) {
+  const [session, setSession] = useState<CollaborationSession | null>(null);
+  const [status, setStatus] = useState(WebSocketStatus.Connecting);
+  const [synced, setSynced] = useState(false);
+  const [users, setUsers] = useState<Array<{ clientId: number; name: string; color: string }>>([]);
+  const [error, setError] = useState('');
+  const runtime = globalThis as typeof globalThis & {
+    __CLAIM_CENTER_COLLABORATION_URL__?: string;
+    __CLAIM_CENTER_COLLABORATION_TOKEN_ENDPOINT__?: string;
+  };
+  const url = runtime.__CLAIM_CENTER_COLLABORATION_URL__?.trim() ?? '';
+  const tokenEndpoint = runtime.__CLAIM_CENTER_COLLABORATION_TOKEN_ENDPOINT__?.trim() || '/api/collaboration/token';
+  const collaboration = props.collaboration!;
+
+  useEffect(() => {
+    const document = new Y.Doc();
+    const user = {
+      name: collaboration.userName.trim() || collaboration.userEmail?.split('@')[0] || '협업 사용자',
+      color: collaborationColor(collaboration.userEmail || collaboration.userName || collaboration.documentId),
+      ...(collaboration.userEmail ? { email: collaboration.userEmail } : {})
+    };
+    let active = true;
+    const provider = new HocuspocusProvider({
+      url,
+      name: collaboration.documentId,
+      document,
+      sessionAwareness: true,
+      flushDelay: 250,
+      token: async () => {
+        const response = await fetch(tokenEndpoint, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ documentName: collaboration.documentId })
+        });
+        if (!response.ok) throw new Error(`협업 인증 토큰 발급 실패 (HTTP ${response.status})`);
+        const payload = await response.json() as { token?: unknown };
+        if (typeof payload.token !== 'string' || !payload.token) throw new Error('협업 인증 토큰이 없습니다.');
+        return payload.token;
+      },
+      onStatus: ({ status: next }) => { if (active) setStatus(next); },
+      onSynced: ({ state }) => { if (active) setSynced(state); },
+      onAwarenessUpdate: ({ states }) => { if (active) setUsers(normalizeCollaborationUsers(states)); },
+      onAuthenticationFailed: ({ reason }) => { if (active) setError(`실시간 협업 인증 실패: ${reason}`); },
+      onAuthenticated: () => { if (active) setError(''); }
+    });
+    provider.setAwarenessField('user', user);
+    setSession({ document, provider, user });
+    return () => {
+      active = false;
+      provider.destroy();
+      document.destroy();
+    };
+  }, [collaboration.documentId, collaboration.userEmail, collaboration.userName, tokenEndpoint, url]);
+
+  if (!session) return <section className="structured-editor structured-editor--collaboration-loading" aria-label={props.label}><strong>실시간 공동 편집기를 준비하고 있습니다…</strong></section>;
+  return <StructuredDocumentEditorCore {...props} ref={ref} collaborationSession={session} collaborationStatus={status} collaborationSynced={synced} collaborationUsers={users} collaborationError={error} />;
+});
+
+export const StructuredDocumentEditor = forwardRef<StructuredDocumentEditorHandle, StructuredDocumentEditorProps>(function StructuredDocumentEditor(props, ref) {
+  const runtime = globalThis as typeof globalThis & {
+    __CLAIM_CENTER_COLLABORATION_URL__?: string;
+    __CLAIM_CENTER_SESSION_USER__?: { id: string; name: string; email: string; organizationId: string; roles: string[] };
+  };
+  const collaborationUrl = runtime.__CLAIM_CENTER_COLLABORATION_URL__?.trim();
+  const implicitDocumentKey = props.documentKey?.replace(/^report-step(?:3|4)-/u, 'report-');
+  const collaboration = props.collaboration ?? (props.documentKey ? {
+    documentId: `claim-center:${runtime.__CLAIM_CENTER_SESSION_USER__?.organizationId ?? 'unknown'}:${implicitDocumentKey}`,
+    userName: runtime.__CLAIM_CENTER_SESSION_USER__?.name ?? '로그인 사용자',
+    userEmail: runtime.__CLAIM_CENTER_SESSION_USER__?.email
+  } : undefined);
+  if (collaboration && collaborationUrl) return <CollaborativeDocumentEditor {...props} collaboration={collaboration} ref={ref} />;
+  return <StructuredDocumentEditorCore {...props} ref={ref} />;
 });

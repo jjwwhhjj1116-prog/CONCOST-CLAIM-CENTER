@@ -160,6 +160,14 @@ export const App: React.FC = () => {
     );
   }
 
+  (globalThis as typeof globalThis & { __CLAIM_CENTER_SESSION_USER__?: { id: string; name: string; email: string; organizationId: string; roles: UserRole[] } }).__CLAIM_CENTER_SESSION_USER__ = {
+    id: session.id,
+    name: session.name,
+    email: session.email,
+    organizationId: session.organizationId,
+    roles: session.roles
+  };
+
   if (currentPath === '/print/projects/month-a4') {
     return <ProjectSchedulePrint
       currentSearch={currentSearch}

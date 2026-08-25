@@ -9,6 +9,7 @@ import './layout/WorkspaceHelpCenter.css';
 import './workflow/ProjectWorkflowSchedule.css';
 import './workflow/ProjectSchedulePrint.css';
 import './documents/RhwpEditorDialog.css';
+import './documents/StructuredDocumentCollaboration.css';
 import './documents/StructuredDocumentEditor.css';
 import './workflow/ProposalAwardWorkflow.css';
 import './workflow/WorkflowOperations.css';

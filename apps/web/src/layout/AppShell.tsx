@@ -12,24 +12,24 @@ const NAVIGATION_GROUPS: readonly {
   nestedGroups?: readonly { label: string; eyebrow: string; routeIds: readonly string[] }[];
   allowedRoles?: readonly UserRole[];
 }[] = [
-  { label: 'CLAIM CENTER HOME', eyebrow: 'HOME', icon: 'home', routeIds: ['DASH-01'] },
+  { label: 'HOME', eyebrow: '클레임센터 홈', icon: 'home', routeIds: ['DASH-01'] },
   {
-    label: '프로젝트 제안 및 수주', eyebrow: 'PROJECT INTAKE & AWARD', icon: 'proposal',
+    label: '프로젝트 제안 및 수주', eyebrow: '의뢰·제안·수주', icon: 'proposal',
     routeIds: ['CASE-02', 'CASE-07', 'CASE-08', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'],
     nestedGroups: [
-      { label: '프로젝트 의뢰', eyebrow: 'PROJECT INTAKES', routeIds: ['CASE-02', 'CASE-07', 'CASE-08'] },
-      { label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }
+      { label: '프로젝트 의뢰', eyebrow: '의뢰 관리', routeIds: ['CASE-02', 'CASE-07', 'CASE-08'] },
+      { label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }
     ]
   },
   {
-    label: '프로젝트 워크', eyebrow: 'PROJECT WORK', icon: 'work',
+    label: '프로젝트 워크', eyebrow: '프로젝트 실행', icon: 'work',
     routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
-    nestedGroups: [{ label: '프로젝트 보고서', eyebrow: 'PROJECT REPORTS', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
+    nestedGroups: [{ label: '프로젝트 보고서', eyebrow: '보고서 관리', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
   },
-  { label: '클레임센터 자료실', eyebrow: 'EVIDENCE LIBRARY', icon: 'library', routeIds: ['CASE-06'] },
-  { label: '법원 자료', eyebrow: 'COURT & LITIGATION', icon: 'court', routeIds: ['POST-01'] },
-  { label: '검토·납품·품질관리', eyebrow: 'QUALITY & DELIVERY', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
-  { label: '설정', eyebrow: 'SETTINGS', icon: 'settings', routeIds: ['MY-01'] }
+  { label: '클레임센터 자료실', eyebrow: '자료 관리', icon: 'library', routeIds: ['CASE-06'] },
+  { label: '법원 자료', eyebrow: '법원·소송', icon: 'court', routeIds: ['POST-01'] },
+  { label: '검토·납품·품질관리', eyebrow: '검토·납품 관리', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
+  { label: '설정', eyebrow: '환경 설정', icon: 'settings', routeIds: ['MY-01'] }
 ];
 
 const NavigationGroupIcon: React.FC<{ name: (typeof NAVIGATION_GROUPS)[number]['icon'] }> = ({ name }) => {
@@ -154,7 +154,7 @@ export const AppShell: React.FC<AppShellProps> = ({
     <nav className="navigation-list" aria-label="주요 화면">
       {selectedProject && <section className="sidebar-project-context" aria-label="현재 선택 프로젝트">
         <button type="button" onClick={() => go(`/projects/schedule?projectId=${encodeURIComponent(selectedProject.id)}`)}>
-          <span className="sidebar-project-context__eyebrow">CURRENT PROJECT</span>
+          <span className="sidebar-project-context__eyebrow">현재 선택 프로젝트</span>
           <strong>{selectedProject.code}</strong>
           <b>{selectedProject.name}</b>
           <small>{selectedStage ? `${selectedStage.id}단계 · ${selectedStage.name}` : '전체 단계 워크플로우'}</small>
@@ -179,7 +179,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           return <section className={`navigation-group navigation-group--single${isCurrentGroup ? ' is-current' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
             <button type="button" className="navigation-single-action" onClick={() => go(route.path)} aria-current={currentPath === route.path ? 'page' : undefined}>
               <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
-              <span><small>{group.eyebrow}</small><strong>{group.label}</strong></span>
+              <span><strong>{group.label}</strong></span>
             </button>
           </section>;
         }
@@ -192,8 +192,8 @@ export const AppShell: React.FC<AppShellProps> = ({
             onClick={() => setExpandedGroups((current) => ({ ...current, [group.icon]: !current[group.icon] }))}
           >
             <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
-            <div><span>{group.eyebrow}</span><h2>{group.label}</h2></div>
-            <span className="navigation-chevron" aria-hidden="true">⌄</span>
+            <div><h2>{group.label}</h2></div>
+            <span className="navigation-chevron" aria-hidden="true" />
           </button>
           <div className="navigation-group__body" id={`navigation-group-${group.icon}`} hidden={!isExpanded}>
           {group.routeIds.map((routeId) => {
@@ -205,7 +205,8 @@ export const AppShell: React.FC<AppShellProps> = ({
                 .filter(Boolean);
               if (!nestedRoutes.length) return null;
               const isSubgroupExpanded = Boolean(expandedSubgroups[nested.label]);
-              return <section className="navigation-subgroup" key={nested.label} aria-label={nested.label}>
+              const subgroupTone = nested.routeIds[0] === 'CASE-02' ? 'intake' : nested.routeIds[0] === 'PROP-02' ? 'proposal' : 'report';
+              return <section className="navigation-subgroup" key={nested.label} aria-label={nested.label} data-nav-subgroup={subgroupTone}>
                 <button
                   type="button"
                   className="navigation-subgroup__title"
@@ -216,6 +217,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                 <div className="navigation-subgroup__body" id={`navigation-subgroup-${nested.routeIds[0]}`} hidden={!isSubgroupExpanded}>{nestedRoutes.map((route) => route && <button
                   type="button"
                   key={route.id}
+                  data-tour-route={route.id}
                   onClick={() => go(routeWithProjectContext(route.id, route.path))}
                   aria-current={currentPath === route.path ? 'page' : undefined}
                   className="navigation-link navigation-link--nested"
@@ -230,6 +232,7 @@ export const AppShell: React.FC<AppShellProps> = ({
             return <button
               type="button"
               key={route.id}
+              data-tour-route={route.id}
               onClick={() => go(routeWithProjectContext(route.id, route.path))}
               aria-current={currentPath === route.path ? 'page' : undefined}
               className="navigation-link"

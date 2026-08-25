@@ -53,7 +53,7 @@ const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'admin'
 
 export const ROUTES: RouteConfig[] = [
   { id: 'AUTH-01', path: '/login', name: '로그인' },
-  { id: 'DASH-01', path: '/dashboard', name: 'CLAIM CENTER HOME' },
+  { id: 'DASH-01', path: '/dashboard', name: 'HOME' },
   { id: 'CASE-01', path: '/cases', name: '전체 프로젝트' },
   { id: 'CASE-02', path: '/cases/new', name: '프로젝트 의뢰서 작성', allowedRoles: CASE_CREATE_ROLES },
   { id: 'CASE-07', path: '/cases/intakes', name: '프로젝트 의뢰 목록' },

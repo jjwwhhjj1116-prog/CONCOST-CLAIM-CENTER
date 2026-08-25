@@ -4598,7 +4598,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
     if (request.method === 'GET') {
       try {
         const actionSchema = await previewTutorialCompletionActionSchema(env);
-        return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF36_V1', phase: 'CF36_GUIDED_WORKSPACE' });
+        return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF62_V1', phase: 'CF62_INTERACTIVE_TUTORIAL' });
       }
       catch { return json({ error: 'Tutorial state migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
     }
@@ -4613,7 +4613,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
     const completionAction = actionSchema ? String(body.action) : 'COMPLETED';
     const current = await previewUserTutorialState(env, user.id);
     if (current.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
-    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: previewTutorialApiProjection(current, actionSchema), currentTutorialVersion: 'CF36_V1', phase: 'CF36_GUIDED_WORKSPACE' });
+    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: previewTutorialApiProjection(current, actionSchema), currentTutorialVersion: 'CF62_V1', phase: 'CF62_INTERACTIVE_TUTORIAL' });
     const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt ?? '1970-01-01') + 1)).toISOString();
     const nextVersion = current.version + 1;
     const write = current.version === 0
@@ -4631,7 +4631,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
           : env.DB.prepare('INSERT INTO preview_user_tutorial_history (id,user_id,tutorial_version,state_version,completed_by,completed_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), user.id, body.tutorialVersion, nextVersion, user.id, now)
       ]) as Array<{meta?:{changes?:number}}>;
       if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT' }, 409);
-      return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF36_V1', phase: 'CF36_GUIDED_WORKSPACE' });
+      return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF62_V1', phase: 'CF62_INTERACTIVE_TUTORIAL' });
     } catch {
       const latest = await previewUserTutorialState(env, user.id).catch(() => null);
       if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);

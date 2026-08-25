@@ -1276,7 +1276,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
               <div><b>한글 문서 편집</b><span>HWP/HWPX를 열어 팝업에서 수정하고 다시 내려받습니다.</span></div>
               <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>{const file=event.target.files?.[0];if(file){setHwpSourceFile(file);setHwpEditorOpen(true);}event.target.value='';}} />
               <Button size="sm" className="report-action-hwp" onClick={()=>hwpInputRef.current?.click()}>HWP 가져오기·편집</Button>
-              <Button size="sm" variant="secondary" onClick={()=>{setHwpSourceFile(null);setHwpEditorOpen(true);}}>새 HWP 편집기</Button>
+              <Button size="sm" variant="secondary" onClick={()=>hwpInputRef.current?.click()}>HWP 원본으로 새 작업</Button>
             </div>
             {finalizations.length > 0 ? (
               <div>

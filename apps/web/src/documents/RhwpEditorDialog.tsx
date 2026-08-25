@@ -74,7 +74,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
           setStatus(`${result.pageCount}페이지를 열었습니다. 편집 후 HWP 또는 HWPX로 내보내세요.`);
         } else {
           setActiveFileName(suggestedName);
-          setStatus('새 문서 편집기가 열렸습니다. 기존 HWP/HWPX를 가져오거나 새로 작성하세요.');
+          setStatus('rhwp는 빈 HWP 생성 API를 제공하지 않습니다. 편집할 HWP/HWPX 원본을 먼저 가져오세요.');
         }
       })
       .catch((reason) => {
@@ -115,6 +115,11 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const exportDocument = async (format: ExportFormat) => {
     const editor = editorRef.current;
     if (!editor) { setError('편집기가 아직 준비되지 않았습니다. 잠시 후 다시 눌러 주세요.'); return; }
+    if (!hasImportedTemplate) {
+      setError('내보낼 HWP 원본이 없습니다. “HWP/HWPX 가져오기”로 회사 템플릿 또는 기존 문서를 먼저 열어 주세요.');
+      setStatus('원본 문서를 불러온 뒤에만 HWP/HWPX 내보내기가 활성화됩니다.');
+      return;
+    }
     setBusy(true); setError(''); setStatus(`${format.toUpperCase()} 파일을 생성하고 있습니다…`);
     try {
       if (format === 'hwp') {
@@ -144,13 +149,13 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       <nav className="rhwp-dialog__toolbar" aria-label="HWP 문서 도구">
         <input ref={importInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event) => void loadFile(event.target.files?.[0])} />
         <button type="button" className="rhwp-action-import" disabled={busy} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
-        <button type="button" className="rhwp-action-hwp" disabled={busy} onClick={() => void exportDocument('hwp')}>HWP 내보내기</button>
-        <button type="button" className="rhwp-action-hwpx" disabled={busy} onClick={() => void exportDocument('hwpx')}>HWPX 내보내기</button>
+        <button type="button" className="rhwp-action-hwp" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 내보내기</button>
+        <button type="button" className="rhwp-action-hwpx" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 내보내기</button>
         <div className="rhwp-dialog__status" role="status">{busy && <i aria-hidden="true" />}{status}</div>
       </nav>
       <aside className={`rhwp-dialog__format-note${hasImportedTemplate ? ' is-preserved' : ''}`}>
         <strong>{hasImportedTemplate ? '✓ 원본 HWP 서식 유지' : '회사 기본서식 적용 방법'}</strong>
-        <span>{hasImportedTemplate ? '가져온 템플릿의 글꼴·글자크기·머리글·쪽 여백·표·이미지 배치를 그대로 편집하고 내보냅니다.' : '“HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열면 글꼴·머리글·여백이 그대로 기본값이 됩니다. 빈 문서는 rhwp 기본 서식을 사용합니다.'}</span>
+        <span>{hasImportedTemplate ? '가져온 템플릿의 글꼴·글자크기·머리글·쪽 여백·표·이미지 배치를 그대로 편집하고 내보냅니다.' : '이 편집기는 기존 HWP/HWPX의 서식을 유지하며 고치는 용도입니다. “HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열어야 편집·내보내기가 정상 작동합니다.'}</span>
       </aside>
       <details className="rhwp-dialog__claude-guide">
         <summary>✦ Claude로 HWP를 직접 고칠 수 있나요?</summary>

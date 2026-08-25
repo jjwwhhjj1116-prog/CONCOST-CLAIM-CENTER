@@ -8,7 +8,7 @@ declare global {
 
 const defaultApiOrigin = typeof window === 'undefined'
   ? 'http://127.0.0.1:3001'
-  : ['localhost', '127.0.0.1'].includes(window.location.hostname)
+  : ['localhost', '127.0.0.1'].includes(window.location.hostname) && window.location.port !== '8787'
     ? `${window.location.protocol}//${window.location.hostname}:3001`
     : window.location.origin;
 const configuredApiOrigin = typeof window === 'undefined' ? undefined : window.__CLAIM_API_ORIGIN__;

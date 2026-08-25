@@ -9,7 +9,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   const report = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const webPackage = read('apps/web/package.json');
-  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'replaceAll', '전체화면', '미리보기']) {
+  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'replaceAll', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선']) {
     assert.ok(editor.includes(marker), `missing structured editor feature: ${marker}`);
   }
   assert.match(editor, /AI-CHAPTER:/u);
@@ -17,8 +17,11 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(editor, /replaceRange/u);
   assert.match(report, /StructuredDocumentEditor/u);
   assert.match(report, /editorJson/u);
+  assert.match(report, /report-step3-[\s\S]*?selectionAssistant/u);
+  assert.match(report, /report-step4-[\s\S]*?selectionAssistant/u);
   assert.match(proposal, /StructuredDocumentEditor/u);
   assert.match(proposal, /Gemini 문장 개선/u);
+  assert.match(proposal, /selectionAssistant/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);
 });
@@ -37,9 +40,10 @@ test('CF60 persists structured report JSON and protects proposal AI improvement 
   assert.match(worker, /사용자가 준 사실·숫자·날짜·인명·고유명사·근거를 추가하거나 삭제하지/u);
 });
 
-test('CF60 keeps server-only collaboration and memory bridges honest', () => {
+test('CF60 keeps the collaboration bridge disabled until the private server runtime URL is injected', () => {
   const editor = read('apps/web/src/documents/StructuredDocumentEditor.tsx');
-  assert.doesNotMatch(editor, /hocuspocus|WebsocketProvider|mem0|langgraph/iu);
+  assert.match(editor, /__CLAIM_CENTER_COLLABORATION_URL__/u);
+  assert.match(editor, /if \(collaboration && collaborationUrl\)/u);
   assert.match(editor, /자동 저장 호환 편집기/u);
 });
 

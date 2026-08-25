@@ -174,13 +174,52 @@
       .approval-status--changes_requested { background: hsla(346,87%,50%,.13); color: hsl(346,87%,72%); }
       .approval-status--approved { background: hsla(142,71%,45%,.14); color: hsl(142,70%,70%); }
       .approval-status--resubmitted { background: hsla(38,92%,50%,.14); color: hsl(38,92%,72%); }
-      @media (max-width: 1024px) { .session-tools { flex: 1 1 auto; } .p08-layout { grid-template-columns: 1fr; } .p08-template-list { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); } .dashboard-kpi-grid, .report-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-      @media (max-width: 760px) { .dashboard-hero, .workspace-hero { align-items: stretch; flex-direction: column; } .dashboard-columns { grid-template-columns: 1fr; } .approval-filter { grid-template-columns: 1fr; } .session-identity { display: none; } }
-      @media (max-width: 560px) { .route-view, .route-message { padding: 12px; } .state-controls > button { flex: 1 1 30%; } }
+      @media (max-width: 1024px) {
+        .topbar { padding-inline: 16px; }
+        .session-tools { flex: 1 1 auto; }
+        .p08-layout { grid-template-columns: 1fr; }
+        .p08-template-list { grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); }
+        .dashboard-kpi-grid, .report-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .dashboard-columns { gap: 12px; }
+      }
+      @media (max-width: 760px) {
+        .topbar { align-items: stretch; gap: 8px; padding: 8px 12px; }
+        .brand-group { width: 100%; justify-content: flex-start; }
+        .brand-mark { width: 38px; height: 38px; }
+        .session-tools { width: 100%; max-width: 100%; justify-content: flex-start; gap: 7px; overflow-x: auto; padding-bottom: 3px; flex-wrap: nowrap; scrollbar-width: thin; }
+        .session-tools > * { flex: 0 0 auto; }
+        .preview-chip, .session-identity { display: none; }
+        .shell-body { min-height: calc(100dvh - 106px); }
+        .dashboard-page { gap: 12px; }
+        .dashboard-hero, .workspace-hero { align-items: stretch; flex-direction: column; gap: 16px; padding: 20px 18px; border-radius: 13px; }
+        .dashboard-hero h3, .workspace-hero h3 { font-size: clamp(1.35rem, 7vw, 1.75rem); line-height: 1.25; }
+        .dashboard-quick-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+        .dashboard-quick-actions > :first-child { grid-column: 1 / -1; }
+        .dashboard-quick-actions button { width: 100%; min-height: 44px; }
+        .dashboard-columns { grid-template-columns: 1fr; }
+        .dashboard-work-list button { align-items: flex-start; padding: 14px 2px; }
+        .dashboard-work-list strong, .dashboard-work-list small { white-space: normal; overflow-wrap: anywhere; }
+        .dashboard-status { margin-top: 1px; }
+        .approval-filter { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 560px) {
+        .route-view, .route-message { padding: 12px; }
+        .state-controls > button { flex: 1 1 30%; }
+        .brand-copy h1 { font-size: .98rem; white-space: nowrap; }
+        .brand-copy small { display: none; }
+        .dashboard-kpi-grid, .report-summary-grid { grid-template-columns: 1fr; gap: 9px; }
+        .dashboard-kpi, .report-summary-grid > div { padding: 15px 16px; }
+        .dashboard-kpi strong, .report-summary-grid strong { font-size: 1.75rem; }
+        .dashboard-quick-actions { grid-template-columns: 1fr; }
+        .dashboard-quick-actions > :first-child { grid-column: auto; }
+        .dashboard-work-list button { flex-direction: column; }
+        .dashboard-status { align-self: flex-start; }
+      }
     </style>
   </head>
   <body>
     <div id="root"></div>
+    <script src="/runtime-config.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
