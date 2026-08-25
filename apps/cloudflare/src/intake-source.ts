@@ -132,12 +132,15 @@ function textNodes(xml: string): string {
 async function extractXlsx(bytes: Uint8Array): Promise<string> {
   if (read32(bytes, 0) !== 0x04034b50) throw new IntakeSourceError('INVALID_INTAKE_XLSX', '선택한 파일은 유효한 .xlsx 파일이 아닙니다.');
   const entries = zipEntries(bytes);
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  // HWP/Excel and third-party spreadsheet writers do not always preserve the
+  // canonical OOXML part-name casing. ZIP member lookup therefore has to be
+  // case-insensitive even though the worksheet path matcher already is.
+  const byName = new Map(entries.map((entry) => [entry.name.toLowerCase(), entry]));
   const worksheetEntries = entries.filter((entry) => /^xl\/worksheets\/sheet\d+\.xml$/iu.test(entry.name)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })).slice(0, 20);
-  if (!worksheetEntries.length || !byName.has('[Content_Types].xml')) throw new IntakeSourceError('INVALID_INTAKE_XLSX', 'Excel 통합문서에서 워크시트를 찾을 수 없습니다.');
+  if (!worksheetEntries.length || !byName.has('[content_types].xml')) throw new IntakeSourceError('INVALID_INTAKE_XLSX', 'Excel 통합문서에서 워크시트를 찾을 수 없습니다.');
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const shared: string[] = [];
-  const sharedEntry = byName.get('xl/sharedStrings.xml');
+  const sharedEntry = byName.get('xl/sharedstrings.xml');
   if (sharedEntry) {
     const sharedXml = decoder.decode(await unzipEntry(bytes, sharedEntry));
     for (const match of sharedXml.matchAll(/<si(?:\s[^>]*)?>([\s\S]*?)<\/si>/giu)) shared.push(textNodes(match[1]));
@@ -148,11 +151,14 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
   for (const entry of worksheetEntries) {
     const xml = decoder.decode(await unzipEntry(bytes, entry));
     lines.push(`[${entry.name.replace(/^xl\/worksheets\//u, '').replace(/\.xml$/u, '')}]`);
-    for (const match of xml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/giu)) {
+    // Empty formatted cells are commonly serialized as <c .../>. Match those
+    // atomically so they cannot swallow the next populated cell and shift all
+    // references/values in company meeting-minute templates.
+    for (const match of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/giu)) {
       cellCount += 1;
       if (cellCount > 20_000) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel 셀이 20,000개를 넘습니다. 필요한 시트만 남겨 다시 올려 주세요.');
       const attrs = match[1];
-      const body = match[2];
+      const body = match[2] ?? '';
       const ref = /\br="([^"]+)"/iu.exec(attrs)?.[1] ?? `CELL-${cellCount}`;
       const type = /\bt="([^"]+)"/iu.exec(attrs)?.[1] ?? '';
       const raw = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/iu.exec(body)?.[1] ?? '';

@@ -89,17 +89,20 @@ export const AppShell: React.FC<AppShellProps> = ({
   children
 }) => {
   const safeUserName = typeof userName === 'string' && userName.trim() ? userName.trim() : 'User';
+  const currentRouteId = ROUTES.find((route) => route.path === currentPath)?.id;
+  const activeGroup = NAVIGATION_GROUPS.find((group) => group.routeIds.includes(currentRouteId ?? ''));
+  const activeSubgroup = activeGroup?.nestedGroups?.find((group) => group.routeIds.includes(currentRouteId ?? ''));
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => ({ [activeGroup?.icon ?? 'home']: true }));
+  const [expandedSubgroups, setExpandedSubgroups] = useState<Record<string, boolean>>(() => activeSubgroup ? { [activeSubgroup.label]: true } : {});
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
-  const activeGroup = NAVIGATION_GROUPS.find((group) => group.routeIds.some((id) => ROUTES.find((route) => route.id === id)?.path === currentPath));
   const locationParams = new URLSearchParams(currentSearch);
   const contextProjectId = locationParams.get('projectId');
   const contextCaseId = locationParams.get('caseId');
   const selectedProject = WORKFLOW_PROJECTS.find((project) => project.id === contextProjectId || project.caseId === contextCaseId);
-  const currentRouteId = ROUTES.find((route) => route.path === currentPath)?.id;
   const selectedStage = WORKFLOW_STAGES.find((stage) => stage.routeId === currentRouteId)
     ?? (currentRouteId === 'REPO-02' ? WORKFLOW_STAGES.find((stage) => stage.id === 6) : undefined)
     ?? (currentRouteId === 'MEET-01' ? WORKFLOW_STAGES.find((stage) => stage.id === 3) : undefined)
@@ -114,6 +117,12 @@ export const AppShell: React.FC<AppShellProps> = ({
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarWidth));
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (!activeGroup) return;
+    setExpandedGroups((current) => ({ ...current, [activeGroup.icon]: true }));
+    if (activeSubgroup) setExpandedSubgroups((current) => ({ ...current, [activeSubgroup.label]: true }));
+  }, [activeGroup, activeSubgroup]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -163,6 +172,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;
         const isCurrentGroup = group === activeGroup;
+        const isExpanded = Boolean(expandedGroups[group.icon]);
         if (group.icon === 'settings') {
           const route = routes[0];
           if (!route) return null;
@@ -173,11 +183,19 @@ export const AppShell: React.FC<AppShellProps> = ({
             </button>
           </section>;
         }
-        return <section className={`navigation-group${isCurrentGroup ? ' is-current' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
-          <header>
+        return <section className={`navigation-group${isCurrentGroup ? ' is-current' : ''}${isExpanded ? ' is-expanded' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
+          <button
+            type="button"
+            className="navigation-group-toggle"
+            aria-expanded={isExpanded}
+            aria-controls={`navigation-group-${group.icon}`}
+            onClick={() => setExpandedGroups((current) => ({ ...current, [group.icon]: !current[group.icon] }))}
+          >
             <span className="navigation-group-icon"><NavigationGroupIcon name={group.icon} /></span>
             <div><span>{group.eyebrow}</span><h2>{group.label}</h2></div>
-          </header>
+            <span className="navigation-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <div className="navigation-group__body" id={`navigation-group-${group.icon}`} hidden={!isExpanded}>
           {group.routeIds.map((routeId) => {
             const nested = group.nestedGroups?.find((candidate) => candidate.routeIds.includes(routeId));
             if (nested) {
@@ -186,9 +204,16 @@ export const AppShell: React.FC<AppShellProps> = ({
                 .map((id) => routes.find((route) => route?.id === id))
                 .filter(Boolean);
               if (!nestedRoutes.length) return null;
+              const isSubgroupExpanded = Boolean(expandedSubgroups[nested.label]);
               return <section className="navigation-subgroup" key={nested.label} aria-label={nested.label}>
-                <div className="navigation-subgroup__title"><span aria-hidden="true">▱</span><div><small>{nested.eyebrow}</small><strong>{nested.label}</strong></div></div>
-                {nestedRoutes.map((route) => route && <button
+                <button
+                  type="button"
+                  className="navigation-subgroup__title"
+                  aria-expanded={isSubgroupExpanded}
+                  aria-controls={`navigation-subgroup-${nested.routeIds[0]}`}
+                  onClick={() => setExpandedSubgroups((current) => ({ ...current, [nested.label]: !current[nested.label] }))}
+                ><span aria-hidden="true">▱</span><div><small>{nested.eyebrow}</small><strong>{nested.label}</strong></div><i aria-hidden="true">⌄</i></button>
+                <div className="navigation-subgroup__body" id={`navigation-subgroup-${nested.routeIds[0]}`} hidden={!isSubgroupExpanded}>{nestedRoutes.map((route) => route && <button
                   type="button"
                   key={route.id}
                   onClick={() => go(routeWithProjectContext(route.id, route.path))}
@@ -197,7 +222,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                 >
                   <span className="navigation-dot" aria-hidden="true" />
                   <span className="text-ellipsis">{route.name}</span>
-                </button>)}
+                </button>)}</div>
               </section>;
             }
             const route = routes.find((candidate) => candidate?.id === routeId);
@@ -213,6 +238,7 @@ export const AppShell: React.FC<AppShellProps> = ({
               <span className="text-ellipsis">{route.name}</span>
             </button>;
           })}
+          </div>
         </section>;
       })}
     </nav>

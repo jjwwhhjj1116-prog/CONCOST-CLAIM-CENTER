@@ -49,7 +49,7 @@ test('CF21 keeps active navigation legible and harmonizes light workspace surfac
   const theme = read('apps/web/src/theme-system.css');
 
   assert.match(shell, /navigation-group\$\{isCurrentGroup \? ' is-current' : ''\}/u);
-  assert.match(theme, /\.navigation-group\.is-current header/u);
+  assert.match(theme, /\.navigation-group\.is-current \.navigation-group-toggle/u);
   assert.match(theme, /box-shadow: inset 3px 0 #4a86c5/u);
   assert.doesNotMatch(theme, /\.navigation-group \.navigation-link\[aria-current='page'\] \{ background: linear-gradient/u);
   assert.match(theme, /:root\[data-theme='light'\] \.schedule-board/u);

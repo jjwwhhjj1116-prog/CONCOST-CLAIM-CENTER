@@ -20,6 +20,11 @@ test('CF15 sidebar follows the requested workflow with proposal authoring nested
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
   assert.match(shell, /icon: 'proposal'/u);
   assert.match(shell, /icon: 'library'/u);
+  assert.match(shell, /expandedGroups/u);
+  assert.match(shell, /expandedSubgroups/u);
+  assert.match(shell, /className="navigation-group-toggle"/u);
+  assert.match(shell, /aria-expanded=\{isExpanded\}/u);
+  assert.match(shell, /className="navigation-subgroup__title"/u);
   assert.doesNotMatch(shell, /01 ·|02 ·|03 ·|04 ·|05 ·/u);
   assert.match(router, /CASE-02'.*'프로젝트 의뢰서 작성'/u);
   assert.match(router, /PROP-02'.*'제안서 작성'/u);

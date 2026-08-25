@@ -28,12 +28,18 @@ test('CF58 shared rhwp editor imports, edits, verifies and exports HWP/HWPX', ()
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const previewReport = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const report = read('apps/web/src/reports/ReportStudio.tsx');
+  const dialogCss = read('apps/web/src/documents/RhwpEditorDialog.css');
   const webPackage = read('apps/web/package.json');
   for (const marker of ['createEditor', 'loadFile', 'exportHwp()', 'exportHwpx()', 'exportHwpVerify()', 'notifySaved']) {
     assert.ok(component.includes(marker), `missing rhwp integration marker: ${marker}`);
   }
-  assert.match(component, /VITE_RHWP_STUDIO_URL/u);
+  assert.match(component, /__CLAIM_CENTER_RHWP_STUDIO_URL__/u);
   assert.match(component, /\.hwp,\.hwpx,\.hml/u);
+  assert.match(component, /원본 HWP 서식 유지/u);
+  assert.match(component, /Microsoft 365용 Claude 플러그인은 Word·Excel·PowerPoint·Outlook 전용/u);
+  assert.match(component, /agents-and-tools\/tool-use\/overview/u);
+  assert.match(dialogCss, /display:flex;flex-direction:column/u);
+  assert.match(dialogCss, /height:100%!important;min-height:100%!important/u);
   assert.match(proposal, /HWP 가져오기·편집/u);
   assert.match(previewReport, /HWP 가져오기·편집/u);
   assert.match(report, /HWP 가져오기·편집/u);

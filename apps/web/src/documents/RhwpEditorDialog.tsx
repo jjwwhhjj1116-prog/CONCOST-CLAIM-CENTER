@@ -41,9 +41,10 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const [error, setError] = useState('');
   const [activeFileName, setActiveFileName] = useState(sourceFile?.name ?? suggestedName);
   const [pageCount, setPageCount] = useState<number | null>(null);
+  const [hasImportedTemplate, setHasImportedTemplate] = useState(Boolean(sourceFile));
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
-  const studioUrl = (import.meta.env.VITE_RHWP_STUDIO_URL as string | undefined)?.trim();
+  const studioUrl = (globalThis as typeof globalThis & { __CLAIM_CENTER_RHWP_STUDIO_URL__?: string }).__CLAIM_CENTER_RHWP_STUDIO_URL__?.trim();
 
   useEffect(() => {
     if (!isOpen || !editorHostRef.current) return undefined;
@@ -52,6 +53,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setError('');
     setStatus('rhwp 오픈소스 편집기를 연결하고 있습니다…');
     setPageCount(null);
+    setHasImportedTemplate(Boolean(sourceFile));
     const options: EditorOptions = {
       width: '100%', height: '100%', renderer: 'canvas2d', requestTimeoutMs: 90_000,
       ...(studioUrl ? { studioUrl } : {})
@@ -100,6 +102,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       const result = await editorRef.current.loadFile(await file.arrayBuffer(), file.name, { suppressDialogs: true });
       setPageCount(result.pageCount);
       setActiveFileName(file.name);
+      setHasImportedTemplate(true);
       setStatus(`${result.pageCount}페이지를 열었습니다. 원본과 표·이미지 위치를 확인해 주세요.`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '선택한 HWP 문서를 열지 못했습니다.');
@@ -145,8 +148,16 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         <button type="button" className="rhwp-action-hwpx" disabled={busy} onClick={() => void exportDocument('hwpx')}>HWPX 내보내기</button>
         <div className="rhwp-dialog__status" role="status">{busy && <i aria-hidden="true" />}{status}</div>
       </nav>
+      <aside className={`rhwp-dialog__format-note${hasImportedTemplate ? ' is-preserved' : ''}`}>
+        <strong>{hasImportedTemplate ? '✓ 원본 HWP 서식 유지' : '회사 기본서식 적용 방법'}</strong>
+        <span>{hasImportedTemplate ? '가져온 템플릿의 글꼴·글자크기·머리글·쪽 여백·표·이미지 배치를 그대로 편집하고 내보냅니다.' : '“HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열면 글꼴·머리글·여백이 그대로 기본값이 됩니다. 빈 문서는 rhwp 기본 서식을 사용합니다.'}</span>
+      </aside>
+      <details className="rhwp-dialog__claude-guide">
+        <summary>✦ Claude로 HWP를 직접 고칠 수 있나요?</summary>
+        <div><p><b>Microsoft 365용 Claude 플러그인은 Word·Excel·PowerPoint·Outlook 전용</b>이라 이 HWP 편집기에 그대로 설치할 수 없습니다. 이 웹에서 자동 편집하려면 Anthropic API와 선택 문장 읽기·교체 도구를 연결하는 별도 HWP 브리지가 필요합니다.</p><p>현재 rhwp 0.8.4 공개 SDK에는 선택 문장 교체 API가 없어 “Claude가 자동으로 고쳤다”고 표시하지 않습니다. 우선 HWPX 또는 DOCX로 내보낸 뒤 Microsoft 365용 Claude에서 편집하거나, 향후 사내 서버 브리지에 API를 연결할 수 있습니다.</p><nav><a href="https://claude.com/claude-for-microsoft-365" target="_blank" rel="noreferrer">Microsoft 365용 Claude 공식 안내</a><a href="https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/overview" target="_blank" rel="noreferrer">Anthropic 도구 연결 공식 안내</a></nav></div>
+      </details>
       {!studioUrl && <aside className="rhwp-dialog__security">
-        현재 `rhwp` 공식 공개 편집 런타임을 사용합니다. 회사 기밀 문서 운영 전 관리자가 <b>VITE_RHWP_STUDIO_URL</b>을 사내 동일 출처 주소로 설정하면 편집 엔진도 사내 서버에서 실행됩니다.
+        현재 `rhwp` 공식 공개 편집 런타임을 사용합니다. 회사 기밀 문서 운영 전 서버가 <b>__CLAIM_CENTER_RHWP_STUDIO_URL__</b> 런타임 설정을 사내 동일 출처 주소로 주입하면 편집 엔진도 사내 서버에서 실행됩니다.
       </aside>}
       {error && <p className="rhwp-dialog__error" role="alert">{error}</p>}
       <div className="rhwp-dialog__editor" ref={editorHostRef} aria-label="rhwp 한글 문서 편집 영역" />
