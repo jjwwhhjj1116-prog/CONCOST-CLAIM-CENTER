@@ -212,6 +212,9 @@ body {
 
 @media (max-width: 980px) { .login-page { grid-template-columns: 1fr; }.login-visual { min-height: 380px; padding: 30px; background-position: center 58%; }.login-visual-copy { width: min(680px,100%); padding: 70px 0 36px; }.login-visual-copy h1 { font-size: clamp(2.65rem,8vw,4.3rem); }.login-visual-copy p { max-width: 620px; }.login-panel { min-height: auto; padding: 55px 28px 70px; }.login-wordmark { margin-bottom: 50px; } }
 @media (max-width: 560px) { .login-visual { min-height: 300px; padding: 23px 21px; }.login-visual-brand strong,.login-visual-copy p,.login-capabilities,.login-visual footer small { display: none; }.login-visual-copy { padding: 48px 0 20px; }.login-visual-copy > span { font-size: .54rem; }.login-visual-copy h1 { margin-block: 17px 0; font-size: clamp(2.3rem,12vw,3.2rem); }.login-panel { padding: 42px 21px 55px; }.login-wordmark { margin-bottom: 42px; }.login-heading h2 { font-size: 2.15rem; }.login-input-shell { min-height: 54px; }.login-security-chip { margin-block: 24px 20px; } }
+.login-public-links { display:flex; flex-wrap:wrap; gap:8px 14px; margin-top:18px; padding-top:16px; border-top:1px solid #dbe4ef; }
+.login-public-links a { color:#52657b; font-size:.72rem; font-weight:700; text-decoration:none; }
+.login-public-links a:hover { color:#087ba1; text-decoration:underline; }
 
 .preview-entry {
   display: grid;

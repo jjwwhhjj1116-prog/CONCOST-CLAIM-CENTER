@@ -5,6 +5,7 @@ import { AppShell } from './layout/AppShell';
 import { requestNavigation } from './navigation-guard';
 import { isSafeReturnTo, RouterView, type UserRole } from './routes/Router';
 import { ProjectSchedulePrint } from './workflow/ProjectSchedulePrint';
+import { PublicOAuthPages } from './routes/PublicOAuthPages';
 
 interface SessionUser {
   id: string;
@@ -98,6 +99,10 @@ export const App: React.FC = () => {
     }
   };
 
+  if (currentPath === '/about') return <PublicOAuthPages page="about" />;
+  if (currentPath === '/privacy') return <PublicOAuthPages page="privacy" />;
+  if (currentPath === '/terms') return <PublicOAuthPages page="terms" />;
+
   if (checkingSession) return <main className="login-loading"><span className="login-spinner" aria-hidden="true" /><p role="status">보안 세션을 확인하는 중입니다.</p></main>;
 
   if (!session || currentPath === '/login') {
@@ -154,6 +159,7 @@ export const App: React.FC = () => {
             </form>
 
             <div className="login-help"><span>계정 관련 문의는 클레임센터 관리자에게 요청해 주세요.</span><strong>AUTHORIZED USERS ONLY</strong></div>
+            <nav className="login-public-links" aria-label="서비스 및 개인정보 안내"><a href="/about">서비스 소개</a><a href="/privacy">개인정보처리방침</a><a href="/terms">서비스 약관</a></nav>
           </div>
         </section>
       </main>

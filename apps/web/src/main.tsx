@@ -21,6 +21,7 @@ import './routes/PreviewReportStudio.css';
 import './routes/PreviewLitigationCenter.css';
 import './routes/PreviewQualityCenters.css';
 import './routes/PreviewSettings.css';
+import './routes/PublicOAuthPages.css';
 import './preview-theme.css';
 import './theme-system.css';
 
