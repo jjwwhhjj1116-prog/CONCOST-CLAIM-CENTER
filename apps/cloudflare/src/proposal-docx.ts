@@ -14,6 +14,7 @@ export interface ProposalExportAsset {
   width: number;
   height: number;
   data: Uint8Array;
+  placement?: 'AUTO' | 'INLINE';
 }
 
 export interface ProposalExportDocument {
@@ -102,7 +103,7 @@ function markdownParagraphs(body: string, imageXmlByKey: ReadonlyMap<string,stri
       output.push('<w:p><w:pPr><w:spacing w:after="80"/></w:pPr></w:p>');
       continue;
     }
-    const assetMarker = line.match(/^\[PROPOSAL_ASSET:([A-Z0-9_]+)\]$/u);
+    const assetMarker = line.match(/^\[PROPOSAL_ASSET:([A-Za-z0-9_-]+)\]$/u);
     if (assetMarker) {
       const image = imageXmlByKey.get(assetMarker[1]);
       if (image) output.push(image);
@@ -157,9 +158,16 @@ function proposalBodyWithAssetMarkers(body:string, assets:readonly ProposalExpor
   const pending=[...assets];
   const output:string[]=[];
   for(const line of lines){
+    const explicit=pending.find((asset)=>line.includes(`/assets/${asset.assetKey}`)||line.includes(`[PROPOSAL_ASSET:${asset.assetKey}]`));
+    if(explicit){
+      output.push(`[PROPOSAL_ASSET:${explicit.assetKey}]`);
+      pending.splice(pending.indexOf(explicit),1);
+      continue;
+    }
     output.push(line);
     for(let index=pending.length-1;index>=0;index-=1){
       const asset=pending[index];
+      if(asset.placement==='INLINE')continue;
       const anchor=proposalAssetAnchor[asset.assetKey];
       if(anchor?.test(line)){
         output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');
@@ -167,7 +175,7 @@ function proposalBodyWithAssetMarkers(body:string, assets:readonly ProposalExpor
       }
     }
   }
-  for(const asset of pending)output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');
+  for(const asset of pending){if(asset.placement!=='INLINE')output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');}
   return output.join('\n');
 }
 
@@ -239,7 +247,7 @@ function proposalPdfBlocks(input: ProposalExportDocument): ProposalPdfBlock[] {
     const marked=proposalBodyWithAssetMarkers(chapter.body,chapterAssets).replaceAll('\r\n','\n').split('\n');
     let textLines=[`${chapter.number}. ${chapter.title}`];
     for(const line of marked){
-      const marker=line.trim().match(/^\[PROPOSAL_ASSET:([A-Z0-9_]+)\]$/u);
+      const marker=line.trim().match(/^\[PROPOSAL_ASSET:([A-Za-z0-9_-]+)\]$/u);
       if(!marker){textLines.push(line);continue;}
       if(textLines.some((value)=>value.trim()))pushText(textLines);
       textLines=[];

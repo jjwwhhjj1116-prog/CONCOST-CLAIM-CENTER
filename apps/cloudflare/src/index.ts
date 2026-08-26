@@ -1844,6 +1844,7 @@ interface ProposalStudioChapter {
   kind: 'VARIABLE' | 'FIXED';
   moduleCode?: string;
   body: string;
+  editorJson?: unknown;
 }
 
 interface ProposalCompanyModule {
@@ -2115,6 +2116,14 @@ async function proposalExportAssets(env:CloudflareEnv):Promise<ProposalExportAss
   }catch{return[];}
 }
 
+async function proposalProjectExportAssets(env:CloudflareEnv,proposalId:string,caseId:string):Promise<ProposalExportAsset[]>{
+  if(!env.DB)return[];
+  try{
+    const rows=await env.DB.prepare("SELECT id AS assetKey,chapter_number AS chapterNumber,title,alt_text AS altText,mime_type AS mimeType,file_name AS fileName,file_data AS fileData,width,height FROM preview_proposal_assets WHERE organization_id=? AND proposal_id=? AND case_id=? AND mime_type='image/jpeg' ORDER BY chapter_number,display_order").bind(PREVIEW_ORGANIZATION_ID,proposalId,caseId).all<Record<string,unknown>>();
+    return rows.results.flatMap((row)=>{const data=proposalAssetBytes(row.fileData);return data?[{assetKey:String(row.assetKey),chapterNumber:Number(row.chapterNumber),title:String(row.title),altText:String(row.altText),mimeType:'image/jpeg' as const,fileName:String(row.fileName),width:Number(row.width),height:Number(row.height),data,placement:'INLINE' as const}]:[];});
+  }catch{return[];}
+}
+
 async function proposalTemplateSources(env: CloudflareEnv): Promise<ProposalTemplateSource[]> {
   if (!env.DB) return [FALLBACK_PROPOSAL_SOURCE];
   return env.DB.prepare('SELECT id,source_name AS sourceName,source_format AS sourceFormat,source_date AS sourceDate,is_default AS isDefault,analysis_status AS analysisStatus,chapter_map_json AS chapterMapJson,version FROM preview_proposal_template_sources ORDER BY is_default DESC,source_date DESC,source_name')
@@ -2227,7 +2236,7 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
     const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
     if(!body||!exactObjectKeys(body,['caseId','proposalId','chapterNumber','content','instruction','expectedProposalVersion'])||typeof body.caseId!=='string'||typeof body.proposalId!=='string'||!Number.isInteger(body.chapterNumber)||typeof body.content!=='string'||typeof body.instruction!=='string'||!Number.isInteger(body.expectedProposalVersion))return json({error:'제안서 문장 개선 입력값이 올바르지 않습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
     const caseId=body.caseId;const proposalId=body.proposalId;const chapterNumber=Number(body.chapterNumber);const content=body.content.trim();const instruction=body.instruction.trim();
-    if(!PREVIEW_DRAFT_KEY.test(caseId)||!PREVIEW_DRAFT_KEY.test(proposalId)||chapterNumber<1||chapterNumber>3||!content||content.length>100_000||instruction.length<3||instruction.length>2_000)return json({error:'제안서 문장 개선 범위가 허용 기준을 벗어났습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
+    if(!PREVIEW_DRAFT_KEY.test(caseId)||!PREVIEW_DRAFT_KEY.test(proposalId)||chapterNumber<1||chapterNumber>12||!content||content.length>100_000||instruction.length<3||instruction.length>2_000)return json({error:'제안서 문장 개선 범위가 허용 기준을 벗어났습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
     const caseRow=await accessiblePreviewCase(env,user,caseId);
     if(!caseRow)return json({error:'프로젝트를 찾을 수 없거나 이 사용자에게 배정되지 않았습니다.',code:'CASE_NOT_FOUND'},404);
     const proposal=await env.DB.prepare('SELECT version,status FROM preview_proposals WHERE id=? AND case_id=? AND organization_id=?').bind(proposalId,caseId,PREVIEW_ORGANIZATION_ID).first<{version:number;status:string}>();
@@ -2342,9 +2351,9 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     const claimType = url.searchParams.get('claimType') ?? '';
     return json({ templates: PREVIEW_PROPOSAL_TEMPLATES.filter((item) => !claimType || item.claimType === claimType), phase: 'CF27_D1_PROPOSAL_AUTHORING' });
   }
-  const match = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36}))?(?:\/(versions|reviews|render))?$/iu);
+  const match = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36}))?(?:\/(versions|reviews|render|assets)(?:\/([0-9a-f-]{36}))?)?$/iu);
   if (!match) return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
-  const [, caseId, proposalId, action] = match;
+  const [, caseId, proposalId, action, proposalAssetId] = match;
   const caseRow = await accessiblePreviewCase(env, user, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
 
@@ -2392,6 +2401,36 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
   const current = await env.DB.prepare('SELECT id,status,version,current_version_id AS currentVersionId,created_by AS createdBy,template_body_snapshot AS templateBody,updated_at AS updatedAt FROM preview_proposals WHERE id=? AND case_id=? AND organization_id=?').bind(proposalId, caseId, PREVIEW_ORGANIZATION_ID).first<{id:string;status:string;version:number;currentVersionId:string;createdBy:string;templateBody:string;updatedAt:string}>();
   if (!current) return json({ error: 'Proposal was not found', code: 'PROPOSAL_NOT_FOUND' }, 404);
 
+  if(action==='assets'&&proposalAssetId&&request.method==='GET'){
+    try{
+      const row=await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256 FROM preview_proposal_assets WHERE id=? AND proposal_id=? AND case_id=? AND organization_id=?').bind(proposalAssetId,proposalId,caseId,PREVIEW_ORGANIZATION_ID).first<Record<string,unknown>>();
+      const bytes=proposalAssetBytes(row?.fileData);if(!row||!bytes)return json({error:'제안서 원본 이미지를 찾지 못했습니다.',code:'PROPOSAL_INLINE_ASSET_NOT_FOUND'},404);
+      return new Response(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer,{headers:{'Content-Type':String(row.mimeType),'Content-Disposition':`inline; filename*=UTF-8''${encodeURIComponent(String(row.fileName))}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Content-SHA256':String(row.sha256)}});
+    }catch{return json({error:'제안서 이미지 저장소가 준비되지 않았습니다.',code:'PROPOSAL_INLINE_ASSET_STORE_NOT_READY'},503);}
+  }
+  if(action==='assets'&&!proposalAssetId&&request.method==='GET'){
+    try{
+      const rows=await env.DB.prepare('SELECT id,chapter_number AS chapterNumber,display_order AS displayOrder,title,alt_text AS altText,mime_type AS mimeType,file_name AS fileName,file_sha256 AS sha256,width,height,created_by AS createdBy,created_at AS createdAt FROM preview_proposal_assets WHERE proposal_id=? AND case_id=? AND organization_id=? ORDER BY chapter_number,display_order').bind(proposalId,caseId,PREVIEW_ORGANIZATION_ID).all<Record<string,unknown>>();
+      return json({assets:rows.results.map((row)=>({...row,url:`/api/cases/${caseId}/proposals/${proposalId}/assets/${String(row.id)}`})),phase:'CF64_PROPOSAL_FULL_CHAPTER_EDITING'});
+    }catch{return json({error:'제안서 이미지 저장소가 준비되지 않았습니다.',code:'PROPOSAL_INLINE_ASSET_STORE_NOT_READY'},503);}
+  }
+  if(action==='assets'&&!proposalAssetId&&request.method==='POST'){
+    if(!canEdit||current.status!=='DRAFT')return json({error:'편집 가능한 제안서에만 이미지를 추가할 수 있습니다.',code:'PROPOSAL_LOCKED'},409);
+    const form=await request.formData().catch(()=>null);const file=form?.get('file');const chapterNumber=Number(form?.get('chapterNumber'));const title=String(form?.get('title')??'').trim().slice(0,200);const altText=String(form?.get('altText')??'').trim().slice(0,500);
+    if(!(file instanceof File)||file.size<100||file.size>8_000_000||!Number.isInteger(chapterNumber)||chapterNumber<1||chapterNumber>12||!title||!altText)return json({error:'8MB 이하 원본 이미지와 1~12장 위치 정보가 필요합니다.',code:'INVALID_PROPOSAL_INLINE_ASSET'},400);
+    const bytes=new Uint8Array(await file.arrayBuffer());const dimensions=jpegDimensions(bytes);
+    if(file.type!=='image/jpeg'||!dimensions||dimensions.width<100||dimensions.height<100||dimensions.width>6000||dimensions.height>6000)return json({error:'유효한 JPG 이미지(100~6000px)만 저장할 수 있습니다.',code:'INVALID_PROPOSAL_INLINE_ASSET'},415);
+    const sha256=await sha256Hex(bytes);const now=new Date().toISOString();const id=crypto.randomUUID();
+    try{
+      const order=await env.DB.prepare('SELECT COALESCE(MAX(display_order),0)+1 AS nextOrder FROM preview_proposal_assets WHERE proposal_id=? AND chapter_number=?').bind(proposalId,chapterNumber).first<{nextOrder:number}>();
+      await env.DB.batch?.([
+        env.DB.prepare('INSERT INTO preview_proposal_assets (id,organization_id,proposal_id,case_id,chapter_number,display_order,title,alt_text,mime_type,file_name,file_data,file_sha256,width,height,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,\'image/jpeg\',?,?,?,?,?,?,?)').bind(id,PREVIEW_ORGANIZATION_ID,proposalId,caseId,chapterNumber,Number(order?.nextOrder??1),title,altText,file.name.slice(0,200),bytes,sha256,dimensions.width,dimensions.height,user.id,now),
+        env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,?,?,?,?)').bind(crypto.randomUUID(),caseId,user.id,'PROPOSAL_IMAGE_ADDED',`${chapterNumber}장 원본 이미지 추가`,`${title} · ${dimensions.width}×${dimensions.height}px · ${sha256}`,now)
+      ]);
+      return json({asset:{id,chapterNumber,title,altText,mimeType:'image/jpeg',fileName:file.name,width:dimensions.width,height:dimensions.height,sha256,url:`/api/cases/${caseId}/proposals/${proposalId}/assets/${id}`},phase:'CF64_PROPOSAL_FULL_CHAPTER_EDITING'},201);
+    }catch{return json({error:'제안서 원본 이미지를 저장하지 못했습니다.',code:'PROPOSAL_INLINE_ASSET_SAVE_FAILED'},409);}
+  }
+
   if (action === 'versions' && request.method === 'POST') {
     if (!canEdit || current.status !== 'DRAFT') return json({ error: 'Only an editable draft can receive a new version', code: 'PROPOSAL_LOCKED' }, 409);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -2423,12 +2462,12 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         if(chapter.number>=4&&chapter.number<=11){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
           if(expected&&requestedModules.has(expected.code)&&expected.isActive){
-            return{number:chapter.number,title:expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(expected.bodyMarkdown,50000)};
+            return{number:chapter.number,title:sanitizeInput(chapter.title,200)||expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(chapter.body,50000)};
           }
           return{number:chapter.number,title:expected?.title??chapter.title,kind:'FIXED' as const,...(expected?{moduleCode:expected.code}:{}),body:'[이 회사 모듈은 제안서에서 제외되었습니다.]'};
         }
-        if(chapter.number===12)return{number:12,title:PROPOSAL_CHAPTER_TITLES[11],kind:'FIXED' as const,body:PROPOSAL_STANDARD_CLOSING};
-        return{number:chapter.number,title:PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000)};
+        if(chapter.number===12)return{number:12,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[11],kind:'FIXED' as const,body:sanitizeInput(chapter.body,50000)};
+        return{number:chapter.number,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000)};
       });
       inputs={clientName:sanitizeInput(body.clientName,200),projectTitle:sanitizeInput(body.projectTitle,300),subtitle:sanitizeInput(body.subtitle,300),submissionDate:proposalStudioText(body.submissionDate,30),keyIssues:sanitizeInput(body.keyIssues),objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.planNotes),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:[...requestedModules],templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
     }
@@ -2538,7 +2577,8 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     const modules=await proposalCompanyModules(env); const fallback=defaultProposalChapters(caseRow,modules); const inputs=parseProposalInputs(version.structuredInputsJson,fallback);
     let sanitizationCount=Number(inputs.sanitizationCount||0);
     const chapters:ProposalExportChapter[]=inputs.chapters.sort((a,b)=>a.number-b.number).map((chapter)=>{const safe=sanitizeProposalCostData(chapter.body);sanitizationCount+=safe.count;return{number:chapter.number,title:chapter.title,body:safe.value};});
-    const assets=await proposalExportAssets(env);
+    const companyAssets=await proposalExportAssets(env);const projectAssets=await proposalProjectExportAssets(env,proposalId,caseId);
+    const assets=[...companyAssets,...projectAssets.filter((asset)=>chapters.some((chapter)=>chapter.body.includes(`/assets/${asset.assetKey}`)||chapter.body.includes(`[PROPOSAL_ASSET:${asset.assetKey}]`)))];
     const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters,assets};
     const format=String(body.format); const output=format==='docx'?generateProposalDocx(doc):format==='pdf'?generateProposalPdf(doc):new TextEncoder().encode(generateProposalMarkdown(doc)); const outputSha=await sha256Hex(output);
     const safeCase=caseRow.caseNumber.replace(/[^0-9A-Za-z가-힣_-]/gu,'_'); const extension=format==='docx'?'docx':format==='pdf'?'pdf':'md'; const fileName=`${safeCase}_컨코스트_제안서_v${version.versionNumber}.${extension}`; const now=new Date().toISOString();

@@ -38,6 +38,8 @@ export interface StructuredDocumentEditorHandle {
   getMarkdown: () => string;
   getSelection: () => StructuredSelection | null;
   replaceRange: (from: number, to: number, replacement: string) => void;
+  insertTable: () => void;
+  insertImage: (image: { src: string; alt: string; title?: string }) => void;
 }
 
 interface StructuredDocumentEditorProps {
@@ -216,17 +218,20 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     }
   }, [documentKey, collaborationSession]);
 
-  useEffect(() => { editor?.setEditable(!readOnly); }, [editor, readOnly]);
+  useEffect(() => {
+    if (!editor?.isInitialized || editor.isDestroyed) return;
+    editor.setEditable(!readOnly);
+  }, [editor, readOnly]);
 
   useEffect(() => {
     if (collaborationSession) return;
-    if (!editor || value === lastEmitted.current) return;
+    if (!editor?.isInitialized || editor.isDestroyed || value === lastEmitted.current) return;
     lastEmitted.current = value;
     editor.commands.setContent(editorJson ?? markdownToEditorHtml(value), { emitUpdate: false });
   }, [collaborationSession, editor, editorJson, value]);
 
   useEffect(() => {
-    if (!collaborationSession || !collaborationSynced || !editor || !editor.isEmpty || !value.trim()) return;
+    if (!collaborationSession || !collaborationSynced || !editor?.isInitialized || editor.isDestroyed || !editor.isEmpty || !value.trim()) return;
     editor.commands.setContent(editorJson ?? markdownToEditorHtml(value));
   }, [collaborationSession, collaborationSynced, editor, editorJson, value]);
 
@@ -238,13 +243,19 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   }, [fullscreen]);
 
   useImperativeHandle(ref, () => ({
-    focus: () => editor?.commands.focus(),
+    focus: () => { editor?.chain().focus().run(); },
     getJSON: () => editor?.getJSON() ?? null,
     getMarkdown: () => editor ? editorHtmlToMarkdown(editor.getHTML()) : value,
     getSelection: () => selectionRef.current,
     replaceRange: (from, to, next) => {
       if (!editor) return;
       editor.chain().focus().insertContentAt({ from, to }, markdownToEditorHtml(next)).run();
+    },
+    insertTable: () => {
+      editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+    },
+    insertImage: ({ src, alt, title }) => {
+      editor?.chain().focus().setImage({ src, alt, title: title ?? alt }).run();
     }
   }), [editor, value]);
 
