@@ -31,15 +31,29 @@ test('CF27 persists intake, creator assignment, selected template, and proposal 
 test('CF27 project intake continues with the newly created case selected in proposal authoring', () => {
   const cases = read('apps/web/src/case-management/CaseManagement.tsx');
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
+  const report = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const router = read('apps/web/src/routes/Router.tsx');
   assert.match(cases, /\/proposals\/editor\?caseId=\$\{encodeURIComponent\(result\.case\.id\)\}&from=intake/u);
   assert.match(cases, /의뢰 저장 후 제안서 작성/u);
+  assert.match(cases, /3단계 · 검수 완료하기/u);
+  assert.match(cases, /확인 항목 전체 체크 · 검수 완료/u);
+  assert.match(cases, /case-intake-review-checklist/u);
+  assert.match(cases, /setReviewOpen\(true\)/u);
+  assert.match(cases, /disabled=\{Boolean\(intakeFile\)&&\(!intakeDraft\|\|!reviewConfirmed\)\}/u);
+  assert.match(cases, /invalidateReview\(\)/u);
   assert.match(proposal, /new URLSearchParams\(window\.location\.search\)\.get\('caseId'\)/u);
   assert.match(proposal, /res\.cases\.some\(\(item\) => item\.id === preferred\)/u);
   assert.match(proposal, /!activeProposal && selectedCaseId/u);
   assert.match(proposal, /제안서 작성 1단계 · 유형별 템플릿 선택/u);
   assert.match(proposal, /Excel 양식 내보내기/u);
   assert.match(proposal, /작성 Excel 가져오기/u);
+  assert.match(proposal, /검수 완료 · 전체 합본 미리보기/u);
+  assert.match(proposal, /← 수정 · 3단계로/u);
+  assert.match(report, /지금 저장/u);
+  assert.match(report, /이 단계 완료 · 다음 단계/u);
+  assert.match(report, /← 이전 단계/u);
+  assert.match(report, /저장된 최신본 검토 요청/u);
+  assert.match(report, /승인본 최종 확정/u);
   assert.ok(
     router.indexOf("previewMode && ['PROP-01', 'PROP-02'].includes(currentRoute.id)") < router.indexOf("previewMode && currentRoute.id !== 'RESP-01'"),
     'preview mode must render the real proposal authoring surface before the generic feature placeholder'
