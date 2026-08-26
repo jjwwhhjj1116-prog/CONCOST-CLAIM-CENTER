@@ -284,14 +284,19 @@ function CaseCreatePage({ onNavigate }: { onNavigate: (path: string) => void }):
         method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify({ title, claimType, description, clientLegalPosition, clientPositionDetail, category: { major: '건설 클레임', middle: claimType, minor: '사건 업무' } })
       });
       setCreatedCase(result.case);
+      let driveArchivePending = false;
       if (intakeFile) {
         const form = new FormData(); form.set('file', intakeFile); form.set('useReviewedCaseDescription','true');
-        await apiRequest(`/api/cases/${encodeURIComponent(result.case.id)}/intake-source`, { method: 'POST', headers: { 'Idempotency-Key': intakeSourceIdempotencyKey }, body: form });
+        const sourceResult = await apiRequest<{storage?:{status:string}}>(`/api/cases/${encodeURIComponent(result.case.id)}/intake-source`, { method: 'POST', headers: { 'Idempotency-Key': intakeSourceIdempotencyKey }, body: form });
+        driveArchivePending = Boolean(sourceResult.storage?.status && sourceResult.storage.status !== 'SAVED');
         setIntakeSourceIdempotencyKey(crypto.randomUUID());
       }
       setIdempotencyKey(crypto.randomUUID());
-      onNavigate(`/proposals/editor?caseId=${encodeURIComponent(result.case.id)}&from=intake`);
-    } catch (reason) { setError(`${createdCase ? '의뢰는 저장되었습니다. 첨부 자료의 AI 정리를 다시 시도해 주세요. · ' : ''}${reason instanceof Error ? reason.message : String(reason)}`); }
+      onNavigate(`/proposals/editor?caseId=${encodeURIComponent(result.case.id)}&from=intake${driveArchivePending?'&intakeStorage=pending':''}`);
+    } catch (reason) {
+      setIntakeSourceIdempotencyKey(crypto.randomUUID());
+      setError(`${createdCase ? '의뢰는 저장되었습니다. 첨부 자료 보관을 다시 시도해 주세요. · ' : ''}${reason instanceof Error ? reason.message : String(reason)}`);
+    }
     finally { setSaving(false); }
   };
   return <div className="case-create-page">

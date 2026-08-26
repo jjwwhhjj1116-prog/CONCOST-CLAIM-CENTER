@@ -175,10 +175,28 @@ test('CF48 final upload preserves the human-reviewed case description instead of
   sql.close();
 });
 
+test('CF63 expired Google refresh token does not block intake save or proposal handoff', async () => {
+  const { sql, env } = await integrationSetup();
+  env.GOOGLE_TEST_FETCH = async (input) => String(input).includes('oauth2.googleapis.com/token')
+    ? Response.json({ error:'invalid_grant' }, { status:400 })
+    : new Response('unexpected Google request', { status:500 });
+  const form=new FormData(); form.set('file',new File([new TextEncoder().encode(INTAKE_TEXT)],'의뢰정리.txt',{type:'text/plain'})); form.set('useReviewedCaseDescription','true');
+  const response=await worker.fetch(new Request(`https://preview.example/api/cases/${CASE_ID}/intake-source`,{method:'POST',headers:{'X-Session-Token':SESSION_TOKEN,'Idempotency-Key':'cf63-expired-google-0001'},body:form}),env);
+  assert.equal(response.status,202,await response.clone().text());
+  const body=await response.json() as any;
+  assert.equal(body.phase,'CF63_INTAKE_SAVED_DRIVE_PENDING');
+  assert.equal(body.storage.status,'RECONNECT_REQUIRED');
+  assert.equal(body.storage.code,'GOOGLE_RECONSENT_REQUIRED');
+  assert.equal(body.caseDescription,'초기 메모');
+  assert.equal(sql.exec("SELECT status,error_code FROM preview_intake_audio_operations WHERE idempotency_key='cf63-expired-google-0001'")[0].values[0][0],'FAILED');
+  assert.equal(sql.exec("SELECT COUNT(*) FROM preview_case_activities WHERE case_id=? AND event_type='INTAKE_SOURCE_ARCHIVE_PENDING'",[CASE_ID])[0].values[0][0],1);
+  sql.close();
+});
+
 test('CF47 UI and Worker connect the generic source route to Drive, D1, Gemini, and case description', () => {
   const worker = readFileSync('apps/cloudflare/src/index.ts', 'utf8');
   const ui = readFileSync('apps/web/src/case-management/CaseManagement.tsx', 'utf8');
   for (const marker of ['intake-source|intake-audio', 'extractIntakeSource', 'INTAKE_SOURCE_SUMMARIZED', '프로젝트 의뢰 원본', "SET description=?", 'latestIntakeSourceSummary']) assert.match(worker, new RegExp(marker));
-  for (const marker of ['/intake-source/draft', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '자동작성 결과를 꼭 검수해 주세요.', 'useReviewedCaseDescription', 'timeoutMs:105_000', 'timeoutHintSeconds={90}']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
+  for (const marker of ['/intake-source/draft', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '자동작성 결과를 꼭 검수해 주세요.', 'useReviewedCaseDescription', 'timeoutMs:105_000', 'timeoutHintSeconds={90}', 'intakeStorage=pending']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
   const api = readFileSync('apps/web/src/api.ts','utf8'); assert.match(api,/!\(init\.body instanceof FormData\)/u);
 });

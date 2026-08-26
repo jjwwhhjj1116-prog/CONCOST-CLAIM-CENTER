@@ -129,8 +129,12 @@ async function safeJson(response: Response): Promise<Record<string, unknown>> {
 function providerFailure(response: Response, operation: string, uncertain = false): GoogleDriveError {
   const retryAfterRaw = Number(response.headers.get('Retry-After'));
   const retryAfter = Number.isFinite(retryAfterRaw) && retryAfterRaw >= 0 ? Math.min(120, retryAfterRaw) : null;
-  if (response.status === 401 || response.status === 403) return new GoogleDriveError('GOOGLE_RECONSENT_REQUIRED', 401, 'Google Drive connection must be renewed');
+  // Google's OAuth token endpoint reports an expired/revoked refresh token as
+  // HTTP 400 (invalid_grant), not only as 401/403. Treat every failed refresh
+  // as a reconnect request so callers can recover instead of surfacing the
+  // misleading generic "Google token refresh failed" message.
   if (response.status === 429) return new GoogleDriveError('GOOGLE_RATE_LIMITED', 429, 'Google Drive rate limit reached', false, retryAfter);
+  if ((operation === 'Google token refresh' && response.status === 400) || response.status === 401 || response.status === 403) return new GoogleDriveError('GOOGLE_RECONSENT_REQUIRED', 401, 'Google Drive connection must be renewed');
   return new GoogleDriveError('GOOGLE_PROVIDER_ERROR', response.status >= 500 ? 502 : 400, `${operation} failed`, uncertain && response.status >= 500);
 }
 

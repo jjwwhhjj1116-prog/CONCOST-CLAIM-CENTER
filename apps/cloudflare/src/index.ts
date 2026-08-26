@@ -2681,7 +2681,27 @@ async function handlePreviewIntakeSource(request:Request,env:CloudflareEnv,user:
     ]) as Array<{meta?:{changes?:number}}>;
     if(results.some((result)=>result.meta?.changes!==1))throw new GoogleDriveError('INTAKE_SOURCE_COMMIT_FAILED',503,'Intake source metadata did not commit atomically',true);
     return json({summary:{id:summaryId,text:generated.summary,modelCode:generated.modelCode,googleFileId:uploaded.fileId,sourceKind:source.kind,folderPath:`${caseRow.caseNumber}/프로젝트 의뢰 원본/${period}`},caseDescription:generated.summary,replay:false,phase:'CF47_CLIENT_INTAKE_SOURCE'},201);
-  }catch(reason){const uncertain=reason instanceof GoogleDriveError&&reason.uncertain;await env.DB.prepare('UPDATE preview_intake_audio_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status=\'PENDING\'').bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED',new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run().catch(()=>undefined);return googleFailure(reason)}
+  }catch(reason){
+    const uncertain=reason instanceof GoogleDriveError&&reason.uncertain;
+    const errorCode=reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED';
+    const failedAt=new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString();
+    await env.DB.prepare('UPDATE preview_intake_audio_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status=\'PENDING\'').bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',errorCode,failedAt,operationId).run().catch(()=>undefined);
+    if(reason instanceof GoogleDriveError){
+      const storageStatus=reason.code==='GOOGLE_RECONSENT_REQUIRED'||reason.code==='GOOGLE_DRIVE_NOT_CONNECTED'?'RECONNECT_REQUIRED':uncertain?'RECONCILIATION_REQUIRED':'RETRY_REQUIRED';
+      await env.DB.batch?.([
+        env.DB.prepare('UPDATE preview_cases SET description=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND deleted_at IS NULL').bind(generated.summary,failedAt,caseId,PREVIEW_ORGANIZATION_ID),
+        env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'INTAKE_SOURCE_ARCHIVE_PENDING','의뢰 자료 저장 완료·Drive 보관 대기',?,?)").bind(crypto.randomUUID(),caseId,user.id,`${file.name} · ${errorCode}`,failedAt)
+      ]).catch(()=>undefined);
+      return json({
+        summary:{id:null,text:generated.summary,modelCode:generated.modelCode,googleFileId:null,sourceKind:source.kind},
+        caseDescription:generated.summary,
+        storage:{provider:'GOOGLE_DRIVE',status:storageStatus,code:errorCode,message:'의뢰 내용은 저장되었습니다. Google Drive를 다시 연결하면 원본 보관을 재시도할 수 있습니다.'},
+        replay:false,
+        phase:'CF63_INTAKE_SAVED_DRIVE_PENDING'
+      },202);
+    }
+    return googleFailure(reason);
+  }
 }
 
 type RealWorkflowStatus = 'DONE' | 'IN_PROGRESS' | 'PLANNED';
