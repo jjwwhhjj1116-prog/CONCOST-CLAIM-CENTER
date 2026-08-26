@@ -1845,6 +1845,7 @@ interface ProposalStudioChapter {
   moduleCode?: string;
   body: string;
   editorJson?: unknown;
+  excludedCompanyAssetKeys?: string[];
 }
 
 interface ProposalCompanyModule {
@@ -2062,6 +2063,32 @@ function proposalStudioText(value: unknown, maxLength: number, fallback = ''): s
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : fallback;
 }
 
+function proposalImprovementProtectedFacts(value:string):string[]{
+  const matches=value.match(/\d{4}\s*[.\/-]\s*\d{1,2}(?:\s*[.\/-]\s*\d{1,2})?|\d[\d,.]*\s*(?:%|원|억원|만원|천만원|개월|개년|년|월|일|㎡|m2|m²|세대|개소|층|건)|\b[A-Z][A-Z0-9-]{1,}\b/giu)??[];
+  return [...new Set(matches.map((item)=>item.replace(/\s+/gu,'').toLocaleUpperCase('en-US')).filter(Boolean))].sort();
+}
+
+function proposalImprovementSimilarity(original:string,candidate:string):number{
+  const normalize=(value:string)=>value.toLocaleLowerCase('ko-KR').replace(/[\s\p{P}\p{S}]+/gu,'');
+  const source=normalize(original);const next=normalize(candidate);
+  if(!source||!next)return 0;
+  if(source===next)return 1;
+  const grams=(value:string)=>{const result:string[]=[];for(let index=0;index<value.length-1;index+=1)result.push(value.slice(index,index+2));return result;};
+  const sourceGrams=grams(source);const nextGrams=new Set(grams(next));
+  if(!sourceGrams.length)return next.includes(source)?1:0;
+  return sourceGrams.filter((gram)=>nextGrams.has(gram)).length/sourceGrams.length;
+}
+
+function proposalImprovementPreservesSource(original:string,candidate:string,instruction:string):boolean{
+  const source=original.trim();const next=candidate.trim();
+  if(!source||!next)return false;
+  const sourceFacts=proposalImprovementProtectedFacts(source);const nextFacts=proposalImprovementProtectedFacts(next);
+  if(sourceFacts.length!==nextFacts.length||sourceFacts.some((fact,index)=>fact!==nextFacts[index]))return false;
+  const ratio=next.length/Math.max(1,source.length);const concise=/간결|요약|줄여/gu.test(instruction);
+  if(ratio<(concise?.3:.45)||ratio>(concise?1.08:1.35))return false;
+  return proposalImprovementSimilarity(source,next)>=(source.length<30?.25:.38);
+}
+
 async function proposalCompanyModules(env: CloudflareEnv): Promise<ProposalCompanyModule[]> {
   if (!env.DB) return FALLBACK_PROPOSAL_MODULES;
   try {
@@ -2153,7 +2180,7 @@ function proposalBodyFromChapters(chapters: ProposalStudioChapter[]): string {
 }
 
 function validProposalChapters(value: unknown): value is ProposalStudioChapter[] {
-  return Array.isArray(value) && value.length === 12 && value.every((chapter, index) => chapter && typeof chapter === 'object' && Number((chapter as ProposalStudioChapter).number) === index + 1 && typeof (chapter as ProposalStudioChapter).title === 'string' && typeof (chapter as ProposalStudioChapter).body === 'string' && ['VARIABLE','FIXED'].includes(String((chapter as ProposalStudioChapter).kind)));
+  return Array.isArray(value) && value.length === 12 && value.every((chapter, index) => chapter && typeof chapter === 'object' && Number((chapter as ProposalStudioChapter).number) === index + 1 && typeof (chapter as ProposalStudioChapter).title === 'string' && typeof (chapter as ProposalStudioChapter).body === 'string' && ['VARIABLE','FIXED'].includes(String((chapter as ProposalStudioChapter).kind)) && ((chapter as ProposalStudioChapter).excludedCompanyAssetKeys === undefined || (Array.isArray((chapter as ProposalStudioChapter).excludedCompanyAssetKeys) && (chapter as ProposalStudioChapter).excludedCompanyAssetKeys!.every((key)=>/^[A-Z0-9_]{3,80}$/u.test(key)))));
 }
 
 function parseProposalInputs(value: string, fallbackChapters: ProposalStudioChapter[]): ProposalStudioInputs {
@@ -2245,9 +2272,18 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
     if(Number(proposal.version)!==Number(body.expectedProposalVersion))return json({error:'다른 화면에서 제안서가 먼저 변경되었습니다. 최신 제안서를 다시 불러와 주세요.',code:'VERSION_CONFLICT',currentVersion:Number(proposal.version)},409);
     const routes=await previewAiRoutes(env);const settings=previewPersonalGeminiAssistantRoute(routes);const geminiCredential=await resolvePreviewAiCredential(env,user.id,'GEMINI');
     if(!geminiCredential)return json({error:'설정에서 개인 또는 관리자 공용 Gemini API 키를 연결한 뒤 다시 시도해 주세요.',code:'GEMINI_NOT_CONFIGURED'},503);
-    const improved=await generatePreviewAiText(env,settings,`당신은 건설 클레임 수주 제안서 편집자입니다. 현재 문장은 제안서 ${chapterNumber}장에 들어갑니다. 사용자가 준 사실·숫자·날짜·인명·고유명사·근거를 추가하거나 삭제하지 마십시오. 법률 판단, 성과 보장, 금액 추정, 입력에 없는 현장명은 만들지 마십시오. 요청한 문체와 구조만 개선하고 결과 본문만 반환하십시오.`, `개선 요청: ${instruction}\n\n수정할 제안서 본문:\n${content}`,user.id,geminiCredential);
+    const systemInstruction=`당신은 건설 클레임 수주 제안서의 교정 편집자입니다. 현재 선택문은 제안서 ${chapterNumber}장에 이미 들어 있는 확정 전 원문입니다. 새 제안서를 쓰지 말고 선택된 범위만 교정하십시오. 원문의 사실·숫자·날짜·인명·회사명·현장명·계약명·영문 약어·근거를 단 하나도 추가, 삭제 또는 변경하지 마십시오. 문단 수, 목록 수, 제목 여부와 주장 강도를 유지하십시오. 선택문이 짧은 제목이나 구이면 완전한 문단으로 확장하지 마십시오. 법률 판단, 성과 보장, 금액 추정, 입력에 없는 사례는 만들지 마십시오. 사용자가 요청한 문체와 가독성만 개선하고 결과 본문만 반환하십시오.`;
+    const improved=await generatePreviewAiText(env,settings,systemInstruction,`개선 요청: ${instruction}\n\n수정할 제안서 원문:\n${content}`,user.id,geminiCredential);
     if(improved.response)return improved.response;
-    return json({content:improved.content,providerKind:settings.providerKind,modelCode:settings.modelCode,credentialSource:geminiCredential.source,phase:'CF60_STRUCTURED_PROPOSAL_EDITOR'});
+    const improvedContent=improved.content??'';
+    if(!proposalImprovementPreservesSource(content,improvedContent,instruction)){
+      const retry=await generatePreviewAiText(env,settings,systemInstruction,`첫 결과가 원문의 사실 보존 검사를 통과하지 못했습니다. 다음 원문의 보호된 숫자·날짜·영문 약어를 문자 그대로 유지하고, 문장 수와 의미를 바꾸지 말고 다시 교정하십시오.\n\n개선 요청: ${instruction}\n\n수정할 제안서 원문:\n${content}`,user.id,geminiCredential);
+      if(retry.response)return retry.response;
+      const retryContent=retry.content??'';
+      if(!proposalImprovementPreservesSource(content,retryContent,instruction))return json({error:'Gemini 개선안이 원문의 사실·숫자·의미 보존 기준을 통과하지 못해 적용하지 않았습니다. 선택 범위를 줄이거나 구체적인 교정 요청으로 다시 시도해 주세요.',code:'PROPOSAL_IMPROVEMENT_SOURCE_DRIFT'},422);
+      return json({content:retryContent,providerKind:settings.providerKind,modelCode:settings.modelCode,credentialSource:geminiCredential.source,phase:'CF60_STRUCTURED_PROPOSAL_EDITOR'});
+    }
+    return json({content:improvedContent,providerKind:settings.providerKind,modelCode:settings.modelCode,credentialSource:geminiCredential.source,phase:'CF60_STRUCTURED_PROPOSAL_EDITOR'});
   }
   if (url.pathname === '/api/proposal-studio/config' && request.method === 'GET') {
     const modules = await proposalCompanyModules(env);
@@ -2459,15 +2495,16 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const requestedModules=new Set((body.includedModuleCodes as unknown[]).filter((item):item is string=>typeof item==='string'&&moduleByCode.has(item)));
       const submitted=body.chapters as ProposalStudioChapter[];
       const chapters=submitted.map((chapter)=>{
+        const excludedCompanyAssetKeys=(chapter.excludedCompanyAssetKeys??[]).filter((key)=>FALLBACK_PROPOSAL_ASSETS.some((asset)=>asset.assetKey===key));
         if(chapter.number>=4&&chapter.number<=11){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
           if(expected&&requestedModules.has(expected.code)&&expected.isActive){
-            return{number:chapter.number,title:sanitizeInput(chapter.title,200)||expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(chapter.body,50000)};
+            return{number:chapter.number,title:sanitizeInput(chapter.title,200)||expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(chapter.body,50000),excludedCompanyAssetKeys};
           }
-          return{number:chapter.number,title:expected?.title??chapter.title,kind:'FIXED' as const,...(expected?{moduleCode:expected.code}:{}),body:'[이 회사 모듈은 제안서에서 제외되었습니다.]'};
+          return{number:chapter.number,title:expected?.title??chapter.title,kind:'FIXED' as const,...(expected?{moduleCode:expected.code}:{}),body:'[이 회사 모듈은 제안서에서 제외되었습니다.]',excludedCompanyAssetKeys};
         }
-        if(chapter.number===12)return{number:12,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[11],kind:'FIXED' as const,body:sanitizeInput(chapter.body,50000)};
-        return{number:chapter.number,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000)};
+        if(chapter.number===12)return{number:12,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[11],kind:'FIXED' as const,body:sanitizeInput(chapter.body,50000),excludedCompanyAssetKeys};
+        return{number:chapter.number,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000),excludedCompanyAssetKeys};
       });
       inputs={clientName:sanitizeInput(body.clientName,200),projectTitle:sanitizeInput(body.projectTitle,300),subtitle:sanitizeInput(body.subtitle,300),submissionDate:proposalStudioText(body.submissionDate,30),keyIssues:sanitizeInput(body.keyIssues),objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.planNotes),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:[...requestedModules],templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
     }
@@ -2577,7 +2614,8 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
     const modules=await proposalCompanyModules(env); const fallback=defaultProposalChapters(caseRow,modules); const inputs=parseProposalInputs(version.structuredInputsJson,fallback);
     let sanitizationCount=Number(inputs.sanitizationCount||0);
     const chapters:ProposalExportChapter[]=inputs.chapters.sort((a,b)=>a.number-b.number).map((chapter)=>{const safe=sanitizeProposalCostData(chapter.body);sanitizationCount+=safe.count;return{number:chapter.number,title:chapter.title,body:safe.value};});
-    const companyAssets=await proposalExportAssets(env);const projectAssets=await proposalProjectExportAssets(env,proposalId,caseId);
+    const excludedCompanyAssetKeys=new Set(inputs.chapters.flatMap((chapter)=>chapter.excludedCompanyAssetKeys??[]));
+    const companyAssets=(await proposalExportAssets(env)).filter((asset)=>!excludedCompanyAssetKeys.has(asset.assetKey));const projectAssets=await proposalProjectExportAssets(env,proposalId,caseId);
     const assets=[...companyAssets,...projectAssets.filter((asset)=>chapters.some((chapter)=>chapter.body.includes(`/assets/${asset.assetKey}`)||chapter.body.includes(`[PROPOSAL_ASSET:${asset.assetKey}]`)))];
     const doc={proposalId,versionId:version.id,versionNumber:Number(version.versionNumber),projectTitle:inputs.projectTitle||`${caseRow.title} 기술용역 제안서`,clientName:inputs.clientName,subtitle:inputs.subtitle,submissionDate:inputs.submissionDate,caseNumber:caseRow.caseNumber,claimType:caseRow.claimType,preparedBy:version.preparedBy,contentSha256:version.sha256,chapters,assets};
     const format=String(body.format); const output=format==='docx'?generateProposalDocx(doc):format==='pdf'?generateProposalPdf(doc):new TextEncoder().encode(generateProposalMarkdown(doc)); const outputSha=await sha256Hex(output);

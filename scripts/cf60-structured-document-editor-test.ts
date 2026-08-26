@@ -9,12 +9,15 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   const report = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const webPackage = read('apps/web/package.json');
-  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'replaceAll', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선']) {
+  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'NodeSelection', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'replaceAll', '표 크기 설정', '표 삭제', '이미지 ↑', '이미지 ↓', '이미지 삭제', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선']) {
     assert.ok(editor.includes(marker), `missing structured editor feature: ${marker}`);
   }
   assert.match(editor, /\(\?:AI\|MANUAL\)-CHAPTER/u);
   assert.match(editor, /getSelection/u);
   assert.match(editor, /replaceRange/u);
+  assert.match(editor, /dismissSelectionMenu/u);
+  assert.match(editor, /imageSelected/u);
+  assert.match(editor, /const initialContent = collaborationSession \? undefined : editorJson \?\? markdownToEditorHtml\(value\)/u);
   assert.match(report, /StructuredDocumentEditor/u);
   assert.match(report, /editorJson/u);
   assert.match(report, /report-step3-[\s\S]*?selectionAssistant/u);
@@ -22,6 +25,8 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /StructuredDocumentEditor/u);
   assert.match(proposal, /Gemini 문장 개선/u);
   assert.match(proposal, /selectionAssistant/u);
+  assert.match(proposal, /repairLegacyProposalChapterMixup/u);
+  assert.match(proposal, /variablesWereDuplicated/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);
 });
@@ -37,7 +42,9 @@ test('CF60 persists structured report JSON and protects proposal AI improvement 
   assert.match(worker, /expectedProposalVersion/u);
   assert.match(worker, /PROPOSAL_NOT_EDITABLE/u);
   assert.match(worker, /VERSION_CONFLICT/u);
-  assert.match(worker, /사용자가 준 사실·숫자·날짜·인명·고유명사·근거를 추가하거나 삭제하지/u);
+  assert.match(worker, /원문의 사실·숫자·날짜·인명·회사명·현장명·계약명·영문 약어·근거를 단 하나도 추가/u);
+  assert.match(worker, /proposalImprovementPreservesSource/u);
+  assert.match(worker, /PROPOSAL_IMPROVEMENT_SOURCE_DRIFT/u);
 });
 
 test('CF60 keeps the collaboration bridge disabled until the private server runtime URL is injected', () => {

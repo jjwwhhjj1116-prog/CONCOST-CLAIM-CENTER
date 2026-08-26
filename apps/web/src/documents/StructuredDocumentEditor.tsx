@@ -10,10 +10,12 @@ import TextAlign from '@tiptap/extension-text-align';
 import { Node, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
+import { NodeSelection } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import * as Y from 'yjs';
@@ -38,8 +40,12 @@ export interface StructuredDocumentEditorHandle {
   getMarkdown: () => string;
   getSelection: () => StructuredSelection | null;
   replaceRange: (from: number, to: number, replacement: string) => void;
-  insertTable: () => void;
+  insertTable: (rows?: number, columns?: number) => void;
   insertImage: (image: { src: string; alt: string; title?: string }) => void;
+  deleteSelectedTable: () => boolean;
+  deleteSelectedImage: () => { deleted: boolean; src?: string };
+  moveSelectedImage: (direction: 'up' | 'down') => boolean;
+  dismissSelectionMenu: () => void;
 }
 
 interface StructuredDocumentEditorProps {
@@ -56,6 +62,7 @@ interface StructuredDocumentEditorProps {
     userEmail?: string;
   };
   selectionAssistant?: StructuredSelectionAssistant;
+  onRequestInsertTable?: () => void;
   onChange: (markdown: string, editorJson: JSONContent) => void;
   onSelectionChange?: (selection: StructuredSelection | null) => void;
 }
@@ -169,6 +176,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   collaborationUsers = [],
   collaborationError = '',
   selectionAssistant,
+  onRequestInsertTable,
   onChange,
   onSelectionChange
 }, ref) {
@@ -179,10 +187,16 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [replacement, setReplacement] = useState('');
   const [searchStatus, setSearchStatus] = useState('');
   const [activeSelection, setActiveSelection] = useState<StructuredSelection | null>(null);
+  const [imageSelected, setImageSelected] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
+  const [tableDialogOpen, setTableDialogOpen] = useState(false);
+  const [tableRows, setTableRows] = useState(3);
+  const [tableColumns, setTableColumns] = useState(3);
   const lastEmitted = useRef(value);
   const selectionRef = useRef<StructuredSelection | null>(null);
-  const initialContent = useMemo(() => collaborationSession ? undefined : editorJson ?? markdownToEditorHtml(value), []);
+  // useEditor is recreated for each documentKey. Calculate this value on that
+  // render so a chapter never inherits the previous chapter's first content.
+  const initialContent = collaborationSession ? undefined : editorJson ?? markdownToEditorHtml(value);
 
   const editor = useEditor({
     extensions: [
@@ -209,6 +223,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     },
     onSelectionUpdate: ({ editor: activeEditor }) => {
       const { from, to } = activeEditor.state.selection;
+      setImageSelected(activeEditor.state.selection instanceof NodeSelection && activeEditor.state.selection.node.type.name === 'image');
       const text = from === to ? '' : activeEditor.state.doc.textBetween(from, to, '\n');
       const selection = text.trim() ? { from, to, text } : null;
       selectionRef.current = selection;
@@ -222,6 +237,12 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     if (!editor?.isInitialized || editor.isDestroyed) return;
     editor.setEditable(!readOnly);
   }, [editor, readOnly]);
+
+  useEffect(() => {
+    setImageSelected(false);
+    setActiveSelection(null);
+    selectionRef.current = null;
+  }, [documentKey]);
 
   useEffect(() => {
     if (collaborationSession) return;
@@ -242,6 +263,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     return () => { document.body.style.overflow = previous; };
   }, [fullscreen]);
 
+  const deleteSelectedImageNode = (): { deleted: boolean; src?: string } => {
+    if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return { deleted: false };
+    const src = typeof editor.state.selection.node.attrs.src === 'string' ? editor.state.selection.node.attrs.src : undefined;
+    editor.chain().focus().deleteSelection().run();
+    window.dispatchEvent(new CustomEvent('structured-editor:image-deleted', { detail: { documentKey, src } }));
+    return { deleted: true, ...(src ? { src } : {}) };
+  };
+
   useImperativeHandle(ref, () => ({
     focus: () => { editor?.chain().focus().run(); },
     getJSON: () => editor?.getJSON() ?? null,
@@ -251,13 +280,48 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       if (!editor) return;
       editor.chain().focus().insertContentAt({ from, to }, markdownToEditorHtml(next)).run();
     },
-    insertTable: () => {
-      editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+    insertTable: (rows, columns) => {
+      if (rows === undefined || columns === undefined) {
+        setTableDialogOpen(true);
+        return;
+      }
+      editor?.chain().focus().insertTable({ rows, cols: columns, withHeaderRow: true }).run();
     },
     insertImage: ({ src, alt, title }) => {
       editor?.chain().focus().setImage({ src, alt, title: title ?? alt }).run();
+    },
+    deleteSelectedTable: () => {
+      if (!editor?.isActive('table')) return false;
+      editor.chain().focus().deleteTable().run();
+      return true;
+    },
+    deleteSelectedImage: () => {
+      return deleteSelectedImageNode();
+    },
+    moveSelectedImage: (direction) => {
+      if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return false;
+      const { selection } = editor.state;
+      const parent = selection.$from.parent;
+      const index = selection.$from.index();
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= parent.childCount) return false;
+      const neighbor = parent.child(targetIndex);
+      const image = selection.node;
+      const from = selection.from;
+      const nextPosition = direction === 'up' ? from - neighbor.nodeSize : from + neighbor.nodeSize;
+      const transaction = editor.state.tr.delete(from, from + image.nodeSize).insert(nextPosition, image);
+      transaction.setSelection(NodeSelection.create(transaction.doc, nextPosition));
+      editor.view.dispatch(transaction.scrollIntoView());
+      return true;
+    },
+    dismissSelectionMenu: () => {
+      if (!editor) return;
+      editor.chain().setTextSelection(editor.state.selection.to).blur().run();
+      selectionRef.current = null;
+      setActiveSelection(null);
+      onSelectionChange?.(null);
     }
-  }), [editor, value]);
+  }), [editor, onSelectionChange, value]);
 
   const findNext = () => {
     if (!editor || !search.trim()) { setSearchStatus('찾을 내용을 입력하세요.'); return; }
@@ -324,7 +388,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const wordCount = editor?.getText().trim().split(/\s+/u).filter(Boolean).length ?? 0;
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
 
-  return <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label}>
+  return <>
+    {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{editor?.chain().focus().insertTable({rows:tableRows,cols:tableColumns,withHeaderRow:true}).run();setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
+    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label}>
     <header className="structured-editor__header">
       <div><strong>{label}</strong><span>{readOnly ? '읽기 전용' : collaborationSession ? '실시간 공동 편집 + 자동 저장' : '자동 저장 호환 편집기'}</span></div>
       {collaborationSession && <div className="structured-editor__collaboration" data-status={collaborationStatus}>
@@ -367,7 +433,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="오른쪽 정렬" active={editor?.isActive({ textAlign: 'right' })} onClick={() => editor?.chain().focus().setTextAlign('right').run()}>오른쪽</ToolbarButton>
       </div>
       <div>
-        <ToolbarButton label="표 삽입" onClick={() => editor?.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>표 +</ToolbarButton>
+        <ToolbarButton label="표 삽입" onClick={() => onRequestInsertTable ? onRequestInsertTable() : setTableDialogOpen(true)}>표 +</ToolbarButton>
         <ToolbarButton label="표 행 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addRowAfter().run()}>행 +</ToolbarButton>
         <ToolbarButton label="표 열 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addColumnAfter().run()}>열 +</ToolbarButton>
         <ToolbarButton label="표 행 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteRow().run()}>행 −</ToolbarButton>
@@ -377,6 +443,19 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <div>
         <ToolbarButton label="링크" active={editor?.isActive('link')} onClick={addLink}>링크</ToolbarButton>
         <ToolbarButton label="이미지" onClick={addImage}>이미지</ToolbarButton>
+        <ToolbarButton label="선택 이미지 위로 이동" disabled={!imageSelected} onClick={() => {
+          if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
+          const parent = editor.state.selection.$from.parent; const index = editor.state.selection.$from.index(); if (index < 1) return;
+          const previous = parent.child(index - 1); const image = editor.state.selection.node; const from = editor.state.selection.from; const nextPosition = from - previous.nodeSize;
+          const transaction = editor.state.tr.delete(from, from + image.nodeSize).insert(nextPosition, image); transaction.setSelection(NodeSelection.create(transaction.doc, nextPosition)); editor.view.dispatch(transaction.scrollIntoView());
+        }}>이미지 ↑</ToolbarButton>
+        <ToolbarButton label="선택 이미지 아래로 이동" disabled={!imageSelected} onClick={() => {
+          if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
+          const parent = editor.state.selection.$from.parent; const index = editor.state.selection.$from.index(); if (index >= parent.childCount - 1) return;
+          const next = parent.child(index + 1); const image = editor.state.selection.node; const from = editor.state.selection.from; const nextPosition = from + next.nodeSize;
+          const transaction = editor.state.tr.delete(from, from + image.nodeSize).insert(nextPosition, image); transaction.setSelection(NodeSelection.create(transaction.doc, nextPosition)); editor.view.dispatch(transaction.scrollIntoView());
+        }}>이미지 ↓</ToolbarButton>
+        <ToolbarButton label="선택 이미지 삭제" disabled={!imageSelected} onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
         <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>구분선</ToolbarButton>
         <ToolbarButton label="서식 지우기" onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}>서식 지우기</ToolbarButton>
       </div>
@@ -388,7 +467,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
           editor={editor}
           pluginKey={`structured-selection-assistant-${documentKey ?? label}`}
           updateDelay={80}
-          shouldShow={({ editor: activeEditor, from, to }) => !readOnly && activeEditor.isEditable && activeEditor.isFocused && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim())}
+          shouldShow={({ editor: activeEditor, from, to }) => !readOnly && !selectionAssistant.disabled && !selectionAssistant.busy && activeEditor.isEditable && activeEditor.isFocused && from !== to && Boolean(activeEditor.state.doc.textBetween(from, to, '\n').trim())}
           className="structured-editor__selection-menu"
           role="toolbar"
           aria-label="선택 문장 빠른 작업"
@@ -403,7 +482,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       </>}
     </div>
     <footer>{collaborationError && <span className="structured-editor__collaboration-error">{collaborationError}</span>}<span>{wordCount.toLocaleString('ko-KR')}단어</span><span>{(characterCount ?? 0).toLocaleString('ko-KR')}자</span><span>{collaborationSession ? 'Yjs + Hocuspocus CRDT' : 'Markdown + Tiptap JSON 호환'}</span></footer>
-  </section>;
+    </section>
+  </>;
 });
 
 const CollaborativeDocumentEditor = forwardRef<StructuredDocumentEditorHandle, StructuredDocumentEditorProps>(function CollaborativeDocumentEditor(props, ref) {
