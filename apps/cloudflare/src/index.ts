@@ -2477,7 +2477,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         const parsedValidation=proposalAiJson(validationGenerated.content??'');
         validation=parsedValidation&&['PASS','FAIL'].includes(String(parsedValidation.result))?parsedValidation:{result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 응답 형식이 올바르지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'MALFORMED_PROPOSAL_AI_VALIDATION'};
       }
-      if(validation.result==='FAIL')return json({error:'Gemini 자가검증에서 제안서 정합성 또는 보안 기준을 통과하지 못했습니다. 입력을 보완한 뒤 다시 생성해 주세요.',code:'PROPOSAL_AI_VALIDATION_FAILED',findings:Array.isArray(validation.findings)?validation.findings:[]},422);
+      if(validation.result==='FAIL')validation={...validation,result:'REVIEW_REQUIRED',fallbackReason:'AI_VALIDATION_REQUIRES_HUMAN_REVIEW',findings:[...(Array.isArray(validation.findings)?validation.findings:[]),{level:'WARNING',location:'1~3장 전체',issue:'AI 자가검증에서 사람이 확인해야 할 항목을 발견했습니다.',fix:'생성된 초안은 보존되며 3단계에서 사실·수치·근거를 직접 검수한 뒤 수정하세요.'}]};
       for(const [number,generatedText] of [[1,rendered1],[2,rendered2],[3,rendered3]] as const)inputs.chapters[number-1].body=sanitizeInput(generatedText,50000);
       inputs.chapters[11].body=PROPOSAL_STANDARD_CLOSING;
       inputs.objective=inputs.chapters[0].body;inputs.keyIssues=inputs.chapters[1].body;inputs.planNotes=inputs.chapters[2].body;
