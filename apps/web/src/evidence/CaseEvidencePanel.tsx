@@ -53,6 +53,7 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const [loading, setLoading] = useState(false);
   const [storagePolicy, setStoragePolicy] = useState<'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'>('D1_TEST_FALLBACK');
   const [googleDriveConnected, setGoogleDriveConnected] = useState(false);
+  const [driveLibraryUrl, setDriveLibraryUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState('');
@@ -69,17 +70,18 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     setLoading(true); setError('');
     try {
       const response = await fetch(`/api/cases/${encodeURIComponent(requestCaseId)}/evidence`, { headers: { Accept: 'application/json' } });
-      const payload = await response.json() as { files?: CaseEvidenceFile[]; error?: string; storagePolicy?: 'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'; googleDriveConnected?: boolean };
+      const payload = await response.json() as { files?: CaseEvidenceFile[]; error?: string; storagePolicy?: 'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'; googleDriveConnected?: boolean; driveLibraryUrl?: string | null };
       if (!response.ok) throw new Error(payload.error ?? '프로젝트 자료를 불러오지 못했습니다.');
       if (sequence !== loadSequenceRef.current || caseIdRef.current !== requestCaseId) return;
       setFiles(payload.files ?? []);
       setStoragePolicy(payload.storagePolicy ?? 'D1_TEST_FALLBACK');
       setGoogleDriveConnected(Boolean(payload.googleDriveConnected));
+      setDriveLibraryUrl(typeof payload.driveLibraryUrl === 'string' && payload.driveLibraryUrl.startsWith('https://drive.google.com/') ? payload.driveLibraryUrl : null);
     } catch (reason) { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : '프로젝트 자료를 불러오지 못했습니다.'); }
     finally { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setLoading(false); }
   }, [caseId]);
 
-  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(initialCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setGoogleDriveConnected(false); }, [caseId, categoryKey, initialCategory]);
+  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(initialCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setGoogleDriveConnected(false); setDriveLibraryUrl(null); }, [caseId, categoryKey, initialCategory]);
   useEffect(() => { void load(); }, [load]);
 
   const upload = async (incoming: FileList | File[]) => {
@@ -131,7 +133,7 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
       <input ref={inputRef} type="file" multiple accept={ACCEPT} disabled={uploadDisabled} onChange={(event) => event.target.files && void upload(event.target.files)} />
       <span aria-hidden="true">⇧</span><div><strong>{uploading ? `${uploading}개 파일 저장 중…` : uploadDisabled ? '회사 Google Drive 연결이 필요합니다' : `${categoryCopy[category].title}를 끌어다 놓으세요`}</strong><small>문서·사진·녹음파일 최대 10MB · 업로더·업로드 시각·SHA-256을 기록하고 프로젝트/자료종류/월 폴더에 저장합니다.</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
     </div>
-    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? 'COMPANY GOOGLE DRIVE STORAGE' : 'LOCAL TEST FALLBACK'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 Drive 연결 완료 · 새 파일은 프로젝트/업무단계별 자료/월 폴더에 직접 저장됩니다.' : '업로드가 잠겨 있습니다. 설정의 관리자 설정에서 회사 계정을 연결하세요.' : '자동화 테스트 환경에서만 D1 임시 보존을 사용합니다.'} {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>Google Drive 설정 열기</button>}</p>
+    <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? 'COMPANY GOOGLE DRIVE STORAGE' : 'LOCAL TEST FALLBACK'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 Drive 연결 완료 · 새 파일은 프로젝트/업무단계별 자료/월 폴더에 직접 저장됩니다.' : '업로드가 잠겨 있습니다. 설정의 관리자 설정에서 회사 계정을 연결하세요.' : '자동화 테스트 환경에서만 D1 임시 보존을 사용합니다.'} {googleDriveConnected && driveLibraryUrl && <a className="case-evidence-drive-link" href={driveLibraryUrl} target="_blank" rel="noreferrer noopener">Google Drive 자료실 열기 ↗</a>} {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>Google Drive 설정 열기</button>}</p>
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error} <button type="button" onClick={() => void load()}>다시 확인</button></p>}
     <div className="case-evidence-list"><header><div><span>PROJECT EVIDENCE</span><h3>{categoryCopy[category].title} 목록</h3></div><div><em>{categoryFiles.length} FILES</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
       {loading ? <p className="case-evidence-empty">자료 목록을 불러오는 중입니다.</p> : visibleFiles.length ? <ul>{visibleFiles.map((file) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small>{categoryCopy[file.category].title} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {file.uploadedBy} · {formatBytes(file.byteSize)}</small></div><span>{file.storageProvider === 'GOOGLE_DRIVE' ? 'GOOGLE DRIVE' : 'D1 LEGACY'}</span><div className="case-evidence-file-actions">{file.driveUrl && <a href={file.driveUrl} target="_blank" rel="noreferrer">Drive에서 열기</a>}<Button size="sm" variant="secondary" onClick={() => void download(file)}>다운로드</Button></div></li>)}</ul> : <p className="case-evidence-empty">아직 저장된 자료가 없습니다. 위 영역에 첫 자료를 올려 주세요.</p>}

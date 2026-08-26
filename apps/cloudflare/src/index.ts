@@ -6195,7 +6195,13 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     const configured = Boolean(await googleConfig(env));
     const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
     const files = [...googleRows, ...legacyRows.results].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)).slice(0, 200);
-    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF39_INTEGRATED_PROJECT_EVIDENCE' });
+    const latestFolderId = googleRows.find((row) => typeof row.googleFolderId === 'string' && /^[A-Za-z0-9_-]{10,200}$/u.test(row.googleFolderId))?.googleFolderId;
+    const driveLibraryUrl = connected
+      ? latestFolderId
+        ? `https://drive.google.com/drive/folders/${encodeURIComponent(latestFolderId)}`
+        : 'https://drive.google.com/drive/my-drive'
+      : null;
+    return json({ files: files.map(caseEvidenceProjection), categories: CASE_EVIDENCE_CATEGORY_CONFIG, googleDriveConfigured: configured, googleDriveConnected: connected, driveLibraryUrl, storagePolicy: configured ? 'GOOGLE_DRIVE_REQUIRED' : 'D1_TEST_FALLBACK', temporaryStorage: !configured, migrationTarget: 'GOOGLE_DRIVE', phase: 'CF39_INTEGRATED_PROJECT_EVIDENCE' });
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!user.roles.some((role) => CASE_EVIDENCE_UPLOAD_ROLES.has(role))) return json({ error: 'Role cannot upload project evidence', code: 'FORBIDDEN' }, 403);

@@ -168,6 +168,7 @@ test('CF39 all assigned login roles upload project-wide evidence categories and 
   const list = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`, PM_TOKEN), env);
   const body = await list.json() as any;
   assert.equal(body.phase, 'CF39_INTEGRATED_PROJECT_EVIDENCE');
+  assert.equal(body.driveLibraryUrl, null);
   assert.deepEqual(new Set(body.files.map((file: any) => file.category)), new Set(['MEETING_RECORDING', 'FINAL_DELIVERABLE']));
   assert.equal(Object.keys(body.categories).length, 13);
   assert.throws(() => sql.run("UPDATE preview_case_evidence SET workflow_category='COURT_DOCUMENT'"), /append-only/u);
@@ -241,6 +242,9 @@ test('CF39 judgment performance is derived only from recorded court events and f
   assert.match(deliverySource, /FINAL_DELIVERABLE/u);
   assert.match(deliverySource, /allowedCategories=\{\['FINAL_DELIVERABLE'\]\}/u);
   assert.match(deliverySource, /Drive에서 열기|Google Drive/u);
+  const evidencePanelSource = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'evidence', 'CaseEvidencePanel.tsx'), 'utf8');
+  assert.match(evidencePanelSource, /Google Drive 자료실 열기/u);
+  assert.match(evidencePanelSource, /driveLibraryUrl/u);
   const outcomeSource = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewOutcomeCenter.tsx'), 'utf8');
   assert.match(outcomeSource, /litigation-outcomes/u);
   sql.close();
