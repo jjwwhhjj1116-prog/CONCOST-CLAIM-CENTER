@@ -61,9 +61,11 @@ async function integrationSetup(): Promise<{ sql: Database; env: CloudflareEnv }
     if (url.includes('/upload/drive/v3/files')) return Response.json({ id: 'cf47UploadedFile001', name: '의뢰정리.txt', mimeType: 'text/plain', size: String(new TextEncoder().encode(INTAKE_TEXT).length), webViewLink: 'https://drive.google.test/file' });
     return new Response('unexpected Google request', { status: 500 });
   };
-  const geminiFetch: typeof fetch = async (_input, init) => {
+  const geminiFetch: typeof fetch = async (input, init) => {
+    assert.match(String(input), /gemini-3\.6-flash/u, 'intake automation must use the approved organization Gemini route');
+    assert.doesNotMatch(String(input), /gemini-3\.7-flash/u, 'intake automation must not call an unavailable hard-coded model');
     const body = JSON.parse(String(init?.body)) as any;
-    assert.equal('temperature' in body.generationConfig, false, 'Gemini 3.7 calls must omit deprecated sampling controls');
+    assert.equal('temperature' in body.generationConfig, false, 'Gemini document calls must omit deprecated sampling controls');
     assert.match(body.contents[0].parts[1].text, /발주처가 추가 공사를 지시/u);
     if (body.contents[0].parts[0].text.includes('JSON 객체 하나만 반환')) return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({ title:'추가공사비 검토 의뢰', claimType:'TYPE-01', clientLegalPosition:'VICTIM', clientPositionDetail:'원고 조합', description:'2026-08-01 발주처의 추가 공사 지시에 대해 클라이언트가 공사비 검토를 요청했습니다.', reviewChecklist:['추가 공사 지시일 대조','클라이언트 법적 지위 확인'] }) }] } }] });
     return Response.json({ candidates: [{ content: { parts: [{ text: '1) 시간순 타임라인\n- 2026-08-01 발주처 추가 공사 지시\n2) 의뢰 배경\n추가 공사비 검토 요청' }] } }] });

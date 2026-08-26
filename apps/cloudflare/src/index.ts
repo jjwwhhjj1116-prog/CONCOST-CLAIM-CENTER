@@ -806,7 +806,7 @@ async function generateWorkflowAiImport(
   mimeType: string
 ): Promise<{ result?: WorkflowAiImportResult; modelCode: string; redactionCount: number; response?: Response }> {
   const credential = await resolveOrganizationAiCredential(env, 'GEMINI');
-  const modelCode = 'gemini-3.7-flash';
+  const modelCode = (await previewOrganizationGeminiAutomationRoute(env)).modelCode;
   if (!credential) return { modelCode, redactionCount: 0, response: json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503) };
   const textLike = mimeType === 'text/plain' || mimeType === 'text/csv';
   const redacted = textLike ? redactExternalAiText(new TextDecoder('utf-8', { fatal: false }).decode(bytes)) : { text: '', count: 0 };
@@ -905,9 +905,10 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     const governance = await workflowAiGovernance(env);
     const paidPolicy = governance.confidentialEnabled && ['PAID_NO_PRODUCT_IMPROVEMENT','VERTEX_AI_ENTERPRISE'].includes(governance.serviceTier);
     if (classification !== 'GENERAL' && !paidPolicy) {
+      const modelCode = (await previewOrganizationGeminiAutomationRoute(env)).modelCode;
       await env.DB.prepare(
-        "INSERT INTO preview_workflow_ai_imports (id,organization_id,case_id,workflow_kind,original_name,mime_type,byte_size,source_sha256,data_class,redaction_count,provider_kind,model_code,status,error_code,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,'GEMINI','gemini-3.7-flash','BLOCKED_BY_POLICY','PAID_NO_TRAINING_REQUIRED',?,?)"
-      ).bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,workflowKind,file.name,validated.mimeType,file.size,validated.sha256,classification,user.id,new Date().toISOString()).run();
+        "INSERT INTO preview_workflow_ai_imports (id,organization_id,case_id,workflow_kind,original_name,mime_type,byte_size,source_sha256,data_class,redaction_count,provider_kind,model_code,status,error_code,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,'GEMINI',?,'BLOCKED_BY_POLICY','PAID_NO_TRAINING_REQUIRED',?,?)"
+      ).bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,workflowKind,file.name,validated.mimeType,file.size,validated.sha256,classification,modelCode,user.id,new Date().toISOString()).run();
       return json({
         error: '회사 내부·기밀 자료는 Gemini 유료 서비스(Cloud Billing 활성)와 비학습 조건을 관리자가 확인하기 전 외부 AI로 전송하지 않습니다.',
         code: 'PAID_NO_TRAINING_REQUIRED', governance
@@ -972,7 +973,7 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     let generator = 'LOCAL_STRUCTURED_FALLBACK';
     const organizationGemini = await resolveOrganizationAiCredential(env, 'GEMINI');
     if (organizationGemini) {
-      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'medium', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: now, updatedByName: 'ORGANIZATION_ADMIN' };
+      const route = await previewOrganizationGeminiAutomationRoute(env);
       const generated = await generatePreviewAiText(
         env,
         route,
@@ -2443,7 +2444,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const intakeSummary = await env.DB.prepare(
         'SELECT summary_text AS summaryText,client_legal_position AS clientLegalPosition,created_at AS createdAt FROM preview_intake_audio_summaries WHERE case_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1'
       ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ summaryText: string; clientLegalPosition: string; createdAt: string }>().catch(() => null);
-      const route: PreviewAiRouteRow = { taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'low', secretName: 'GEMINI_API_KEY', version: 1, updatedAt: new Date().toISOString(), updatedByName: 'ORGANIZATION_ADMIN' };
+      const route = await previewOrganizationGeminiAutomationRoute(env);
       const issueLines=inputs.keyIssues.split(/\r?\n|[;；]/u).map((line)=>line.replace(/^\s*\d+[.)]\s*/u,'').trim()).filter(Boolean).slice(0,5);
       while(issueLines.length<4)issueLines.push(`[확인필요: 핵심 쟁점 ${issueLines.length+1}]`);
       const generationInput={
@@ -2596,8 +2597,9 @@ function parseIntakeAssistantDraft(raw:string,current:Record<string,string>):Int
 
 async function generateIntakeAssistantDraft(env:CloudflareEnv,bytes:Uint8Array,fileName:string,source:IntakeSource,current:Record<string,string>):Promise<{draft?:IntakeAssistantDraft;modelCode:string;response?:Response}>{
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
-  if(!credential)return{modelCode:'gemini-3.7-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
-  const modelCode='gemini-3.7-flash'; const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
+  const modelCode=(await previewOrganizationGeminiAutomationRoute(env)).modelCode;
+  if(!credential)return{modelCode,response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
+  const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
   let response:Response;
   try{
     response=await(env.GEMINI_TEST_FETCH??fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${modelCode}:generateContent`,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json','x-goog-api-key':credential.apiKey},body:JSON.stringify({system_instruction:{parts:[{text:'당신은 건설 클레임 프로젝트 의뢰 접수 보조자입니다. 첨부 원문에 명시된 사실만 사용하고 추측하지 마세요. 클라이언트와 상대방을 구분하고 불확실한 값은 반드시 확인 필요라고 표시하세요.'}]},contents:[{role:'user',parts:[{text:`첨부 자료 ${fileName} (${source.kind})를 읽고 프로젝트 의뢰 기본정보 초안을 만드세요. 현재 입력값은 참고만 하며 원문과 충돌하면 reviewChecklist에 적으세요.\n현재 사건명: ${current.title||'[없음]'}\n현재 유형: ${current.claimType||'[없음]'}\n현재 법적 지위: ${current.clientLegalPosition||'[없음]'}\n현재 입장 상세: ${current.clientPositionDetail||'[없음]'}\n현재 설명: ${current.description||'[없음]'}\n\nJSON 객체 하나만 반환하세요: {"title":"사건명","claimType":"TYPE-01~TYPE-06 중 하나","clientLegalPosition":"VICTIM|SUSPECT|OTHER","clientPositionDetail":"우리 클라이언트의 구체적 지위","description":"클라이언트 관점의 사건 설명. 시간순 사실·주장·상대방 주장·핵심 쟁점·확보자료·확인필요 사항 포함","reviewChecklist":["사람이 원문과 대조할 항목"]}`},intakeGeminiSourcePart(bytes,source)]}],generationConfig:{maxOutputTokens:4096,responseMimeType:'application/json'}})});
@@ -2624,8 +2626,8 @@ async function handlePreviewIntakeDraft(request:Request,env:CloudflareEnv,user:S
 
 async function summarizeIntakeSource(env: CloudflareEnv,user: SessionUser,caseRow: PreviewCaseRow,bytes: Uint8Array,fileName:string,source:IntakeSource): Promise<{summary?:string;modelCode:string;response?:Response}> {
   const credential=await resolveOrganizationAiCredential(env,'GEMINI');
-  if(!credential) return {modelCode:'gemini-3.7-flash',response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
-  const modelCode='gemini-3.7-flash';
+  const modelCode=(await previewOrganizationGeminiAutomationRoute(env)).modelCode;
+  if(!credential) return {modelCode,response:json({error:'관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),90_000);
   let response:Response;
   try{
@@ -2661,7 +2663,7 @@ async function handlePreviewIntakeSource(request:Request,env:CloudflareEnv,user:
   if(reserved.meta?.changes!==1)return json({error:'동일 의뢰 자료 처리가 이미 진행 중입니다.',code:'INTAKE_SOURCE_OPERATION_CONFLICT'},409);
   const useReviewedDraft=form?.get('useReviewedCaseDescription')==='true'&&Boolean(caseRow.description?.trim());
   const generated=useReviewedDraft
-    ? {summary:caseRow.description as string,modelCode:'gemini-3.7-flash+human-reviewed'}
+    ? {summary:caseRow.description as string,modelCode:'human-reviewed'}
     : await summarizeIntakeSource(env,user,caseRow,bytes,file.name,source);
   if(generated.response){await env.DB.prepare("UPDATE preview_intake_audio_operations SET status='FAILED',error_code='GEMINI_SUMMARY_FAILED',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString(),operationId).run();return generated.response;}
   try{
@@ -3741,6 +3743,22 @@ function previewPersonalGeminiAssistantRoute(routes: PreviewAiRouteRow[]): Previ
       updatedAt: '',
       updatedByName: 'SYSTEM'
     };
+}
+
+async function previewOrganizationGeminiAutomationRoute(env: CloudflareEnv): Promise<PreviewAiRouteRow> {
+  const routes = await previewAiRoutes(env);
+  const configured = routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'CHAPTER_WRITING' && previewModelAllowed('GEMINI', route.modelCode))
+    ?? routes.find((route) => route.providerKind === 'GEMINI' && previewModelAllowed('GEMINI', route.modelCode));
+  return configured ?? {
+    taskKind: 'CHAPTER_WRITING',
+    providerKind: 'GEMINI',
+    modelCode: 'gemini-3.6-flash',
+    reasoningEffort: 'medium',
+    secretName: 'GEMINI_API_KEY',
+    version: 0,
+    updatedAt: '',
+    updatedByName: 'SYSTEM'
+  };
 }
 
 async function previewAiPublicConfiguration(env: CloudflareEnv, routes: PreviewAiRouteRow[]): Promise<Record<string, unknown>> {
