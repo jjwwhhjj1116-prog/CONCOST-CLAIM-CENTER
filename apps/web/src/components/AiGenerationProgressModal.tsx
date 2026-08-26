@@ -25,7 +25,7 @@ export function AiGenerationProgressModal({
   completeMessage,
   errorMessage,
   confirmLabel = '확인하고 다음 단계로',
-  timeoutHintSeconds = 180,
+  timeoutHintSeconds = 220,
   onConfirm,
   onClose
 }: AiGenerationProgressModalProps): React.ReactElement | null {

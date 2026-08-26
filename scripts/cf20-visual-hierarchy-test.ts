@@ -68,7 +68,7 @@ test('CF22 applies the pastel overlay system and project-specific work tags', ()
   assert.match(html, /family=DM\+Mono/u);
   assert.match(theme, /--page-bg: #f4f7fb/u);
   assert.match(theme, /0 6px 18px rgba\(34, 62, 94, \.04\)/u);
-  assert.match(theme, /\.navigation-group \.navigation-link\[aria-current='page'\].*background: #e5f0f8/u);
+  assert.match(theme, /\.navigation-group \.navigation-link\[aria-current='page'\].*background: rgba\(var\(--group-rgb\), \.14\)/u);
   assert.match(model, /highlights: readonly/u);
   assert.match(model, /마감팀 · 마감 물량 산출/u);
   assert.doesNotMatch(schedule, /project-brief-board/u);
@@ -92,7 +92,7 @@ test('CF23 opens project workflow as a contextual schedule dialog without a dupl
   assert.match(app, /currentSearch=\{currentSearch\}/u);
   assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.match(shell, /sidebar-project-context/u);
-  assert.match(shell, /CURRENT PROJECT/u);
+  assert.match(shell, /현재 선택 프로젝트/u);
   assert.match(shell, /selectedStage \? `\$\{selectedStage\.id\}단계/u);
   assert.match(shell, /상세 팝업/u);
   assert.match(schedule, /project-context-strip/u);

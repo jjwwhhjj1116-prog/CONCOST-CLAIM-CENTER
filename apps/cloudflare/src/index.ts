@@ -2470,9 +2470,13 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const rendered1=proposalRenderedAiChapter(1,chapter1);const rendered2=proposalRenderedAiChapter(2,chapter2);const rendered3=proposalRenderedAiChapter(3,chapter3);
       if(!rendered1||!rendered2||!rendered3)return json({error:'Gemini 초안이 선택 템플릿의 1~3장 구조 기준에 미달하여 저장하지 않았습니다.',code:'INCOMPLETE_PROPOSAL_AI_RESPONSE',requiredOrder:[2,1,3]},502);
       const validationGenerated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}`,JSON.stringify({input:generationInput,chapter1,chapter2,chapter3}),user.id,organizationGemini,40_000);
-      if(validationGenerated.response)return validationGenerated.response;
-      const validation=proposalAiJson(validationGenerated.content??'');
-      if(!validation||!['PASS','FAIL'].includes(String(validation.result)))return json({error:'Gemini 자가검증 응답 형식이 올바르지 않습니다.',code:'MALFORMED_PROPOSAL_AI_VALIDATION'},502);
+      let validation:Record<string,unknown>;
+      if(validationGenerated.response){
+        validation={result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 서비스가 응답하지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'PROVIDER_VALIDATION_UNAVAILABLE'};
+      }else{
+        const parsedValidation=proposalAiJson(validationGenerated.content??'');
+        validation=parsedValidation&&['PASS','FAIL'].includes(String(parsedValidation.result))?parsedValidation:{result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 응답 형식이 올바르지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'MALFORMED_PROPOSAL_AI_VALIDATION'};
+      }
       if(validation.result==='FAIL')return json({error:'Gemini 자가검증에서 제안서 정합성 또는 보안 기준을 통과하지 못했습니다. 입력을 보완한 뒤 다시 생성해 주세요.',code:'PROPOSAL_AI_VALIDATION_FAILED',findings:Array.isArray(validation.findings)?validation.findings:[]},422);
       for(const [number,generatedText] of [[1,rendered1],[2,rendered2],[3,rendered3]] as const)inputs.chapters[number-1].body=sanitizeInput(generatedText,50000);
       inputs.chapters[11].body=PROPOSAL_STANDARD_CLOSING;

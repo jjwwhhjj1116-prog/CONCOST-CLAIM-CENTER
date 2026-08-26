@@ -7,7 +7,6 @@ import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { TableKit } from '@tiptap/extension-table';
 import TextAlign from '@tiptap/extension-text-align';
-import Underline from '@tiptap/extension-underline';
 import { Node, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
@@ -92,7 +91,7 @@ const AiChapterMarker = Node.create({
 });
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-const markerPattern = /<!--\s*(AI-CHAPTER:[^:]+:(?:START|END))\s*-->/gu;
+const markerPattern = /<!--\s*((?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END))\s*-->/gu;
 
 const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
@@ -186,7 +185,6 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const editor = useEditor({
     extensions: [
       StarterKit.configure(collaborationSession ? { undoRedo: false, link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } } : { link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
-      Underline,
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true } }),

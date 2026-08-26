@@ -12,7 +12,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'replaceAll', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선']) {
     assert.ok(editor.includes(marker), `missing structured editor feature: ${marker}`);
   }
-  assert.match(editor, /AI-CHAPTER:/u);
+  assert.match(editor, /\(\?:AI\|MANUAL\)-CHAPTER/u);
   assert.match(editor, /getSelection/u);
   assert.match(editor, /replaceRange/u);
   assert.match(report, /StructuredDocumentEditor/u);

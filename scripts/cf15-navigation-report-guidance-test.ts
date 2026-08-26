@@ -8,12 +8,12 @@ const studio = readFileSync('apps/web/src/routes/PreviewReportStudio.tsx', 'utf8
 const schedule = readFileSync('apps/web/src/workflow/ProjectWorkflowSchedule.tsx', 'utf8');
 
 test('CF15 sidebar follows the requested workflow with proposal authoring nested between intake and award', () => {
-  for (const label of ['CLAIM CENTER HOME', '프로젝트 제안 및 수주', '프로젝트 제안서', '프로젝트 워크', '프로젝트 보고서', '클레임센터 자료실', '법원 자료', '검토·납품·품질관리']) {
+  for (const label of ['HOME', '프로젝트 제안 및 수주', '프로젝트 제안서', '프로젝트 워크', '프로젝트 보고서', '클레임센터 자료실', '법원 자료', '검토·납품·품질관리']) {
     assert.match(shell, new RegExp(label, 'u'));
   }
   assert.match(shell, /routeIds: \['CASE-02', 'CASE-07', 'CASE-08', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'\]/u);
   assert.match(shell, /nestedGroups: \[\s*\{ label: '프로젝트 의뢰'.*routeIds: \['CASE-02', 'CASE-07', 'CASE-08'\]/su);
-  assert.match(shell, /\{ label: '프로젝트 제안서', eyebrow: 'PROJECT PROPOSALS', routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\] \}/u);
+  assert.match(shell, /\{ label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\] \}/u);
   assert.match(shell, /routeIds: \['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'\]/u);
   assert.match(shell, /nestedGroups: \[\{ label: '프로젝트 보고서'.*routeIds: \['REPO-02', 'REPO-03', 'REPO-04'\]/u);
   assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
