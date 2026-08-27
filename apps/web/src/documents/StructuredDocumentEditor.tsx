@@ -21,6 +21,7 @@ import { createPortal } from 'react-dom';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import * as Y from 'yjs';
+import { structuredDocumentContentSignature } from './structured-document-sync';
 
 export interface StructuredSelection {
   from: number;
@@ -392,7 +393,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [tableRows, setTableRows] = useState(3);
   const [tableColumns, setTableColumns] = useState(3);
-  const lastEmitted = useRef(value);
+  const lastAppliedContentSignature = useRef(structuredDocumentContentSignature(value, editorJson));
   const selectionRef = useRef<StructuredSelection | null>(null);
   // useEditor is recreated for each documentKey. Calculate this value on that
   // render so a chapter never inherits the previous chapter's first content.
@@ -465,8 +466,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     immediatelyRender: false,
     onUpdate: ({ editor: activeEditor }) => {
       const nextMarkdown = editorHtmlToMarkdown(activeEditor.getHTML());
-      lastEmitted.current = nextMarkdown;
-      onChange(nextMarkdown, activeEditor.getJSON());
+      const nextJson = activeEditor.getJSON();
+      lastAppliedContentSignature.current = structuredDocumentContentSignature(nextMarkdown, nextJson);
+      onChange(nextMarkdown, nextJson);
     },
     onSelectionUpdate: ({ editor: activeEditor }) => {
       const { from, to } = activeEditor.state.selection;
@@ -495,8 +497,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   useEffect(() => {
     if (collaborationSession) return;
-    if (!editor?.isInitialized || editor.isDestroyed || value === lastEmitted.current) return;
-    lastEmitted.current = value;
+    if (!editor?.isInitialized || editor.isDestroyed) return;
+    const desiredSignature = structuredDocumentContentSignature(value, editorJson);
+    if (desiredSignature === lastAppliedContentSignature.current) return;
+    lastAppliedContentSignature.current = desiredSignature;
     editor.commands.setContent(editorJson ?? markdownToEditorHtml(value), { emitUpdate: false });
   }, [collaborationSession, editor, editorJson, value]);
 

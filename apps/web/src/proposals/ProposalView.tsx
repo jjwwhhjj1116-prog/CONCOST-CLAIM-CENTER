@@ -127,27 +127,27 @@ const deduplicateProposalImages=(body:string):string=>{
     seen.add(source);return token;
   });
 };
-const renderProposalBodyHtml=(body:string,assets:readonly CompanyAsset[]):string=>{
-  const hydrated=proposalChapterWithCompanyImages({number:assets[0]?.chapterNumber??0,title:'',kind:'FIXED',body},assets).body;
-  const rendered=marked.parse(deduplicateProposalImages(hydrated),{async:false,gfm:true,breaks:true});
+const renderProposalBodyHtml=(body:string,assets:readonly CompanyAsset[],hydrateCompanyAssets:boolean):string=>{
+  const source=hydrateCompanyAssets?proposalChapterWithCompanyImages({number:assets[0]?.chapterNumber??0,title:'',kind:'FIXED',body},assets).body:body;
+  const rendered=marked.parse(deduplicateProposalImages(source),{async:false,gfm:true,breaks:true});
   return DOMPurify.sanitize(typeof rendered==='string'?rendered:'',{
     ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','colspan','rowspan','style','target','rel','width','height']
   });
 };
-function ProposalRichContent({body,editorJson,assets=[]}:{body:string;editorJson?:import('@tiptap/core').JSONContent|null;assets?:CompanyAsset[]}):React.ReactElement{
+function ProposalRichContent({body,editorJson,assets=[],hydrateCompanyAssets=true}:{body:string;editorJson?:import('@tiptap/core').JSONContent|null;assets?:CompanyAsset[];hydrateCompanyAssets?:boolean}):React.ReactElement{
   const visible=assets.filter((asset)=>asset.hasContent&&asset.isActive).sort((a,b)=>a.displayOrder-b.displayOrder);
   const structuredHtml=editorJson?renderStructuredDocumentHtml(editorJson):'';
   const html=structuredHtml
     ? DOMPurify.sanitize(deduplicateProposalImages(structuredHtml),{ADD_ATTR:['data-image-align','data-table-width','data-table-align','data-table-density','colspan','rowspan','style','target','rel','width','height']})
-    : renderProposalBodyHtml(body,visible);
+    : renderProposalBodyHtml(body,visible,hydrateCompanyAssets);
   return <article className="proposal-rich-content structured-editor__preview" dangerouslySetInnerHTML={{__html:html}}/>;
 }
 
-function ProposalFinalDocumentPreview({projectTitle,subtitle,clientName,submissionDate,chapters,assets}:{projectTitle:string;subtitle:string;clientName:string;submissionDate:string;chapters:ProposalChapter[];assets:CompanyAsset[]}):React.ReactElement{
+function ProposalFinalDocumentPreview({projectTitle,subtitle,clientName,submissionDate,chapters}:{projectTitle:string;subtitle:string;clientName:string;submissionDate:string;chapters:ProposalChapter[];assets?:CompanyAsset[]}):React.ReactElement{
   return <article className="proposal-final-document" aria-label="확정 전 제안서 전체 합본 미리보기">
     <section className="proposal-final-cover"><span>CONCOST CLAIM CENTER STUDIO</span><h3>{projectTitle}</h3><p>{subtitle}</p><dl><div><dt>제출처</dt><dd>{clientName}</dd></div><div><dt>제출일</dt><dd>{submissionDate}</dd></div><div><dt>제안사</dt><dd>주식회사 컨코스트 · 클레임센터</dd></div></dl><b>건설 클레임 전문용역 제안서</b></section>
     <section className="proposal-final-toc"><span>TABLE OF CONTENTS</span><h3>목차</h3><ol>{chapters.map((item)=><li key={item.number}><b>{String(item.number).padStart(2,'0')}</b><span>{item.title}</span></li>)}</ol></section>
-    {chapters.map((item)=><section className="proposal-final-chapter" data-chapter-number={item.number} key={item.number}><header><span>CHAPTER {String(item.number).padStart(2,'0')}</span><h3>{item.number}. {item.title}</h3></header><ProposalRichContent body={item.body} editorJson={item.editorJson} assets={assets.filter((asset)=>asset.chapterNumber===item.number&&!(item.excludedCompanyAssetKeys??[]).includes(asset.assetKey))}/></section>)}
+    {chapters.map((item)=><section className="proposal-final-chapter" data-chapter-number={item.number} key={item.number}><header><span>CHAPTER {String(item.number).padStart(2,'0')}</span><h3>{item.number}. {item.title}</h3></header><ProposalRichContent body={item.body} editorJson={item.editorJson}/></section>)}
   </article>;
 }
 
