@@ -342,7 +342,7 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .proposal-storage-warning { display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 16px;border:1px solid #f1b866;border-left:6px solid #e57b20;border-radius:12px;background:#fff7e8;color:#713b0a;box-shadow:0 8px 24px rgba(110,71,24,.1); }
 .proposal-storage-warning div { display:grid;gap:3px; }.proposal-storage-warning b { font-size:15px; }.proposal-storage-warning span { line-height:1.55; }
 .proposal-project-bar,.proposal-template-pick { display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr);gap:12px;align-items:end; }
-.proposal-project-template-bar { grid-template-columns:minmax(260px,.85fr) minmax(390px,1.35fr) auto; }
+.proposal-project-template-bar { grid-template-columns:minmax(240px,.85fr) minmax(210px,.55fr) minmax(280px,1fr) auto; }
 .proposal-template-preview-button { min-height:42px!important;padding-inline:18px!important;background:#7c3aed!important;color:#fff!important;font-weight:900!important;box-shadow:0 8px 18px rgba(124,58,237,.22); }
 .proposal-template-pick { grid-template-columns:minmax(250px,.85fr) minmax(340px,1.25fr) auto auto; }
 .proposal-project-context { margin-top:12px;display:flex;gap:12px;align-items:center;padding:11px 14px;border:1px solid #cfe1ef;border-radius:11px;background:#f6fbff; }
@@ -457,6 +457,7 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .proposal-template-dialog ul button { width:100%;padding:10px 12px;border:1px solid #d9e2ec;border-radius:9px;background:#f8fafc;color:#34465d;text-align:left;font-weight:700;cursor:pointer; }
 .proposal-template-dialog ul button:hover { border-color:#8f83ce;background:#f5f2ff; }
 .proposal-template-dialog ul button.is-selected { border-color:#766bb5;background:#eeeafd;color:#433881;box-shadow:inset 4px 0 #766bb5; }
+.proposal-template-dialog ul button small{display:block;margin-top:5px;color:#687d96;font-size:.72rem;font-weight:600;line-height:1.45}.proposal-representative-template input{background:#f7f5ff;border-color:#c9bdf4;color:#433881;font-weight:800}
 @media(max-width:1180px){.proposal-template-pick{grid-template-columns:1fr 1fr}.proposal-template-import{grid-template-columns:1fr 1fr}.proposal-template-import>div:first-child{grid-column:1/-1}}
 @media(max-width:1000px){.proposal-editor-grid{grid-template-columns:180px 1fr}.proposal-module-panel{grid-column:1/-1;border-left:0;border-top:1px solid #dde6ef;display:grid;grid-template-columns:repeat(2,1fr);gap:7px}.proposal-module-panel h4,.proposal-module-panel>p{grid-column:1/-1}.proposal-ai-map{grid-template-columns:1fr}.proposal-four-steps{grid-template-columns:repeat(2,1fr)}.proposal-admin-asset-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:700px){.proposal-project-bar,.proposal-template-pick,.proposal-template-import,.proposal-input-grid,.proposal-history,.proposal-draft-methods,.proposal-manual-draft{grid-template-columns:1fr}.proposal-template-import>div:first-child{grid-column:auto}.proposal-editor-grid{grid-template-columns:1fr}.proposal-toc{display:grid;grid-template-columns:repeat(2,1fr);border-right:0;border-bottom:1px solid #dde6ef;max-height:250px}.proposal-module-panel{grid-template-columns:1fr}.proposal-four-steps{grid-template-columns:1fr 1fr}.proposal-excel-workflow,.proposal-compact-tools,.proposal-manual-draft>header{align-items:stretch;flex-direction:column}.proposal-project-context{align-items:flex-start;flex-direction:column}.proposal-project-context span{margin-left:0}.proposal-final-preview ol{columns:1}}
@@ -850,3 +851,11 @@ body { background: var(--page-bg); color: var(--text-primary); }
 }
 .erp-sync-banner{display:flex;align-items:center;gap:16px;margin:14px 0;padding:15px 18px;border:2px solid #0f9f73;border-radius:14px;background:#e9fff7;color:#073b2d}.erp-sync-banner strong{font-size:16px}.erp-sync-banner span{font-size:14px;color:#174e40;flex:1}.erp-sync-banner button{min-height:40px;padding:0 16px;border:0;border-radius:10px;background:#075985;color:#fff;font-weight:800;cursor:pointer}.erp-sync-banner button:disabled{opacity:.55;cursor:wait}.erp-sync-banner.is-pending,.erp-sync-banner.is-failed{border-color:#f59e0b;background:#fff8e7;color:#713f12}.erp-sync-banner.is-pending span,.erp-sync-banner.is-failed span{color:#854d0e}
 .proposal-reception-summary{display:flex;flex-direction:column;gap:6px;margin-top:14px;padding:18px;border:2px solid #2563eb;border-radius:14px;background:#eff6ff;color:#172554}.proposal-reception-summary strong{font-size:20px}.proposal-reception-summary span{font-size:14px;line-height:1.6}
+
+/* CF66: keep the document text controls compact without hiding useful formatting. */
+.structured-editor__text-controls { min-width: 270px; }
+.structured-editor__text-controls label > span { position: absolute; width: 0; height: 0; overflow: hidden; font-size: 0; }
+.structured-editor__text-controls select { max-width: 122px; }
+.structured-editor__text-controls label:nth-of-type(2) select { max-width: 70px; }
+.structured-editor__color-control input[type="color"] { width: 36px; }
+@media (max-width: 760px) { .structured-editor__text-controls { grid-template-columns: 1fr 84px 44px auto; } }

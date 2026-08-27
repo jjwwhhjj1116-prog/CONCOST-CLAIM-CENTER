@@ -7,7 +7,7 @@ import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
 import { TableKit, TableView } from '@tiptap/extension-table';
 import TextAlign from '@tiptap/extension-text-align';
-import { Extension, Mark, Node, mergeAttributes, type JSONContent } from '@tiptap/core';
+import { Extension, Mark, Node, generateHTML, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
@@ -300,6 +300,27 @@ const createTurndown = () => {
 };
 
 const editorHtmlToMarkdown = (html: string): string => createTurndown().turndown(html).replace(/\n{3,}/gu, '\n\n').trim();
+
+/** Render the same structured document used by the editor for final previews. */
+export const renderStructuredDocumentHtml = (editorJson: JSONContent): string => {
+  try {
+    const html = generateHTML(editorJson, [
+      StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
+      Highlight.configure({ multicolor: false }),
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      TableKit.configure({ table: { resizable: false } }),
+      Image.configure({ allowBase64: false, inline: false }),
+      AiChapterMarker,
+      DocumentTextStyle,
+      DocumentPresentationAttributes
+    ]);
+    return DOMPurify.sanitize(html, {
+      ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    });
+  } catch {
+    return '';
+  }
+};
 
 const ToolbarButton = ({ active = false, disabled = false, label, onClick, children }: { active?: boolean; disabled?: boolean; label: string; onClick: () => void; children: React.ReactNode }) => (
   <button type="button" className={active ? 'is-active' : ''} disabled={disabled} title={label} aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick}>{children}</button>
@@ -683,10 +704,6 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="실행 취소" disabled={!editor?.can().undo()} onClick={() => editor?.chain().focus().undo().run()}>↶</ToolbarButton>
         <ToolbarButton label="다시 실행" disabled={!editor?.can().redo()} onClick={() => editor?.chain().focus().redo().run()}>↷</ToolbarButton>
       </div>
-      <div className="structured-editor__toolbar-group" data-label="문단">
-        <ToolbarButton label="본문" active={editor?.isActive('paragraph')} onClick={() => editor?.chain().focus().setParagraph().run()}>본문</ToolbarButton>
-        {[1, 2, 3].map((level) => <ToolbarButton key={level} label={`제목 ${level}`} active={editor?.isActive('heading', { level })} onClick={() => editor?.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 }).run()}>H{level}</ToolbarButton>)}
-      </div>
       <div className="structured-editor__toolbar-group structured-editor__text-controls" data-label="글자">
         <label><span>글꼴</span><select aria-label="선택 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{['기본','한글 기본·시스템','무료 한글 글꼴','영문 글꼴'].map((group) => <optgroup key={group} label={group}>{FONT_FAMILIES.filter((font) => font.group === group).map((font) => <option key={font.label} value={font.value} style={font.value ? { fontFamily: font.value } : undefined}>{font.label}</option>)}</optgroup>)}</select></label>
         <label><span>크기</span><select aria-label="선택 글자 크기" value={fontSize} onChange={(event) => applyTextFormatting({ fontSize: event.target.value })}>{FONT_SIZES.map((size) => <option key={size || 'default'} value={size}>{size ? `${size}px` : '기본'}</option>)}</select></label>
@@ -699,11 +716,6 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="밑줄" active={editor?.isActive('underline')} onClick={() => editor?.chain().focus().toggleUnderline().run()}><u>U</u></ToolbarButton>
         <ToolbarButton label="취소선" active={editor?.isActive('strike')} onClick={() => editor?.chain().focus().toggleStrike().run()}><s>S</s></ToolbarButton>
         <ToolbarButton label="형광펜" active={editor?.isActive('highlight')} onClick={() => editor?.chain().focus().toggleHighlight().run()}>강조</ToolbarButton>
-      </div>
-      <div className="structured-editor__toolbar-group" data-label="목록">
-        <ToolbarButton label="글머리 목록" active={editor?.isActive('bulletList')} onClick={() => editor?.chain().focus().toggleBulletList().run()}>• 목록</ToolbarButton>
-        <ToolbarButton label="번호 목록" active={editor?.isActive('orderedList')} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>1. 목록</ToolbarButton>
-        <ToolbarButton label="인용문" active={editor?.isActive('blockquote')} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>인용</ToolbarButton>
       </div>
       <div className="structured-editor__toolbar-group" data-label="정렬">
         <ToolbarButton label="왼쪽 정렬" active={editor?.isActive({ textAlign: 'left' })} onClick={() => editor?.chain().focus().setTextAlign('left').run()}>왼쪽</ToolbarButton>

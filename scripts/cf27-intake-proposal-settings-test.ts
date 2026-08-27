@@ -44,7 +44,8 @@ test('CF27 project intake continues with the newly created case selected in prop
   assert.match(proposal, /new URLSearchParams\(window\.location\.search\)\.get\('caseId'\)/u);
   assert.match(proposal, /res\.cases\.some\(\(item\) => item\.id === preferred\)/u);
   assert.match(proposal, /!activeProposal && selectedCaseId/u);
-  assert.match(proposal, /제안서 작성 1단계 · 유형별 템플릿 선택/u);
+  assert.match(proposal, /현재 프로젝트 · 제안서 유형/u);
+  assert.match(proposal, /유형별 대표 템플릿/u);
   assert.match(proposal, /Excel 양식 내보내기/u);
   assert.match(proposal, /작성 Excel 가져오기/u);
   assert.match(proposal, /검수 완료 · 전체 합본 미리보기/u);

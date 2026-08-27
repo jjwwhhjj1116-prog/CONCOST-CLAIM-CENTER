@@ -9,7 +9,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   const report = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const webPackage = read('apps/web/package.json');
-  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'NodeSelection', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'mergeCells', 'splitCell', 'replaceAll', 'DocumentTextStyle', 'DocumentPresentationAttributes', 'alwaysPreserveAspectRatio', '이미지 너비 비율', '표 너비 비율', '표 너비 ${size}%', '셀 간격', '표 크기 설정', '표 삭제', '이미지 ↑', '이미지 ↓', '이미지 삭제', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선', '돋움', '굴림', '바탕', '궁서', 'Noto Serif KR', '나눔스퀘어', '선택 글자 색상', '글자 색상 기본값', 'normalizeTextColor', 'data-label="글자"', 'data-label="표"']) {
+  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'NodeSelection', 'toggleBold', 'addColumnAfter', 'mergeCells', 'splitCell', 'replaceAll', 'DocumentTextStyle', 'DocumentPresentationAttributes', 'alwaysPreserveAspectRatio', '이미지 너비 비율', '표 너비 비율', '표 너비 ${size}%', '셀 간격', '표 크기 설정', '표 삭제', '이미지 ↑', '이미지 ↓', '이미지 삭제', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선', '돋움', '굴림', '바탕', '궁서', 'Noto Serif KR', '나눔스퀘어', '선택 글자 색상', '글자 색상 기본값', 'normalizeTextColor', 'data-label="글자"', 'data-label="표"']) {
     assert.ok(editor.includes(marker), `missing structured editor feature: ${marker}`);
   }
   assert.match(editor, /\(\?:AI\|MANUAL\)-CHAPTER/u);
@@ -34,10 +34,14 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /renderProposalBodyHtml/u);
   assert.match(proposal, /deduplicateProposalImages/u);
   assert.match(proposal, /dangerouslySetInnerHTML/u);
+  assert.match(proposal, /renderStructuredDocumentHtml/u);
+  assert.match(proposal, /editorJson=\{item\.editorJson\}/u);
   assert.match(proposal, /ADD_ATTR:\['data-image-align','data-table-width','data-table-align','data-table-density'/u);
   assert.match(proposal, /<StructuredDocumentEditor key=\{`proposal-\$\{activeProposal\.id\}-\$\{chapter\.number\}`\}/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);
+  assert.doesNotMatch(editor, /data-label="문단"/u);
+  assert.doesNotMatch(editor, /data-label="목록"/u);
 });
 
 test('CF60 persists structured report JSON and protects proposal AI improvement with D1 versions', () => {

@@ -1953,6 +1953,27 @@ function proposalTemplateCategory(sourceName:string):ProposalTemplateCategory {
   return 'GENERAL_CLAIM';
 }
 
+const PROPOSAL_TEMPLATE_TYPE_META:Record<ProposalTemplateCategory,{label:string;description:string;representativePattern:RegExp}>={
+  REDEVELOPMENT_FINANCE:{label:'정비사업 금융·HUG 대응',description:'리츠·HUG·대출구조와 사업성·재무 쟁점을 중심으로 1~3장을 작성합니다.',representativePattern:/260728|세교1구역|HUG/u},
+  REDEVELOPMENT_COST:{label:'정비사업 공사비 검증',description:'재개발·재건축의 계약·설계변경·수량·단가·증액 검증을 중심으로 작성합니다.',representativePattern:/공사비 검증|공사비검증|화양센트럴/u},
+  CLAIM_LITIGATION:{label:'클레임·소송·감정 대응',description:'청구 원인·사실관계·기술감정·송무지원 쟁점을 법률 업무와 구분해 작성합니다.',representativePattern:/김앤장|송무지원|감정|클레임/u},
+  PRICE_ESCALATION:{label:'물가변동·간접비',description:'물가변동 공식·기준일·공기연장·간접비 증빙과 산정 업무를 중심으로 작성합니다.',representativePattern:/물가변동|간접비/u},
+  PUBLIC_SUPPORT:{label:'공공·LH 지원',description:'LH·공공기관 심사·매입·지원 절차와 제출자료를 중심으로 작성합니다.',representativePattern:/LH매입|LH.*지원/u},
+  GENERAL_CLAIM:{label:'일반 건설클레임',description:'계약·시공·원가 사실과 쟁점별 증빙·수행업무를 일반형으로 작성합니다.',representativePattern:/건설공사 클레임|건설클레임 용역/u}
+};
+
+function proposalTemplateTypeCatalog(sources:ProposalTemplateSource[],profiles:ProposalTemplatePromptProfile[]){
+  const fallback=sources.find((source)=>source.isDefault)??sources[0];
+  return PROPOSAL_TEMPLATE_CATEGORIES.flatMap((category)=>{
+    const meta=PROPOSAL_TEMPLATE_TYPE_META[category];
+    const matching=sources.filter((source)=>proposalTemplateCategory(source.sourceName)===category);
+    const representative=matching.find((source)=>meta.representativePattern.test(source.sourceName))??matching.find((source)=>source.isDefault)??matching[0]??fallback;
+    if(!representative)return[];
+    const profile=profiles.find((item)=>item.templateSourceId===representative.id);
+    return [{id:category,label:meta.label,description:meta.description,representativeSourceId:representative.id,representativeSourceName:representative.sourceName,sourceCount:matching.length,promptReady:Boolean(profile?.isActive&&profile.chapters.length===3&&profile.chapters.every((chapter)=>chapter.isActive))}];
+  });
+}
+
 function proposalTemplateCategoryInstruction(category:ProposalTemplateCategory):string {
   const instructions:Record<ProposalTemplateCategory,string>={
     REDEVELOPMENT_FINANCE:'이 템플릿은 정비사업 금융·HUG 대응형이다. 사업성·재무구조, 리츠 매각가격, HUG 지원·보증 규모, 대출구조, 계약·정책 변화와 협상자료의 연결을 중점 검토한다.',
@@ -2181,7 +2202,7 @@ function proposalBodyFromChapters(chapters: ProposalStudioChapter[]): string {
 }
 
 function validProposalChapters(value: unknown): value is ProposalStudioChapter[] {
-  return Array.isArray(value) && value.length === 12 && value.every((chapter, index) => chapter && typeof chapter === 'object' && Number((chapter as ProposalStudioChapter).number) === index + 1 && typeof (chapter as ProposalStudioChapter).title === 'string' && typeof (chapter as ProposalStudioChapter).body === 'string' && ['VARIABLE','FIXED'].includes(String((chapter as ProposalStudioChapter).kind)) && ((chapter as ProposalStudioChapter).excludedCompanyAssetKeys === undefined || (Array.isArray((chapter as ProposalStudioChapter).excludedCompanyAssetKeys) && (chapter as ProposalStudioChapter).excludedCompanyAssetKeys!.every((key)=>/^[A-Z0-9_]{3,80}$/u.test(key)))));
+  return Array.isArray(value) && value.length === 12 && value.every((chapter, index) => chapter && typeof chapter === 'object' && Number((chapter as ProposalStudioChapter).number) === index + 1 && typeof (chapter as ProposalStudioChapter).title === 'string' && typeof (chapter as ProposalStudioChapter).body === 'string' && ['VARIABLE','FIXED'].includes(String((chapter as ProposalStudioChapter).kind)) && ((chapter as ProposalStudioChapter).editorJson === undefined || (chapter as ProposalStudioChapter).editorJson === null || (typeof (chapter as ProposalStudioChapter).editorJson === 'object' && !Array.isArray((chapter as ProposalStudioChapter).editorJson) && String(((chapter as ProposalStudioChapter).editorJson as Record<string,unknown>).type??'')==='doc' && JSON.stringify((chapter as ProposalStudioChapter).editorJson).length<=500_000)) && ((chapter as ProposalStudioChapter).excludedCompanyAssetKeys === undefined || (Array.isArray((chapter as ProposalStudioChapter).excludedCompanyAssetKeys) && (chapter as ProposalStudioChapter).excludedCompanyAssetKeys!.every((key)=>/^[A-Z0-9_]{3,80}$/u.test(key)))));
 }
 
 function parseProposalInputs(value: string, fallbackChapters: ProposalStudioChapter[]): ProposalStudioInputs {
@@ -2292,8 +2313,11 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
     const assets = await proposalCompanyAssets(env);
     const writingPrompts = await proposalWritingPrompts(env);
     const promptProfiles=await proposalTemplatePromptProfiles(env,sources);
-    const promptProfileStatus=promptProfiles.map((profile)=>({templateSourceId:profile.templateSourceId,templateSourceName:profile.templateSourceName,templateCategory:profile.templateCategory,isActive:profile.isActive,version:profile.version,ready:profile.isActive&&profile.chapters.length===3&&profile.chapters.every((chapter)=>chapter.isActive)}));
-    return json({ modules,sources,assets,...(isAdmin?{writingPrompts,promptProfiles}:{promptProfileStatus}),chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF54_PROPOSAL_TEMPLATE_PROMPT_PROFILES' });
+    const templateTypes=proposalTemplateTypeCatalog(sources,promptProfiles);
+    const representativeIds=new Set(templateTypes.map((type)=>type.representativeSourceId));
+    const representativeProfiles=promptProfiles.filter((profile)=>representativeIds.has(profile.templateSourceId));
+    const promptProfileStatus=representativeProfiles.map((profile)=>({templateSourceId:profile.templateSourceId,templateSourceName:profile.templateSourceName,templateCategory:profile.templateCategory,isActive:profile.isActive,version:profile.version,ready:profile.isActive&&profile.chapters.length===3&&profile.chapters.every((chapter)=>chapter.isActive)}));
+    return json({ modules,sources,assets,templateTypes,...(isAdmin?{writingPrompts,promptProfiles:representativeProfiles}:{promptProfileStatus}),chapterTitles:PROPOSAL_CHAPTER_TITLES,canManage:isAdmin,maskPlaceholder:'[비공개 협의금액]',phase:'CF66_PROPOSAL_TYPE_CATALOG' });
   }
   const promptProfileMatch=url.pathname.match(/^\/api\/proposal-studio\/prompt-profiles\/([^/]+)$/u);
   if(promptProfileMatch&&request.method==='PUT'){
@@ -2502,11 +2526,11 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         if(chapter.number>=4&&chapter.number<=12){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
           if(expected&&requestedModules.has(expected.code)&&expected.isActive){
-            return{number:chapter.number,title:sanitizeInput(chapter.title,200)||expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(chapter.body,50000),excludedCompanyAssetKeys};
+            return{number:chapter.number,title:sanitizeInput(chapter.title,200)||expected.title,kind:'FIXED' as const,moduleCode:expected.code,body:sanitizeInput(chapter.body,50000),...(chapter.editorJson?{editorJson:chapter.editorJson}:{}),excludedCompanyAssetKeys};
           }
           return{number:chapter.number,title:expected?.title??chapter.title,kind:'FIXED' as const,...(expected?{moduleCode:expected.code}:{}),body:'[이 회사 모듈은 제안서에서 제외되었습니다.]',excludedCompanyAssetKeys};
         }
-        return{number:chapter.number,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000),excludedCompanyAssetKeys};
+        return{number:chapter.number,title:sanitizeInput(chapter.title,200)||PROPOSAL_CHAPTER_TITLES[chapter.number-1],kind:'VARIABLE' as const,body:sanitizeInput(chapter.body,50000),...(chapter.editorJson?{editorJson:chapter.editorJson}:{}),excludedCompanyAssetKeys};
       });
       inputs={clientName:sanitizeInput(body.clientName,200),projectTitle:sanitizeInput(body.projectTitle,300),subtitle:sanitizeInput(body.subtitle,300),submissionDate:proposalStudioText(body.submissionDate,30),keyIssues:sanitizeInput(body.keyIssues),objective:sanitizeInput(body.objective),planNotes:sanitizeInput(body.planNotes),exclusions:sanitizeInput(body.exclusions),chapters,includedModuleCodes:[...requestedModules],templateSourceId:selectedSource.id,templateSourceName:selectedSource.sourceName,sanitizationCount};
     }
@@ -2556,7 +2580,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
         validation=parsedValidation&&['PASS','FAIL'].includes(String(parsedValidation.result))?parsedValidation:{result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 응답 형식이 올바르지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'MALFORMED_PROPOSAL_AI_VALIDATION'};
       }
       if(validation.result==='FAIL')validation={...validation,result:'REVIEW_REQUIRED',fallbackReason:'AI_VALIDATION_REQUIRES_HUMAN_REVIEW',findings:[...(Array.isArray(validation.findings)?validation.findings:[]),{level:'WARNING',location:'1~3장 전체',issue:'AI 자가검증에서 사람이 확인해야 할 항목을 발견했습니다.',fix:'생성된 초안은 보존되며 3단계에서 사실·수치·근거를 직접 검수한 뒤 수정하세요.'}]};
-      for(const [number,generatedText] of [[1,rendered1],[2,rendered2],[3,rendered3]] as const)inputs.chapters[number-1].body=sanitizeInput(generatedText,50000);
+      for(const [number,generatedText] of [[1,rendered1],[2,rendered2],[3,rendered3]] as const){inputs.chapters[number-1].body=sanitizeInput(generatedText,50000);delete inputs.chapters[number-1].editorJson;}
       inputs.objective=inputs.chapters[0].body;inputs.keyIssues=inputs.chapters[1].body;inputs.planNotes=inputs.chapters[2].body;
       inputs.aiGenerationTrace={templateSourceId:selectedSource.id,templatePromptProfileVersion:promptProfile.version,chapterPromptVersions:Object.fromEntries(promptProfile.chapters.map((prompt)=>[String(prompt.chapterNumber),prompt.version])),chapter1,chapter2,chapter3,validation};
       bodyText=proposalBodyFromChapters(inputs.chapters);
