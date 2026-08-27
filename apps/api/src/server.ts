@@ -35,6 +35,7 @@ import {
   type GoogleAdapterResponse,
   type GoogleWorkspaceAdapter
 } from './google-workspace/GoogleWorkspaceAdapter';
+import { handleServerSettingsRequest } from './settings/server-settings-adapter';
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3000',
@@ -42,7 +43,9 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://127.0.0.1:4173',
-  'http://localhost:4173'
+  'http://localhost:4173',
+  'http://claimcenterstudio.con-cost.co.kr',
+  'https://claimcenterstudio.con-cost.co.kr'
 ];
 const FIXED_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
@@ -163,6 +166,8 @@ export interface ApiServerOptions {
   backupRootDir?: string;
   restoreRootDir?: string;
   backupSigningKey?: Buffer;
+  serverSettingsMasterKey?: Buffer;
+  settingsFetcher?: typeof fetch;
   backupStorageRoots?: BackupStorageRoot[];
   databasePath?: string;
   volumeRootDir?: string;
@@ -1016,10 +1021,15 @@ function resolveOptional32ByteKey(
 ): Buffer | undefined {
   const encoded = resolveReferencedEnvironmentValue(referenceVariable, environment);
   if (!encoded) return undefined;
+  return decodeOptional32ByteKeyValue(referenceVariable, encoded);
+}
+
+function decodeOptional32ByteKeyValue(label: string, encoded: string | undefined): Buffer | undefined {
+  if (!encoded) return undefined;
   const key = /^[0-9a-fA-F]{64}$/.test(encoded.trim())
     ? Buffer.from(encoded.trim(), 'hex')
     : Buffer.from(encoded.trim(), 'base64url');
-  if (key.length !== 32) throw new Error(referenceVariable + ' must resolve to exactly 32 bytes');
+  if (key.length !== 32) throw new Error(label + ' must resolve to exactly 32 bytes');
   return key;
 }
 
@@ -1165,6 +1175,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
     ?? path.join(process.cwd(), 'packages/database/.data/google-pkce'));
   const migrationsDir = path.resolve(options.migrationsDir ?? path.join(process.cwd(), 'packages/database/prisma/migrations'));
   const configuredPkceKey = resolveOptional32ByteKey('GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF', environment);
+  const configuredSettingsKey = options.serverSettingsMasterKey
+    ?? resolveOptional32ByteKey('AI_CREDENTIAL_MASTER_KEY_REF', environment)
+    ?? decodeOptional32ByteKeyValue('AI_CREDENTIAL_MASTER_KEY', environment.AI_CREDENTIAL_MASTER_KEY)
+    ?? configuredPkceKey;
   if (isProduction) {
     if (!options.volumeRootDir || !options.databasePath || !backupSigningKey || !configuredPkceKey) {
       throw new Error('Production requires a persistent volume root, database path, backup key, and credential key');
@@ -1214,14 +1228,16 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
   const server = http.createServer((req, res) => {
     void (async () => {
       const origin = req.headers.origin;
-      if (origin && !allowedOrigins.has(origin)) throw new HttpError(403, 'Origin is not allowed');
+      const originAllowed = !origin || allowedOrigins.has(origin);
+      if (!originAllowed) throw new HttpError(403, 'Origin is not allowed');
       if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token, Idempotency-Key, X-Request-Id');
         res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+        res.setHeader('Access-Control-Max-Age', '600');
       }
       if (req.method === 'OPTIONS') {
         sendJson(res, 204, {});
@@ -1282,11 +1298,19 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
       if (pathname === '/auth/login' && req.method === 'POST') {
         const body = await readJson(req);
-        const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+        const loginId = typeof body.loginId === 'string' && body.loginId.trim()
+          ? body.loginId.trim().toLowerCase()
+          : typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
         const password = typeof body.password === 'string' ? body.password : '';
-        const user = email ? await db.user.findUnique({ where: { email } }) : null;
+        const emailCandidates = loginId.includes('@')
+          ? [loginId]
+          : [loginId, `${loginId}@con-cost.com`, `${loginId}@example.invalid`];
+        const idCandidates = [loginId, loginId.toUpperCase(), `USR-${loginId.toUpperCase()}`];
+        const user = loginId ? await db.user.findFirst({ where: {
+          OR: [{ email: { in: emailCandidates } }, { id: { in: idCandidates } }]
+        } }) : null;
         if (!user || !user.isActive || !verifyPassword(password, user.passwordHash)) {
-          await db.auditLog.create({ data: requestAudit(null, 'LOGIN_FAILED', 'User', email || 'UNKNOWN', { reason: 'invalid_credentials' }) });
+          await db.auditLog.create({ data: requestAudit(null, 'LOGIN_FAILED', 'User', loginId || 'UNKNOWN', { reason: 'invalid_credentials' }) });
           throw new HttpError(401, 'Invalid email or password');
         }
 
@@ -1339,9 +1363,20 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
       }
 
       if (pathname === '/auth/session' && req.method === 'GET') {
-        sendJson(res, 200, { ...context.user, roles: context.roles });
+        sendJson(res, 200, { ...context.user, roles: context.roles, previewMode: true });
         return;
       }
+
+      if (await handleServerSettingsRequest({
+        pathname,
+        method: req.method ?? 'GET',
+        request: req,
+        response: res,
+        db,
+        context,
+        masterKey: configuredSettingsKey ?? null,
+        fetcher: options.settingsFetcher
+      })) return;
 
       if (pathname === '/api/proposal-templates' && req.method === 'GET') {
         const claimType = url.searchParams.get('claimType')?.trim();

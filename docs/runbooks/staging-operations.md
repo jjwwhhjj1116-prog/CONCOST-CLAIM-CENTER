@@ -25,6 +25,15 @@ P16의 목표는 개발 PC가 꺼지거나 API 프로세스가 재시작돼도 �
 | `CLAIM_ALLOWED_ORIGINS` | 쉼표로 구분한 정확한 웹 origin. 와일드카드 금지 |
 | `CLAIM_BACKUP_SIGNING_KEY_REF=ENV_<NAME>` | 32바이트 백업 서명 키를 참조하는 이름 |
 | `GOOGLE_WORKSPACE_CREDENTIAL_MASTER_KEY_REF=ENV_<NAME>` | 32바이트 credential/PKCE 암호화 키를 참조하는 이름 |
+| `AI_CREDENTIAL_MASTER_KEY=<32-byte hex/base64url>` | 관리자 설정의 AI/Hermes secret 암호화 키. 운영에서는 Google 키와 분리하고 고정 보관 |
+
+회사 운영 도메인의 정확한 예시는 다음과 같습니다. 경로(`/settings`)는 넣지 않고 origin만 등록합니다.
+
+```dotenv
+CLAIM_ALLOWED_ORIGINS=https://claimcenterstudio.con-cost.co.kr
+```
+
+`*.con-cost.co.kr` 같은 와일드카드나 suffix 허용은 사용하지 않습니다. 프론트와 API가 다른 origin이면 실제 프론트 origin을 쉼표로 추가하고, reverse proxy는 `OPTIONS` 요청과 `Origin`, `Cookie`, `X-CSRF-Token`, `Idempotency-Key` 헤더를 API까지 전달해야 합니다.
 
 키 원문, 고객 본문, 로컬 절대 경로는 Git·API 응답·로그에 기록하지 않습니다. 루트나 키가 하나라도 없거나 루트 밖 경로가 섞이면 서버는 시작을 거부합니다.
 
