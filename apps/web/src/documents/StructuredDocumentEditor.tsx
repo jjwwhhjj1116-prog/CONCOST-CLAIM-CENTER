@@ -5,12 +5,14 @@ import CharacterCount from '@tiptap/extension-character-count';
 import Highlight from '@tiptap/extension-highlight';
 import Image from '@tiptap/extension-image';
 import Placeholder from '@tiptap/extension-placeholder';
-import { TableKit } from '@tiptap/extension-table';
+import { TableKit, TableView } from '@tiptap/extension-table';
 import TextAlign from '@tiptap/extension-text-align';
-import { Node, mergeAttributes, type JSONContent } from '@tiptap/core';
+import { Extension, Mark, Node, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
+import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -99,6 +101,118 @@ const AiChapterMarker = Node.create({
   renderHTML({ HTMLAttributes }) { return ['div', mergeAttributes(HTMLAttributes, { class: 'structured-editor__marker' })]; }
 });
 
+const FONT_FAMILIES = [
+  { value: '', label: '기본 글꼴' },
+  { value: 'Pretendard', label: 'Pretendard' },
+  { value: 'Noto Sans KR', label: 'Noto Sans KR' },
+  { value: 'Nanum Gothic', label: '나눔고딕' },
+  { value: 'Nanum Myeongjo', label: '나눔명조' },
+  { value: 'Arial', label: 'Arial' }
+] as const;
+const FONT_SIZES = ['', '9', '10', '11', '12', '14', '16', '18', '20', '24', '28', '32'] as const;
+const IMAGE_ALIGNMENTS = new Set(['left', 'center', 'right']);
+const TABLE_DENSITIES = new Set(['compact', 'normal', 'comfortable']);
+
+const normalizeFontFamily = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/["']/gu, '').trim().toLocaleLowerCase('en-US');
+  return FONT_FAMILIES.find((font) => font.value.toLocaleLowerCase('en-US') === normalized)?.value || null;
+};
+
+const normalizeFontSize = (value: unknown): number | null => {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? '').replace(/px$/iu, ''));
+  return Number.isFinite(parsed) && parsed >= 8 && parsed <= 72 ? Math.round(parsed) : null;
+};
+
+const DocumentTextStyle = Mark.create({
+  name: 'documentTextStyle',
+  addAttributes() {
+    return {
+      fontFamily: { default: null, parseHTML: (element) => normalizeFontFamily(element.style.fontFamily) },
+      fontSize: { default: null, parseHTML: (element) => normalizeFontSize(element.style.fontSize) }
+    };
+  },
+  parseHTML() {
+    return [{
+      tag: 'span',
+      getAttrs: (node) => {
+        if (!(node instanceof HTMLElement)) return false;
+        const fontFamily = normalizeFontFamily(node.style.fontFamily);
+        const fontSize = normalizeFontSize(node.style.fontSize);
+        return fontFamily || fontSize ? { fontFamily, fontSize } : false;
+      }
+    }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    const fontFamily = normalizeFontFamily(HTMLAttributes.fontFamily);
+    const fontSize = normalizeFontSize(HTMLAttributes.fontSize);
+    const style = [fontFamily ? `font-family:${fontFamily}` : '', fontSize ? `font-size:${fontSize}px` : ''].filter(Boolean).join(';');
+    return ['span', style ? { style } : {}, 0];
+  }
+});
+
+const DocumentPresentationAttributes = Extension.create({
+  name: 'documentPresentationAttributes',
+  addGlobalAttributes() {
+    return [
+      {
+        types: ['image'],
+        attributes: {
+          alignment: {
+            default: 'center',
+            parseHTML: (element) => IMAGE_ALIGNMENTS.has(element.getAttribute('data-image-align') ?? '') ? element.getAttribute('data-image-align') : 'center',
+            renderHTML: (attributes) => ({ 'data-image-align': IMAGE_ALIGNMENTS.has(attributes.alignment) ? attributes.alignment : 'center' })
+          }
+        }
+      },
+      {
+        types: ['table'],
+        attributes: {
+          tableWidth: {
+            default: 100,
+            parseHTML: (element) => Math.min(100, Math.max(35, Number(element.getAttribute('data-table-width')) || Number.parseFloat(element.style.width) || 100)),
+            renderHTML: (attributes) => ({ 'data-table-width': String(Math.min(100, Math.max(35, Number(attributes.tableWidth) || 100))) })
+          },
+          tableAlignment: {
+            default: 'center',
+            parseHTML: (element) => IMAGE_ALIGNMENTS.has(element.getAttribute('data-table-align') ?? '') ? element.getAttribute('data-table-align') : 'center',
+            renderHTML: (attributes) => ({ 'data-table-align': IMAGE_ALIGNMENTS.has(attributes.tableAlignment) ? attributes.tableAlignment : 'center' })
+          },
+          tableDensity: {
+            default: 'normal',
+            parseHTML: (element) => TABLE_DENSITIES.has(element.getAttribute('data-table-density') ?? '') ? element.getAttribute('data-table-density') : 'normal',
+            renderHTML: (attributes) => ({ 'data-table-density': TABLE_DENSITIES.has(attributes.tableDensity) ? attributes.tableDensity : 'normal' })
+          }
+        }
+      }
+    ];
+  }
+});
+
+class DocumentTableView extends TableView {
+  constructor(node: ProseMirrorNode, cellMinWidth: number, view: EditorView, HTMLAttributes?: Record<string, unknown>) {
+    super(node, cellMinWidth, view, HTMLAttributes);
+    this.applyPresentation(node);
+  }
+
+  update(node: ProseMirrorNode): boolean {
+    const updated = super.update(node);
+    if (updated) this.applyPresentation(node);
+    return updated;
+  }
+
+  private applyPresentation(node: ProseMirrorNode): void {
+    const width = Math.min(100, Math.max(35, Number(node.attrs.tableWidth) || 100));
+    const alignment = IMAGE_ALIGNMENTS.has(node.attrs.tableAlignment) ? node.attrs.tableAlignment : 'center';
+    const density = TABLE_DENSITIES.has(node.attrs.tableDensity) ? node.attrs.tableDensity : 'normal';
+    this.table.dataset.tableWidth = String(width);
+    this.table.dataset.tableAlign = alignment;
+    this.table.dataset.tableDensity = density;
+    this.table.style.width = `${width}%`;
+    this.table.style.minWidth = '0';
+  }
+}
+
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const markerPattern = /<!--\s*((?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END))\s*-->/gu;
 
@@ -106,9 +220,11 @@ const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(typeof rendered === 'string' ? rendered : '', {
-    ADD_ATTR: ['data-ai-chapter-marker', 'colspan', 'rowspan', 'style', 'target', 'rel']
+    ADD_ATTR: ['data-ai-chapter-marker', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
+
+const escapeHtmlAttribute = (value: string): string => value.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;');
 
 const createTurndown = () => {
   const service = new TurndownService({
@@ -125,6 +241,38 @@ const createTurndown = () => {
       const marker = node instanceof HTMLElement ? node.getAttribute('data-ai-chapter-marker') : '';
       return marker ? `\n\n<!-- ${marker} -->\n\n` : '';
     }
+  });
+  service.addRule('documentTextStyle', {
+    filter: (node) => node instanceof HTMLElement && node.tagName === 'SPAN' && Boolean(normalizeFontFamily(node.style.fontFamily) || normalizeFontSize(node.style.fontSize)),
+    replacement: (content, node) => {
+      if (!(node instanceof HTMLElement)) return content;
+      const fontFamily = normalizeFontFamily(node.style.fontFamily);
+      const fontSize = normalizeFontSize(node.style.fontSize);
+      const style = [fontFamily ? `font-family:${fontFamily}` : '', fontSize ? `font-size:${fontSize}px` : ''].filter(Boolean).join(';');
+      return style ? `<span style="${escapeHtmlAttribute(style)}">${content}</span>` : content;
+    }
+  });
+  service.addRule('sizedImage', {
+    filter: 'img',
+    replacement: (_content, node) => {
+      if (!(node instanceof HTMLImageElement)) return '';
+      const src = node.getAttribute('src') ?? '';
+      if (!src) return '';
+      const alt = node.getAttribute('alt') ?? '';
+      const title = node.getAttribute('title') ?? '';
+      const rawWidth = Number(node.getAttribute('width'));
+      const width = Number.isFinite(rawWidth) && rawWidth > 0 ? Math.round(rawWidth) : null;
+      const rawHeight = Number(node.getAttribute('height'));
+      const height = Number.isFinite(rawHeight) && rawHeight > 0 ? Math.round(rawHeight) : null;
+      const alignment = IMAGE_ALIGNMENTS.has(node.getAttribute('data-image-align') ?? '') ? node.getAttribute('data-image-align')! : 'center';
+      return `\n\n<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}"${title ? ` title="${escapeHtmlAttribute(title)}"` : ''}${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''} data-image-align="${alignment}">\n\n`;
+    }
+  });
+  service.addRule('adjustableTable', {
+    filter: 'table',
+    replacement: (_content, node) => node instanceof HTMLTableElement
+      ? `\n\n${DOMPurify.sanitize(node.outerHTML, { ADD_ATTR: ['data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style'] })}\n\n`
+      : ''
   });
   return service;
 };
@@ -188,6 +336,14 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [searchStatus, setSearchStatus] = useState('');
   const [activeSelection, setActiveSelection] = useState<StructuredSelection | null>(null);
   const [imageSelected, setImageSelected] = useState(false);
+  const [imageWidthPercent, setImageWidthPercent] = useState(100);
+  const [imageAlignment, setImageAlignment] = useState<'left' | 'center' | 'right'>('center');
+  const [tableActive, setTableActive] = useState(false);
+  const [tableWidthPercent, setTableWidthPercent] = useState(100);
+  const [tableAlignment, setTableAlignment] = useState<'left' | 'center' | 'right'>('center');
+  const [tableDensity, setTableDensity] = useState<'compact' | 'normal' | 'comfortable'>('normal');
+  const [fontFamily, setFontFamily] = useState('');
+  const [fontSize, setFontSize] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [tableRows, setTableRows] = useState(3);
@@ -198,16 +354,62 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   // render so a chapter never inherits the previous chapter's first content.
   const initialContent = collaborationSession ? undefined : editorJson ?? markdownToEditorHtml(value);
 
+  const selectedImageElement = (activeEditor: Editor): HTMLImageElement | null => {
+    if (!(activeEditor.state.selection instanceof NodeSelection) || activeEditor.state.selection.node.type.name !== 'image') return null;
+    const dom = activeEditor.view.nodeDOM(activeEditor.state.selection.from);
+    if (dom instanceof HTMLImageElement) return dom;
+    return dom instanceof HTMLElement ? dom.querySelector('img') : null;
+  };
+
+  const syncContextualControls = (activeEditor: Editor) => {
+    const selection = activeEditor.state.selection;
+    const selectedImage = selection instanceof NodeSelection && selection.node.type.name === 'image';
+    setImageSelected(selectedImage);
+    if (selectedImage && selection instanceof NodeSelection) {
+      const attributes = selection.node.attrs;
+      const alignment = IMAGE_ALIGNMENTS.has(attributes.alignment) ? attributes.alignment as 'left' | 'center' | 'right' : 'center';
+      const element = selectedImageElement(activeEditor);
+      const editorStyle = window.getComputedStyle(activeEditor.view.dom);
+      const availableWidth = Math.max(1, activeEditor.view.dom.clientWidth - Number.parseFloat(editorStyle.paddingLeft || '0') - Number.parseFloat(editorStyle.paddingRight || '0'));
+      const displayedWidth = Number(attributes.width) || element?.getBoundingClientRect().width || availableWidth;
+      setImageAlignment(alignment);
+      setImageWidthPercent(Math.min(100, Math.max(10, Math.round((displayedWidth / availableWidth) * 100))));
+    }
+    const inTable = activeEditor.isActive('table');
+    setTableActive(inTable);
+    if (inTable) {
+      const attributes = activeEditor.getAttributes('table');
+      setTableWidthPercent(Math.min(100, Math.max(35, Number(attributes.tableWidth) || 100)));
+      setTableAlignment(IMAGE_ALIGNMENTS.has(attributes.tableAlignment) ? attributes.tableAlignment as 'left' | 'center' | 'right' : 'center');
+      setTableDensity(TABLE_DENSITIES.has(attributes.tableDensity) ? attributes.tableDensity as 'compact' | 'normal' | 'comfortable' : 'normal');
+    }
+    const textAttributes = activeEditor.getAttributes('documentTextStyle');
+    setFontFamily(normalizeFontFamily(textAttributes.fontFamily) ?? '');
+    setFontSize(normalizeFontSize(textAttributes.fontSize)?.toString() ?? '');
+  };
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure(collaborationSession ? { undoRedo: false, link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } } : { link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true } }),
-      Image.configure({ allowBase64: false, inline: false }),
+      TableKit.configure({ table: { resizable: true, allowTableNodeSelection: true, View: DocumentTableView } }),
+      Image.configure({
+        allowBase64: false,
+        inline: false,
+        resize: {
+          enabled: true,
+          directions: ['top-left', 'top-right', 'bottom-left', 'bottom-right'],
+          minWidth: 80,
+          minHeight: 40,
+          alwaysPreserveAspectRatio: true
+        }
+      }),
       Placeholder.configure({ placeholder }),
       CharacterCount,
       AiChapterMarker,
+      DocumentTextStyle,
+      DocumentPresentationAttributes,
       ...(collaborationSession ? [
         Collaboration.configure({ document: collaborationSession.document }),
         CollaborationCaret.configure({ provider: collaborationSession.provider, user: collaborationSession.user })
@@ -223,14 +425,15 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     },
     onSelectionUpdate: ({ editor: activeEditor }) => {
       const { from, to } = activeEditor.state.selection;
-      setImageSelected(activeEditor.state.selection instanceof NodeSelection && activeEditor.state.selection.node.type.name === 'image');
+      syncContextualControls(activeEditor);
       const text = from === to ? '' : activeEditor.state.doc.textBetween(from, to, '\n');
       const selection = text.trim() ? { from, to, text } : null;
       selectionRef.current = selection;
       setActiveSelection(selection);
       if (!selection) setCopyStatus('');
       onSelectionChange?.(selection);
-    }
+    },
+    onTransaction: ({ editor: activeEditor }) => syncContextualControls(activeEditor)
   }, [documentKey, collaborationSession]);
 
   useEffect(() => {
@@ -240,6 +443,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   useEffect(() => {
     setImageSelected(false);
+    setTableActive(false);
     setActiveSelection(null);
     selectionRef.current = null;
   }, [documentKey]);
@@ -269,6 +473,49 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     editor.chain().focus().deleteSelection().run();
     window.dispatchEvent(new CustomEvent('structured-editor:image-deleted', { detail: { documentKey, src } }));
     return { deleted: true, ...(src ? { src } : {}) };
+  };
+
+  const applyTextFormatting = (next: { fontFamily?: string; fontSize?: string }) => {
+    if (!editor) return;
+    const current = editor.getAttributes('documentTextStyle');
+    const nextFamily = next.fontFamily === undefined ? normalizeFontFamily(current.fontFamily) : normalizeFontFamily(next.fontFamily);
+    const nextSize = next.fontSize === undefined ? normalizeFontSize(current.fontSize) : normalizeFontSize(next.fontSize);
+    const chain = editor.chain().focus();
+    if (!nextFamily && !nextSize) chain.unsetMark('documentTextStyle').run();
+    else chain.setMark('documentTextStyle', { fontFamily: nextFamily, fontSize: nextSize }).run();
+  };
+
+  const applyImageWidth = (percentage: number) => {
+    if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
+    const normalized = Math.min(100, Math.max(10, Math.round(percentage)));
+    const element = selectedImageElement(editor);
+    const style = window.getComputedStyle(editor.view.dom);
+    const availableWidth = Math.max(80, editor.view.dom.clientWidth - Number.parseFloat(style.paddingLeft || '0') - Number.parseFloat(style.paddingRight || '0'));
+    const currentWidth = Number(editor.state.selection.node.attrs.width) || element?.getBoundingClientRect().width || element?.naturalWidth || availableWidth;
+    const currentHeight = Number(editor.state.selection.node.attrs.height) || element?.getBoundingClientRect().height || element?.naturalHeight || currentWidth;
+    const aspectRatio = currentWidth > 0 && currentHeight > 0 ? currentWidth / currentHeight : 1;
+    const width = Math.max(80, Math.round((availableWidth * normalized) / 100));
+    const height = Math.max(40, Math.round(width / aspectRatio));
+    setImageWidthPercent(normalized);
+    if (element) {
+      element.style.width = `${width}px`;
+      element.style.height = `${height}px`;
+    }
+    editor.chain().focus().updateAttributes('image', { width, height }).run();
+  };
+
+  const applyImageAlignment = (alignment: 'left' | 'center' | 'right') => {
+    if (!editor || !(editor.state.selection instanceof NodeSelection) || editor.state.selection.node.type.name !== 'image') return;
+    setImageAlignment(alignment);
+    editor.chain().focus().updateAttributes('image', { alignment }).run();
+  };
+
+  const applyTablePresentation = (attributes: { tableWidth?: number; tableAlignment?: 'left' | 'center' | 'right'; tableDensity?: 'compact' | 'normal' | 'comfortable' }) => {
+    if (!editor?.isActive('table')) return;
+    if (attributes.tableWidth !== undefined) setTableWidthPercent(attributes.tableWidth);
+    if (attributes.tableAlignment) setTableAlignment(attributes.tableAlignment);
+    if (attributes.tableDensity) setTableDensity(attributes.tableDensity);
+    editor.chain().focus().updateAttributes('table', attributes).run();
   };
 
   useImperativeHandle(ref, () => ({
@@ -415,6 +662,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="본문" active={editor?.isActive('paragraph')} onClick={() => editor?.chain().focus().setParagraph().run()}>본문</ToolbarButton>
         {[1, 2, 3].map((level) => <ToolbarButton key={level} label={`제목 ${level}`} active={editor?.isActive('heading', { level })} onClick={() => editor?.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 }).run()}>H{level}</ToolbarButton>)}
       </div>
+      <div className="structured-editor__text-controls">
+        <label><span>글꼴</span><select aria-label="선택 글꼴" value={fontFamily} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{FONT_FAMILIES.map((font) => <option key={font.label} value={font.value}>{font.label}</option>)}</select></label>
+        <label><span>크기</span><select aria-label="선택 글자 크기" value={fontSize} onChange={(event) => applyTextFormatting({ fontSize: event.target.value })}>{FONT_SIZES.map((size) => <option key={size || 'default'} value={size}>{size ? `${size}px` : '기본'}</option>)}</select></label>
+      </div>
       <div>
         <ToolbarButton label="굵게" active={editor?.isActive('bold')} onClick={() => editor?.chain().focus().toggleBold().run()}><b>B</b></ToolbarButton>
         <ToolbarButton label="기울임" active={editor?.isActive('italic')} onClick={() => editor?.chain().focus().toggleItalic().run()}><i>I</i></ToolbarButton>
@@ -438,6 +689,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="표 열 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addColumnAfter().run()}>열 +</ToolbarButton>
         <ToolbarButton label="표 행 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteRow().run()}>행 −</ToolbarButton>
         <ToolbarButton label="표 열 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteColumn().run()}>열 −</ToolbarButton>
+        <ToolbarButton label="표 셀 병합" disabled={!editor?.can().mergeCells()} onClick={() => editor?.chain().focus().mergeCells().run()}>셀 병합</ToolbarButton>
+        <ToolbarButton label="표 셀 분할" disabled={!editor?.can().splitCell()} onClick={() => editor?.chain().focus().splitCell().run()}>셀 분할</ToolbarButton>
         <ToolbarButton label="표 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
       </div>
       <div>
@@ -459,6 +712,23 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="구분선" onClick={() => editor?.chain().focus().setHorizontalRule().run()}>구분선</ToolbarButton>
         <ToolbarButton label="서식 지우기" onClick={() => editor?.chain().focus().unsetAllMarks().clearNodes().run()}>서식 지우기</ToolbarButton>
       </div>
+    </div>}
+    {!readOnly && !preview && imageSelected && <div className="structured-editor__object-controls is-image" role="group" aria-label="선택 이미지 크기와 정렬">
+      <strong>선택 이미지</strong>
+      <label><span>크기</span><input aria-label="이미지 너비 비율" type="range" min="10" max="100" step="5" value={imageWidthPercent} onChange={(event) => applyImageWidth(Number(event.target.value))} /><output>{imageWidthPercent}%</output></label>
+      <div className="structured-editor__quick-sizes">{[25, 50, 75, 100].map((size) => <ToolbarButton key={size} label={`이미지 너비 ${size}%`} active={imageWidthPercent === size} onClick={() => applyImageWidth(size)}>{size}%</ToolbarButton>)}</div>
+      <div><span>정렬</span>{(['left', 'center', 'right'] as const).map((alignment) => <ToolbarButton key={alignment} label={`이미지 ${alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'} 정렬`} active={imageAlignment === alignment} onClick={() => applyImageAlignment(alignment)}>{alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'}</ToolbarButton>)}</div>
+      <small>파란 모서리 조절점을 드래그해도 원본 비율을 유지한 채 크기가 저장됩니다.</small>
+      <ToolbarButton label="선택 이미지 삭제" onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
+    </div>}
+    {!readOnly && !preview && tableActive && <div className="structured-editor__object-controls is-table" role="group" aria-label="선택 표 크기와 간격">
+      <strong>현재 표</strong>
+      <label><span>표 너비</span><input aria-label="표 너비 비율" type="range" min="35" max="100" step="5" value={tableWidthPercent} onChange={(event) => applyTablePresentation({ tableWidth: Number(event.target.value) })} /><output>{tableWidthPercent}%</output></label>
+      <div className="structured-editor__quick-sizes">{[50, 65, 80, 100].map((size) => <ToolbarButton key={size} label={`표 너비 ${size}%`} active={tableWidthPercent === size} onClick={() => applyTablePresentation({ tableWidth: size })}>{size}%</ToolbarButton>)}</div>
+      <div><span>정렬</span>{(['left', 'center', 'right'] as const).map((alignment) => <ToolbarButton key={alignment} label={`표 ${alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'} 정렬`} active={tableAlignment === alignment} onClick={() => applyTablePresentation({ tableAlignment: alignment })}>{alignment === 'left' ? '왼쪽' : alignment === 'center' ? '가운데' : '오른쪽'}</ToolbarButton>)}</div>
+      <div><span>셀 간격</span>{(['compact', 'normal', 'comfortable'] as const).map((density) => <ToolbarButton key={density} label={`표 ${density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}`} active={tableDensity === density} onClick={() => applyTablePresentation({ tableDensity: density })}>{density === 'compact' ? '좁게' : density === 'normal' ? '보통' : '넓게'}</ToolbarButton>)}</div>
+      <small>열 경계선을 드래그하면 열 너비도 개별 조정할 수 있습니다.</small>
+      <ToolbarButton label="표 삭제" onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
     </div>}
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
     <div className="structured-editor__canvas">

@@ -9,7 +9,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   const report = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const webPackage = read('apps/web/package.json');
-  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'NodeSelection', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'replaceAll', '표 크기 설정', '표 삭제', '이미지 ↑', '이미지 ↓', '이미지 삭제', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선']) {
+  for (const marker of ['StarterKit', 'TableKit', 'CharacterCount', 'BubbleMenu', 'NodeSelection', 'toggleBold', 'toggleBulletList', 'addColumnAfter', 'mergeCells', 'splitCell', 'replaceAll', 'DocumentTextStyle', 'DocumentPresentationAttributes', 'alwaysPreserveAspectRatio', '이미지 너비 비율', '표 너비 비율', '표 너비 ${size}%', '셀 간격', '표 크기 설정', '표 삭제', '이미지 ↑', '이미지 ↓', '이미지 삭제', '전체화면', '미리보기', '선택 문장 빠른 작업', '✦ Gemini 개선']) {
     assert.ok(editor.includes(marker), `missing structured editor feature: ${marker}`);
   }
   assert.match(editor, /\(\?:AI\|MANUAL\)-CHAPTER/u);
@@ -17,6 +17,9 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(editor, /replaceRange/u);
   assert.match(editor, /dismissSelectionMenu/u);
   assert.match(editor, /imageSelected/u);
+  assert.match(editor, /data-image-align/u);
+  assert.match(editor, /data-table-width/u);
+  assert.match(editor, /data-table-density/u);
   assert.match(editor, /const initialContent = collaborationSession \? undefined : editorJson \?\? markdownToEditorHtml\(value\)/u);
   assert.match(report, /StructuredDocumentEditor/u);
   assert.match(report, /editorJson/u);
@@ -27,6 +30,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /selectionAssistant/u);
   assert.match(proposal, /repairLegacyProposalChapterMixup/u);
   assert.match(proposal, /variablesWereDuplicated/u);
+  assert.match(proposal, /body:event\.target\.value,editorJson:null/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);
 });
