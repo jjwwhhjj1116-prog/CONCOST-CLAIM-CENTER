@@ -178,7 +178,7 @@ export function sentProposalArchiveWorkbook(rows: SentProposalExcelRow[]): Uint8
 const read16 = (view: DataView, offset: number) => view.getUint16(offset, true);
 const read32 = (view: DataView, offset: number) => view.getUint32(offset, true);
 
-async function zipEntry(bytes: Uint8Array, wantedName: string): Promise<string> {
+async function zipEntry(bytes: Uint8Array, wantedName: string, optional = false): Promise<string> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = bytes.length - 22;
   while (eocd >= 0 && read32(view, eocd) !== 0x06054b50) eocd -= 1;
@@ -208,20 +208,91 @@ async function zipEntry(bytes: Uint8Array, wantedName: string): Promise<string> 
     }
     cursor += 46 + nameLength + extraLength + commentLength;
   }
+  if (optional) return '';
   throw new Error('제안서 작성 시트를 찾지 못했습니다. 내보낸 양식을 사용하세요.');
+}
+
+const unescapeXml = (value: string) => value
+  .replaceAll('&lt;', '<')
+  .replaceAll('&gt;', '>')
+  .replaceAll('&quot;', '"')
+  .replaceAll('&apos;', "'")
+  .replaceAll('&amp;', '&');
+
+/**
+ * Excel rewrites inline strings to a shared string table when a user opens and
+ * saves an exported workbook.  Reading only `<t>` from the worksheet therefore
+ * works for our freshly exported file, but reads the shared-string index (0, 1,
+ * 2...) after a normal Excel edit.  Keep this parser dependency-free so it also
+ * runs in Cloudflare Workers and in the browser.
+ */
+async function workbookSharedStrings(bytes: Uint8Array): Promise<string[]> {
+  const sharedXml = await zipEntry(bytes, 'xl/sharedStrings.xml', true);
+  if (!sharedXml) return [];
+  return [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gu)].map((item) =>
+    [...item[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gu)]
+      .map((text) => unescapeXml(text[1]))
+      .join(''),
+  );
+}
+
+async function workbookFirstSheetPath(bytes: Uint8Array): Promise<string> {
+  const [workbookXml, relationshipsXml] = await Promise.all([
+    zipEntry(bytes, 'xl/workbook.xml', true),
+    zipEntry(bytes, 'xl/_rels/workbook.xml.rels', true),
+  ]);
+  const relationshipId = workbookXml.match(/<sheet\b[^>]*\br:id="([^"]+)"/u)?.[1];
+  if (!relationshipId || !relationshipsXml) return 'xl/worksheets/sheet1.xml';
+  const escapedId = relationshipId.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const target = relationshipsXml.match(new RegExp(`<Relationship\\b(?=[^>]*\\bId="${escapedId}")(?=[^>]*\\bTarget="([^"]+)")[^>]*/?>`, 'u'))?.[1];
+  if (!target) return 'xl/worksheets/sheet1.xml';
+  const decodedTarget = unescapeXml(target).replaceAll('\\', '/').replace(/^\//u, '');
+  if (decodedTarget.startsWith('xl/')) return decodedTarget;
+  return `xl/${decodedTarget.replace(/^\.\//u, '')}`;
+}
+
+function worksheetRows(sheetXml: string, sharedStrings: readonly string[]): Array<Map<string, string>> {
+  const rows: Array<Map<string, string>> = [];
+  for (const rowMatch of sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gu)) {
+    const cellValues = new Map<string, string>();
+    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)\br="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/gu)) {
+      const attributes = `${cellMatch[1]} ${cellMatch[3]}`;
+      const body = cellMatch[4];
+      const type = attributes.match(/\bt="([^"]+)"/u)?.[1] ?? '';
+      const inlineText = [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gu)]
+        .map((text) => unescapeXml(text[1]))
+        .join('');
+      const rawValue = unescapeXml(body.match(/<v\b[^>]*>([\s\S]*?)<\/v>/u)?.[1] ?? '');
+      const value = type === 's'
+        ? sharedStrings[Number.parseInt(rawValue, 10)] ?? ''
+        : inlineText || rawValue;
+      cellValues.set(cellMatch[2], value);
+    }
+    rows.push(cellValues);
+  }
+  return rows;
+}
+
+function excelDateToIso(value: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
+  if (!/^\d+(?:\.\d+)?$/u.test(value)) return value;
+  const serial = Number(value);
+  if (!Number.isFinite(serial) || serial < 1 || serial > 2_958_465) return value;
+  // Excel's 1900 date system contains the historic, fictitious 1900-02-29.
+  const utc = Date.UTC(1899, 11, 30) + Math.floor(serial) * 86_400_000;
+  return new Date(utc).toISOString().slice(0, 10);
 }
 
 export async function readProposalWorkbook(file: File): Promise<ProposalExcelValues> {
   if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 5_000_000) throw new Error('5MB 이하의 XLSX 제안서 양식만 가져올 수 있습니다.');
-  const sheetXml = await zipEntry(new Uint8Array(await file.arrayBuffer()), 'xl/worksheets/sheet1.xml');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sheetPath = await workbookFirstSheetPath(bytes);
+  const [sheetXml, sharedStrings] = await Promise.all([
+    zipEntry(bytes, sheetPath),
+    workbookSharedStrings(bytes),
+  ]);
   const result = {} as ProposalExcelValues;
-  const unescapeXml = (value: string) => value.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&');
-  for (const rowMatch of sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gu)) {
-    const cellValues = new Map<string, string>();
-    for (const cellMatch of rowMatch[1].matchAll(/<c\b[^>]*\br="([A-Z]+)\d+"[^>]*>([\s\S]*?)<\/c>/gu)) {
-      const textMatch = cellMatch[2].match(/<t\b[^>]*>([\s\S]*?)<\/t>/u) ?? cellMatch[2].match(/<v>([\s\S]*?)<\/v>/u);
-      cellValues.set(cellMatch[1], unescapeXml(textMatch?.[1] ?? ''));
-    }
+  for (const cellValues of worksheetRows(sheetXml, sharedStrings)) {
     const valueAt = (column: string) => cellValues.get(column) ?? '';
     const code = valueAt('A') as keyof ProposalExcelValues;
     if (fields.some((field) => field.code === code)) result[code] = valueAt('C').trim();
@@ -232,17 +303,13 @@ export async function readProposalWorkbook(file: File): Promise<ProposalExcelVal
 
 export async function readProposalStudioWorkbook(file: File): Promise<ProposalStudioExcelValues> {
   if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 5_000_000) throw new Error('5MB 이하의 XLSX 제안서 양식만 가져올 수 있습니다.');
-  const sheetXml=await zipEntry(new Uint8Array(await file.arrayBuffer()),'xl/worksheets/sheet1.xml');
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  const sheetPath=await workbookFirstSheetPath(bytes);
+  const [sheetXml,sharedStrings]=await Promise.all([zipEntry(bytes,sheetPath),workbookSharedStrings(bytes)]);
   const result={} as ProposalStudioExcelValues;
-  const unescapeXml=(value:string)=>value.replaceAll('&lt;','<').replaceAll('&gt;','>').replaceAll('&quot;','"').replaceAll('&apos;',"'").replaceAll('&amp;','&');
-  for(const rowMatch of sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gu)){
-    const cellValues=new Map<string,string>();
-    for(const cellMatch of rowMatch[1].matchAll(/<c\b[^>]*\br="([A-Z]+)\d+"[^>]*>([\s\S]*?)<\/c>/gu)){
-      const textMatch=cellMatch[2].match(/<t\b[^>]*>([\s\S]*?)<\/t>/u)??cellMatch[2].match(/<v>([\s\S]*?)<\/v>/u);
-      cellValues.set(cellMatch[1],unescapeXml(textMatch?.[1]??''));
-    }
+  for(const cellValues of worksheetRows(sheetXml,sharedStrings)){
     const code=cellValues.get('A') as keyof ProposalStudioExcelValues;
-    if(studioFields.some((field)=>field.code===code))result[code]=(cellValues.get('C')??'').trim();
+    if(studioFields.some((field)=>field.code===code))result[code]=code==='submissionDate'?excelDateToIso((cellValues.get('C')??'').trim()):(cellValues.get('C')??'').trim();
   }
   if(!studioFields.every((field)=>typeof result[field.code]==='string'))throw new Error('12챕터 제안서 필수 항목이 없습니다. 내보낸 양식의 FIELD_CODE 열을 변경하지 마세요.');
   return result;

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@claim-studio/ui';
 import { apiRequest } from './api';
 import { AppShell } from './layout/AppShell';
@@ -31,6 +31,7 @@ const currentBrowserLocation = () => `${window.location.pathname}${window.locati
 
 export const App: React.FC = () => {
   const [currentLocation, setCurrentLocation] = useState(currentBrowserLocation);
+  const currentLocationRef = useRef(currentLocation);
   const currentUrl = new URL(currentLocation, window.location.origin);
   const currentPath = currentUrl.pathname;
   const currentSearch = currentUrl.search;
@@ -49,13 +50,31 @@ export const App: React.FC = () => {
     const proceed = () => {
       if (replace) window.history.replaceState(null, '', destination);
       else window.history.pushState(null, '', destination);
+      currentLocationRef.current = destination;
       setCurrentLocation(destination);
     };
     if (!replace && requestNavigation(destination, proceed)) return;
     proceed();
   }, []);
   useEffect(() => {
-    const restoreFromHistory = () => setCurrentLocation(currentBrowserLocation());
+    currentLocationRef.current = currentLocation;
+  }, [currentLocation]);
+  useEffect(() => {
+    const restoreFromHistory = () => {
+      const destination = currentBrowserLocation();
+      const previous = currentLocationRef.current;
+      const proceed = () => {
+        window.history.replaceState(null, '', destination);
+        currentLocationRef.current = destination;
+        setCurrentLocation(destination);
+      };
+      if (destination !== previous && requestNavigation(destination, proceed)) {
+        window.history.pushState(null, '', previous);
+        return;
+      }
+      currentLocationRef.current = destination;
+      setCurrentLocation(destination);
+    };
     window.addEventListener('popstate', restoreFromHistory);
     return () => window.removeEventListener('popstate', restoreFromHistory);
   }, []);

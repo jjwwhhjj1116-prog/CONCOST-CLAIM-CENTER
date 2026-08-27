@@ -6,19 +6,22 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   error?: string;
 }
 
-export const Input: React.FC<InputProps> = ({ label, error, className = '', id, ...props }) => {
+export const Input: React.FC<InputProps> = ({ label, error, className = '', id, required, ...props }) => {
   const inputId = id || (label ? `input-${label.replace(/\s+/g, '-').toLowerCase()}` : undefined);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
       {label && (
         <label htmlFor={inputId} style={{ fontSize: typography.fontSize.sm, color: `var(--text-secondary, ${color.text.secondary})`, fontWeight: 650 }}>
-          {label}
+          {label}{required && <span className="ui-required-mark" aria-hidden="true"> *</span>}
         </label>
       )}
       <input
         id={inputId}
-        className={className}
+        className={`${className} ${required ? 'ui-field--required' : ''}`.trim()}
+        required={required}
+        aria-required={required || undefined}
+        aria-invalid={Boolean(error) || undefined}
         style={{
           padding: '10px 12px',
           background: `var(--field-bg, ${color.background.primary})`,

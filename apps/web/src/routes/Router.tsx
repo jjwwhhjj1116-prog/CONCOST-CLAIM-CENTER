@@ -27,6 +27,7 @@ import { PreviewLitigationCenter } from './PreviewLitigationCenter';
 import { PreviewDeliveryCenter } from './PreviewDeliveryCenter';
 import { PreviewOutcomeCenter } from './PreviewOutcomeCenter';
 import { PreviewSettings } from './PreviewSettings';
+import { PreviewDocumentTemplates } from './PreviewDocumentTemplates';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -62,6 +63,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'CASE-04', path: '/cases/schedule', name: '사건 상세-일정' },
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
   { id: 'CASE-06', path: '/cases/files', name: '클레임센터 자료실' },
+  { id: 'CASE-09', path: '/cases/files/templates', name: '문서 양식' },
   { id: 'MEET-01', path: '/meetings', name: '착수회의·회의록' },
   { id: 'PROP-01', path: '/proposals/templates', name: '제안서 템플릿 선택' },
   { id: 'PROP-02', path: '/proposals/editor', name: '제안서 작성' },
@@ -201,7 +203,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
           <span className="preview-pill">D1 LIVE DATA</span>
         </div>
         <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} previewMode />
@@ -209,6 +211,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     );
   }
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CASE-09') return <PreviewDocumentTemplates onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'CASE-07') return <IntakeLibraryView mode="projects" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'CASE-08') return <IntakeLibraryView mode="database" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;
@@ -221,8 +224,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
-          <span className="preview-pill">D1 LIVE PROPOSAL</span>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <ProposalView routeId={currentRoute.id} roles={roles} userEmail={userEmail} onNavigate={onNavigate} />
       </section>
@@ -246,7 +248,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <CaseManagement routeId={currentRoute.id} onNavigate={onNavigate} />
         {googleRoute && <GoogleWorkspaceCaseTools routeId={googleRoute} roles={roles} />}
@@ -258,7 +260,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <ProposalView routeId={currentRoute.id} roles={roles} userEmail={userEmail} onNavigate={onNavigate} />
       </section>
@@ -270,12 +272,13 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   if (currentRoute.id === 'CASE-08') return <IntakeLibraryView mode="database" onNavigate={onNavigate} />;
   if (currentRoute.id === 'REPO-03') return <ReportLibraryView mode="projects" onNavigate={onNavigate} />;
   if (currentRoute.id === 'REPO-04') return <ReportLibraryView mode="database" onNavigate={onNavigate} />;
+  if (currentRoute.id === 'CASE-09') return <PreviewDocumentTemplates onNavigate={onNavigate} />;
 
   if (currentRoute.id === 'TPL-01') {
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <ReportTemplateCatalog routeId={currentRoute.id} roles={roles} onNavigate={onNavigate} />
       </section>
@@ -286,7 +289,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <ReportStudio reportId={resolvedRoute?.params.reportId} roles={roles} onNavigate={onNavigate} />
       </section>
@@ -297,7 +300,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <ReportList onNavigate={onNavigate} />
       </section>
@@ -308,7 +311,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     return (
       <section className="route-view" aria-labelledby="route-title">
         <div className="route-heading">
-          <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         </div>
         <ApprovalInbox onNavigate={onNavigate} />
       </section>
@@ -342,7 +345,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   return (
     <section className="route-view" aria-labelledby="route-title">
       <div className="route-heading">
-        <h2 id="route-title">{currentRoute.name} <small>({currentRoute.id})</small></h2>
+          <h2 id="route-title">{currentRoute.name}</h2>
         <div className="state-controls" aria-label="화면 상태 미리보기">
           {(['normal', 'loading', 'empty', 'error', 'forbidden'] as const).map((state) => (
             <Button key={state} size="sm" variant="secondary" onClick={() => setUiState(state)}>{state === 'forbidden' ? '403' : state}</Button>

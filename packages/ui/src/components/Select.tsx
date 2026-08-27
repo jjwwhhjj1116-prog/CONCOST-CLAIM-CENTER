@@ -11,18 +11,21 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
   options: SelectOption[];
 }
 
-export const Select: React.FC<SelectProps> = ({ label, options, id, ...props }) => {
+export const Select: React.FC<SelectProps> = ({ label, options, id, className = '', required, ...props }) => {
   const selectId = id || (label ? `select-${label.replace(/\s+/g, '-').toLowerCase()}` : undefined);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
       {label && (
         <label htmlFor={selectId} style={{ fontSize: typography.fontSize.sm, color: `var(--text-secondary, ${color.text.secondary})`, fontWeight: 650 }}>
-          {label}
+          {label}{required && <span className="ui-required-mark" aria-hidden="true"> *</span>}
         </label>
       )}
       <select
         id={selectId}
+        className={`${className} ${required ? 'ui-field--required' : ''}`.trim()}
+        required={required}
+        aria-required={required || undefined}
         style={{
           padding: '10px 12px',
           background: `var(--field-bg, ${color.background.primary})`,

@@ -12,6 +12,7 @@ test('CF41 proposal sidebar separates authoring, sent projects and admin databas
   const router = read('apps/web/src/routes/Router.tsx');
   assert.match(shell, /label: '프로젝트 제안 및 수주'/u);
   assert.match(shell, /routeIds: \['CASE-02', 'CASE-07', 'CASE-08', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'\]/u);
+  assert.match(shell, /routeIds: \['CASE-06', 'CASE-09'\]/u);
   assert.match(shell, /\{ label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\] \}/u);
   assert.match(router, /PROP-02'.*'제안서 작성'/u);
   assert.match(router, /PROP-03'.*'프로젝트별 제안서 목록'/u);
