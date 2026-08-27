@@ -29,7 +29,7 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   {
     eyebrow: 'PROPOSAL · 제안서 작성', title: '의뢰 내용을 제안서로 이어갑니다.',
     explanation: '의뢰 프로젝트와 HWP 템플릿을 선택하고, Gemini 초안 → 사람 편집 → 전체 미리보기·확정 순서로 진행합니다.',
-    tasks: ['연결 프로젝트·원본 템플릿 확인', 'Gemini 1~3장 초안과 회사 고정 모듈 확인', '사람 검수 편집기·AI 글쓰기 개선 사용', 'HWP·DOCX·PDF 내보내기와 DB 보관 확인'],
+    tasks: ['연결 프로젝트·원본 템플릿 확인', 'Gemini 1~3장 초안과 회사 고정 모듈 확인', '담당자 검수 편집기·AI 글쓰기 개선 사용', 'HWP·DOCX·PDF 내보내기와 DB 보관 확인'],
     completion: '전체 미리보기에서 확정한 제안서가 DB에 보관되면 완료입니다.', path: '/proposals/editor', pathLabel: '제안서 스튜디오 열기',
     targetSelectors: ['.proposal-intake-context select', '.proposal-step-card', '.proposal-editor-toolbar, .proposal-step-card textarea', '.proposal-step-button, .proposal-export-actions']
   },

@@ -31,6 +31,11 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /repairLegacyProposalChapterMixup/u);
   assert.match(proposal, /variablesWereDuplicated/u);
   assert.match(proposal, /body:event\.target\.value,editorJson:null/u);
+  assert.match(proposal, /renderProposalBodyHtml/u);
+  assert.match(proposal, /deduplicateProposalImages/u);
+  assert.match(proposal, /dangerouslySetInnerHTML/u);
+  assert.match(proposal, /ADD_ATTR:\['data-image-align','data-table-width','data-table-align','data-table-density'/u);
+  assert.match(proposal, /<StructuredDocumentEditor key=\{`proposal-\$\{activeProposal\.id\}-\$\{chapter\.number\}`\}/u);
   assert.match(webPackage, /"@tiptap\/react"/u);
   assert.match(webPackage, /"turndown-plugin-gfm"/u);
 });

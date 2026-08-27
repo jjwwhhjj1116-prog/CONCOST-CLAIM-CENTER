@@ -313,7 +313,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
         <section className="reception-card">
           <div className="reception-step"><span>01</span><div><small>확정 제안서 선택</small><h3>접수할 프로젝트를 고르세요.</h3><p>제안서 작성 4단계에서 확정된 제안서만 표시됩니다.</p></div></div>
           {receptions.length === 0 ? (
-            <div className="reception-empty"><strong>접수 가능한 확정 제안서가 없습니다.</strong><span>제안서 작성에서 사람 검수를 마치고 4단계 ‘제안서 확정’을 먼저 완료하세요.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>제안서 작성으로 이동</button></div>
+            <div className="reception-empty"><strong>접수 가능한 확정 제안서가 없습니다.</strong><span>제안서 작성에서 담당자 검수를 마치고 4단계 ‘제안서 확정’을 먼저 완료하세요.</span><button type="button" onClick={() => onNavigate('/proposals/editor')}>제안서 작성으로 이동</button></div>
           ) : (
             <>
               <label className="reception-selector"><span>확정 제안서</span><select value={selectedReceptionId} disabled={busy === 'reception'} onChange={(event) => { setSelectedReceptionId(event.target.value); setError(''); setNotice(''); }}>{receptions.map((item) => <option key={item.proposalId} value={item.proposalId}>{item.caseNumber} · {item.caseTitle} · {item.revisionLabel} · {item.receptionStatus === 'READY' ? '접수 대기' : item.receptionStatus === 'WON' ? '수주 확인' : '접수 취소'}</option>)}</select></label>
