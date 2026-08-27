@@ -102,14 +102,24 @@ const AiChapterMarker = Node.create({
 });
 
 const FONT_FAMILIES = [
-  { value: '', label: '기본 글꼴' },
-  { value: 'Pretendard', label: 'Pretendard' },
-  { value: 'Noto Sans KR', label: 'Noto Sans KR' },
-  { value: 'Nanum Gothic', label: '나눔고딕' },
-  { value: 'Nanum Myeongjo', label: '나눔명조' },
-  { value: 'Arial', label: 'Arial' }
+  { value: '', label: '기본 글꼴', group: '기본' },
+  { value: 'Pretendard', label: '프리텐다드', group: '한글 기본·시스템' },
+  { value: 'Malgun Gothic', label: '맑은 고딕', group: '한글 기본·시스템' },
+  { value: 'Dotum', label: '돋움', group: '한글 기본·시스템' },
+  { value: 'Gulim', label: '굴림', group: '한글 기본·시스템' },
+  { value: 'Batang', label: '바탕', group: '한글 기본·시스템' },
+  { value: 'Gungsuh', label: '궁서', group: '한글 기본·시스템' },
+  { value: 'Noto Sans KR', label: 'Noto Sans KR', group: '무료 한글 글꼴' },
+  { value: 'Noto Serif KR', label: 'Noto Serif KR', group: '무료 한글 글꼴' },
+  { value: 'Nanum Gothic', label: '나눔고딕', group: '무료 한글 글꼴' },
+  { value: 'Nanum Myeongjo', label: '나눔명조', group: '무료 한글 글꼴' },
+  { value: 'NanumSquare', label: '나눔스퀘어', group: '무료 한글 글꼴' },
+  { value: 'Gowun Dodum', label: '고운돋움', group: '무료 한글 글꼴' },
+  { value: 'Arial', label: 'Arial', group: '영문 글꼴' },
+  { value: 'Times New Roman', label: 'Times New Roman', group: '영문 글꼴' }
 ] as const;
 const FONT_SIZES = ['', '9', '10', '11', '12', '14', '16', '18', '20', '24', '28', '32'] as const;
+const DEFAULT_TEXT_COLOR = '#17253a';
 const IMAGE_ALIGNMENTS = new Set(['left', 'center', 'right']);
 const TABLE_DENSITIES = new Set(['compact', 'normal', 'comfortable']);
 
@@ -124,12 +134,21 @@ const normalizeFontSize = (value: unknown): number | null => {
   return Number.isFinite(parsed) && parsed >= 8 && parsed <= 72 ? Math.round(parsed) : null;
 };
 
+const normalizeTextColor = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLocaleLowerCase('en-US');
+  if (/^#[0-9a-f]{6}$/u.test(normalized)) return normalized;
+  const shortHex = normalized.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/u);
+  return shortHex ? `#${shortHex[1]}${shortHex[1]}${shortHex[2]}${shortHex[2]}${shortHex[3]}${shortHex[3]}` : null;
+};
+
 const DocumentTextStyle = Mark.create({
   name: 'documentTextStyle',
   addAttributes() {
     return {
       fontFamily: { default: null, parseHTML: (element) => normalizeFontFamily(element.style.fontFamily) },
-      fontSize: { default: null, parseHTML: (element) => normalizeFontSize(element.style.fontSize) }
+      fontSize: { default: null, parseHTML: (element) => normalizeFontSize(element.style.fontSize) },
+      color: { default: null, parseHTML: (element) => normalizeTextColor(element.style.color) }
     };
   },
   parseHTML() {
@@ -139,14 +158,16 @@ const DocumentTextStyle = Mark.create({
         if (!(node instanceof HTMLElement)) return false;
         const fontFamily = normalizeFontFamily(node.style.fontFamily);
         const fontSize = normalizeFontSize(node.style.fontSize);
-        return fontFamily || fontSize ? { fontFamily, fontSize } : false;
+        const color = normalizeTextColor(node.style.color);
+        return fontFamily || fontSize || color ? { fontFamily, fontSize, color } : false;
       }
     }];
   },
   renderHTML({ HTMLAttributes }) {
     const fontFamily = normalizeFontFamily(HTMLAttributes.fontFamily);
     const fontSize = normalizeFontSize(HTMLAttributes.fontSize);
-    const style = [fontFamily ? `font-family:${fontFamily}` : '', fontSize ? `font-size:${fontSize}px` : ''].filter(Boolean).join(';');
+    const color = normalizeTextColor(HTMLAttributes.color);
+    const style = [fontFamily ? `font-family:${fontFamily}` : '', fontSize ? `font-size:${fontSize}px` : '', color ? `color:${color}` : ''].filter(Boolean).join(';');
     return ['span', style ? { style } : {}, 0];
   }
 });
@@ -243,12 +264,13 @@ const createTurndown = () => {
     }
   });
   service.addRule('documentTextStyle', {
-    filter: (node) => node instanceof HTMLElement && node.tagName === 'SPAN' && Boolean(normalizeFontFamily(node.style.fontFamily) || normalizeFontSize(node.style.fontSize)),
+    filter: (node) => node instanceof HTMLElement && node.tagName === 'SPAN' && Boolean(normalizeFontFamily(node.style.fontFamily) || normalizeFontSize(node.style.fontSize) || normalizeTextColor(node.style.color)),
     replacement: (content, node) => {
       if (!(node instanceof HTMLElement)) return content;
       const fontFamily = normalizeFontFamily(node.style.fontFamily);
       const fontSize = normalizeFontSize(node.style.fontSize);
-      const style = [fontFamily ? `font-family:${fontFamily}` : '', fontSize ? `font-size:${fontSize}px` : ''].filter(Boolean).join(';');
+      const color = normalizeTextColor(node.style.color);
+      const style = [fontFamily ? `font-family:${fontFamily}` : '', fontSize ? `font-size:${fontSize}px` : '', color ? `color:${color}` : ''].filter(Boolean).join(';');
       return style ? `<span style="${escapeHtmlAttribute(style)}">${content}</span>` : content;
     }
   });
@@ -344,6 +366,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [tableDensity, setTableDensity] = useState<'compact' | 'normal' | 'comfortable'>('normal');
   const [fontFamily, setFontFamily] = useState('');
   const [fontSize, setFontSize] = useState('');
+  const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
   const [copyStatus, setCopyStatus] = useState('');
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [tableRows, setTableRows] = useState(3);
@@ -386,6 +409,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const textAttributes = activeEditor.getAttributes('documentTextStyle');
     setFontFamily(normalizeFontFamily(textAttributes.fontFamily) ?? '');
     setFontSize(normalizeFontSize(textAttributes.fontSize)?.toString() ?? '');
+    setTextColor(normalizeTextColor(textAttributes.color) ?? DEFAULT_TEXT_COLOR);
   };
 
   const editor = useEditor({
@@ -475,14 +499,15 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     return { deleted: true, ...(src ? { src } : {}) };
   };
 
-  const applyTextFormatting = (next: { fontFamily?: string; fontSize?: string }) => {
+  const applyTextFormatting = (next: { fontFamily?: string; fontSize?: string; color?: string | null }) => {
     if (!editor) return;
     const current = editor.getAttributes('documentTextStyle');
     const nextFamily = next.fontFamily === undefined ? normalizeFontFamily(current.fontFamily) : normalizeFontFamily(next.fontFamily);
     const nextSize = next.fontSize === undefined ? normalizeFontSize(current.fontSize) : normalizeFontSize(next.fontSize);
+    const nextColor = next.color === undefined ? normalizeTextColor(current.color) : normalizeTextColor(next.color);
     const chain = editor.chain().focus();
-    if (!nextFamily && !nextSize) chain.unsetMark('documentTextStyle').run();
-    else chain.setMark('documentTextStyle', { fontFamily: nextFamily, fontSize: nextSize }).run();
+    if (!nextFamily && !nextSize && !nextColor) chain.unsetMark('documentTextStyle').run();
+    else chain.setMark('documentTextStyle', { fontFamily: nextFamily, fontSize: nextSize, color: nextColor }).run();
   };
 
   const applyImageWidth = (percentage: number) => {
@@ -654,36 +679,38 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       </div>
     </header>
     {!readOnly && !preview && <div className="structured-editor__toolbar" role="toolbar" aria-label="문서 서식 도구">
-      <div>
+      <div className="structured-editor__toolbar-group" data-label="실행">
         <ToolbarButton label="실행 취소" disabled={!editor?.can().undo()} onClick={() => editor?.chain().focus().undo().run()}>↶</ToolbarButton>
         <ToolbarButton label="다시 실행" disabled={!editor?.can().redo()} onClick={() => editor?.chain().focus().redo().run()}>↷</ToolbarButton>
       </div>
-      <div>
+      <div className="structured-editor__toolbar-group" data-label="문단">
         <ToolbarButton label="본문" active={editor?.isActive('paragraph')} onClick={() => editor?.chain().focus().setParagraph().run()}>본문</ToolbarButton>
         {[1, 2, 3].map((level) => <ToolbarButton key={level} label={`제목 ${level}`} active={editor?.isActive('heading', { level })} onClick={() => editor?.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 }).run()}>H{level}</ToolbarButton>)}
       </div>
-      <div className="structured-editor__text-controls">
-        <label><span>글꼴</span><select aria-label="선택 글꼴" value={fontFamily} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{FONT_FAMILIES.map((font) => <option key={font.label} value={font.value}>{font.label}</option>)}</select></label>
+      <div className="structured-editor__toolbar-group structured-editor__text-controls" data-label="글자">
+        <label><span>글꼴</span><select aria-label="선택 글꼴" value={fontFamily} style={fontFamily ? { fontFamily } : undefined} onChange={(event) => applyTextFormatting({ fontFamily: event.target.value })}>{['기본','한글 기본·시스템','무료 한글 글꼴','영문 글꼴'].map((group) => <optgroup key={group} label={group}>{FONT_FAMILIES.filter((font) => font.group === group).map((font) => <option key={font.label} value={font.value} style={font.value ? { fontFamily: font.value } : undefined}>{font.label}</option>)}</optgroup>)}</select></label>
         <label><span>크기</span><select aria-label="선택 글자 크기" value={fontSize} onChange={(event) => applyTextFormatting({ fontSize: event.target.value })}>{FONT_SIZES.map((size) => <option key={size || 'default'} value={size}>{size ? `${size}px` : '기본'}</option>)}</select></label>
+        <label className="structured-editor__color-control"><span>색상</span><input aria-label="선택 글자 색상" type="color" value={textColor} onChange={(event) => applyTextFormatting({ color: event.target.value })}/></label>
+        <ToolbarButton label="글자 색상 기본값" disabled={!normalizeTextColor(editor?.getAttributes('documentTextStyle').color)} onClick={() => applyTextFormatting({ color: null })}>색상 해제</ToolbarButton>
       </div>
-      <div>
+      <div className="structured-editor__toolbar-group" data-label="강조">
         <ToolbarButton label="굵게" active={editor?.isActive('bold')} onClick={() => editor?.chain().focus().toggleBold().run()}><b>B</b></ToolbarButton>
         <ToolbarButton label="기울임" active={editor?.isActive('italic')} onClick={() => editor?.chain().focus().toggleItalic().run()}><i>I</i></ToolbarButton>
         <ToolbarButton label="밑줄" active={editor?.isActive('underline')} onClick={() => editor?.chain().focus().toggleUnderline().run()}><u>U</u></ToolbarButton>
         <ToolbarButton label="취소선" active={editor?.isActive('strike')} onClick={() => editor?.chain().focus().toggleStrike().run()}><s>S</s></ToolbarButton>
         <ToolbarButton label="형광펜" active={editor?.isActive('highlight')} onClick={() => editor?.chain().focus().toggleHighlight().run()}>강조</ToolbarButton>
       </div>
-      <div>
+      <div className="structured-editor__toolbar-group" data-label="목록">
         <ToolbarButton label="글머리 목록" active={editor?.isActive('bulletList')} onClick={() => editor?.chain().focus().toggleBulletList().run()}>• 목록</ToolbarButton>
         <ToolbarButton label="번호 목록" active={editor?.isActive('orderedList')} onClick={() => editor?.chain().focus().toggleOrderedList().run()}>1. 목록</ToolbarButton>
         <ToolbarButton label="인용문" active={editor?.isActive('blockquote')} onClick={() => editor?.chain().focus().toggleBlockquote().run()}>인용</ToolbarButton>
       </div>
-      <div>
+      <div className="structured-editor__toolbar-group" data-label="정렬">
         <ToolbarButton label="왼쪽 정렬" active={editor?.isActive({ textAlign: 'left' })} onClick={() => editor?.chain().focus().setTextAlign('left').run()}>왼쪽</ToolbarButton>
         <ToolbarButton label="가운데 정렬" active={editor?.isActive({ textAlign: 'center' })} onClick={() => editor?.chain().focus().setTextAlign('center').run()}>가운데</ToolbarButton>
         <ToolbarButton label="오른쪽 정렬" active={editor?.isActive({ textAlign: 'right' })} onClick={() => editor?.chain().focus().setTextAlign('right').run()}>오른쪽</ToolbarButton>
       </div>
-      <div>
+      <div className="structured-editor__toolbar-group structured-editor__toolbar-table" data-label="표">
         <ToolbarButton label="표 삽입" onClick={() => onRequestInsertTable ? onRequestInsertTable() : setTableDialogOpen(true)}>표 +</ToolbarButton>
         <ToolbarButton label="표 행 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addRowAfter().run()}>행 +</ToolbarButton>
         <ToolbarButton label="표 열 추가" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().addColumnAfter().run()}>열 +</ToolbarButton>
@@ -693,7 +720,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
         <ToolbarButton label="표 셀 분할" disabled={!editor?.can().splitCell()} onClick={() => editor?.chain().focus().splitCell().run()}>셀 분할</ToolbarButton>
         <ToolbarButton label="표 삭제" disabled={!editor?.isActive('table')} onClick={() => editor?.chain().focus().deleteTable().run()}>표 삭제</ToolbarButton>
       </div>
-      <div>
+      <div className="structured-editor__toolbar-group structured-editor__toolbar-insert" data-label="삽입·정리">
         <ToolbarButton label="링크" active={editor?.isActive('link')} onClick={addLink}>링크</ToolbarButton>
         <ToolbarButton label="이미지" onClick={addImage}>이미지</ToolbarButton>
         <ToolbarButton label="선택 이미지 위로 이동" disabled={!imageSelected} onClick={() => {
