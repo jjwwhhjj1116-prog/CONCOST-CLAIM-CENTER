@@ -76,15 +76,39 @@ function proposalChapterWithCompanyImages(chapter:ProposalChapter,assets:readonl
   const excluded=new Set(chapter.excludedCompanyAssetKeys??[]);
   const chapterAssets=assets.filter((asset)=>asset.chapterNumber===chapter.number&&asset.hasContent&&asset.isActive&&asset.assetKey!=='BRAND_LOGO'&&!excluded.has(asset.assetKey)).sort((a,b)=>a.displayOrder-b.displayOrder);
   if(!chapterAssets.length)return chapter;
-  const lines=chapter.body.replaceAll('\r\n','\n').split('\n');let changed=false;
+  const lines=chapter.body.replaceAll('\r\n','\n').split('\n');const editorSnapshot=chapter.editorJson?JSON.stringify(chapter.editorJson):'';let changed=false;
   for(const asset of chapterAssets){
-    const sourceBase=`/api/proposal-studio/assets/${asset.assetKey}`;if(chapter.body.includes(sourceBase))continue;
+    const sourceBase=`/api/proposal-studio/assets/${asset.assetKey}`;
+    if(chapter.body.includes(sourceBase)){
+      // Legacy versions can contain the company image in Markdown while their
+      // saved Tiptap JSON predates it. Because the editor prioritizes JSON,
+      // rebuild that stale document from the authoritative chapter body.
+      if(chapter.editorJson&&!editorSnapshot.includes(sourceBase))changed=true;
+      continue;
+    }
     const image=`![${asset.altText}](${sourceBase}?v=${asset.version} "${asset.title.replaceAll('"','')}")`;
     const anchor=proposalAssetAnchor[asset.assetKey];const index=anchor?lines.findIndex((line)=>anchor.test(line)):-1;
     if(index>=0)lines.splice(index+1,0,'',image,'');else lines.push('',image);
     changed=true;
   }
   return changed?{...chapter,body:lines.join('\n'),editorJson:null}:chapter;
+}
+function repairDuplicatedCompanyModules(chapters:ProposalChapter[],modules:readonly CompanyModule[],assets:readonly CompanyAsset[]):ProposalChapter[]{
+  const signature=(value:string)=>value.replace(proposalImageTokenPattern,'').toLocaleLowerCase('ko-KR').replace(/[\s\p{P}\p{S}]+/gu,'');
+  const counts=new Map<string,number>();
+  for(const chapter of chapters){
+    if(chapter.number<4||chapter.number>12)continue;
+    const bodySignature=signature(chapter.body);if(bodySignature)counts.set(bodySignature,(counts.get(bodySignature)??0)+1);
+  }
+  return chapters.map((chapter)=>{
+    let source=chapter;
+    const module=modules.find((candidate)=>candidate.isActive&&candidate.chapterNumber===chapter.number);
+    const bodySignature=signature(chapter.body);
+    const isCorruptedDuplicate=chapter.number>=4&&chapter.number<=12&&Boolean(bodySignature)&&(counts.get(bodySignature)??0)>1;
+    const isMissingFixedBody=chapter.number>=4&&chapter.number<=12&&(!bodySignature||chapter.body.trim()==='[작성 필요]');
+    if(module&&(isCorruptedDuplicate||isMissingFixedBody))source={...chapter,title:module.title,kind:'FIXED',moduleCode:module.code,body:module.bodyMarkdown,editorJson:null,excludedCompanyAssetKeys:[]};
+    return proposalChapterWithCompanyImages(source,assets);
+  });
 }
 const proposalImageTokenPattern=/!\[[^\]]*\]\((?:<)?[^\s)>]+(?:>)?(?:\s+["'][^"']*["'])?\)|<img\b[^>]*\bsrc\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)[^>]*>/giu;
 const proposalImageSource=(token:string):string=>{
@@ -175,7 +199,7 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
   useEffect(()=>{if(selectedCaseId)void loadCaseData(selectedCaseId);},[selectedCaseId,loadCaseData]);
   useEffect(()=>{const selected=modules.find((module)=>module.code===selectedModuleCode)??modules[0];if(!selected)return;if(selected.code!==selectedModuleCode)setSelectedModuleCode(selected.code);setModuleTitle(selected.title);setModuleBody(selected.bodyMarkdown);setModuleActive(selected.isActive);},[modules,selectedModuleCode]);
   useEffect(()=>{if(activeProposal?.status!=='DRAFT'||!modules.length)return;setChapters((current)=>current.map((item)=>{if(item.kind!=='FIXED'||!item.body.trim().startsWith('[작성 필요]'))return item;const canonical=modules.find((module)=>module.chapterNumber===item.number&&module.isActive);return canonical?{...item,title:canonical.title,moduleCode:canonical.code,body:canonical.bodyMarkdown,editorJson:null}:item;}));},[activeProposal?.id,activeProposal?.status,modules]);
-  useEffect(()=>{if(!activeProposal||!companyAssets.length)return;setChapters((current)=>{const next=current.map((chapter)=>proposalChapterWithCompanyImages(chapter,companyAssets));return next.some((chapter,index)=>chapter!==current[index])?next:current;});},[activeProposal?.id,companyAssets]);
+  useEffect(()=>{if(!activeProposal||!companyAssets.length||!modules.length)return;setChapters((current)=>{const next=repairDuplicatedCompanyModules(current,modules,companyAssets);return next.some((chapter,index)=>chapter!==current[index])?next:current;});},[activeProposal?.id,activeProposal?.currentVersionId,companyAssets,modules]);
   useEffect(()=>{const onImageDeleted=(event:Event)=>{const detail=(event as CustomEvent<{documentKey?:string;src?:string}>).detail;if(detail.documentKey!==`proposal-${activeProposal?.id}-${selectedChapter}`||!detail.src)return;const companyKey=detail.src.match(/\/api\/proposal-studio\/assets\/([A-Z0-9_]+)/u)?.[1];if(!companyKey)return;setChapters((current)=>current.map((item)=>item.number===selectedChapter?{...item,excludedCompanyAssetKeys:[...new Set([...(item.excludedCompanyAssetKeys??[]),companyKey])]}:item));setSuccessMessage(`${selectedChapter}장에서 선택한 회사 기본 이미지를 이 제안서에서 제외했습니다. 중앙 기본값 최신본을 다시 가져오면 복원할 수 있습니다.`);};window.addEventListener('structured-editor:image-deleted',onImageDeleted);return()=>window.removeEventListener('structured-editor:image-deleted',onImageDeleted);},[activeProposal?.id,selectedChapter]);
   useEffect(()=>{if(projectTitle.trim()&&!mailSubject.trim())setMailSubject(`[컨코스트] ${projectTitle} 제안서 송부`);},[projectTitle,mailSubject]);
   useEffect(()=>{const type=templateTypes.find((item)=>item.representativeSourceId===selectedTemplateSourceId);if(type&&type.id!==selectedTemplateType)setSelectedTemplateType(type.id);},[selectedTemplateSourceId,selectedTemplateType,templateTypes]);
