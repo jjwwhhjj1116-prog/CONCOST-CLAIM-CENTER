@@ -2368,7 +2368,11 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
   const assetMatch=url.pathname.match(/^\/api\/proposal-studio\/assets\/([A-Z0-9_]+)$/u);
   if(assetMatch&&request.method==='GET'){
     try{
-      const row=await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256,version FROM preview_proposal_company_assets WHERE organization_id=? AND asset_key=? AND is_active=1 AND file_data IS NOT NULL').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1]).first<Record<string,unknown>>();
+      const requestedVersion=Number(url.searchParams.get('v'));
+      const historical=Number.isInteger(requestedVersion)&&requestedVersion>0;
+      const row=historical
+        ? await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256,version FROM preview_proposal_company_asset_versions WHERE organization_id=? AND asset_key=? AND version=?').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1],requestedVersion).first<Record<string,unknown>>()
+        : await env.DB.prepare('SELECT mime_type AS mimeType,file_name AS fileName,file_data AS fileData,file_sha256 AS sha256,version FROM preview_proposal_company_assets WHERE organization_id=? AND asset_key=? AND is_active=1 AND file_data IS NOT NULL').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1]).first<Record<string,unknown>>();
       const bytes=proposalAssetBytes(row?.fileData); if(!row||!bytes)return json({error:'Proposal company image was not found',code:'PROPOSAL_ASSET_NOT_FOUND'},404);
       return new Response(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer,{headers:{'Content-Type':String(row.mimeType),'Content-Disposition':`inline; filename*=UTF-8''${encodeURIComponent(String(row.fileName))}`,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','X-Content-SHA256':String(row.sha256),'X-Proposal-Asset-Version':String(row.version)}});
     }catch{return json({error:'Proposal company image store is not ready',code:'PROPOSAL_ASSET_STORE_NOT_READY'},503);}
@@ -2381,7 +2385,11 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
     if(file.type!=='image/jpeg'||!dimensions||dimensions.width<100||dimensions.height<100||dimensions.width>6000||dimensions.height>6000)return json({error:'유효한 JPG 이미지(100~6000px)만 등록할 수 있습니다.',code:'INVALID_PROPOSAL_ASSET'},415);
     const sha256=await sha256Hex(bytes); const now=new Date().toISOString();
     try{
-      const result=await env.DB.prepare("UPDATE preview_proposal_company_assets SET mime_type='image/jpeg',file_name=?,file_data=?,file_sha256=?,width=?,height=?,is_active=1,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND asset_key=?").bind(file.name.slice(0,200),bytes,sha256,dimensions.width,dimensions.height,user.id,now,PREVIEW_ORGANIZATION_ID,assetMatch[1]).run();
+      if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
+      const [result]=await env.DB.batch([
+        env.DB.prepare("UPDATE preview_proposal_company_assets SET mime_type='image/jpeg',file_name=?,file_data=?,file_sha256=?,width=?,height=?,is_active=1,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND asset_key=?").bind(file.name.slice(0,200),bytes,sha256,dimensions.width,dimensions.height,user.id,now,PREVIEW_ORGANIZATION_ID,assetMatch[1]),
+        env.DB.prepare('INSERT INTO preview_proposal_company_asset_versions (organization_id,asset_key,version,mime_type,file_name,file_data,file_sha256,width,height,created_by,created_at) SELECT organization_id,asset_key,version,mime_type,file_name,file_data,file_sha256,width,height,updated_by,updated_at FROM preview_proposal_company_assets WHERE organization_id=? AND asset_key=? AND file_data IS NOT NULL').bind(PREVIEW_ORGANIZATION_ID,assetMatch[1]),
+      ]) as Array<{meta?:{changes?:number}}>;
       if(result.meta?.changes!==1)return json({error:'Proposal company image slot was not found',code:'PROPOSAL_ASSET_NOT_FOUND'},404);
       const asset=(await proposalCompanyAssets(env)).find((item)=>item.assetKey===assetMatch[1]);
       return json({asset,phase:'CF48_PROPOSAL_VISUAL_MODULES'});

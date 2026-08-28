@@ -1,10 +1,14 @@
 import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, apiDownload, apiRequest, triggerBrowserDownload } from '../api';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+import { ApiError, apiDownload, apiRequest } from '../api';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
 import { DocumentToolMenus } from '../documents/DocumentToolMenus';
-import { StructuredDocumentEditor, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
+import { FileFormatIcon } from '../documents/FileFormatIcon';
+import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
+import { StructuredDocumentEditor, renderStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { readReportDocx, readReportStudioWorkbook, reportStudioWorkbook } from '../proposals/proposal-excel';
@@ -58,7 +62,7 @@ const REPORT_WIZARD_STEPS: readonly {
   { id: 2, title: '목차 기획', shortHelp: '선택한 템플릿에서 목차를 자동 만들고 제목만 쉽게 다듬습니다.', tasks: ['AI·템플릿으로 목차 자동 만들기', '이상한 챕터 제목만 바로 수정하기', '목차 확정 누르기'], doneText: '목차 확정 표시가 나오면 완료' },
   { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성 또는 수동·외부 LLM 입력을 선택합니다.', tasks: ['작성할 챕터 선택', 'AI 자동작성 또는 수동 입력 선택', 'HWP 원본·참고자료 연결 후 저장'], doneText: '모든 챕터에 초안 있음이 표시되면 완료' },
   { id: 4, title: '사람 검토·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 사람이 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', 'D1 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
-  { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', 'DOCX·PDF 생성 또는 HWP 최종 편집'], doneText: '승인본 파일을 생성하면 보고서 작업 완료' }
+  { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', '미리보기와 동일한 DOCX·PDF·HWP 내려받기'], doneText: '승인본을 확정하면 보고서 작업 완료' }
 ] as const;
 const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
   'AGENT-01': ['PROJECT', 'PROPOSAL', 'KICKOFF'],
@@ -85,6 +89,24 @@ function replaceReportChapterBlock(content: string, chapterCode: string, chapter
   const block = `<!-- MANUAL-CHAPTER:${chapterCode}:START -->\n## ${chapterCode} ${chapterTitle}\n\n${body.trim()}\n<!-- MANUAL-CHAPTER:${chapterCode}:END -->`;
   const pattern = new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${code}:START -->[\\s\\S]*?<!-- (?:AI|MANUAL)-CHAPTER:${code}:END -->`, 'u');
   return pattern.test(content) ? content.replace(pattern, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
+}
+
+function reportPreviewHtml(content: string, editorJson: import('@tiptap/core').JSONContent | null): string {
+  const structured = editorJson ? renderStructuredDocumentHtml(editorJson) : '';
+  const rendered = structured || marked.parse(content, { async: false, gfm: true, breaks: true });
+  return DOMPurify.sanitize(typeof rendered === 'string' ? rendered : '', {
+    ADD_ATTR: ['data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+  });
+}
+
+function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, content, editorJson }: { caseNumber: string; caseTitle: string; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null }): React.ReactElement {
+  const html = reportPreviewHtml(content, editorJson);
+  return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기">
+    <section className="report-final-cover" data-export-page>
+      <span>CONCOST CLAIM CENTER STUDIO</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p><strong>프로젝트 기술 보고서</strong>
+    </section>
+    <section className="report-final-body" data-export-page><header><span>FINAL REPORT</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p></header><article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: html }} /></section>
+  </article>;
 }
 
 export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; onNavigate: (path: string) => void }): React.ReactElement {
@@ -141,6 +163,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [hwpSourceFile, setHwpSourceFile] = useState<File | null>(null);
   const [linkedHwpName, setLinkedHwpName] = useState('');
   const [linkingHwp, setLinkingHwp] = useState(false);
+  const [finalExportMessage, setFinalExportMessage] = useState('');
   const reportExcelInputRef = useRef<HTMLInputElement | null>(null);
   const reportDocxInputRef = useRef<HTMLInputElement | null>(null);
   const hwpInputRef = useRef<HTMLInputElement | null>(null);
@@ -149,6 +172,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const titleRef = useRef('');
   const contentRef = useRef('');
   const reportBodyRef = useRef<StructuredDocumentEditorHandle | null>(null);
+  const finalReportPreviewRef = useRef<HTMLDivElement | null>(null);
   const activeStepRef = useRef<ReportWizardStep>(1);
   const selectedChapterRef = useRef('');
   const editable = roles.some((role) => EDIT_ROLES.includes(role));
@@ -640,22 +664,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     finally { setSubmittingReview(false); }
   };
 
-  const generateOutput = async (format: 'DOCX' | 'PDF') => {
-    if (!currentFinalization) return;
-    setSubmittingReview(true); setError('');
+  const downloadFinalReport = async (format: FinalDocumentFormat) => {
+    if (!currentFinalization || !finalReportPreviewRef.current || !selectedCase) return;
+    setSubmittingReview(true); setError(''); setFinalExportMessage('');
     try {
-      const result = await apiRequest<{ finalizations: Finalization[] }>(`/api/report-finalizations/${encodeURIComponent(currentFinalization.id)}/outputs`, { method: 'POST', body: JSON.stringify({ format }) });
-      setFinalizations(result.finalizations);
+      const result = await downloadFinalDocument({
+        root: finalReportPreviewRef.current,
+        format,
+        fileName: `${selectedCase.caseNumber}_${title}_v${currentFinalization.reportVersion}`,
+        onProgress: setFinalExportMessage
+      });
+      setFinalExportMessage(`${format.toUpperCase()} 확정본 ${result.pageCount}페이지 내려받기 완료 · 화면 미리보기와 동일한 A4 출력본입니다.`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSubmittingReview(false); }
-  };
-
-  const downloadOutput = async (output: FinalOutput) => {
-    setError('');
-    try {
-      const result = await apiDownload(`/api/report-outputs/${encodeURIComponent(output.id)}/download`);
-      triggerBrowserDownload(result);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
   const openTemplateSource = async (file: TemplateLibraryFile) => {
@@ -677,7 +698,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty;
   const chapterStepComplete = Boolean(outlineStepComplete && authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length);
   const editingStepComplete = Boolean(chapterStepComplete && version > 0 && title.trim() && content.trim() && !dirty && !saving);
-  const outputStepComplete = Boolean(editingStepComplete && currentFinalization?.outputs.length);
+  const outputStepComplete = Boolean(editingStepComplete && currentFinalization);
   const stepComplete: Record<ReportWizardStep, boolean> = {
     1: projectStepComplete,
     2: outlineStepComplete,
@@ -858,19 +879,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <div className="action-row"><Button onClick={() => void requestReview()} disabled={!version || dirty || saving || submittingReview || !!pendingReview || loadedCaseId !== selectedCaseId}>{submittingReview ? '제출 중…' : '저장된 최신본 검토 요청'}</Button>{dirty && <span className="muted">변경사항을 먼저 저장해야 합니다.</span>}{pendingReview && <span className="muted">기존 검토가 끝난 뒤 새 버전을 제출할 수 있습니다.</span>}</div>
             </>}
           </div>
-          <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·다운로드</h3>
-          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX·PDF 출력, HWP 최종 편집이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
+          <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·3종 다운로드</h3>
+          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 미리보기와 동일한 DOCX·PDF·HWP 출력이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
             <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
           </div> : <div className="form-stack">
             <p className="notice-box"><strong>최종 확정 완료 · v{currentFinalization.reportVersion}</strong><br />{currentFinalization.finalizedBy.name} · {new Date(currentFinalization.finalizedAt).toLocaleString('ko-KR')} · 승인자 {currentFinalization.approvedBy}</p>
-            <div className="action-row">
-              {(['DOCX', 'PDF'] as const).map((format) => {
-                const output = currentFinalization.outputs.find((entry) => entry.format === format);
-                return output ? <Button key={format} variant="secondary" onClick={() => void downloadOutput(output)}>{format} 다운로드</Button> : <Button key={format} onClick={() => void generateOutput(format)} disabled={submittingReview}>{format} 생성</Button>;
-              })}
-              <Button variant="secondary" onClick={()=>hwpInputRef.current?.click()} disabled={linkingHwp}>HWP 최종 편집·내보내기</Button>
+            <div ref={finalReportPreviewRef} className="report-final-export-source"><ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={editorJson}/></div>
+            <div className="action-row final-export-actions" aria-label="확정 보고서 파일 내려받기">
+              <Button className="final-export-button is-docx" aria-label="확정 보고서 Word DOCX 내려받기" onClick={() => void downloadFinalReport('docx')} disabled={submittingReview}><FileFormatIcon format="docx"/><span>Word DOCX</span></Button>
+              <Button className="final-export-button is-pdf" aria-label="확정 보고서 PDF 내려받기" onClick={() => void downloadFinalReport('pdf')} disabled={submittingReview}><FileFormatIcon format="pdf"/><span>PDF</span></Button>
+              <Button className="final-export-button is-hwp" aria-label="확정 보고서 HWP 내려받기" onClick={() => void downloadFinalReport('hwp')} disabled={submittingReview}><FileFormatIcon format="hwp"/><span>HWP</span></Button>
             </div>
+            {finalExportMessage && <p className="notice-box" role="status">{finalExportMessage}</p>}
             {currentFinalization.outputs.map((output) => <p className="muted" key={output.id}>{output.format} · {(output.byteSize / 1024).toFixed(1)} KB · SHA {output.contentSha256.slice(0, 16)}…</p>)}
           </div>}</section>
         </Card>

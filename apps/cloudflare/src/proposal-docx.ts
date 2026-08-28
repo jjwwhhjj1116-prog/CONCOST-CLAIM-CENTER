@@ -116,7 +116,7 @@ function markdownParagraphs(body: string, imageXmlByKey: ReadonlyMap<string,stri
       output.push(`<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>${textRun(block.text)}</w:p>`);
       continue;
     }
-    output.push(paragraph(block.text, 'Normal', '<w:jc w:val="both"/>'));
+    output.push(paragraph(block.text, 'Normal'));
   }
   return output.join('');
 }
