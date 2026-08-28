@@ -1,3 +1,5 @@
+import { normalizeMixedDocumentBlocks, normalizedDocumentTextLines } from './document-content-normalizer';
+
 export interface FinalReportDocument {
   caseNumber: string;
   caseTitle: string;
@@ -54,7 +56,51 @@ function zipStore(files: Array<{ name: string; content: string }>): Uint8Array {
   return concat([...local, directory, concat([u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(directory.length), u32(offset), u16(0)])]);
 }
 
+function docxParagraph(value: string, options: { bold?: boolean; size?: number; after?: number } = {}): string {
+  const properties = options.after ? `<w:spacing w:after="${options.after}"/>` : '';
+  const runProperties = `${options.bold ? '<w:b/>' : ''}<w:sz w:val="${options.size ?? 21}"/>`;
+  return `<w:p><w:pPr>${properties}</w:pPr><w:r><w:rPr>${runProperties}</w:rPr><w:t xml:space="preserve">${xml(value)}</w:t></w:r></w:p>`;
+}
+
+function docxTable(header: string[], rows: string[][]): string {
+  const columnCount = Math.max(1, header.length, ...rows.map((row) => row.length));
+  const cellWidth = Math.max(900, Math.floor(9300 / columnCount));
+  const renderRow = (cells: string[], heading: boolean): string => `<w:tr>${Array.from({ length: columnCount }, (_unused, index) => `<w:tc><w:tcPr><w:tcW w:w="${cellWidth}" w:type="dxa"/>${heading ? '<w:shd w:fill="EAF2FF"/>' : ''}<w:vAlign w:val="center"/></w:tcPr>${docxParagraph(cells[index] ?? '', { bold: heading, size: heading ? 19 : 18, after: 40 })}</w:tc>`).join('')}</w:tr>`;
+  return `<w:tbl><w:tblPr><w:tblW w:w="9300" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="B8C8DA"/><w:left w:val="single" w:sz="6" w:color="B8C8DA"/><w:bottom w:val="single" w:sz="6" w:color="B8C8DA"/><w:right w:val="single" w:sz="6" w:color="B8C8DA"/><w:insideH w:val="single" w:sz="4" w:color="D6E0EA"/><w:insideV w:val="single" w:sz="4" w:color="D6E0EA"/></w:tblBorders></w:tblPr>${header.length ? renderRow(header, true) : ''}${rows.map((row) => renderRow(row, false)).join('')}</w:tbl>${docxParagraph('', { after: 100 })}`;
+}
+
 export function generateFinalDocx(document: FinalReportDocument): Uint8Array {
+  const content = normalizeMixedDocumentBlocks(document.content).map((block) => {
+    if (block.kind === 'asset') return '';
+    if (block.kind === 'table') return docxTable(block.header, block.rows);
+    if (block.kind === 'heading') return docxParagraph(block.text, { bold: true, size: block.level === 1 ? 30 : block.level === 2 ? 26 : 23, after: 150 });
+    if (block.kind === 'list') return docxParagraph(`• ${block.text}`, { after: 80 });
+    return docxParagraph(block.text);
+  }).join('');
+  const paragraphs = [
+    docxParagraph(`${document.caseNumber} · ${document.caseTitle}`, { after: 160 }),
+    docxParagraph(document.reportTitle, { bold: true, size: 32, after: 160 }),
+    docxParagraph(`확정 버전 v${document.reportVersion}`, { after: 160 }),
+    content,
+    docxParagraph(''),
+    docxParagraph(`본문 SHA-256: ${document.contentSha256}`),
+    docxParagraph(`승인: ${document.approvedBy} · ${document.approvedAt}`),
+    docxParagraph(`최종 확정: ${document.finalizedBy} · ${document.finalizedAt}`)
+  ].join('');
+  return zipStore([
+    { name: '[Content_Types].xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>' },
+    { name: '_rels/.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>' },
+    { name: 'docProps/core.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${xml(document.reportTitle)}</dc:title><dc:creator>${xml(document.finalizedBy)}</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${xml(document.finalizedAt)}</dcterms:created></cp:coreProperties>` },
+    { name: 'word/document.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraphs}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>` }
+  ]);
+}
+
+/**
+ * Keeps already-finalized CF09 output rows downloadable after the structured
+ * renderer was introduced. New outputs must use generateFinalDocx; this
+ * function is only selected when its digest matches an immutable legacy row.
+ */
+export function generateLegacyFinalDocx(document: FinalReportDocument): Uint8Array {
   const lines = [`${document.caseNumber} · ${document.caseTitle}`, document.reportTitle, `확정 버전 v${document.reportVersion}`, '', ...document.content.split(/\r?\n/u), '', `본문 SHA-256: ${document.contentSha256}`, `승인: ${document.approvedBy} · ${document.approvedAt}`, `최종 확정: ${document.finalizedBy} · ${document.finalizedAt}`];
   const paragraphs = lines.map((line, index) => `<w:p><w:pPr>${index < 3 ? '<w:spacing w:after="160"/>' : ''}</w:pPr><w:r><w:rPr>${index === 1 ? '<w:b/><w:sz w:val="32"/>' : '<w:sz w:val="21"/>'}</w:rPr><w:t xml:space="preserve">${xml(line)}</w:t></w:r></w:p>`).join('');
   return zipStore([
@@ -72,11 +118,39 @@ function utf16Hex(value: string): string {
 }
 
 export function generateFinalPdf(document: FinalReportDocument): Uint8Array {
-  const rawLines = [`${document.caseNumber} · ${document.caseTitle}`, document.reportTitle, `확정 버전 v${document.reportVersion}`, '', ...document.content.split(/\r?\n/u), '', `본문 SHA-256 ${document.contentSha256}`, `승인 ${document.approvedBy} · ${document.approvedAt}`, `최종 확정 ${document.finalizedBy} · ${document.finalizedAt}`];
+  const rawLines = [`${document.caseNumber} · ${document.caseTitle}`, document.reportTitle, `확정 버전 v${document.reportVersion}`, '', ...normalizedDocumentTextLines(document.content), '', `본문 SHA-256 ${document.contentSha256}`, `승인 ${document.approvedBy} · ${document.approvedAt}`, `최종 확정 ${document.finalizedBy} · ${document.finalizedAt}`];
   const lines = rawLines.flatMap((line) => line.length ? Array.from({ length: Math.ceil(line.length / 42) }, (_, index) => line.slice(index * 42, (index + 1) * 42)) : ['']);
   const pages = Array.from({ length: Math.max(1, Math.ceil(lines.length / 42)) }, (_, index) => lines.slice(index * 42, (index + 1) * 42));
   const objects = new Map<number, string>();
   const pageIds = pages.map((_, index) => 5 + index * 2);
+  objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  objects.set(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
+  objects.set(3, '<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>');
+  objects.set(4, '<< /Type /Font /Subtype /CIDFontType0 /BaseFont /HYSMyeongJo-Medium /CIDSystemInfo << /Registry (Adobe) /Ordering (Korea1) /Supplement 2 >> >>');
+  pages.forEach((pageLines, index) => {
+    const pageId = pageIds[index];
+    const contentId = pageId + 1;
+    const commands = ['BT', '/F1 11 Tf', '50 790 Td', '15 TL', ...pageLines.flatMap((line, lineIndex) => [`<${utf16Hex(line)}> Tj`, lineIndex === pageLines.length - 1 ? '' : 'T*']).filter(Boolean), 'ET'].join('\n');
+    objects.set(pageId, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objects.set(contentId, `<< /Length ${encoder.encode(commands).length} >>\nstream\n${commands}\nendstream`);
+  });
+  let output = '%PDF-1.7\n%CLAIM-CENTER\n';
+  const offsets: number[] = [0];
+  for (let id = 1; id <= objects.size; id += 1) { offsets[id] = output.length; output += `${id} 0 obj\n${objects.get(id)}\nendobj\n`; }
+  const xref = output.length;
+  output += `xref\n0 ${objects.size + 1}\n0000000000 65535 f \n`;
+  for (let id = 1; id <= objects.size; id += 1) output += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
+  output += `trailer\n<< /Size ${objects.size + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return encoder.encode(output);
+}
+
+/** Legacy counterpart to generateLegacyFinalDocx; see its compatibility note. */
+export function generateLegacyFinalPdf(document: FinalReportDocument): Uint8Array {
+  const rawLines = [`${document.caseNumber} · ${document.caseTitle}`, document.reportTitle, `확정 버전 v${document.reportVersion}`, '', ...document.content.split(/\r?\n/u), '', `본문 SHA-256 ${document.contentSha256}`, `승인 ${document.approvedBy} · ${document.approvedAt}`, `최종 확정 ${document.finalizedBy} · ${document.finalizedAt}`];
+  const lines = rawLines.flatMap((line) => line.length ? Array.from({ length: Math.ceil(line.length / 42) }, (_unused, index) => line.slice(index * 42, (index + 1) * 42)) : ['']);
+  const pages = Array.from({ length: Math.max(1, Math.ceil(lines.length / 42)) }, (_unused, index) => lines.slice(index * 42, (index + 1) * 42));
+  const objects = new Map<number, string>();
+  const pageIds = pages.map((_unused, index) => 5 + index * 2);
   objects.set(1, '<< /Type /Catalog /Pages 2 0 R >>');
   objects.set(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pages.length} >>`);
   objects.set(3, '<< /Type /Font /Subtype /Type0 /BaseFont /HYSMyeongJo-Medium /Encoding /UniKS-UCS2-H /DescendantFonts [4 0 R] >>');

@@ -17,6 +17,12 @@ export interface ProposalStudioExcelValues {
   exclusions: string;
 }
 
+export interface ProposalChapterExcelValues {
+  chapterNumber: number;
+  chapterTitle: string;
+  chapterBody: string;
+}
+
 export interface ProposalDocxChapter {
   number: number;
   title: string;
@@ -139,6 +145,28 @@ export function proposalStudioWorkbook(values: ProposalStudioExcelValues, projec
     {name:'xl/workbook.xml',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="제안서 입력" sheetId="1" r:id="rId1"/></sheets></workbook>'},
     {name:'xl/_rels/workbook.xml.rels',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
     {name:'xl/styles.xml',content:styles},{name:'xl/worksheets/sheet1.xml',content:worksheet}
+  ]);
+}
+
+export function proposalChapterWorkbook(values: ProposalChapterExcelValues, projectLabel: string): Uint8Array {
+  const rows = [
+    { code: 'chapterNumber', label: '챕터 번호', value: String(values.chapterNumber), guide: '현재 담당자 검수에서 선택한 챕터 번호입니다. 변경하지 마세요.' },
+    { code: 'chapterTitle', label: '챕터 제목', value: values.chapterTitle, guide: '현재 챕터 제목입니다.' },
+    { code: 'chapterBody', label: '챕터 본문', value: values.chapterBody, guide: '이 셀의 본문만 수정하면 선택 챕터에 다시 가져올 수 있습니다.' },
+  ].map((field, index) => {
+    const row = index + 4;
+    const height = field.code === 'chapterBody' ? 260 : 48;
+    return `<row r="${row}" ht="${height}" customHeight="1">${cell(`A${row}`, field.code, '2')}${cell(`B${row}`, field.label, '2')}${cell(`C${row}`, field.value, '3')}${cell(`D${row}`, field.guide, '4')}</row>`;
+  }).join('');
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="22" customWidth="1" hidden="1"/><col min="2" max="2" width="24" customWidth="1"/><col min="3" max="3" width="90" customWidth="1"/><col min="4" max="4" width="54" customWidth="1"/></cols><sheetData><row r="1" ht="32" customHeight="1">${cell('A1', `클레임센터 스튜디오 · 제안서 ${values.chapterNumber}장 담당자 검수`, '1')}</row><row r="2">${cell('A2', `프로젝트: ${projectLabel} · 현재 ${values.chapterNumber}장 전용 양식`, '4')}</row><row r="3">${cell('A3', 'FIELD_CODE', '2')}${cell('B3', '편집 항목', '2')}${cell('C3', '현재 챕터 내용', '2')}${cell('D3', '작성 안내', '2')}</row>${rows}</sheetData><mergeCells count="2"><mergeCell ref="A1:D1"/><mergeCell ref="A2:D2"/></mergeCells></worksheet>`;
+  const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><color rgb="FF17326D"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF3155B8"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEAF1FF"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border></borders><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="1" applyFill="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>';
+  return zipStore([
+    { name: '[Content_Types].xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+    { name: '_rels/.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { name: 'xl/workbook.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${values.chapterNumber}장 편집" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+    { name: 'xl/styles.xml', content: styles },
+    { name: 'xl/worksheets/sheet1.xml', content: worksheet },
   ]);
 }
 
@@ -340,6 +368,25 @@ export async function readProposalStudioWorkbook(file: File): Promise<ProposalSt
   }
   if(!studioFields.every((field)=>typeof result[field.code]==='string'))throw new Error('12챕터 제안서 필수 항목이 없습니다. 내보낸 양식의 FIELD_CODE 열을 변경하지 마세요.');
   return result;
+}
+
+export async function readProposalChapterWorkbook(file: File): Promise<ProposalChapterExcelValues> {
+  if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 10_000_000) throw new Error('10MB 이하의 현재 챕터 XLSX 양식만 가져올 수 있습니다.');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sheetPath = await workbookFirstSheetPath(bytes);
+  const [sheetXml, sharedStrings] = await Promise.all([zipEntry(bytes, sheetPath), workbookSharedStrings(bytes)]);
+  const values = new Map<string, string>();
+  for (const cells of worksheetRows(sheetXml, sharedStrings)) {
+    const code = cells.get('A') ?? '';
+    if (['chapterNumber', 'chapterTitle', 'chapterBody'].includes(code)) values.set(code, cells.get('C') ?? '');
+  }
+  const chapterNumber = Number.parseInt(values.get('chapterNumber') ?? '', 10);
+  const chapterTitle = (values.get('chapterTitle') ?? '').trim();
+  const chapterBody = (values.get('chapterBody') ?? '').trim();
+  if (!Number.isInteger(chapterNumber) || chapterNumber < 1 || chapterNumber > 12 || !chapterTitle || !chapterBody) {
+    throw new Error('현재 챕터 양식의 번호·제목·본문을 찾지 못했습니다. 내보낸 FIELD_CODE 열을 변경하지 마세요.');
+  }
+  return { chapterNumber, chapterTitle, chapterBody };
 }
 
 export async function readReportStudioWorkbook(file: File): Promise<ReportStudioExcelValues> {

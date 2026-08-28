@@ -18,7 +18,8 @@ const NAVIGATION_GROUPS: readonly {
     routeIds: ['CASE-02', 'CASE-07', 'CASE-08', 'PROP-02', 'PROP-03', 'PROP-04', 'WF-02'],
     nestedGroups: [
       { label: '프로젝트 의뢰', eyebrow: '의뢰 관리', routeIds: ['CASE-02', 'CASE-07', 'CASE-08'] },
-      { label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] }
+      { label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: ['PROP-02', 'PROP-03', 'PROP-04'] },
+      { label: '프로젝트 접수', eyebrow: '접수 관리', routeIds: ['WF-02', 'WF-07'] }
     ]
   },
   {
@@ -30,6 +31,10 @@ const NAVIGATION_GROUPS: readonly {
   { label: '법원 자료', eyebrow: '법원·소송', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품·품질관리', eyebrow: '검토·납품 관리', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
   { label: '설정', eyebrow: '환경 설정', icon: 'settings', routeIds: ['MY-01'] }
+];
+
+const navigationGroupRouteIds = (group: (typeof NAVIGATION_GROUPS)[number]): readonly string[] => [
+  ...new Set([...group.routeIds, ...(group.nestedGroups?.flatMap((nested) => nested.routeIds) ?? [])])
 ];
 
 const NavigationGroupIcon: React.FC<{ name: (typeof NAVIGATION_GROUPS)[number]['icon'] }> = ({ name }) => {
@@ -90,7 +95,7 @@ export const AppShell: React.FC<AppShellProps> = ({
 }) => {
   const safeUserName = typeof userName === 'string' && userName.trim() ? userName.trim() : 'User';
   const currentRouteId = ROUTES.find((route) => route.path === currentPath)?.id;
-  const activeGroup = NAVIGATION_GROUPS.find((group) => group.routeIds.includes(currentRouteId ?? ''));
+  const activeGroup = NAVIGATION_GROUPS.find((group) => navigationGroupRouteIds(group).includes(currentRouteId ?? ''));
   const activeSubgroup = activeGroup?.nestedGroups?.find((group) => group.routeIds.includes(currentRouteId ?? ''));
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
@@ -167,7 +172,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
       </section>}
       {NAVIGATION_GROUPS.filter((group) => !group.allowedRoles || group.allowedRoles.some((role) => roles.includes(role))).map((group) => {
-        const routes = group.routeIds
+        const routes = navigationGroupRouteIds(group)
           .map((id) => ROUTES.find((route) => route.id === id))
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;

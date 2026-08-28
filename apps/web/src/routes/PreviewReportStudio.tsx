@@ -58,7 +58,7 @@ const REPORT_WIZARD_STEPS: readonly {
   { id: 2, title: '목차 기획', shortHelp: '선택한 템플릿에서 목차를 자동 만들고 제목만 쉽게 다듬습니다.', tasks: ['AI·템플릿으로 목차 자동 만들기', '이상한 챕터 제목만 바로 수정하기', '목차 확정 누르기'], doneText: '목차 확정 표시가 나오면 완료' },
   { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성 또는 수동·외부 LLM 입력을 선택합니다.', tasks: ['작성할 챕터 선택', 'AI 자동작성 또는 수동 입력 선택', 'HWP 원본·참고자료 연결 후 저장'], doneText: '모든 챕터에 초안 있음이 표시되면 완료' },
   { id: 4, title: '사람 검토·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 사람이 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', 'D1 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
-  { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', 'DOCX 또는 PDF 생성'], doneText: '승인본 파일을 생성하면 보고서 작업 완료' }
+  { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', 'DOCX·PDF 생성 또는 HWP 최종 편집'], doneText: '승인본 파일을 생성하면 보고서 작업 완료' }
 ] as const;
 const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
   'AGENT-01': ['PROJECT', 'PROPOSAL', 'KICKOFF'],
@@ -68,6 +68,24 @@ const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
   'AGENT-05': ['PROJECT', 'PROPOSAL', 'KICKOFF', 'SITE_SURVEY', 'QUANTITY', 'EVIDENCE', 'LITIGATION'],
   'AGENT-06': ['PROJECT', 'PROPOSAL', 'KICKOFF', 'SITE_SURVEY', 'QUANTITY', 'EVIDENCE', 'LITIGATION']
 };
+
+function escapedPattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function reportChapterBlock(content: string, chapterCode: string): string {
+  const code = escapedPattern(chapterCode);
+  const match = content.match(new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${code}:START -->\\s*([\\s\\S]*?)\\s*<!-- (?:AI|MANUAL)-CHAPTER:${code}:END -->`, 'u'));
+  if (!match) return '';
+  return match[1].replace(/^##\s+[^\n]+\n?/u, '').trim();
+}
+
+function replaceReportChapterBlock(content: string, chapterCode: string, chapterTitle: string, body: string): string {
+  const code = escapedPattern(chapterCode);
+  const block = `<!-- MANUAL-CHAPTER:${chapterCode}:START -->\n## ${chapterCode} ${chapterTitle}\n\n${body.trim()}\n<!-- MANUAL-CHAPTER:${chapterCode}:END -->`;
+  const pattern = new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${code}:START -->[\\s\\S]*?<!-- (?:AI|MANUAL)-CHAPTER:${code}:END -->`, 'u');
+  return pattern.test(content) ? content.replace(pattern, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
+}
 
 export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; onNavigate: (path: string) => void }): React.ReactElement {
   const [cases, setCases] = useState<CaseSummary[]>([]);
@@ -435,19 +453,22 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const exportReportExcel = () => {
+    const chapterReview = activeStep === 4 && selectedChapter;
+    const exportTitle = chapterReview ? `${selectedChapter.chapterCode} ${outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title}` : title;
+    const exportContent = chapterReview ? reportChapterBlock(content, selectedChapter.chapterCode) : content;
     const bytes=reportStudioWorkbook(
-      {reportTitle:title,reportContent:content},
+      {reportTitle:exportTitle,reportContent:exportContent},
       `${selectedCase?.caseNumber??''} · ${selectedCase?.title??''}`,
-      selectedTemplateCategory?.displayName??authoring?.typeGuideline?.typeName??'유형별 보고서',
+      chapterReview ? `담당자 검수 · ${selectedChapter.chapterCode}` : selectedTemplateCategory?.displayName??authoring?.typeGuideline?.typeName??'유형별 보고서',
     );
     const payload=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;
     const url=URL.createObjectURL(new Blob([payload],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
     const anchor=document.createElement('a');
     anchor.href=url;
-    anchor.download=`${selectedCase?.caseNumber??'PROJECT'}_보고서_작성양식.xlsx`;
+    anchor.download=`${selectedCase?.caseNumber??'PROJECT'}_${chapterReview ? selectedChapter.chapterCode : '보고서'}_작성양식.xlsx`;
     anchor.click();
     URL.revokeObjectURL(url);
-    setMemoryNotice('보고서 Excel 양식을 내보냈습니다. FIELD_CODE 열은 유지하고 C열을 수정한 뒤 다시 가져오세요.');
+    setMemoryNotice(chapterReview ? `${selectedChapter.chapterCode} 검수용 Excel을 내보냈습니다. FIELD_CODE 열은 유지하고 C열을 수정한 뒤 현재 단계에서 다시 가져오세요.` : '보고서 입력용 Excel 양식을 내보냈습니다. FIELD_CODE 열은 유지하고 C열을 수정한 뒤 1단계에서 다시 가져오세요.');
   };
 
   const importReportExcel = async (file: File | undefined) => {
@@ -455,9 +476,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setSaving(true);setError('');
     try{
       const values=await readReportStudioWorkbook(file);
-      titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
-      setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDirty(true);
-      setMemoryNotice('작성 Excel 가져오기 완료. 보고서 제목과 본문을 편집기에 반영했으며 자동 저장을 시작합니다.');
+      if (activeStep === 4 && selectedChapter) {
+        const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
+        const nextContent = replaceReportChapterBlock(contentRef.current, selectedChapter.chapterCode, chapterTitle, values.reportContent);
+        contentRef.current=nextContent;setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
+        setMemoryNotice(`${selectedChapter.chapterCode} 검수용 Excel 내용을 현재 챕터에만 반영했습니다.`);
+      } else {
+        titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
+        setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDirty(true);
+        setMemoryNotice('입력용 Excel 가져오기 완료. 보고서 제목과 본문을 1단계 초안에 반영했으며 자동 저장을 시작합니다.');
+      }
     }catch(reason){setError(reason instanceof Error?reason.message:'보고서 Excel을 읽지 못했습니다.');}
     finally{setSaving(false);if(reportExcelInputRef.current)reportExcelInputRef.current.value='';}
   };
@@ -467,9 +495,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setSaving(true);setError('');
     try{
       const values=await readReportDocx(file);
-      titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
-      setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
-      setMemoryNotice('Word DOCX 가져오기 완료. 제목과 본문을 수동 초안으로 반영했으며 자동 저장을 시작합니다.');
+      if (activeStep === 4 && selectedChapter) {
+        const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
+        const nextContent = replaceReportChapterBlock(contentRef.current, selectedChapter.chapterCode, chapterTitle, values.reportContent);
+        contentRef.current=nextContent;setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
+        setMemoryNotice(`Word DOCX 본문을 ${selectedChapter.chapterCode} 챕터에만 반영했습니다.`);
+      } else {
+        titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
+        setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
+        setMemoryNotice('Word DOCX 가져오기 완료. 제목과 본문을 수동 초안으로 반영했으며 자동 저장을 시작합니다.');
+      }
     }catch(reason){setError(reason instanceof Error?reason.message:'Word 보고서를 읽지 못했습니다.');}
     finally{setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}
   };
@@ -495,6 +530,21 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setLinkingHwp(false);
       if (hwpInputRef.current) hwpInputRef.current.value = '';
     }
+  };
+
+  const applyHwpTextToCurrentChapter = (importedContent: string) => {
+    if (!selectedChapter) {
+      setError('HWP 내용을 넣을 보고서 챕터를 먼저 선택해 주세요.');
+      return;
+    }
+    const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
+    const nextContent = replaceReportChapterBlock(contentRef.current, selectedChapter.chapterCode, chapterTitle, importedContent);
+    contentRef.current = nextContent;
+    setContent(nextContent);
+    setEditorJson(null);
+    setDraftMethod('MANUAL');
+    setDirty(true);
+    setMemoryNotice(`HWP/HWPX 본문을 ${selectedChapter.chapterCode} ${chapterTitle}에 반영했습니다. 저장하면 현재 보고서 버전에 기록됩니다.`);
   };
 
   const improveWriting = async () => {
@@ -654,25 +704,24 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         : activeStep === 4
           ? '본문을 저장해 D1 저장 완료 표시를 확인해 주세요.'
           : '';
-  const reportDocumentTools=<DocumentToolMenus groups={[
+  const reportDocumentTools=(stepId: ReportWizardStep)=>stepId === 1 || stepId === 4 ? <DocumentToolMenus groups={[
     {id:'excel',label:'Excel',actions:[
-      {id:'export',label:'보고서 양식 내보내기',onClick:exportReportExcel},
-      {id:'import',label:'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:saving},
+      {id:'export',label:stepId===4?'현재 챕터 Excel 내보내기':'보고서 입력 양식 내보내기',onClick:exportReportExcel},
+      {id:'import',label:stepId===4?'현재 챕터 Excel 가져오기':'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:saving},
     ]},
     {id:'docx',label:'DOCX',actions:[
-      {id:'import',label:'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:saving},
+      {id:'import',label:stepId===4?'현재 챕터에 DOCX 반영':'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:saving},
     ]},
     {id:'hwp',label:'HWP',actions:[
-      {id:'import',label:'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
-      {id:'new',label:'HWP 원본으로 새 작업',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
+      {id:'import',label:stepId===4?'현재 챕터에 HWP 반영':'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
     ]},
-  ]}/>;
+  ]}/> : null;
   const renderStageHeader = (stepId: ReportWizardStep) => {
     const guide = REPORT_WIZARD_STEPS[stepId - 1];
     return <header className="report-stage-header">
       <span className="report-stage-header__number" aria-hidden="true">{String(stepId).padStart(2, '0')}</span>
       <div><small>REPORT STEP {stepId}</small><h3>{guide.title}</h3><p>{guide.shortHelp}</p>{showGuide && <ol>{guide.tasks.map((task, index) => <li key={task}><b>{index + 1}</b>{task}</li>)}</ol>}</div>
-      <div className="report-stage-header__actions">{reportDocumentTools}<aside><strong>{stepComplete[stepId] ? '✓ 단계 완료' : '완료 기준'}</strong><p>{guide.doneText}</p></aside></div>
+      <div className="report-stage-header__actions">{reportDocumentTools(stepId)}<aside><strong>{stepComplete[stepId] ? '✓ 단계 완료' : '완료 기준'}</strong><p>{guide.doneText}</p></aside></div>
     </header>;
   };
 
@@ -680,7 +729,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
-      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
+      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel={activeStep===4&&selectedChapter?`현재 내용을 ${selectedChapter.chapterCode}에 적용`:'현재 HWP 내용을 보고서에 적용'} onApplyContent={activeStep===4?applyHwpTextToCurrentChapter:undefined} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
@@ -810,7 +859,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </>}
           </div>
           <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·다운로드</h3>
-          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX/PDF 출력이 열립니다. HWP/HWPX 편집기는 승인 전에도 사용할 수 있습니다.</p> : !currentFinalization ? <div className="form-stack">
+          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX·PDF 출력, HWP 최종 편집이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
             <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
           </div> : <div className="form-stack">
@@ -820,6 +869,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
                 const output = currentFinalization.outputs.find((entry) => entry.format === format);
                 return output ? <Button key={format} variant="secondary" onClick={() => void downloadOutput(output)}>{format} 다운로드</Button> : <Button key={format} onClick={() => void generateOutput(format)} disabled={submittingReview}>{format} 생성</Button>;
               })}
+              <Button variant="secondary" onClick={()=>hwpInputRef.current?.click()} disabled={linkingHwp}>HWP 최종 편집·내보내기</Button>
             </div>
             {currentFinalization.outputs.map((output) => <p className="muted" key={output.id}>{output.format} · {(output.byteSize / 1024).toFixed(1)} KB · SHA {output.contentSha256.slice(0, 16)}…</p>)}
           </div>}</section>

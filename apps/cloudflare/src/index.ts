@@ -22,7 +22,7 @@ import {
   type ClaimCenterFolderKind,
   type GoogleFetch
 } from './google-drive';
-import { generateFinalDocx, generateFinalPdf, type FinalReportDocument } from './final-output';
+import { generateFinalDocx, generateFinalPdf, generateLegacyFinalDocx, generateLegacyFinalPdf, type FinalReportDocument } from './final-output';
 import { defaultMemoryAgent, extractGeneratedChapter, type MemoryScope } from './memory-service';
 import { checkMemoryBridge, normalizeMemoryBridgeBaseUrl, rankMemoryRules, type MemoryBridgeCredential, type MemoryBridgeFetch } from './memory-bridge';
 import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, type ProposalExportAsset, type ProposalExportChapter } from './proposal-docx';
@@ -5674,7 +5674,10 @@ async function handlePreviewFinalOutput(request: Request, env: CloudflareEnv, ur
     const safeName = document.reportTitle.replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 180) || 'final-report';
     const fileName = `${safeName}-v${document.reportVersion}.${format.toLowerCase()}`;
     const existing = await env.DB.prepare('SELECT id,content_sha256 AS contentSha256,byte_size AS byteSize FROM preview_report_outputs WHERE finalization_id=? AND format=?').bind(outputMatch[1], format).first<{ id: string; contentSha256: string; byteSize: number }>();
-    if (existing && (existing.contentSha256 !== digest || Number(existing.byteSize) !== bytes.byteLength)) return json({ error: 'Deterministic output verification failed', code: 'OUTPUT_HASH_MISMATCH' }, 500);
+    if (existing && (existing.contentSha256 !== digest || Number(existing.byteSize) !== bytes.byteLength)) {
+      const legacyBytes = format === 'DOCX' ? generateLegacyFinalDocx(document) : generateLegacyFinalPdf(document);
+      if (await sha256Hex(legacyBytes) !== existing.contentSha256 || legacyBytes.byteLength !== Number(existing.byteSize)) return json({ error: 'Deterministic output verification failed', code: 'OUTPUT_HASH_MISMATCH' }, 500);
+    }
     if (!existing) {
       if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
       const outputId = crypto.randomUUID(); const now = new Date().toISOString();
@@ -5691,8 +5694,12 @@ async function handlePreviewFinalOutput(request: Request, env: CloudflareEnv, ur
     if (!output || !await accessiblePreviewCase(env, user, output.caseId)) return json({ error: 'Output was not found', code: 'OUTPUT_NOT_FOUND' }, 404);
     const document = await finalDocument(env, output.finalizationId);
     if (!document) return json({ error: 'Finalization was not found', code: 'FINALIZATION_NOT_FOUND' }, 404);
-    const bytes = output.format === 'DOCX' ? generateFinalDocx(document) : generateFinalPdf(document);
-    if (await sha256Hex(bytes) !== output.contentSha256 || bytes.byteLength !== Number(output.byteSize)) return json({ error: 'Output integrity verification failed', code: 'OUTPUT_HASH_MISMATCH' }, 500);
+    let bytes = output.format === 'DOCX' ? generateFinalDocx(document) : generateFinalPdf(document);
+    if (await sha256Hex(bytes) !== output.contentSha256 || bytes.byteLength !== Number(output.byteSize)) {
+      const legacyBytes = output.format === 'DOCX' ? generateLegacyFinalDocx(document) : generateLegacyFinalPdf(document);
+      if (await sha256Hex(legacyBytes) !== output.contentSha256 || legacyBytes.byteLength !== Number(output.byteSize)) return json({ error: 'Output integrity verification failed', code: 'OUTPUT_HASH_MISMATCH' }, 500);
+      bytes = legacyBytes;
+    }
     await env.DB.prepare('INSERT INTO preview_report_output_events VALUES (?, ?, ?, \'OUTPUT_DOWNLOADED\', ?, ?)').bind(crypto.randomUUID(), output.finalizationId, output.id, user.id, new Date().toISOString()).run();
     return new Response(bytes.buffer as ArrayBuffer, { headers: { 'Cache-Control': 'no-store', 'Content-Type': output.format === 'DOCX' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/pdf', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(output.fileName)}`, 'X-Content-SHA256': output.contentSha256, 'X-Content-Type-Options': 'nosniff' } });
   }

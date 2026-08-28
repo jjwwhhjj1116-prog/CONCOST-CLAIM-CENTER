@@ -74,6 +74,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'PROJ-PRINT', path: '/print/projects/month-a4', name: '프로젝트 일정표 A4 출력' },
   { id: 'WF-01', path: '/workflow/proposal-link', name: '1. 제안서 연동' },
   { id: 'WF-02', path: '/workflow/award', name: '프로젝트 접수' },
+  { id: 'WF-07', path: '/workflow/projects/database', name: '프로젝트 DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'WF-03', path: '/workflow/kickoff', name: '착수회의' },
   { id: 'WF-04', path: '/workflow/site-survey', name: '현장조사' },
   { id: 'WF-05', path: '/workflow/quantity', name: '물량산출 및 내역' },
@@ -195,6 +196,15 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   }
   if (previewMode && ['WF-01', 'WF-02'].includes(currentRoute.id)) {
     return <ProposalAwardWorkflow routeId={currentRoute.id as 'WF-01' | 'WF-02'} roles={roles} onNavigate={onNavigate} />;
+  }
+  if (previewMode && currentRoute.id === 'WF-07') {
+    return <ProposalAwardWorkflow routeId="WF-07" roles={roles} onNavigate={onNavigate} />;
+  }
+  if (!previewMode && ['WF-01', 'WF-02'].includes(currentRoute.id)) {
+    return <ProposalAwardWorkflow routeId={currentRoute.id as 'WF-01' | 'WF-02'} roles={roles} onNavigate={onNavigate} />;
+  }
+  if (!previewMode && currentRoute.id === 'WF-07') {
+    return <ProposalAwardWorkflow routeId="WF-07" roles={roles} onNavigate={onNavigate} />;
   }
   if (['PROJ-01', 'PROJ-02', 'WF-01', 'WF-02', 'WF-03', 'WF-04', 'WF-05', 'WF-06'].includes(currentRoute.id)) {
     return <ProjectWorkflowSchedule routeId={currentRoute.id} onNavigate={onNavigate} />;

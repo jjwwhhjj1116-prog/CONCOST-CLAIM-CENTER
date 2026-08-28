@@ -1,3 +1,5 @@
+import { normalizeMixedDocumentBlocks } from './document-content-normalizer';
+
 export interface ProposalExportChapter {
   number: number;
   title: string;
@@ -86,60 +88,35 @@ const textRun = (value: string, properties = ''): string => `<w:r>${properties ?
 const paragraph = (value: string, style = 'Normal', extraProperties = '', runProperties = ''): string =>
   `<w:p><w:pPr><w:pStyle w:val="${style}"/>${extraProperties}</w:pPr>${textRun(value, runProperties)}</w:p>`;
 
-const markdownCells = (line: string): string[] => line.trim().replace(/^\|/u, '').replace(/\|$/u, '').split('|').map((cell) => cell.trim().replace(/^\*\*(.+)\*\*$/u, '$1'));
-
 function markdownTable(header: string[], rows: string[][]): string {
-  const cellWidth = Math.max(900, Math.floor(9300 / Math.max(1, header.length)));
-  const row = (cells: string[], heading: boolean): string => `<w:tr>${header.map((_column, index) => `<w:tc><w:tcPr><w:tcW w:w="${cellWidth}" w:type="dxa"/>${heading ? '<w:shd w:fill="EAF2FF"/>' : ''}<w:vAlign w:val="center"/></w:tcPr>${paragraph(cells[index] ?? '', 'Normal', '<w:spacing w:after="40"/>', heading ? '<w:b/><w:color w:val="17326D"/><w:sz w:val="17"/>' : '<w:sz w:val="16"/>')}</w:tc>`).join('')}</w:tr>`;
-  return `<w:tbl><w:tblPr><w:tblW w:w="9300" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="B8C8DA"/><w:left w:val="single" w:sz="6" w:color="B8C8DA"/><w:bottom w:val="single" w:sz="6" w:color="B8C8DA"/><w:right w:val="single" w:sz="6" w:color="B8C8DA"/><w:insideH w:val="single" w:sz="4" w:color="D6E0EA"/><w:insideV w:val="single" w:sz="4" w:color="D6E0EA"/></w:tblBorders><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>${row(header, true)}${rows.map((cells) => row(cells, false)).join('')}</w:tbl>${paragraph('', 'Normal', '<w:spacing w:after="100"/>')}`;
+  const columnCount = Math.max(1, header.length, ...rows.map((row) => row.length));
+  const columns = Array.from({ length: columnCount });
+  const cellWidth = Math.max(900, Math.floor(9300 / columnCount));
+  const row = (cells: string[], heading: boolean): string => `<w:tr>${columns.map((_column, index) => `<w:tc><w:tcPr><w:tcW w:w="${cellWidth}" w:type="dxa"/>${heading ? '<w:shd w:fill="EAF2FF"/>' : ''}<w:vAlign w:val="center"/></w:tcPr>${paragraph(cells[index] ?? '', 'Normal', '<w:spacing w:after="40"/>', heading ? '<w:b/><w:color w:val="17326D"/><w:sz w:val="17"/>' : '<w:sz w:val="16"/>')}</w:tc>`).join('')}</w:tr>`;
+  return `<w:tbl><w:tblPr><w:tblW w:w="9300" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="single" w:sz="6" w:color="B8C8DA"/><w:left w:val="single" w:sz="6" w:color="B8C8DA"/><w:bottom w:val="single" w:sz="6" w:color="B8C8DA"/><w:right w:val="single" w:sz="6" w:color="B8C8DA"/><w:insideH w:val="single" w:sz="4" w:color="D6E0EA"/><w:insideV w:val="single" w:sz="4" w:color="D6E0EA"/></w:tblBorders><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr>${header.length ? row(header, true) : ''}${rows.map((cells) => row(cells, false)).join('')}</w:tbl>${paragraph('', 'Normal', '<w:spacing w:after="100"/>')}`;
 }
 
 function markdownParagraphs(body: string, imageXmlByKey: ReadonlyMap<string,string> = new Map()): string {
-  const lines = body.replaceAll('\r\n', '\n').split('\n');
   const output: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
-    if (!line) {
-      output.push('<w:p><w:pPr><w:spacing w:after="80"/></w:pPr></w:p>');
-      continue;
-    }
-    const assetMarker = line.match(/^\[PROPOSAL_ASSET:([A-Za-z0-9_-]+)\]$/u);
-    if (assetMarker) {
-      const image = imageXmlByKey.get(assetMarker[1]);
+  for (const block of normalizeMixedDocumentBlocks(body)) {
+    if (block.kind === 'asset') {
+      const image = imageXmlByKey.get(block.key);
       if (image) output.push(image);
       continue;
     }
-    if (line.includes('|') && lines[index + 1] && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*$/u.test(lines[index + 1])) {
-      const header = markdownCells(line);
-      const rows: string[][] = [];
-      index += 2;
-      while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
-        rows.push(markdownCells(lines[index]));
-        index += 1;
-      }
-      index -= 1;
-      output.push(markdownTable(header, rows));
+    if (block.kind === 'table') {
+      output.push(markdownTable(block.header, block.rows));
       continue;
     }
-    if (line.startsWith('### ')) {
-      output.push(paragraph(line.slice(4), 'Heading3'));
+    if (block.kind === 'heading') {
+      output.push(paragraph(block.text, `Heading${block.level}`));
       continue;
     }
-    if (line.startsWith('## ')) {
-      output.push(paragraph(line.slice(3), 'Heading2'));
+    if (block.kind === 'list') {
+      output.push(`<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>${textRun(block.text)}</w:p>`);
       continue;
     }
-    if (line.startsWith('# ')) {
-      output.push(paragraph(line.slice(2), 'Heading1'));
-      continue;
-    }
-    if (/^(?:[-*•ㅇ]|\d+[.)])\s+/u.test(line)) {
-      const value = line.replace(/^(?:[-*•ㅇ]|\d+[.)])\s+/u, '');
-      output.push(`<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>${textRun(value)}</w:p>`);
-      continue;
-    }
-    const strong = line.match(/^\*\*(.+)\*\*$/u);
-    output.push(paragraph(strong?.[1] ?? line, 'Normal', '<w:jc w:val="both"/>', strong ? '<w:b/>' : ''));
+    output.push(paragraph(block.text, 'Normal', '<w:jc w:val="both"/>'));
   }
   return output.join('');
 }
@@ -244,14 +221,18 @@ function proposalPdfBlocks(input: ProposalExportDocument): ProposalPdfBlock[] {
   ]);
   for(const chapter of input.chapters){
     const chapterAssets=assets.filter((asset)=>asset.chapterNumber===chapter.number);
-    const marked=proposalBodyWithAssetMarkers(chapter.body,chapterAssets).replaceAll('\r\n','\n').split('\n');
     let textLines=[`${chapter.number}. ${chapter.title}`];
-    for(const line of marked){
-      const marker=line.trim().match(/^\[PROPOSAL_ASSET:([A-Za-z0-9_-]+)\]$/u);
-      if(!marker){textLines.push(line);continue;}
+    for(const block of normalizeMixedDocumentBlocks(proposalBodyWithAssetMarkers(chapter.body,chapterAssets))){
+      if(block.kind!=='asset'){
+        if(block.kind==='table'){
+          if(block.header.length)textLines.push(block.header.join(' | '));
+          textLines.push(...block.rows.map((row)=>row.join(' | ')));
+        }else textLines.push(block.text);
+        continue;
+      }
       if(textLines.some((value)=>value.trim()))pushText(textLines);
       textLines=[];
-      const asset=chapterAssets.find((item)=>item.assetKey===marker[1]);
+      const asset=chapterAssets.find((item)=>item.assetKey===block.key);
       if(asset)blocks.push({kind:'image',asset});
     }
     if(textLines.some((value)=>value.trim()))pushText(textLines);
