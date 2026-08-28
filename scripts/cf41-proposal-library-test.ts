@@ -38,7 +38,7 @@ test('CF41 sent project view and immutable DB ledger use the scoped proposal wor
 
 test('CF41 authoring has XLSX import and all sent proposal records export as a real workbook', () => {
   const author = read('apps/web/src/proposals/ProposalView.tsx');
-  assert.match(author, /Excel 양식 내보내기/u);
+  assert.match(author, /입력 양식 내보내기/u);
   assert.match(author, /작성 Excel 가져오기/u);
   assert.match(author, /readProposalWorkbook/u);
   const bytes = sentProposalArchiveWorkbook([{

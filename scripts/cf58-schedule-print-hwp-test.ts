@@ -40,8 +40,8 @@ test('CF58 shared rhwp editor imports, edits, verifies and exports HWP/HWPX', ()
   assert.match(component, /agents-and-tools\/tool-use\/overview/u);
   assert.match(dialogCss, /display:flex;flex-direction:column/u);
   assert.match(dialogCss, /height:100%!important;min-height:100%!important/u);
-  assert.match(proposal, /HWP 가져오기·편집/u);
-  assert.match(previewReport, /HWP 가져오기·편집/u);
+  assert.match(proposal, /HWP\/HWPX 가져오기·편집/u);
+  assert.match(previewReport, /HWP\/HWPX 가져오기·편집/u);
   assert.match(report, /HWP 가져오기·편집/u);
   assert.match(webPackage, /"@rhwp\/editor": "0\.8\.4"/u);
 });

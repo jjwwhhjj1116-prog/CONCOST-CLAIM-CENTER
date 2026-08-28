@@ -23,6 +23,16 @@ export interface ProposalDocxChapter {
   body: string;
 }
 
+export interface ReportStudioExcelValues {
+  reportTitle: string;
+  reportContent: string;
+}
+
+export interface ReportDocxValues {
+  reportTitle: string;
+  reportContent: string;
+}
+
 export interface SentProposalExcelRow {
   caseNumber: string;
   caseTitle: string;
@@ -59,6 +69,10 @@ const studioFields: Array<{ code: keyof ProposalStudioExcelValues; label: string
   { code:'objective',label:'제안 목적',guide:'클라이언트 관점의 목표와 권익 보호 방향' },
   { code:'planNotes',label:'수행 계획 메모',guide:'Fact Finding, 법리·원가 검증, 협상, 총회·의결 지원 범위' },
   { code:'exclusions',label:'제외·확인 사항',guide:'제안 범위에서 제외하거나 추가 확인할 내용' }
+];
+const reportStudioFields: Array<{ code: keyof ReportStudioExcelValues; label: string; guide: string }> = [
+  { code:'reportTitle',label:'보고서 제목',guide:'프로젝트별 보고서의 공식 제목' },
+  { code:'reportContent',label:'보고서 본문',guide:'챕터 제목과 본문을 포함한 전체 초안. Markdown 표·목록을 사용할 수 있습니다.' },
 ];
 
 const xml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
@@ -123,6 +137,19 @@ export function proposalStudioWorkbook(values: ProposalStudioExcelValues, projec
     {name:'[Content_Types].xml',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'},
     {name:'_rels/.rels',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'},
     {name:'xl/workbook.xml',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="제안서 입력" sheetId="1" r:id="rId1"/></sheets></workbook>'},
+    {name:'xl/_rels/workbook.xml.rels',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
+    {name:'xl/styles.xml',content:styles},{name:'xl/worksheets/sheet1.xml',content:worksheet}
+  ]);
+}
+
+export function reportStudioWorkbook(values: ReportStudioExcelValues, projectLabel: string, templateName: string): Uint8Array {
+  const dataRows=reportStudioFields.map((field,index)=>{const row=index+4;return `<row r="${row}" ht="${field.code==='reportContent'?220:52}" customHeight="1">${cell(`A${row}`,field.code,'2')}${cell(`B${row}`,field.label,'2')}${cell(`C${row}`,values[field.code],'3')}${cell(`D${row}`,field.guide,'4')}</row>`;}).join('');
+  const worksheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="22" customWidth="1" hidden="1"/><col min="2" max="2" width="24" customWidth="1"/><col min="3" max="3" width="90" customWidth="1"/><col min="4" max="4" width="54" customWidth="1"/></cols><sheetData><row r="1" ht="32" customHeight="1">${cell('A1','클레임센터 스튜디오 · 프로젝트 보고서 작성 양식','1')}</row><row r="2">${cell('A2',`프로젝트: ${projectLabel} · 템플릿: ${templateName}`,'4')}</row><row r="3">${cell('A3','FIELD_CODE','2')}${cell('B3','작성 항목','2')}${cell('C3','프로젝트별 수정 내용','2')}${cell('D3','작성 안내','2')}</row>${dataRows}</sheetData><mergeCells count="2"><mergeCell ref="A1:D1"/><mergeCell ref="A2:D2"/></mergeCells></worksheet>`;
+  const styles='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="3"><font><sz val="11"/><name val="Arial"/></font><font><b/><sz val="16"/><color rgb="FF17326D"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF107C41"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF7CF"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border></borders><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="1" applyFill="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" applyBorder="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs></styleSheet>';
+  return zipStore([
+    {name:'[Content_Types].xml',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'},
+    {name:'_rels/.rels',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'},
+    {name:'xl/workbook.xml',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="보고서 작성" sheetId="1" r:id="rId1"/></sheets></workbook>'},
     {name:'xl/_rels/workbook.xml.rels',content:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
     {name:'xl/styles.xml',content:styles},{name:'xl/worksheets/sheet1.xml',content:worksheet}
   ]);
@@ -315,6 +342,20 @@ export async function readProposalStudioWorkbook(file: File): Promise<ProposalSt
   return result;
 }
 
+export async function readReportStudioWorkbook(file: File): Promise<ReportStudioExcelValues> {
+  if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 15_000_000) throw new Error('15MB 이하의 XLSX 보고서 양식만 가져올 수 있습니다.');
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  const sheetPath=await workbookFirstSheetPath(bytes);
+  const [sheetXml,sharedStrings]=await Promise.all([zipEntry(bytes,sheetPath),workbookSharedStrings(bytes)]);
+  const result={} as ReportStudioExcelValues;
+  for(const cellValues of worksheetRows(sheetXml,sharedStrings)){
+    const code=cellValues.get('A') as keyof ReportStudioExcelValues;
+    if(reportStudioFields.some((field)=>field.code===code))result[code]=(cellValues.get('C')??'').trim();
+  }
+  if(!reportStudioFields.every((field)=>typeof result[field.code]==='string'))throw new Error('보고서 필수 항목이 없습니다. 내보낸 양식의 FIELD_CODE 열을 변경하지 마세요.');
+  return result;
+}
+
 const proposalDocxChapterAliases: ReadonlyArray<ReadonlyArray<string>> = [
   ['제안의 목적','제안(용역)의 목적','용역의 목적'],
   ['핵심 쟁점','현장의 핵심 쟁점','쟁점 분석'],
@@ -363,4 +404,19 @@ export async function readProposalDocx(file: File): Promise<ProposalDocxChapter[
   const chapters=[...candidates.entries()].map(([number,values])=>{const selected=[...values].sort((left,right)=>right.body.length-left.body.length)[0];return{number,title:selected.title,body:selected.body};}).sort((left,right)=>left.number-right.number);
   if(chapters.length<3||![1,2,3].every((number)=>chapters.some((chapter)=>chapter.number===number)))throw new Error('12챕터 제안서 목차를 인식하지 못했습니다. 표준 제안서 DOCX 또는 이 화면에서 내려받은 DOCX를 사용하세요.');
   return chapters;
+}
+
+export async function readReportDocx(file: File): Promise<ReportDocxValues> {
+  if(!file.name.toLowerCase().endsWith('.docx')||file.size>20_000_000)throw new Error('20MB 이하의 Word DOCX 보고서만 가져올 수 있습니다.');
+  const documentXml=await zipEntry(new Uint8Array(await file.arrayBuffer()),'word/document.xml');
+  const paragraphs:string[]=[];
+  for(const paragraph of documentXml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/gu)){
+    const parts=[...paragraph[1].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gu)].map((match)=>unescapeXml(match[1]));
+    const text=parts.join('').replaceAll('\u00a0',' ').replace(/\s+/gu,' ').trim();
+    if(text)paragraphs.push(text);
+  }
+  if(!paragraphs.length)throw new Error('Word 보고서에서 읽을 수 있는 본문을 찾지 못했습니다.');
+  const title=paragraphs[0].slice(0,300);
+  const body=paragraphs.slice(1).join('\n\n').trim()||paragraphs[0];
+  return{reportTitle:title,reportContent:body};
 }

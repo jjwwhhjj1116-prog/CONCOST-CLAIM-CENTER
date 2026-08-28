@@ -46,7 +46,7 @@ test('CF27 project intake continues with the newly created case selected in prop
   assert.match(proposal, /!activeProposal && selectedCaseId/u);
   assert.match(proposal, /현재 프로젝트 · 제안서 유형/u);
   assert.match(proposal, /유형별 대표 템플릿/u);
-  assert.match(proposal, /Excel 양식 내보내기/u);
+  assert.match(proposal, /입력 양식 내보내기/u);
   assert.match(proposal, /작성 Excel 가져오기/u);
   assert.match(proposal, /검수 완료 · 전체 합본 미리보기/u);
   assert.match(proposal, /← 수정 · 3단계로/u);

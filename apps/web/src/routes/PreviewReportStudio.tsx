@@ -3,9 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiDownload, apiRequest, triggerBrowserDownload } from '../api';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
+import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { StructuredDocumentEditor, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
+import { readReportDocx, readReportStudioWorkbook, reportStudioWorkbook } from '../proposals/proposal-excel';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
 import type { UserRole } from './Router';
 import type { PreviewReportReview } from './PreviewApprovalInbox';
@@ -121,6 +123,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [hwpSourceFile, setHwpSourceFile] = useState<File | null>(null);
   const [linkedHwpName, setLinkedHwpName] = useState('');
   const [linkingHwp, setLinkingHwp] = useState(false);
+  const reportExcelInputRef = useRef<HTMLInputElement | null>(null);
+  const reportDocxInputRef = useRef<HTMLInputElement | null>(null);
   const hwpInputRef = useRef<HTMLInputElement | null>(null);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
@@ -430,6 +434,46 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setDirty(true);
   };
 
+  const exportReportExcel = () => {
+    const bytes=reportStudioWorkbook(
+      {reportTitle:title,reportContent:content},
+      `${selectedCase?.caseNumber??''} · ${selectedCase?.title??''}`,
+      selectedTemplateCategory?.displayName??authoring?.typeGuideline?.typeName??'유형별 보고서',
+    );
+    const payload=bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer;
+    const url=URL.createObjectURL(new Blob([payload],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    const anchor=document.createElement('a');
+    anchor.href=url;
+    anchor.download=`${selectedCase?.caseNumber??'PROJECT'}_보고서_작성양식.xlsx`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setMemoryNotice('보고서 Excel 양식을 내보냈습니다. FIELD_CODE 열은 유지하고 C열을 수정한 뒤 다시 가져오세요.');
+  };
+
+  const importReportExcel = async (file: File | undefined) => {
+    if(!file)return;
+    setSaving(true);setError('');
+    try{
+      const values=await readReportStudioWorkbook(file);
+      titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
+      setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDirty(true);
+      setMemoryNotice('작성 Excel 가져오기 완료. 보고서 제목과 본문을 편집기에 반영했으며 자동 저장을 시작합니다.');
+    }catch(reason){setError(reason instanceof Error?reason.message:'보고서 Excel을 읽지 못했습니다.');}
+    finally{setSaving(false);if(reportExcelInputRef.current)reportExcelInputRef.current.value='';}
+  };
+
+  const importReportDocx = async (file: File | undefined) => {
+    if(!file)return;
+    setSaving(true);setError('');
+    try{
+      const values=await readReportDocx(file);
+      titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
+      setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
+      setMemoryNotice('Word DOCX 가져오기 완료. 제목과 본문을 수동 초안으로 반영했으며 자동 저장을 시작합니다.');
+    }catch(reason){setError(reason instanceof Error?reason.message:'Word 보고서를 읽지 못했습니다.');}
+    finally{setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}
+  };
+
   const openAndLinkReportHwp = async (file: File | undefined) => {
     if (!file) return;
     setHwpSourceFile(file);
@@ -610,12 +654,25 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         : activeStep === 4
           ? '본문을 저장해 D1 저장 완료 표시를 확인해 주세요.'
           : '';
+  const reportDocumentTools=<DocumentToolMenus groups={[
+    {id:'excel',label:'Excel',actions:[
+      {id:'export',label:'보고서 양식 내보내기',onClick:exportReportExcel},
+      {id:'import',label:'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:saving},
+    ]},
+    {id:'docx',label:'DOCX',actions:[
+      {id:'import',label:'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:saving},
+    ]},
+    {id:'hwp',label:'HWP',actions:[
+      {id:'import',label:'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
+      {id:'new',label:'HWP 원본으로 새 작업',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
+    ]},
+  ]}/>;
   const renderStageHeader = (stepId: ReportWizardStep) => {
     const guide = REPORT_WIZARD_STEPS[stepId - 1];
     return <header className="report-stage-header">
       <span className="report-stage-header__number" aria-hidden="true">{String(stepId).padStart(2, '0')}</span>
       <div><small>REPORT STEP {stepId}</small><h3>{guide.title}</h3><p>{guide.shortHelp}</p>{showGuide && <ol>{guide.tasks.map((task, index) => <li key={task}><b>{index + 1}</b>{task}</li>)}</ol>}</div>
-      <aside><strong>{stepComplete[stepId] ? '✓ 단계 완료' : '완료 기준'}</strong><p>{guide.doneText}</p></aside>
+      <div className="report-stage-header__actions">{reportDocumentTools}<aside><strong>{stepComplete[stepId] ? '✓ 단계 완료' : '완료 기준'}</strong><p>{guide.doneText}</p></aside></div>
     </header>;
   };
 
@@ -624,6 +681,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
       <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
+      <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
+      <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
+      <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형 확인','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 D1에 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
@@ -661,10 +721,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <span className="report-wizard-navigation__progress"><i style={{ width: `${(activeStep / 5) * 100}%` }} /></span>
       </nav>
 
+      {selectedCase&&<div className="report-current-project report-current-project--persistent" aria-live="polite"><span>현재 프로젝트</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>}
+      {memoryNotice&&<p className="notice-box report-document-notice" role="status">{memoryNotice}</p>}
+
       <Card title="" className="report-step-card report-step-card--1 report-stage-card">
         {renderStageHeader(1)}
         <div className="inline-form">
-          <Select label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
+          <Select required label="작성할 프로젝트" value={selectedCaseId} onChange={(event) => selectCase(event.target.value)} disabled={saving} options={cases.map((record) => ({ value: record.id, label: `${record.caseNumber} · ${record.title}` }))} />
           <div className="action-row" aria-live="polite">
             <span className="preview-pill">{error ? '저장 확인 필요' : saving ? 'D1 저장 중' : dirty || workspaceDirty || outlineDirty ? '저장할 변경사항 있음' : version ? `D1 저장 완료 · v${version}` : '새 초안'}</span>
             <Button className="report-action-confirm" onClick={() => void saveNow()} disabled={!editable || (!dirty && !workspaceDirty && version > 0) || saving || loadedCaseId !== selectedCaseId}>{saving ? '저장 중…' : '지금 저장'}</Button>
@@ -747,12 +810,6 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </>}
           </div>
           <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·다운로드</h3>
-          <div className="report-hwp-tools" aria-label="보고서 HWP 가져오기와 편집 도구">
-            <div><b>한글 문서 편집</b><span>기존 HWP/HWPX 보고서를 팝업에서 열어 수정하고 HWP·HWPX로 내려받습니다.</span></div>
-            <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])} />
-            <Button className="report-action-hwp" onClick={()=>hwpInputRef.current?.click()}>HWP 가져오기·편집</Button>
-            <Button variant="secondary" onClick={()=>hwpInputRef.current?.click()}>HWP 원본으로 새 작업</Button>
-          </div>
           {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 최종 확정과 DOCX/PDF 출력이 열립니다. HWP/HWPX 편집기는 승인 전에도 사용할 수 있습니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
             <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 D1에서 변경·삭제할 수 없습니다.</span></div>
@@ -775,7 +832,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           <small>{stepComplete[activeStep] ? `✓ ${activeStepGuide.doneText}` : nextBlockedReason || activeStepGuide.doneText}</small>
         </div>
         {nextStep
-          ? <Button disabled={!stepComplete[activeStep]} onClick={() => changeWizardStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
+          ? <Button className="workflow-next-action" disabled={!stepComplete[activeStep]} onClick={() => changeWizardStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
           : <Button onClick={() => onNavigate('/approval')}>검토·승인함 열기 →</Button>}
       </footer>
       <Dialog isOpen={Boolean(pendingNavigation)} title="보고서 작업을 저장하고 이동할까요?" onClose={() => !navigationBusy && setPendingNavigation(null)}>
