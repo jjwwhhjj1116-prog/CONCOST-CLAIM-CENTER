@@ -4,10 +4,12 @@
 
 상태 기준: 2026-08-25 Cloudflare Preview에서 검증된 UI와 API 계약을 기준으로 한다.
 
+> 현재 베트남 서버가 `dev.db` SQLite를 유지하는 주간 소스 업데이트는 이 문서의 PostgreSQL 목표 구조를 바로 실행하지 말고 `vietnam-weekly-sqlite-update.md`를 우선 적용한다. SQLite와 PostgreSQL 이전은 서로 다른 작업이며 같은 배포에서 임의로 혼합하지 않는다.
+
 ## 1. 가장 중요한 전제
 
 1. 이번 작업은 단순한 DNS 변경이나 `apps/api` 실행 작업이 아니다.
-2. 현재 최신 로그인·프로젝트 의뢰·제안서·일정·Google Drive·보고서·법원·관리자 설정 API의 기준 구현은 `apps/cloudflare/src/index.ts`와 `apps/cloudflare/migrations/0001~0043`에 있다.
+2. 현재 최신 로그인·프로젝트 의뢰·제안서·일정·Google Drive·보고서·법원·관리자 설정 API의 기준 구현은 `apps/cloudflare/src/index.ts`와 `apps/cloudflare/migrations/0001~0046`에 있다.
 3. `apps/api/src/server.ts`는 기존 P04~P16 Node/SQLite 서버다. 최신 Cloudflare 기능을 전부 포함한 대체 서버가 아니므로 **이 파일만 실행하고 완료 처리하면 안 된다**.
 4. 프론트엔드는 같은 Origin의 `/api/*`를 호출한다. 새 서버에서도 브라우저가 다른 주소의 API를 직접 호출하게 만들지 말고, 단일 HTTPS 도메인 아래에서 웹과 API를 제공한다.
 5. Tiptap JSON이 보고서·제안서의 편집 정본이다. PostgreSQL 이전 후에도 Markdown만 저장하거나 HTML만 저장하지 않는다.
@@ -71,7 +73,7 @@ Gotenberg, PostgreSQL, Redis, Hocuspocus, Mem0, LangGraph, Hermes 관리 API는 
 
 ### 4.2 D1을 PostgreSQL로 이전
 
-1. `apps/cloudflare/migrations/0001~0043`을 순서대로 분석한다.
+1. `apps/cloudflare/migrations/0001~0046`을 순서대로 분석한다.
 2. 초기 이전에서는 `preview_*` 테이블명을 유지해 API 포팅 위험을 줄인다.
 3. D1 SQL을 PostgreSQL 문법으로 변환한다.
    - `?` bind placeholder -> `$1`, `$2` 또는 ORM parameter

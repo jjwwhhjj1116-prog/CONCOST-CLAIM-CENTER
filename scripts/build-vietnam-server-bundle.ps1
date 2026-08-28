@@ -35,6 +35,7 @@ function Copy-RepositoryFile {
 
 Copy-RepositoryFile 'docs/vietnam-server-kit/VIETNAM_DEVELOPER_START_HERE.md' 'README_FIRST.md'
 Copy-RepositoryFile 'docs/runbooks/vietnam-primary-server-migration-handoff.md' 'handoff/vietnam-primary-server-migration-handoff.md'
+Copy-RepositoryFile 'docs/runbooks/vietnam-weekly-sqlite-update.md' 'handoff/vietnam-weekly-sqlite-update.md'
 Copy-RepositoryFile 'docs/runbooks/vietnam-yjs-hocuspocus-handoff.md' 'handoff/vietnam-yjs-hocuspocus-handoff.md'
 Copy-RepositoryFile 'docs/runbooks/vietnam-hermes-private-bridge.md' 'handoff/vietnam-hermes-private-bridge.md'
 Copy-RepositoryFile 'docs/runbooks/document-authoring-platform.md' 'handoff/document-authoring-platform.md'

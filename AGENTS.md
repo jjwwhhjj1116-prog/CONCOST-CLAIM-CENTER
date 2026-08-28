@@ -45,3 +45,17 @@
 - 사용자 변경과 무관한 파일은 수정하거나 스테이징하지 않는다.
 - `git reset --hard`, 광범위 삭제, 강제 푸시는 사용하지 않는다.
 - 라이브 업무 데이터를 테스트용으로 변경해야 한다면 별도 테스트 레코드를 사용하고, 사용할 수 없으면 총괄이 변경 범위를 명확히 제한한다.
+
+## SQLite/D1 변경과 주간 서버 전달 원칙
+
+- 베트남 메인 서버의 `dev.db`는 소스가 아니라 운영 데이터다. 소스 ZIP, Git 커밋, 샘플 DB로 덮어쓰거나 Git에 추가하지 않는다.
+- DB 구조를 바꾸는 작업은 코드 수정과 동시에 새 migration을 추가한다. 이미 적용된 migration 파일은 절대 수정하거나 이름을 바꾸지 않는다.
+- Node/SQLite 서버 변경은 `packages/database/prisma/migrations/<timestamp>_<name>/migration.sql`에 추가한다. Cloudflare Preview에도 같은 구조 변경이 필요하면 `apps/cloudflare/migrations/`에 별도 D1 migration을 함께 추가한다. D1 migration만 작성하고 베트남 SQLite migration을 누락하지 않는다.
+- migration은 기본적으로 additive하게 작성한다. 기존 테이블 삭제, 컬럼 삭제, 무검증 테이블 재생성, 기존 행을 잃는 변환은 금지하며 불가피하면 별도 데이터 변환·행 수 검증·복구 계획을 먼저 작성한다.
+- 운영 또는 개발팀 보존 DB에는 `db:reset`이나 synthetic seed를 실행하지 않는다. 새 migration 적용 명령은 `pnpm db:migrate`만 사용하되, 운영에서는 정확한 기존 DB의 절대 `DATABASE_URL`을 명시한다. 운영 DB 파일이 없으면 새 DB를 만들지 말고 배포를 중단한다.
+- migration 전에는 유지보수 모드로 전환해 새 쓰기를 막고, 관리자 백업 엔진으로 서명 백업을 생성·검증한 뒤 API를 완전히 중지한다. `dev.db`, 업로드, Google credential vault, 암호화 키/환경변수 저장소를 함께 보존한다.
+- 검증된 백업을 격리 경로에 복원한 사본에 실제 migration runner를 먼저 실행한다. 전후 `integrity_check`, `foreign_key_check`, migration checksum 원장, 테이블별 행 수와 주요 PK/설정 레코드가 보존되는지 확인한 뒤에만 운영 DB에 적용한다.
+- migration 후에는 API를 시작하고 `/readiness` 통과, 로그인, 관리자 설정, Google Drive 연결 상태, AI credential 메타데이터를 검증한다. 실패 시 reverse SQL을 임의 실행하지 않고 검증된 직전 백업과 이전 커밋으로 복구한다.
+- 데이터가 들어 있는 DB 사본에 migration을 적용하는 회귀 테스트를 추가하고, 기존 식별자와 설정 레코드가 그대로 남는지 확인한다. 빈 DB에서만 통과한 migration은 완료로 처리하지 않으며, 같은 migration을 두 번 실행해도 결과가 변하지 않는지 확인한다.
+- 주간 전달물에는 커밋 SHA, 변경 파일, 새 migration 목록, 실행 명령, 백업·검증·롤백 절차를 포함한다. `dev.db`, `.env`, OAuth token, API key, 암호화 master key는 포함하지 않는다.
+- OAuth/AI 설정은 기존 `dev.db`와 동일한 암호화 master key 및 환경변수를 유지하는 한 소스 업데이트 후에도 보존되어야 한다. DB를 교체하거나 master key를 바꾸는 변경은 일반 소스 업데이트로 처리하지 않고 별도 이전 작업으로 승인받는다.
