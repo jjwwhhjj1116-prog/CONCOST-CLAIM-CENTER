@@ -342,13 +342,13 @@ export type ClaimCenterFolderKind =
   | 'MEETING_MINUTES' | 'MEETING_RECORDING' | 'SITE_PHOTO' | 'SITE_RECORDING'
   | 'SITE_DOCUMENT' | 'TAKEOFF_SOURCE' | 'COST_BREAKDOWN' | 'REPORT_REFERENCE'
   | 'COURT_DOCUMENT' | 'FINAL_DELIVERABLE' | 'INTAKE_AUDIO' | 'INTAKE_SOURCE'
-  | 'INTAKE_DB_ARCHIVE' | 'PROPOSAL_DB_ARCHIVE' | 'MONTH';
+  | 'INTAKE_DB_ARCHIVE' | 'PROPOSAL_DB_ARCHIVE' | 'BUSINESS_CARD_LIBRARY' | 'MONTH';
 
 const CLAIM_CENTER_FOLDER_KINDS = new Set<ClaimCenterFolderKind>([
   'PROJECT_ROOT','INTAKE_REFERENCE','PROPOSAL_REFERENCE','KICKOFF_MATERIAL','MEETING_MINUTES',
   'MEETING_RECORDING','SITE_PHOTO','SITE_RECORDING','SITE_DOCUMENT','TAKEOFF_SOURCE',
   'COST_BREAKDOWN','REPORT_REFERENCE','COURT_DOCUMENT','FINAL_DELIVERABLE','INTAKE_AUDIO','INTAKE_SOURCE',
-  'INTAKE_DB_ARCHIVE','PROPOSAL_DB_ARCHIVE','MONTH'
+  'INTAKE_DB_ARCHIVE','PROPOSAL_DB_ARCHIVE','BUSINESS_CARD_LIBRARY','MONTH'
 ]);
 
 function driveQueryValue(value: string): string {
@@ -421,8 +421,8 @@ export async function ensureClaimCenterFolder(
   }
   const name = input.name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/gu, '-').replace(/\s+/gu, ' ').slice(0, 180);
   let parentId = input.parentId;
-  const usesDepartmentRoot = input.kind === 'PROJECT_ROOT' && !parentId;
-  if (input.kind === 'PROJECT_ROOT' && !parentId) {
+  const usesDepartmentRoot = (input.kind === 'PROJECT_ROOT' || input.kind === 'BUSINESS_CARD_LIBRARY') && !parentId;
+  if ((input.kind === 'PROJECT_ROOT' || input.kind === 'BUSINESS_CARD_LIBRARY') && !parentId) {
     parentId = (await ensureClaimCenterDepartmentRoot(fetcher, input.accessToken)).departmentRootId;
   }
   if (!name || (parentId && !GOOGLE_ID.test(parentId))) throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder name or parent is invalid');
@@ -451,7 +451,7 @@ export async function ensureClaimCenterFolder(
   // Preserve folders created before departmental routing was introduced. The
   // app owns these folders under drive.file, so it can move them without
   // copying files or breaking their stable Google Drive URLs.
-  if (usesDepartmentRoot && parentId) {
+  if (usesDepartmentRoot && input.kind === 'PROJECT_ROOT' && parentId) {
     const legacyQuery = q.filter((entry) => !entry.endsWith(' in parents')).join(' and ');
     const legacyUrl = new URL(`${GOOGLE_DRIVE_API}/files`);
     legacyUrl.searchParams.set('q', legacyQuery);

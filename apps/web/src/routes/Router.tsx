@@ -28,6 +28,7 @@ import { PreviewDeliveryCenter } from './PreviewDeliveryCenter';
 import { PreviewOutcomeCenter } from './PreviewOutcomeCenter';
 import { PreviewSettings } from './PreviewSettings';
 import { PreviewDocumentTemplates } from './PreviewDocumentTemplates';
+import { BusinessCardContacts } from './BusinessCardContacts';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -50,7 +51,7 @@ export interface RouteConfig {
 
 const ADMIN_ONLY: readonly UserRole[] = ['admin'];
 const FINANCE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm'];
-const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'admin'];
+const CASE_CREATE_ROLES: readonly UserRole[] = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'];
 
 export const ROUTES: RouteConfig[] = [
   { id: 'AUTH-01', path: '/login', name: '로그인' },
@@ -64,6 +65,9 @@ export const ROUTES: RouteConfig[] = [
   { id: 'CASE-05', path: '/cases/parties', name: '사건 상세-관계자' },
   { id: 'CASE-06', path: '/cases/files', name: '클레임센터 자료실' },
   { id: 'CASE-09', path: '/cases/files/templates', name: '문서 양식' },
+  { id: 'CONTACT-01', path: '/contacts', name: '인맥관리' },
+  { id: 'CONTACT-02', path: '/contacts/cards/new', name: '명함등록' },
+  { id: 'CONTACT-03', path: '/contacts/cards/database', name: '명함DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'MEET-01', path: '/meetings', name: '착수회의·회의록' },
   { id: 'PROP-01', path: '/proposals/templates', name: '제안서 템플릿 선택' },
   { id: 'PROP-02', path: '/proposals/editor', name: '제안서 작성' },
@@ -222,6 +226,9 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   }
   if (previewMode && currentRoute.id === 'CASE-06') return <PreviewEvidenceHub userName={userName} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'CASE-09') return <PreviewDocumentTemplates onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CONTACT-01') return <BusinessCardContacts mode="LIST" roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CONTACT-02') return <BusinessCardContacts mode="REGISTER" roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'CONTACT-03') return <BusinessCardContacts mode="DATABASE" roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'CASE-07') return <IntakeLibraryView mode="projects" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'CASE-08') return <IntakeLibraryView mode="database" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'INTEG-01') return <PreviewGoogleDriveSetup onNavigate={onNavigate} />;

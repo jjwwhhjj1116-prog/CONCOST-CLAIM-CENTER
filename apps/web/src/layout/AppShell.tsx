@@ -28,7 +28,7 @@ const NAVIGATION_GROUPS: readonly {
     routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
     nestedGroups: [{ label: '프로젝트 보고서', eyebrow: '보고서 관리', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
   },
-  { label: '클레임센터 자료실', eyebrow: '자료 관리', icon: 'library', routeIds: ['CASE-06', 'CASE-09'], nestedGroups: [{ label: '자료실 이용', eyebrow: '자료·양식', routeIds: ['CASE-06', 'CASE-09'] }] },
+  { label: '클레임센터 자료실', eyebrow: '자료 관리', icon: 'library', routeIds: ['CASE-06', 'CASE-09', 'CONTACT-01', 'CONTACT-02', 'CONTACT-03'], nestedGroups: [{ label: '자료실 이용', eyebrow: '자료·양식', routeIds: ['CASE-06', 'CASE-09'] }, { label: '인맥관리', eyebrow: '명함·연락처', routeIds: ['CONTACT-01', 'CONTACT-02', 'CONTACT-03'] }] },
   { label: '법원 자료', eyebrow: '법원·소송', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품·품질관리', eyebrow: '검토·납품 관리', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
   { label: '설정', eyebrow: '환경 설정', icon: 'settings', routeIds: ['MY-01'] }

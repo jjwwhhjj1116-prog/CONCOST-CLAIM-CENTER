@@ -25,7 +25,7 @@ export function PreviewDeliveryCenter({ onNavigate }:{ onNavigate:(path:string)=
   useEffect(()=>{
     let active=true;
     Promise.all([
-      apiRequest<{cases:CaseSummary[]}>('/api/cases?limit=100&q='),
+      apiRequest<{cases:CaseSummary[]}>('/api/cases?scope=project-work&limit=100&q='),
       apiRequest<{finalizations:Finalization[]}>('/api/report-finalizations')
     ]).then(([caseResult,finalResult])=>{
       if(!active)return;

@@ -68,7 +68,7 @@ async function main():Promise<void>{
         assert.equal(body.expectedVersion,stateVersion);
         tutorialVersion=body.tutorialVersion;completionAction=body.action;stateVersion+=1;completionWrites+=1;
       }
-      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tutorial:{completedTutorialVersion:tutorialVersion,completedAt:tutorialVersion?new Date().toISOString():null,completionAction,version:stateVersion,updatedAt:tutorialVersion?new Date().toISOString():null},currentTutorialVersion:'CF62_V1',phase:'CF62_INTERACTIVE_TUTORIAL'})});
+      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({tutorial:{completedTutorialVersion:tutorialVersion,completedAt:tutorialVersion?new Date().toISOString():null,completionAction,version:stateVersion,updatedAt:tutorialVersion?new Date().toISOString():null},currentTutorialVersion:'CF79_V1',phase:'CF79_RENEWED_TUTORIAL'})});
     });
     await page.route('**/api/preview/draft',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{title:'가이드 검증 초안',content:'검증용 합성 메모',updatedAt:null}})}));
     await page.route('**/api/cases?**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({cases:[],total:0,page:1,limit:100})}));

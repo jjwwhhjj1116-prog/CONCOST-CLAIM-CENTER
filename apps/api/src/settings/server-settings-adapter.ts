@@ -37,7 +37,7 @@ const PROVIDERS = [
   { providerKind: 'OPENAI', label: 'OpenAI · ChatGPT' },
   { providerKind: 'ANTHROPIC', label: 'Anthropic · Claude' }
 ] as const;
-const TUTORIAL_VERSION = 'CF62_V1';
+const TUTORIAL_VERSION = 'CF79_V1';
 
 function json(response: http.ServerResponse, status: number, body: unknown): void {
   response.statusCode = status;

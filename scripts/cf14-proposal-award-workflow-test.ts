@@ -110,17 +110,17 @@ test('CF14 applies INQUIRY → PROPOSAL → CONTRACT with optimistic case and li
   sql.close();
 });
 
-test('CF14 enforces assignment, mutation roles, verified source boundaries, and report grounding', async () => {
+test('CF14 shares pre-award authoring and lists with every member while preserving verified source boundaries', async () => {
   const { sql, env, providerInputs } = await setup();
-  assert.equal((await worker.fetch(request('/api/proposal-workflow/links', STAFF_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf14-staff-link-0001' }, body: JSON.stringify(proposalPayload) }), env)).status, 403);
-  assert.deepEqual((await (await worker.fetch(request('/api/proposal-workflow', OUTSIDER_TOKEN), env)).json() as { proposals: unknown[] }).proposals, []);
+  const created = await worker.fetch(request('/api/proposal-workflow/links', ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf14-admin-link-shared-0001' }, body: JSON.stringify(proposalPayload) }), env);
+  assert.equal(created.status, 200);
+  const shared = (await (await worker.fetch(request('/api/proposal-workflow', OUTSIDER_TOKEN), env)).json() as { proposals: unknown[] }).proposals;
+  assert.equal(shared.length, 1, 'all active members must see the same pre-award proposal list');
   const badVerified = await worker.fetch(request('/api/proposal-workflow/links', ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf14-bad-source-0001' }, body: JSON.stringify({ ...proposalPayload, documentUrl: 'javascript:alert(1)' }) }), env);
   assert.equal(badVerified.status, 400);
-  const created = await worker.fetch(request('/api/proposal-workflow/links', ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf14-proposal-link-0002' }, body: JSON.stringify(proposalPayload) }), env);
-  assert.equal(created.status, 200);
-  const config = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+  const config = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, ADMIN_TOKEN), env);
   const chapterId = (await config.json() as { chapters: Array<{ id: string }> }).chapters[0].id;
-  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId, expectedDraftVersion: 0 }) }), env);
+  const generated = await worker.fetch(request('/api/report-authoring/generate', ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId, expectedDraftVersion: 0 }) }), env);
   assert.equal(generated.status, 200);
   assert.match(providerInputs[0], /PROP-2026-014/u); assert.match(providerInputs[0], /verifiedProposalSnapshots/u); assert.match(providerInputs[0], /Proposal facts require VERIFIED/u);
   sql.close();

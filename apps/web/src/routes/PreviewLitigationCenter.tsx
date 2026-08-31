@@ -164,7 +164,7 @@ export function PreviewLitigationCenter({ roles, onNavigate }: { roles: UserRole
 
   useEffect(() => {
     void Promise.all([
-      apiRequest<{ cases: CaseOption[] }>('/api/cases?limit=100&q=').then((result) => {
+      apiRequest<{ cases: CaseOption[] }>('/api/cases?scope=project-work&limit=100&q=').then((result) => {
         setCases(result.cases);
         setRecordForm((current) => current.caseId ? current : { ...current, caseId: result.cases[0]?.id ?? '' });
       }),

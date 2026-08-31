@@ -360,6 +360,7 @@ const PREVIEW_CASE_STATUSES = [
   'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'CLOSED'
 ] as const;
 const PREVIEW_CASE_MUTATION_ROLES = new Set(['admin', 'ceo', 'director', 'pm']);
+const PREVIEW_INTAKE_COLLABORATION_ROLES = new Set(['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer']);
 const PREVIEW_CASE_CREATE_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
 const ACTIVE_PROJECT_WORK_FILTER = `
   c.status IN ('CONTRACT','MATERIAL_RECEIVED','ANALYSIS','REPORT_DRAFTING','SUBMITTED','LITIGATION','JUDGEMENT','CLOSED')
@@ -392,6 +393,19 @@ const ACTIVE_PROJECT_WORK_FILTER = `
       AND COALESCE(accepted_catalog.db_deleted, 0) = 0
   )`;
 
+// Historical isolated fixtures stop before the catalog/effective-award
+// migrations. Production uses the stricter filter above; this fallback keeps
+// older, already-awarded project work readable while those fixtures migrate.
+const LEGACY_ACTIVE_PROJECT_WORK_FILTER = `
+  c.status IN ('CONTRACT','MATERIAL_RECEIVED','ANALYSIS','REPORT_DRAFTING','SUBMITTED','LITIGATION','JUDGEMENT','CLOSED')
+  AND EXISTS (
+    SELECT 1
+    FROM preview_proposal_links accepted
+    WHERE accepted.case_id = c.id
+      AND accepted.organization_id = c.organization_id
+      AND accepted.award_status = 'WON'
+  )`;
+
 interface PreviewCaseRow {
   id: string;
   caseNumber: string;
@@ -411,6 +425,10 @@ interface PreviewCaseRow {
 
 function canMutatePreviewCases(user: SessionUser): boolean {
   return user.roles.some((role) => PREVIEW_CASE_MUTATION_ROLES.has(role));
+}
+
+function canCollaboratePreviewIntake(user: SessionUser): boolean {
+  return user.roles.some((role) => PREVIEW_INTAKE_COLLABORATION_ROLES.has(role));
 }
 
 function previewCaseProjection(row: PreviewCaseRow): Record<string, unknown> {
@@ -471,6 +489,20 @@ async function accessiblePreviewCase(env: CloudflareEnv, user: SessionUser, case
   ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
 }
 
+async function accessiblePreviewIntakeCase(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<PreviewCaseRow | null> {
+  if (!env.DB) return null;
+  if (!canCollaboratePreviewIntake(user)) return accessiblePreviewCase(env, user, caseId);
+  const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
+    ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail, '
+    : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail, ";
+  return env.DB.prepare(
+    'SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, ' +
+    `c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns}c.created_at AS createdAt, c.updated_at AS updatedAt ` +
+    'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL ' +
+    "AND (c.status IN ('INQUIRY','PROPOSAL','ESTIMATE') OR ? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))"
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
+}
+
 async function projectWorkGateSchemaAvailable(env: CloudflareEnv): Promise<boolean> {
   if (!env.DB) return false;
   try {
@@ -494,7 +526,7 @@ async function isActiveProjectWorkCase(env: CloudflareEnv, caseId: string): Prom
 
 async function previewCaseDetail(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
-  const row = await accessiblePreviewCase(env, user, caseId);
+  const row = await accessiblePreviewIntakeCase(env, user, caseId);
   if (!row) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
   const [parties, schedules, activities, intakeSummaries] = await Promise.all([
     env.DB.prepare('SELECT id, name, role, contact FROM preview_case_parties WHERE case_id = ? ORDER BY created_at ASC LIMIT 100').bind(caseId).all<{ id: string; name: string; role: string; contact: string | null }>(),
@@ -527,7 +559,7 @@ async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Pro
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   const admin = user.roles.includes('admin') ? 1 : 0;
-  const visibility = '(? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))';
+  const visibility = "(c.status IN ('INQUIRY','PROPOSAL','ESTIMATE') OR ? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))";
   const summary = await env.DB.prepare(
     `SELECT COUNT(*) AS totalCases, SUM(CASE WHEN c.status <> 'CLOSED' THEN 1 ELSE 0 END) AS inProgressCount ` +
     `FROM preview_cases c WHERE c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility}`
@@ -1413,11 +1445,12 @@ const previewProposalSelect =
 
 async function previewProposalDetail(env: CloudflareEnv, user: SessionUser, id: string): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const collaboration = canCollaboratePreviewIntake(user) ? 1 : 0;
   const admin = user.roles.includes('admin') ? 1 : 0;
   const record = await env.DB.prepare(
     previewProposalSelect +
-    'WHERE p.id=? AND p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?))'
-  ).bind(id, PREVIEW_ORGANIZATION_ID, admin, user.id).first<PreviewProposalRow>();
+    "WHERE p.id=? AND p.organization_id=? AND c.deleted_at IS NULL AND ((?=1 AND c.status IN ('INQUIRY','PROPOSAL','ESTIMATE')) OR ?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?))"
+  ).bind(id, PREVIEW_ORGANIZATION_ID, collaboration, admin, user.id).first<PreviewProposalRow>();
   if (!record) return json({ error: 'Proposal link was not found or is outside your assigned projects', code: 'PROPOSAL_NOT_FOUND' }, 404);
   const decisions = await env.DB.prepare(
     'SELECT d.id,d.decision,d.decision_note AS decisionNote,d.decided_at AS decidedAt,d.contract_amount_krw AS contractAmountKrw,' +
@@ -1559,12 +1592,11 @@ function proposalReceptionProjection(row: ProposalReceptionCandidateRow): Record
 
 async function proposalReceptionDetail(env: CloudflareEnv, user: SessionUser, proposalId: string): Promise<ProposalReceptionCandidateRow | null> {
   if (!env.DB) return null;
-  const admin = user.roles.includes('admin') ? 1 : 0;
   return env.DB.prepare(
     proposalReceptionSelect +
     'WHERE p.id=? AND p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL ' +
-    'AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?))'
-  ).bind(proposalId, PREVIEW_ORGANIZATION_ID, admin, user.id).first<ProposalReceptionCandidateRow>();
+    'AND COALESCE(catalog.db_deleted,0)=0'
+  ).bind(proposalId, PREVIEW_ORGANIZATION_ID).first<ProposalReceptionCandidateRow>();
 }
 
 async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -1576,20 +1608,18 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
   if (url.pathname === '/api/proposal-workflow/receptions' && request.method === 'GET') {
     const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
     const like = `%${q}%`;
-    const admin = user.roles.includes('admin') ? 1 : 0;
     const rows = await env.DB.prepare(
       proposalReceptionSelect +
       'WHERE p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL AND COALESCE(catalog.db_deleted,0)=0 ' +
-      'AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) ' +
       'AND (?=\'\' OR p.title LIKE ? OR c.case_number LIKE ? OR c.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ?) ' +
       'ORDER BY CASE COALESCE(effective.effective_status,link.award_status,\'READY\') WHEN \'READY\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.updated_at DESC LIMIT 200'
-    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, q, like, like, like, like).all<ProposalReceptionCandidateRow>();
+    ).bind(PREVIEW_ORGANIZATION_ID, q, like, like, like, like).all<ProposalReceptionCandidateRow>();
     return json({ receptions: rows.results.map(proposalReceptionProjection), phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
   }
 
   const receptionStatusMatch=url.pathname.match(/^\/api\/proposal-workflow\/receptions\/([0-9a-f-]{36})\/status$/iu);
   if(receptionStatusMatch&&request.method==='POST'){
-    if(!canMutatePreviewCases(user))return json({error:'수주 상태를 정정할 권한이 없습니다.',code:'FORBIDDEN'},403);
+    if(!canCollaboratePreviewIntake(user))return json({error:'수주 상태를 정정할 권한이 없습니다.',code:'FORBIDDEN'},403);
     if(!env.DB.batch)return json({error:'D1 일괄 저장 기능을 사용할 수 없습니다.',code:'D1_BATCH_REQUIRED'},503);
     const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
     if(!body||!exactObjectKeys(body,['decision','reason','expectedStateVersion','expectedCaseVersion'])||!['WON','LOST'].includes(String(body.decision))||typeof body.reason!=='string'||body.reason.trim().length<2||body.reason.trim().length>3000||!Number.isInteger(body.expectedStateVersion)||!Number.isInteger(body.expectedCaseVersion))return json({error:'변경할 상태와 사유를 확인해 주세요.',code:'INVALID_AWARD_ADJUSTMENT'},400);
@@ -1615,7 +1645,7 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
   }
 
   if (url.pathname === '/api/proposal-workflow/receptions' && request.method === 'POST') {
-    if (!canMutatePreviewCases(user)) return json({ error: '프로젝트를 접수하거나 취소할 권한이 없습니다.', code: 'FORBIDDEN' }, 403);
+    if (!canCollaboratePreviewIntake(user)) return json({ error: '프로젝트를 접수하거나 취소할 권한이 없습니다.', code: 'FORBIDDEN' }, 403);
     if (!env.DB.batch) return json({ error: 'D1 일괄 저장 기능을 사용할 수 없습니다.', code: 'D1_BATCH_REQUIRED' }, 503);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || !exactObjectKeys(body, ['proposalId','decision','expectedProposalVersion','expectedCaseVersion'])) return json({ error: '프로젝트 접수 요청이 올바르지 않습니다.', code: 'INVALID_RECEPTION_PAYLOAD' }, 400);
@@ -1694,25 +1724,24 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
     const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
     const requestedLimit = Number(url.searchParams.get('limit') ?? 100);
     const limit = Number.isInteger(requestedLimit) ? Math.min(200, Math.max(1, requestedLimit)) : 100;
-    const admin = user.roles.includes('admin') ? 1 : 0;
     const like = `%${q}%`;
     const rows = await env.DB.prepare(
       previewProposalSelect +
-      'WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) ' +
+      'WHERE p.organization_id=? AND c.deleted_at IS NULL ' +
       'AND (?=\'\' OR p.award_status=?) AND (?=\'\' OR p.case_id=?) ' +
       'AND (?=\'\' OR p.proposal_number LIKE ? OR p.proposal_title LIKE ? OR p.client_name LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ' +
       'ORDER BY CASE p.award_status WHEN \'PENDING\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.response_due_on,p.sent_at DESC LIMIT ?'
-    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, awardStatus, awardStatus, caseId, caseId, q, like, like, like, like, like, limit).all<PreviewProposalRow>();
+    ).bind(PREVIEW_ORGANIZATION_ID, awardStatus, awardStatus, caseId, caseId, q, like, like, like, like, like, limit).all<PreviewProposalRow>();
     return json({ proposals: rows.results.map(proposalProjection), phase: 'CF14_PROPOSAL_AWARD_WORKFLOW' });
   }
 
   if (url.pathname === '/api/proposal-workflow/links' && request.method === 'POST') {
-    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot link proposal snapshots', code: 'FORBIDDEN' }, 403);
+    if (!canCollaboratePreviewIntake(user)) return json({ error: 'Role cannot link proposal snapshots', code: 'FORBIDDEN' }, 403);
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || !exactObjectKeys(body, ['caseId','proposalNumber','proposalTitle','revisionLabel','clientName','sentAt','responseDueOn','proposedAmountKrw','documentUrl','documentSha256','verificationStatus','expectedCaseVersion'])) return json({ error: 'Proposal link payload is invalid', code: 'INVALID_PROPOSAL_PAYLOAD' }, 400);
     const caseId = typeof body.caseId === 'string' ? body.caseId : '';
-    const project = PREVIEW_DRAFT_KEY.test(caseId) ? await accessiblePreviewCase(env, user, caseId) : null;
+    const project = PREVIEW_DRAFT_KEY.test(caseId) ? await accessiblePreviewIntakeCase(env, user, caseId) : null;
     const proposalNumber = proposalText(body.proposalNumber, 100);
     const proposalTitle = proposalText(body.proposalTitle, 500);
     const revisionLabel = proposalText(body.revisionLabel, 80);
@@ -1740,6 +1769,8 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
         .bind(id,PREVIEW_ORGANIZATION_ID,caseId,proposalNumber,proposalTitle,revisionLabel,clientName,sentAt,responseDueOn,proposedAmountKrw,documentUrl,documentSha256,verificationStatus,requestKey,fingerprint,user.id,now,now),
       env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL')
         .bind(nextCaseStatus,now,caseId,PREVIEW_ORGANIZATION_ID,expectedCaseVersion),
+      env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) VALUES (?,?,?,?)')
+        .bind(caseId,user.id,user.id,now),
       env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'PROPOSAL_LINKED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id=? AND version=? AND updated_at=?)')
         .bind(crypto.randomUUID(),caseId,user.id,'제안서 연동',`${proposalNumber} · ${revisionLabel} · ${clientName}`,now,caseId,expectedCaseVersion+1,now)
     ]);
@@ -1751,7 +1782,7 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
   if (detailMatch && !detailMatch[2] && request.method === 'GET') return previewProposalDetail(env,user,detailMatch[1]);
 
   if (detailMatch?.[2] === 'decision' && request.method === 'POST') {
-    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot decide proposal awards', code: 'FORBIDDEN' }, 403);
+    if (!canCollaboratePreviewIntake(user)) return json({ error: 'Role cannot decide proposal awards', code: 'FORBIDDEN' }, 403);
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     const awardKeys = ['decision','decisionNote','decidedAt','contractAmountKrw','projectStartOn','projectEndOn','expectedLinkVersion','expectedCaseVersion'];
@@ -1760,7 +1791,7 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
     const simplePayload = Boolean(body && exactObjectKeys(body, simpleAwardKeys));
     if (!body || (!legacyPayload && !simplePayload)) return json({ error: 'Award decision payload is invalid', code: 'INVALID_AWARD_PAYLOAD' }, 400);
     const current = await env.DB.prepare(previewProposalSelect + 'WHERE p.id=? AND p.organization_id=?').bind(detailMatch[1],PREVIEW_ORGANIZATION_ID).first<PreviewProposalRow>();
-    if (!current || !await accessiblePreviewCase(env,user,current.caseId)) return json({ error: 'Proposal link was not found or is outside your assigned projects', code: 'PROPOSAL_NOT_FOUND' }, 404);
+    if (!current || !await accessiblePreviewIntakeCase(env,user,current.caseId)) return json({ error: 'Proposal link was not found', code: 'PROPOSAL_NOT_FOUND' }, 404);
     const decision = typeof body.decision === 'string' && ['WON','LOST'].includes(body.decision) ? body.decision : null;
     const now = new Date().toISOString();
     const decisionNote = legacyPayload ? proposalText(body.decisionNote,5000) : decision === 'WON' ? '연동된 제안서의 수주 확정에 따라 프로젝트를 접수했습니다.' : decision === 'LOST' ? '연동된 제안서가 취소되어 프로젝트 접수를 종료했습니다.' : null;
@@ -1824,7 +1855,7 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
   if(url.pathname==='/api/proposal-catalog'&&request.method==='GET'){
     const mode=url.searchParams.get('mode')==='database'?'database':'projects';
     if(mode==='database'&&!user.roles.includes('admin'))return json({error:'관리자만 제안서 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN'},403);
-    const q=(url.searchParams.get('q')??'').trim().slice(0,120);const award=url.searchParams.get('awardStatus')??'';const like=`%${q}%`;const admin=user.roles.includes('admin')?1:0;
+    const q=(url.searchParams.get('q')??'').trim().slice(0,120);const award=url.searchParams.get('awardStatus')??'';const like=`%${q}%`;
     const rows=await env.DB.prepare(
       'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,'+
       '(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AS proposalNumber,p.title AS proposalTitle,'+
@@ -1839,10 +1870,10 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
       'LEFT JOIN preview_proposal_versions v ON v.id=p.current_version_id AND v.proposal_id=p.id '+
       'LEFT JOIN preview_proposal_links link ON link.id=(SELECT linked.id FROM preview_proposal_links linked WHERE linked.case_id=p.case_id AND linked.organization_id=p.organization_id ORDER BY linked.updated_at DESC LIMIT 1) '+
       'LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'PROPOSAL\' AND cr.record_id=p.id '+
-      'WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) AND COALESCE(cr.db_deleted,0)=0 '+
+      'WHERE p.organization_id=? AND c.deleted_at IS NULL AND COALESCE(cr.db_deleted,0)=0 '+
       `${mode==='projects'?'AND COALESCE(cr.list_hidden,0)=0 ':''}`+
       'AND (?=\'\' OR COALESCE(link.award_status,\'PENDING\')=?) AND (?=\'\' OR p.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ORDER BY p.updated_at DESC LIMIT 200'
-    ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,award,award,q,like,like,like,like).all<Record<string,unknown>>();
+    ).bind(PREVIEW_ORGANIZATION_ID,award,award,q,like,like,like,like).all<Record<string,unknown>>();
     return json({proposals:rows.results.map((row)=>proposalProjection(row as unknown as PreviewProposalRow)).map((row,index)=>({...row,listHidden:Boolean(rows.results[index].listHidden),dbDeleted:Boolean(rows.results[index].dbDeleted),catalogVersion:Number(rows.results[index].catalogVersion??0),driveArchiveUrl:rows.results[index].driveArchiveUrl??null,driveArchivedAt:rows.results[index].driveArchivedAt??null})),mode,source:'preview_proposals',phase:'CF55_PROPOSAL_STUDIO_CATALOG'});
   }
   if(!actionMatch||request.method!=='POST')return json({error:'Proposal catalog route was not found',code:'PROPOSAL_CATALOG_NOT_FOUND'},404);
@@ -1858,7 +1889,7 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
     'LEFT JOIN preview_proposal_links link ON link.id=(SELECT linked.id FROM preview_proposal_links linked WHERE linked.case_id=p.case_id AND linked.organization_id=p.organization_id ORDER BY linked.updated_at DESC LIMIT 1) '+
     'WHERE p.id=? AND p.organization_id=?'
   ).bind(actionMatch[1],PREVIEW_ORGANIZATION_ID).first<Record<string,unknown>>();
-  if(!row||!await accessiblePreviewCase(env,user,String(row.caseId)))return json({error:'제안서를 찾을 수 없습니다.',code:'PROPOSAL_NOT_FOUND'},404);
+  if(!row||!await accessiblePreviewIntakeCase(env,user,String(row.caseId)))return json({error:'제안서를 찾을 수 없습니다.',code:'PROPOSAL_NOT_FOUND'},404);
   const body=await request.json().catch(()=>null) as Record<string,unknown>|null;const action=typeof body?.action==='string'?body.action:'';const expectedVersion=Number(body?.expectedVersion);
   if(!body||!exactObjectKeys(body,['action','expectedVersion'])||!['HIDE_FROM_LIST','RESTORE_TO_LIST','ARCHIVE_TO_DRIVE','ADMIN_DELETE'].includes(action)||!Number.isInteger(expectedVersion)||expectedVersion<0)return json({error:'제안서 목록/DB 작업 요청이 올바르지 않습니다.',code:'INVALID_CATALOG_ACTION'},400);
   if(!canMutatePreviewCases(user))return json({error:'제안서 목록을 변경할 권한이 없습니다.',code:'FORBIDDEN'},403);
@@ -2584,7 +2615,7 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
     if(!body||!exactObjectKeys(body,['caseId','proposalId','chapterNumber','content','instruction','expectedProposalVersion'])||typeof body.caseId!=='string'||typeof body.proposalId!=='string'||!Number.isInteger(body.chapterNumber)||typeof body.content!=='string'||typeof body.instruction!=='string'||!Number.isInteger(body.expectedProposalVersion))return json({error:'제안서 문장 개선 입력값이 올바르지 않습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
     const caseId=body.caseId;const proposalId=body.proposalId;const chapterNumber=Number(body.chapterNumber);const content=body.content.trim();const instruction=body.instruction.trim();
     if(!PREVIEW_DRAFT_KEY.test(caseId)||!PREVIEW_DRAFT_KEY.test(proposalId)||chapterNumber<1||chapterNumber>12||!content||content.length>100_000||instruction.length<3||instruction.length>2_000)return json({error:'제안서 문장 개선 범위가 허용 기준을 벗어났습니다.',code:'INVALID_PROPOSAL_IMPROVEMENT_PAYLOAD'},400);
-    const caseRow=await accessiblePreviewCase(env,user,caseId);
+    const caseRow=await accessiblePreviewIntakeCase(env,user,caseId);
     if(!caseRow)return json({error:'프로젝트를 찾을 수 없거나 이 사용자에게 배정되지 않았습니다.',code:'CASE_NOT_FOUND'},404);
     const proposal=await env.DB.prepare('SELECT version,status FROM preview_proposals WHERE id=? AND case_id=? AND organization_id=?').bind(proposalId,caseId,PREVIEW_ORGANIZATION_ID).first<{version:number;status:string}>();
     if(!proposal)return json({error:'제안서를 찾을 수 없습니다.',code:'PROPOSAL_NOT_FOUND'},404);
@@ -2721,7 +2752,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
   const match = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36}))?(?:\/(versions|reviews|render|assets)(?:\/([0-9a-f-]{36}))?)?$/iu);
   if (!match) return json({ error: 'Proposal authoring route was not found', code: 'PROPOSAL_ROUTE_NOT_FOUND' }, 404);
   const [, caseId, proposalId, action, proposalAssetId] = match;
-  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  const caseRow = await accessiblePreviewIntakeCase(env, user, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
 
   if (!proposalId && request.method === 'GET') {
@@ -3058,7 +3089,7 @@ async function handlePreviewIntakeSource(request:Request,env:CloudflareEnv,user:
   if(!env.DB)return json({error:'D1 database is not bound',code:'D1_NOT_CONFIGURED'},503);
   if(request.method!=='POST')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
   if(!user.roles.some((role)=>new Set(['admin','ceo','director','pm','staff']).has(role)))return json({error:'Role cannot upload intake source material',code:'FORBIDDEN'},403);
-  const caseRow=await accessiblePreviewCase(env,user,caseId);
+  const caseRow=await accessiblePreviewIntakeCase(env,user,caseId);
   if(!caseRow)return json({error:'Case was not found or is not assigned to this user',code:'CASE_NOT_FOUND'},404);
   if(!['VICTIM','SUSPECT','OTHER'].includes(caseRow.clientLegalPosition))return json({error:'Select the client legal position before AI source summarization',code:'CLIENT_POSITION_REQUIRED'},409);
   const key=request.headers.get('Idempotency-Key')??'';
@@ -3122,12 +3153,13 @@ async function handlePreviewIntakeSource(request:Request,env:CloudflareEnv,user:
 type RealWorkflowStatus = 'DONE' | 'IN_PROGRESS' | 'PLANNED';
 interface RealWorkflowScheduleRow {
   caseId: string; caseNumber: string; title: string; claimType: string; clientLegalPosition: string;
-  createdAt: string; clientName: string | null; proposalCreatedAt: string | null; proposalStatus: string | null;
+  caseStatus: string; createdAt: string; clientName: string | null; proposalCreatedAt: string | null; proposalStatus: string | null;
   sentAt: string | null; awardStatus: 'WON' | 'PENDING' | 'LOST' | null; projectStartOn: string | null; projectEndOn: string | null;
   kickoffAt: string | null; kickoffStatus: string | null; surveyStart: string | null; surveyEnd: string | null;
   surveyCount: number; surveyCompleted: number; allocationStart: string | null; allocationEnd: string | null;
   allocationUnits: string | null; takeoffCount: number; costCount: number; reportCreatedAt: string | null;
   reportUpdatedAt: string | null; reviewStatus: string | null; reviewAt: string | null; finalizedAt: string | null;
+  finalDeliverableCount: number; scheduleVisibilityVersion: number | null;
 }
 
 function workflowDateDay(value: string | null, fallback: number): number {
@@ -3141,9 +3173,14 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   if (request.method !== 'GET') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
-  const admin = user.roles.includes('admin') ? 1 : 0;
+  const visibilityReady = await projectScheduleVisibilitySchema(env);
+  const evidenceWorkflowReady = await hasEvidenceWorkflowCategory(env.DB);
+  const visibilityFilter = visibilityReady
+    ? "AND NOT EXISTS (SELECT 1 FROM preview_project_schedule_visibility hidden WHERE hidden.case_id=c.id AND hidden.organization_id=c.organization_id AND hidden.visibility='HIDDEN')"
+    : '';
+  const activeProjectFilter = await projectWorkGateSchemaAvailable(env) ? ACTIVE_PROJECT_WORK_FILTER : LEGACY_ACTIVE_PROJECT_WORK_FILTER;
   const rows = await env.DB.prepare(
-    `SELECT c.id AS caseId,c.case_number AS caseNumber,c.title,c.claim_type AS claimType,c.client_legal_position AS clientLegalPosition,c.created_at AS createdAt,
+    `SELECT c.id AS caseId,c.case_number AS caseNumber,c.title,c.claim_type AS claimType,c.client_legal_position AS clientLegalPosition,c.status AS caseStatus,c.created_at AS createdAt,
       (SELECT p.client_name FROM preview_proposal_links p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS clientName,
       (SELECT p.created_at FROM preview_proposals p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS proposalCreatedAt,
       (SELECT p.status FROM preview_proposals p WHERE p.case_id=c.id ORDER BY p.updated_at DESC LIMIT 1) AS proposalStatus,
@@ -3166,12 +3203,13 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
       (SELECT d.updated_at FROM preview_report_drafts d WHERE d.case_id=c.id) AS reportUpdatedAt,
       (SELECT r.status FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewStatus,
       (SELECT COALESCE(r.reviewed_at,r.requested_at) FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewAt,
-      (SELECT f.finalized_at FROM preview_report_finalizations f WHERE f.case_id=c.id ORDER BY f.finalized_at DESC LIMIT 1) AS finalizedAt
-    FROM preview_cases c WHERE c.organization_id=? AND c.deleted_at IS NULL AND c.status='CONTRACT'
-      AND EXISTS (SELECT 1 FROM preview_proposal_links accepted LEFT JOIN preview_award_effective_states effective ON effective.proposal_link_id=accepted.id WHERE accepted.case_id=c.id AND accepted.organization_id=c.organization_id AND COALESCE(effective.effective_status,accepted.award_status)='WON')
-      AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments x WHERE x.case_id=c.id AND x.user_id=?))
+      (SELECT f.finalized_at FROM preview_report_finalizations f WHERE f.case_id=c.id ORDER BY f.finalized_at DESC LIMIT 1) AS finalizedAt,
+      ${evidenceWorkflowReady ? "(SELECT COUNT(*) FROM preview_google_case_evidence e WHERE e.case_id=c.id AND e.organization_id=c.organization_id AND e.workflow_category='FINAL_DELIVERABLE')" : '0'} AS finalDeliverableCount,
+      ${visibilityReady ? '(SELECT visibility.version FROM preview_project_schedule_visibility visibility WHERE visibility.case_id=c.id AND visibility.organization_id=c.organization_id)' : 'NULL'} AS scheduleVisibilityVersion
+    FROM preview_cases c WHERE c.organization_id=? AND c.deleted_at IS NULL AND ${activeProjectFilter}
+      ${visibilityFilter}
     ORDER BY c.updated_at DESC LIMIT 100`
-  ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<RealWorkflowScheduleRow>();
+  ).bind(PREVIEW_ORGANIZATION_ID).all<RealWorkflowScheduleRow>();
 
   type ExplicitStage = { caseId: string; stageCode: string; startDate: string; endDate: string; status: string; noteText: string | null; version: number };
   type ScheduleProfile = { caseId: string; responsiblePmId: string; responsiblePmName: string; version: number };
@@ -3185,14 +3223,14 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
       env.DB.prepare(
         `SELECT s.case_id AS caseId,s.stage_code AS stageCode,s.start_date AS startDate,s.end_date AS endDate,s.status,s.note_text AS noteText,s.version
          FROM preview_project_stage_schedules s JOIN preview_cases c ON c.id=s.case_id AND c.organization_id=s.organization_id
-         WHERE s.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=s.case_id AND a.user_id=?))`
-      ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id).all<ExplicitStage>(),
+         WHERE s.organization_id=? AND c.deleted_at IS NULL`
+      ).bind(PREVIEW_ORGANIZATION_ID).all<ExplicitStage>(),
       env.DB.prepare(
         `SELECT p.case_id AS caseId,p.responsible_pm_id AS responsiblePmId,u.display_name AS responsiblePmName,p.version
          FROM preview_project_schedule_profiles p JOIN preview_users u ON u.id=p.responsible_pm_id
          JOIN preview_cases c ON c.id=p.case_id AND c.organization_id=p.organization_id
-         WHERE p.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=p.case_id AND a.user_id=?))`
-      ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id).all<ScheduleProfile>(),
+         WHERE p.organization_id=? AND c.deleted_at IS NULL`
+      ).bind(PREVIEW_ORGANIZATION_ID).all<ScheduleProfile>(),
       env.DB.prepare(
         `SELECT r.id,r.case_id AS caseId,r.stage_code AS stageCode,r.proposed_start_date AS proposedStartDate,r.proposed_end_date AS proposedEndDate,
           r.reason_text AS reasonText,r.status,r.expected_schedule_version AS expectedScheduleVersion,
@@ -3200,9 +3238,8 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
          FROM preview_schedule_change_requests r JOIN preview_users u ON u.id=r.requested_by
          JOIN preview_cases c ON c.id=r.case_id AND c.organization_id=r.organization_id
          WHERE r.organization_id=? AND r.status='PENDING' AND c.deleted_at IS NULL
-           AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=r.case_id AND a.user_id=?))
          ORDER BY r.requested_at DESC LIMIT 200`
-      ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id).all<ChangeRequest>()
+      ).bind(PREVIEW_ORGANIZATION_ID).all<ChangeRequest>()
     ]);
     for (const stage of explicitRows.results) {
       const group = explicitByCase.get(stage.caseId) ?? new Map<string, ExplicitStage>();
@@ -3245,12 +3282,14 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
       scheduledStage('TAKEOFF_COST',5,quantityStatus,row.allocationUnits ?? '담당 PM',`팀 배정 ${row.allocationStart ? '완료' : '필요'} · 산출 ${row.takeoffCount} · 내역 ${row.costCount}`),
       scheduledStage('REPORT_WRITING',6,reportStatus,'담당 PM',row.finalizedAt ? '승인본 최종 확정' : row.reviewStatus ? `검토 ${row.reviewStatus}` : row.reportCreatedAt ? '보고서 작성 중' : '보고서 작성 예정')
     ];
+    const deliveryStatus = Number(row.finalDeliverableCount) > 0 ? 'DELIVERED' : row.finalizedAt ? 'FINALIZED_PENDING_ARCHIVE' : 'IN_PROGRESS';
     const highlights: Array<{label:string;tone:string}> = [];
     if (row.allocationUnits) highlights.push({label:`투입 팀 · ${row.allocationUnits}`,tone:'finish'});
     if (Number(row.takeoffCount)+Number(row.costCount)>0) highlights.push({label:`Drive 산출·내역 ${Number(row.takeoffCount)+Number(row.costCount)}건`,tone:'survey'});
     if (row.reviewStatus) highlights.push({label:`보고서 검토 · ${row.reviewStatus}`,tone:'report'});
+    if (deliveryStatus === 'DELIVERED') highlights.push({label:`납품완료 · Drive 최종 납품본 ${Number(row.finalDeliverableCount)}건`,tone:'report'});
     if (!highlights.length) highlights.push({label:'실제 D1 기록 · 다음 단계 입력 필요',tone:'pending'});
-    return { id:`project-${row.caseId}`,caseId:row.caseId,code:row.caseNumber,name:row.title,client:row.clientName ?? '거래처 정보 입력 대기',claimType:row.claimType,clientLegalPosition:row.clientLegalPosition,progress,start,end,awardStatus:row.awardStatus ?? 'PENDING',responsiblePm:approvedProfile ? { id:approvedProfile.responsiblePmId,name:approvedProfile.responsiblePmName } : null,profileVersion:Number(profile?.version ?? 0),canManageSchedule:user.roles.includes('admin') || approvedProfile?.responsiblePmId === user.id,pendingChangeRequests:requestsByCase.get(row.caseId) ?? [],highlights,stages };
+    return { id:`project-${row.caseId}`,caseId:row.caseId,code:row.caseNumber,name:row.title,client:row.clientName ?? '거래처 정보 입력 대기',claimType:row.claimType,clientLegalPosition:row.clientLegalPosition,caseStatus:row.caseStatus,progress,start,end,awardStatus:row.awardStatus ?? 'PENDING',deliveryStatus,finalDeliverableCount:Number(row.finalDeliverableCount),scheduleVisibilityVersion:Number(row.scheduleVisibilityVersion ?? 0),responsiblePm:approvedProfile ? { id:approvedProfile.responsiblePmId,name:approvedProfile.responsiblePmName } : null,profileVersion:Number(profile?.version ?? 0),canManageSchedule:user.roles.includes('admin') || approvedProfile?.responsiblePmId === user.id,canRemoveFromSchedule:(user.roles.includes('admin') || approvedProfile?.responsiblePmId === user.id) && deliveryStatus === 'DELIVERED',pendingChangeRequests:requestsByCase.get(row.caseId) ?? [],highlights,stages };
   });
   return json({ projects, dataBasis:'REAL_D1_WORKFLOW_RECORDS', schedulePolicy:scheduleReady?'RESPONSIBLE_PM_EXPLICIT_DATES':'LEGACY_READ_ONLY', stageSources:['preview_proposals','preview_proposal_links','preview_workflow_kickoffs','preview_site_surveys','preview_workforce_allocations','preview_google_case_evidence','preview_report_drafts','preview_report_reviews','preview_report_finalizations',...(scheduleReady?['preview_project_schedule_profiles','preview_project_stage_schedules','preview_schedule_change_requests']:[])], phase:'CF40_PM_SCHEDULE_AI_IMPORT' });
 }
@@ -3261,6 +3300,65 @@ async function projectScheduleSchema(env: CloudflareEnv): Promise<boolean> {
   if (!env.DB) return false;
   try { await env.DB.prepare('SELECT case_id FROM preview_project_schedule_profiles LIMIT 0').all(); return true; }
   catch { return false; }
+}
+
+async function projectScheduleVisibilitySchema(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try { await env.DB.prepare('SELECT manifest_sha256 FROM preview_project_schedule_visibility LIMIT 0').all(); return true; }
+  catch { return false; }
+}
+
+interface ProjectArchiveReadinessCounts {
+  finalizationCount: number;
+  finalDeliverableCount: number;
+  googleEvidenceCount: number;
+  googleFileIdCount: number;
+  temporaryEvidenceCount: number;
+  pendingGoogleOperationCount: number;
+  pendingIntakeOperationCount: number;
+}
+
+async function projectArchiveReadiness(env: CloudflareEnv, caseId: string): Promise<Record<string, unknown>> {
+  if (!env.DB) throw new Error('D1 database is not bound');
+  const counts = await env.DB.prepare(
+    `SELECT
+      (SELECT COUNT(*) FROM preview_report_finalizations f WHERE f.case_id=?) AS finalizationCount,
+      (SELECT COUNT(*) FROM preview_google_case_evidence e WHERE e.case_id=? AND e.organization_id=? AND e.workflow_category='FINAL_DELIVERABLE') AS finalDeliverableCount,
+      (SELECT COUNT(*) FROM preview_google_case_evidence e WHERE e.case_id=? AND e.organization_id=?) AS googleEvidenceCount,
+      (SELECT COUNT(*) FROM preview_google_case_evidence e WHERE e.case_id=? AND e.organization_id=? AND length(e.google_file_id)>0) AS googleFileIdCount,
+      (SELECT COUNT(*) FROM preview_case_evidence e WHERE e.case_id=? AND e.organization_id=?) AS temporaryEvidenceCount,
+      (SELECT COUNT(*) FROM preview_google_case_operations o WHERE o.case_id=? AND o.organization_id=? AND o.status<>'SUCCEEDED') AS pendingGoogleOperationCount,
+      (SELECT COUNT(*) FROM preview_intake_audio_operations o WHERE o.case_id=? AND o.organization_id=? AND o.status<>'SUCCEEDED') AS pendingIntakeOperationCount`
+  ).bind(
+    caseId, caseId, PREVIEW_ORGANIZATION_ID, caseId, PREVIEW_ORGANIZATION_ID, caseId, PREVIEW_ORGANIZATION_ID,
+    caseId, PREVIEW_ORGANIZATION_ID, caseId, PREVIEW_ORGANIZATION_ID, caseId, PREVIEW_ORGANIZATION_ID
+  ).first<ProjectArchiveReadinessCounts>();
+  const normalized = {
+    finalizationCount: Number(counts?.finalizationCount ?? 0),
+    finalDeliverableCount: Number(counts?.finalDeliverableCount ?? 0),
+    googleEvidenceCount: Number(counts?.googleEvidenceCount ?? 0),
+    googleFileIdCount: Number(counts?.googleFileIdCount ?? 0),
+    temporaryEvidenceCount: Number(counts?.temporaryEvidenceCount ?? 0),
+    pendingGoogleOperationCount: Number(counts?.pendingGoogleOperationCount ?? 0),
+    pendingIntakeOperationCount: Number(counts?.pendingIntakeOperationCount ?? 0)
+  };
+  const configured = Boolean(await googleConfig(env));
+  const connected = configured ? Boolean(await getGoogleDriveCredential(env)) : false;
+  const ledger = await env.DB.prepare(
+    `SELECT id,google_file_id AS googleFileId,sha256,workflow_category AS workflowCategory
+     FROM preview_google_case_evidence WHERE case_id=? AND organization_id=? ORDER BY id`
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID).all<{ id: string; googleFileId: string; sha256: string; workflowCategory: string }>();
+  const snapshot = { caseId, ...normalized, configured, connected, files: ledger.results };
+  const manifestSha256 = await sha256Hex(JSON.stringify(snapshot));
+  const checklist = [
+    { code: 'GOOGLE_CONNECTED', label: '회사 Google Drive 연결', complete: configured && connected, detail: configured && connected ? '연결됨' : '관리자 OAuth 연결 필요' },
+    { code: 'REPORT_FINALIZED', label: '승인 보고서 최종 확정', complete: normalized.finalizationCount > 0, detail: `${normalized.finalizationCount}건` },
+    { code: 'FINAL_DELIVERABLE', label: 'Drive 최종 납품본 보관', complete: normalized.finalDeliverableCount > 0, detail: `${normalized.finalDeliverableCount}건` },
+    { code: 'GOOGLE_LEDGER', label: 'Drive 파일 ID 원장 일치', complete: normalized.googleEvidenceCount === normalized.googleFileIdCount, detail: `${normalized.googleFileIdCount}/${normalized.googleEvidenceCount}건` },
+    { code: 'NO_TEMPORARY_FILES', label: 'D1 임시 파일 없음', complete: normalized.temporaryEvidenceCount === 0, detail: `${normalized.temporaryEvidenceCount}건 남음` },
+    { code: 'NO_PENDING_UPLOADS', label: '실패·확인대기 업로드 없음', complete: normalized.pendingGoogleOperationCount === 0 && normalized.pendingIntakeOperationCount === 0, detail: `프로젝트 ${normalized.pendingGoogleOperationCount}건 · 의뢰원본 ${normalized.pendingIntakeOperationCount}건` }
+  ];
+  return { complete: checklist.every((item) => item.complete), checklist, manifestSha256, snapshot, checkedAt: new Date().toISOString() };
 }
 
 async function projectPmCandidate(env: CloudflareEnv, _caseId: string, preferredId = ''): Promise<{ id: string; displayName: string } | null> {
@@ -3283,6 +3381,8 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
   const stagesMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/stages$/iu);
   const stageMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/stages\/(KICKOFF|SITE_SURVEY|TAKEOFF_COST|REPORT_WRITING)$/u);
   const requestMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/change-requests$/iu);
+  const archiveReadinessMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/archive-readiness$/iu);
+  const scheduleVisibilityMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/schedule-visibility$/iu);
   const decisionMatch = url.pathname.match(/^\/api\/project-workflow\/change-requests\/([0-9a-f-]{36})\/decision$/iu);
 
   if (url.pathname === '/api/project-workflow/pm-options' && request.method === 'GET') {
@@ -3297,13 +3397,71 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     return json({ users: rows.results, phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
   }
 
-  const caseId = profileMatch?.[1] ?? erpSyncMatch?.[1] ?? stagesMatch?.[1] ?? stageMatch?.[1] ?? requestMatch?.[1] ?? '';
+  const caseId = profileMatch?.[1] ?? erpSyncMatch?.[1] ?? stagesMatch?.[1] ?? stageMatch?.[1] ?? requestMatch?.[1] ?? archiveReadinessMatch?.[1] ?? scheduleVisibilityMatch?.[1] ?? '';
   const caseRow = caseId ? await accessiblePreviewCase(env,user,caseId) : null;
   if (caseId && !caseRow) return json({ error: 'Project was not found or is outside your assignment', code: 'CASE_NOT_FOUND' }, 404);
   const profileFor = async (targetCaseId: string) => env.DB?.prepare(
     'SELECT p.responsible_pm_id AS responsiblePmId,p.version,p.updated_at AS updatedAt,u.display_name AS responsiblePmName FROM preview_project_schedule_profiles p JOIN preview_users u ON u.id=p.responsible_pm_id WHERE p.case_id=? AND p.organization_id=?'
   ).bind(targetCaseId,PREVIEW_ORGANIZATION_ID).first<{ responsiblePmId: string; responsiblePmName: string; version: number; updatedAt: string }>();
   const canManage = (profile: { responsiblePmId: string } | null | undefined) => user.roles.includes('admin') || profile?.responsiblePmId === user.id;
+
+  if ((archiveReadinessMatch || scheduleVisibilityMatch) && !await projectScheduleVisibilitySchema(env)) {
+    return json({ error: 'Project schedule visibility migration is required', code: 'D1_MIGRATION_REQUIRED' }, 503);
+  }
+
+  if (archiveReadinessMatch && request.method === 'GET') {
+    const profile = await profileFor(caseId);
+    if (!canManage(profile)) return json({ error: '담당 PM 또는 관리자만 Drive 보관 여부를 확인할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
+    return json({ readiness: await projectArchiveReadiness(env, caseId), phase: 'CF77_PROJECT_ARCHIVE_READINESS' });
+  }
+
+  if (scheduleVisibilityMatch && request.method === 'POST') {
+    const profile = await profileFor(caseId);
+    if (!canManage(profile)) return json({ error: '담당 PM 또는 관리자만 일정표에서 프로젝트를 숨길 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['reasonCode','reasonText','manifestSha256','expectedVersion']) || !['CANCELLED','DELIVERED_ARCHIVED'].includes(String(body.reasonCode)) || typeof body.reasonText !== 'string' || body.reasonText.trim().length < 2 || body.reasonText.trim().length > 1000 || !(body.manifestSha256 === null || typeof body.manifestSha256 === 'string') || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Schedule visibility payload is invalid', code: 'INVALID_SCHEDULE_VISIBILITY' }, 400);
+    }
+    const reasonCode = String(body.reasonCode);
+    const state = await env.DB.prepare(
+      `SELECT c.status,
+        (SELECT COALESCE(effective.effective_status,link.award_status) FROM preview_proposal_links link
+         LEFT JOIN preview_award_effective_states effective ON effective.proposal_link_id=link.id
+         WHERE link.case_id=c.id AND link.organization_id=c.organization_id ORDER BY link.updated_at DESC LIMIT 1) AS awardStatus,
+        COALESCE((SELECT cr.db_deleted FROM preview_catalog_records cr WHERE cr.organization_id=c.organization_id AND cr.record_kind='INTAKE' AND cr.record_id=c.id),0) AS dbDeleted
+       FROM preview_cases c WHERE c.id=? AND c.organization_id=? AND c.deleted_at IS NULL`
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ status: string; awardStatus: string | null; dbDeleted: number }>();
+    if (!state) return json({ error: 'Project was not found', code: 'CASE_NOT_FOUND' }, 404);
+    const readiness = await projectArchiveReadiness(env, caseId);
+    const readinessComplete = readiness.complete === true;
+    const manifestSha256 = typeof readiness.manifestSha256 === 'string' ? readiness.manifestSha256 : '';
+    if (reasonCode === 'DELIVERED_ARCHIVED' && (!readinessComplete || body.manifestSha256 !== manifestSha256)) {
+      return json({ error: 'Drive 보관 상태가 변경되었거나 아직 완료되지 않았습니다. 다시 확인해 주세요.', code: 'ARCHIVE_READINESS_REQUIRED', readiness }, 409);
+    }
+    const cancelled = state.awardStatus === 'LOST' || Number(state.dbDeleted) === 1 || ['INQUIRY','PROPOSAL','ESTIMATE'].includes(state.status);
+    if (reasonCode === 'CANCELLED' && !cancelled) return json({ error: '취소 또는 미수주 프로젝트만 이 사유로 숨길 수 있습니다.', code: 'PROJECT_NOT_CANCELLED' }, 409);
+    const existing = await env.DB.prepare('SELECT visibility,version,updated_at AS updatedAt FROM preview_project_schedule_visibility WHERE case_id=? AND organization_id=?')
+      .bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ visibility: string; version: number; updatedAt: string }>();
+    const expectedVersion = Number(body.expectedVersion);
+    if (Number(existing?.version ?? 0) !== expectedVersion) return json({ error: 'Schedule visibility changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(existing?.version ?? 0) }, 409);
+    const now = new Date(Math.max(Date.now(), Date.parse(existing?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const verificationJson = JSON.stringify(readiness);
+    const visibilityStatement = existing
+      ? env.DB.prepare("UPDATE preview_project_schedule_visibility SET visibility='HIDDEN',reason_code=?,reason_text=?,drive_verified=?,manifest_sha256=?,verification_json=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=?")
+        .bind(reasonCode, body.reasonText.trim(), reasonCode === 'DELIVERED_ARCHIVED' ? 1 : 0, reasonCode === 'DELIVERED_ARCHIVED' ? manifestSha256 : null, verificationJson, user.id, now, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion)
+      : env.DB.prepare("INSERT INTO preview_project_schedule_visibility (case_id,organization_id,visibility,reason_code,reason_text,drive_verified,manifest_sha256,verification_json,version,updated_by,created_at,updated_at) VALUES (?,?,'HIDDEN',?,?,?,?,?,1,?,?,?)")
+        .bind(caseId, PREVIEW_ORGANIZATION_ID, reasonCode, body.reasonText.trim(), reasonCode === 'DELIVERED_ARCHIVED' ? 1 : 0, reasonCode === 'DELIVERED_ARCHIVED' ? manifestSha256 : null, verificationJson, user.id, now, now);
+    const results = await env.DB.batch([
+      visibilityStatement,
+      env.DB.prepare('INSERT INTO preview_project_schedule_visibility_events (id,case_id,organization_id,from_visibility,to_visibility,reason_code,reason_text,drive_verified,manifest_sha256,verification_json,actor_id,created_at) VALUES (?,?,?, ?,\'HIDDEN\',?,?,?,?,?,?,?)')
+        .bind(crypto.randomUUID(), caseId, PREVIEW_ORGANIZATION_ID, existing?.visibility ?? 'ACTIVE', reasonCode, body.reasonText.trim(), reasonCode === 'DELIVERED_ARCHIVED' ? 1 : 0, reasonCode === 'DELIVERED_ARCHIVED' ? manifestSha256 : null, verificationJson, user.id, now),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'PROJECT_SCHEDULE_HIDDEN','프로젝트 일정표 보관 처리',?,?)")
+        .bind(crypto.randomUUID(), caseId, user.id, `${reasonCode} · 물리 삭제 없음 · ${body.reasonText.trim()}`, now)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results.some((entry) => entry.meta?.changes !== 1)) return json({ error: 'Schedule visibility did not commit atomically', code: 'SCHEDULE_VISIBILITY_COMMIT_FAILED' }, 503);
+    return json({ hidden: true, recoverable: true, physicalDelete: false, version: expectedVersion + 1, phase: 'CF77_PROJECT_SCHEDULE_VISIBILITY' });
+  }
 
   if (erpSyncMatch && request.method === 'POST') {
     if (!canMutatePreviewCases(user)) return json({ error:'Role cannot retry ERP project registration',code:'FORBIDDEN' },403);
@@ -3496,10 +3654,10 @@ async function handlePreviewIntakeCatalog(request: Request, env: CloudflareEnv, 
     'c.created_at AS createdAt,c.updated_at AS updatedAt,u.display_name AS createdByName,COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,'+
     'cr.drive_archive_file_id AS driveArchiveFileId,cr.drive_archive_url AS driveArchiveUrl,cr.drive_archived_at AS driveArchivedAt,archiver.display_name AS driveArchivedByName '+
     'FROM preview_cases c JOIN preview_users u ON u.id=c.created_by LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'INTAKE\' AND cr.record_id=c.id LEFT JOIN preview_users archiver ON archiver.id=cr.drive_archived_by '+
-    'WHERE c.organization_id=? AND c.deleted_at IS NULL AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) '+
+    'WHERE c.organization_id=? AND c.deleted_at IS NULL '+
     `AND COALESCE(cr.db_deleted,0)=0 ${mode === 'projects' ? 'AND COALESCE(cr.list_hidden,0)=0 ' : ''}`+
     'AND (?=\'\' OR c.case_number LIKE ? ESCAPE \'\\\' OR c.title LIKE ? ESCAPE \'\\\' OR COALESCE(c.description,\'\') LIKE ? ESCAPE \'\\\') ORDER BY c.updated_at DESC LIMIT 200'
-  ).bind(PREVIEW_ORGANIZATION_ID,admin,user.id,q,like,like,like).all<Record<string,unknown>>();
+  ).bind(PREVIEW_ORGANIZATION_ID,q,like,like,like).all<Record<string,unknown>>();
   return json({ intakes:rows.results.map(previewCatalogProjection), mode, phase:'CF52_INTAKE_CATALOG' });
 }
 
@@ -3569,20 +3727,25 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     const limitRaw = Number(url.searchParams.get('limit') ?? 50);
     if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 100) return json({ error: 'limit must be between 1 and 100', code: 'INVALID_PAGINATION' }, 400);
     const admin = user.roles.includes('admin') ? 1 : 0;
+    const assignedOnly = url.searchParams.get('assignedOnly') === 'true';
     const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
-    const where = "c.organization_id = ? AND c.deleted_at IS NULL AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')" + (scope === 'project-work' ? ` AND ${ACTIVE_PROJECT_WORK_FILTER}` : '');
+    const visibility = scope === 'project-work' || assignedOnly
+      ? '(? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
+      : '1 = 1';
+    const visibilityBindings = scope === 'project-work' || assignedOnly ? [admin, user.id] : [];
+    const where = `c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')` + (scope === 'project-work' ? ` AND ${ACTIVE_PROJECT_WORK_FILTER}` : '');
     const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
       ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail,'
       : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail,";
     const rows = await env.DB.prepare(
       `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns} c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC LIMIT ?`
-    ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, query, like, like, limitRaw).all<PreviewCaseRow>();
-    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, query, like, like).first<{ total: number }>();
+    ).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like, limitRaw).all<PreviewCaseRow>();
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like).first<{ total: number }>();
     return json({ cases: rows.results.map(previewCaseProjection), total: Number(count?.total ?? 0), phase: 'CF06_D1_CASE_OPERATIONS' });
   }
 
   if (url.pathname === '/api/cases' && request.method === 'POST') {
-    if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot create cases', code: 'FORBIDDEN' }, 403);
+    if (!canCollaboratePreviewIntake(user)) return json({ error: 'Role cannot create cases', code: 'FORBIDDEN' }, 403);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     const perspectiveSchema = await previewCasePerspectiveSchemaAvailable(env);
     if (!body || !exactObjectKeys(body, ['title', 'claimType', 'description', 'clientLegalPosition', 'clientPositionDetail', 'category']) || (perspectiveSchema && (!Object.hasOwn(body, 'clientLegalPosition') || !Object.hasOwn(body, 'clientPositionDetail')))) return json({ error: 'Case payload is invalid', code: 'INVALID_CASE_PAYLOAD' }, 400);
@@ -3635,9 +3798,9 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   if (!casePath) return json({ error: 'Case route was not found', code: 'CASE_ROUTE_NOT_FOUND' }, 404);
   const [, caseId, action] = casePath;
   if (!action && request.method === 'GET') return previewCaseDetail(env, user, caseId);
-  if (!canMutatePreviewCases(user)) return json({ error: 'Role cannot mutate cases', code: 'FORBIDDEN' }, 403);
-  const row = await accessiblePreviewCase(env, user, caseId);
+  const row = await accessiblePreviewIntakeCase(env, user, caseId);
   if (!row) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  if (!['INQUIRY','PROPOSAL','ESTIMATE'].includes(row.status) && !canMutatePreviewCases(user)) return json({ error: 'Role cannot mutate cases', code: 'FORBIDDEN' }, 403);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body) return json({ error: 'JSON body is required', code: 'INVALID_CASE_PAYLOAD' }, 400);
   const now = new Date().toISOString();
@@ -3776,6 +3939,21 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
   });
 }
 
+async function canManagePreviewProjectReport(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<boolean> {
+  if (!env.DB) return false;
+  if (user.roles.includes('admin')) return true;
+  try {
+    const profile = await env.DB.prepare(
+      'SELECT responsible_pm_id AS responsiblePmId FROM preview_project_schedule_profiles WHERE case_id=? AND organization_id=?'
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ responsiblePmId: string }>();
+    if (profile) return profile.responsiblePmId === user.id;
+  } catch { /* pre-CF40 databases use the safe assigned-PM fallback below */ }
+  if (!user.roles.some((role) => ['ceo','director','pm'].includes(role))) return false;
+  const assignment = await env.DB.prepare('SELECT 1 AS found FROM preview_case_assignments WHERE case_id=? AND user_id=?')
+    .bind(caseId, user.id).first<{ found: number }>();
+  return assignment?.found === 1;
+}
+
 async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
@@ -3788,7 +3966,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
 
   if (request.method === 'GET') return previewReportPayload(env, caseId);
   if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
-  if (!user.roles.some((role) => PREVIEW_REPORT_EDIT_ROLES.has(role))) return json({ error: 'Role cannot edit report drafts', code: 'FORBIDDEN' }, 403);
+  if (!await canManagePreviewProjectReport(env, user, caseId)) return json({ error: '보고서 전체 초안은 담당 PM 또는 관리자만 저장할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
   const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
   const editorSchema = await previewReportEditorSchemaAvailable(env);
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -3889,6 +4067,172 @@ async function handlePreviewReportWorkspaces(request: Request, env: CloudflareEn
     workspaces: rows.results.map((row) => ({ ...row, version: Number(row.version), wizardStep: Number(row.wizardStep), contentLength: Number(row.contentLength) })),
     phase: 'CF37_REPORT_WORKSPACE_RESUME'
   });
+}
+
+interface PreviewReportChapterAssignmentRow {
+  caseId: string; chapterId: string; chapterCode: string; chapterTitle: string; assigneeId: string | null;
+  assigneeName: string | null; status: 'UNASSIGNED' | 'IN_PROGRESS' | 'READY' | 'APPLIED'; draftText: string;
+  draftEditorJson: string | null; version: number; updatedByName: string; updatedAt: string;
+}
+
+async function previewReportChapterCollaborationPayload(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<Record<string, unknown>> {
+  if (!env.DB) return { assignments: [], members: [], canManage: false, currentUserId: user.id };
+  const canManage = await canManagePreviewProjectReport(env, user, caseId);
+  const rows = await env.DB.prepare(
+    `SELECT a.case_id AS caseId,a.chapter_id AS chapterId,a.chapter_code AS chapterCode,a.chapter_title AS chapterTitle,
+      a.assignee_id AS assigneeId,assignee.display_name AS assigneeName,a.status,a.draft_text AS draftText,
+      a.draft_editor_json AS draftEditorJson,a.version,updater.display_name AS updatedByName,a.updated_at AS updatedAt
+     FROM preview_report_chapter_assignments a
+     LEFT JOIN preview_users assignee ON assignee.id=a.assignee_id
+     JOIN preview_users updater ON updater.id=a.updated_by
+     WHERE a.case_id=? AND a.organization_id=? ORDER BY a.chapter_code`
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID).all<PreviewReportChapterAssignmentRow>();
+  let members: Array<{ id: string; displayName: string; roles: string[] }> = [];
+  if (canManage) {
+    const memberRows = await env.DB.prepare(
+      `SELECT id,display_name AS displayName,roles_json AS rolesJson FROM preview_users
+       WHERE is_active=1 AND EXISTS (SELECT 1 FROM json_each(preview_users.roles_json) r WHERE lower(r.value) IN ('admin','ceo','director','pm','staff','reviewer'))
+       ORDER BY display_name`
+    ).all<{ id: string; displayName: string; rolesJson: string }>();
+    members = memberRows.results.map((member) => ({ id: member.id, displayName: member.displayName, roles: parsePreviewRoles(member.rolesJson) }));
+  }
+  return {
+    assignments: rows.results.map((row) => ({
+      caseId: row.caseId, chapterId: row.chapterId, chapterCode: row.chapterCode, chapterTitle: row.chapterTitle,
+      assigneeId: row.assigneeId, assigneeName: row.assigneeName, status: row.status,
+      draftText: canManage || row.assigneeId === user.id ? row.draftText : '',
+      draftEditorJson: canManage || row.assigneeId === user.id ? parsePreviewEditorJson(row.draftEditorJson) : null,
+      version: Number(row.version), updatedByName: row.updatedByName, updatedAt: row.updatedAt,
+      canEdit: canManage || row.assigneeId === user.id
+    })),
+    members,
+    canManage,
+    currentUserId: user.id,
+    phase: 'CF77_REPORT_CHAPTER_COLLABORATION'
+  };
+}
+
+function replacePreviewReportChapter(content: string, chapterCode: string, chapterTitle: string, body: string): string {
+  const escaped = chapterCode.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const block = `<!-- MANUAL-CHAPTER:${chapterCode}:START -->\n## ${chapterCode} ${chapterTitle}\n\n${body.trim()}\n<!-- MANUAL-CHAPTER:${chapterCode}:END -->`;
+  const pattern = new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${escaped}:START -->[\\s\\S]*?<!-- (?:AI|MANUAL)-CHAPTER:${escaped}:END -->`, 'u');
+  return pattern.test(content) ? content.replace(pattern, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
+}
+
+async function handlePreviewReportChapterCollaboration(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const caseId = url.searchParams.get('caseId') ?? '';
+  if (!PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
+  const caseRow = await accessiblePreviewCase(env, user, caseId);
+  if (!caseRow) return json({ error: 'Project was not found or is outside your assignment', code: 'CASE_NOT_FOUND' }, 404);
+  try { await env.DB.prepare('SELECT case_id FROM preview_report_chapter_assignments LIMIT 0').all(); }
+  catch { return json({ error: 'Report collaboration migration is required', code: 'D1_MIGRATION_REQUIRED' }, 503); }
+
+  if (request.method === 'GET') return json(await previewReportChapterCollaborationPayload(env, user, caseId));
+  if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+
+  if (request.method === 'PUT') {
+    if (!await canManagePreviewProjectReport(env, user, caseId)) return json({ error: '챕터 담당자는 담당 PM 또는 관리자만 지정할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['chapterId','assigneeId','expectedVersion']) || typeof body.chapterId !== 'string' || !(body.assigneeId === null || typeof body.assigneeId === 'string') || !Number.isInteger(body.expectedVersion)) {
+      return json({ error: 'Chapter assignment payload is invalid', code: 'INVALID_CHAPTER_ASSIGNMENT' }, 400);
+    }
+    const chapter = await env.DB.prepare(
+      `SELECT p.id,p.chapter_code AS chapterCode,p.title FROM preview_report_chapter_prompts p
+       JOIN preview_report_prompt_sets s ON s.id=p.prompt_set_id AND s.organization_id=? AND s.claim_type=? AND s.status='ACTIVE'
+       WHERE p.id=?`
+    ).bind(PREVIEW_ORGANIZATION_ID, caseRow.claimType, body.chapterId).first<{ id: string; chapterCode: string; title: string }>();
+    if (!chapter) return json({ error: 'Current report chapter was not found', code: 'REPORT_CHAPTER_NOT_FOUND' }, 404);
+    const assigneeId = typeof body.assigneeId === 'string' ? body.assigneeId : null;
+    if (assigneeId) {
+      const assignee = await env.DB.prepare(
+        `SELECT 1 AS found FROM preview_users u WHERE u.id=? AND u.is_active=1
+         AND EXISTS (SELECT 1 FROM json_each(u.roles_json) r WHERE lower(r.value) IN ('admin','ceo','director','pm','staff','reviewer'))`
+      ).bind(assigneeId).first<{ found: number }>();
+      if (!assignee) return json({ error: '활성 회원만 챕터 담당자로 지정할 수 있습니다.', code: 'INVALID_CHAPTER_ASSIGNEE' }, 400);
+    }
+    const existing = await env.DB.prepare('SELECT assignee_id AS assigneeId,version,updated_at AS updatedAt FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=?')
+      .bind(caseId, chapter.id).first<{ assigneeId: string | null; version: number; updatedAt: string }>();
+    const expectedVersion = Number(body.expectedVersion);
+    if (Number(existing?.version ?? 0) !== expectedVersion) return json({ error: 'Chapter assignment changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(existing?.version ?? 0) }, 409);
+    const now = new Date(Math.max(Date.now(), Date.parse(existing?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const status = assigneeId ? 'IN_PROGRESS' : 'UNASSIGNED';
+    const statement = existing
+      ? env.DB.prepare('UPDATE preview_report_chapter_assignments SET chapter_title=?,assignee_id=?,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=?')
+        .bind(chapter.title, assigneeId, status, user.id, now, caseId, chapter.id, expectedVersion)
+      : env.DB.prepare('INSERT INTO preview_report_chapter_assignments (case_id,organization_id,chapter_id,chapter_code,chapter_title,assignee_id,status,draft_text,draft_editor_json,version,assigned_by,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,\'\',NULL,1,?,?,?,?)')
+        .bind(caseId, PREVIEW_ORGANIZATION_ID, chapter.id, chapter.chapterCode, chapter.title, assigneeId, status, user.id, user.id, now, now);
+    const results = await env.DB.batch([
+      statement,
+      env.DB.prepare('INSERT OR IGNORE INTO preview_case_assignments (case_id,user_id,assigned_by,assigned_at) SELECT ?,?,?,? WHERE ? IS NOT NULL')
+        .bind(caseId, assigneeId, user.id, now, assigneeId),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'REPORT_CHAPTER_ASSIGNED','보고서 챕터 담당 지정',?,?)")
+        .bind(crypto.randomUUID(), caseId, user.id, `${chapter.chapterCode} · ${assigneeId ?? '담당 해제'}`, now)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1) return json({ error: 'Chapter assignment changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json(await previewReportChapterCollaborationPayload(env, user, caseId));
+  }
+
+  if (request.method !== 'POST') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  if (!body || !exactObjectKeys(body, ['action','chapterId','draftText','expectedVersion','expectedReportVersion']) || !['SAVE','MARK_READY','APPLY'].includes(String(body.action)) || typeof body.chapterId !== 'string' || typeof body.draftText !== 'string' || !Number.isInteger(body.expectedVersion) || !Number.isInteger(body.expectedReportVersion) || body.draftText.length > 200000) {
+    return json({ error: 'Chapter collaboration payload is invalid', code: 'INVALID_CHAPTER_COLLABORATION' }, 400);
+  }
+  const current = await env.DB.prepare(
+    'SELECT chapter_code AS chapterCode,chapter_title AS chapterTitle,assignee_id AS assigneeId,status,draft_text AS draftText,version,updated_at AS updatedAt FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=?'
+  ).bind(caseId, body.chapterId).first<{ chapterCode: string; chapterTitle: string; assigneeId: string | null; status: string; draftText: string; version: number; updatedAt: string }>();
+  if (!current) return json({ error: '챕터 담당자를 먼저 지정해 주세요.', code: 'CHAPTER_ASSIGNMENT_REQUIRED' }, 409);
+  const canManage = await canManagePreviewProjectReport(env, user, caseId);
+  if (!canManage && current.assigneeId !== user.id) return json({ error: '배정된 챕터만 작성·검수할 수 있습니다.', code: 'CHAPTER_ASSIGNEE_REQUIRED' }, 403);
+  const expectedVersion = Number(body.expectedVersion);
+  if (Number(current.version) !== expectedVersion) return json({ error: 'Chapter draft changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current.version) }, 409);
+  const action = String(body.action);
+  const draftText = body.draftText.trim();
+  if ((action === 'MARK_READY' || action === 'APPLY') && !draftText) return json({ error: '검수할 챕터 내용을 먼저 작성해 주세요.', code: 'CHAPTER_CONTENT_REQUIRED' }, 400);
+  const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
+  const nextVersion = expectedVersion + 1;
+  const chapterSha = await sha256Hex(draftText);
+
+  if (action !== 'APPLY') {
+    const nextStatus = action === 'MARK_READY' ? 'READY' : 'IN_PROGRESS';
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE preview_report_chapter_assignments SET draft_text=?,draft_editor_json=NULL,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=?')
+        .bind(draftText, nextStatus, user.id, now, caseId, body.chapterId, expectedVersion),
+      env.DB.prepare('INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, nextStatus, draftText, chapterSha, user.id, now, caseId, body.chapterId, nextVersion, now),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'REPORT_CHAPTER_SAVED',?,?,?)")
+        .bind(crypto.randomUUID(), caseId, user.id, action === 'MARK_READY' ? '챕터 검수 완료·PM 반영 대기' : '챕터 협업 초안 저장', `${current.chapterCode} · v${nextVersion}`, now)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Chapter draft changed in another session', code: 'VERSION_CONFLICT' }, 409);
+    return json(await previewReportChapterCollaborationPayload(env, user, caseId));
+  }
+
+  if (!canManage) return json({ error: '담당 PM 또는 관리자만 검수 완료 챕터를 보고서에 반영할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
+  if (current.status !== 'READY') return json({ error: '담당자가 검수 완료로 제출한 챕터만 반영할 수 있습니다.', code: 'CHAPTER_NOT_READY' }, 409);
+  const report = await env.DB.prepare('SELECT title,content,version,updated_at AS updatedAt FROM preview_report_drafts WHERE case_id=? AND organization_id=?')
+    .bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ title: string; content: string; version: number; updatedAt: string }>();
+  const expectedReportVersion = Number(body.expectedReportVersion);
+  if (!report || Number(report.version) !== expectedReportVersion) return json({ error: 'Report changed before the chapter was applied', code: 'VERSION_CONFLICT', currentVersion: Number(report?.version ?? 0) }, 409);
+  const nextContent = replacePreviewReportChapter(report.content, current.chapterCode, current.chapterTitle, draftText);
+  const nextReportVersion = expectedReportVersion + 1;
+  const reportNow = new Date(Math.max(Date.now(), Date.parse(report.updatedAt) + 1, Date.parse(now) + 1)).toISOString();
+  const reportSha = await sha256Hex(nextContent);
+  const results = await env.DB.batch([
+    env.DB.prepare('UPDATE preview_report_drafts SET content=?,editor_json=NULL,wizard_step=4,selected_chapter_id=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND organization_id=? AND version=?')
+      .bind(nextContent, body.chapterId, user.id, reportNow, caseId, PREVIEW_ORGANIZATION_ID, expectedReportVersion),
+    env.DB.prepare('INSERT INTO preview_report_revisions (id,case_id,version,title,content,editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)')
+      .bind(crypto.randomUUID(), caseId, nextReportVersion, report.title, nextContent, reportSha, user.id, reportNow, caseId, nextReportVersion, reportNow),
+    env.DB.prepare("UPDATE preview_report_chapter_assignments SET status='APPLIED',version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND status='READY'")
+      .bind(user.id, reportNow, caseId, body.chapterId, expectedVersion),
+    env.DB.prepare("INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,'APPLIED',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)")
+      .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, draftText, chapterSha, user.id, reportNow, caseId, body.chapterId, nextVersion, reportNow),
+    env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'REPORT_CHAPTER_APPLIED','검수 챕터 보고서 반영',?,?)")
+      .bind(crypto.randomUUID(), caseId, user.id, `${current.chapterCode} · 보고서 v${nextReportVersion}`, reportNow)
+  ]) as Array<{ meta?: { changes?: number } }>;
+  if (results.slice(0, 4).some((entry) => entry.meta?.changes !== 1)) return json({ error: 'Report or chapter changed before apply', code: 'VERSION_CONFLICT' }, 409);
+  return json({ ...(await previewReportChapterCollaborationPayload(env, user, caseId)), reportVersion: nextReportVersion, applied: true });
 }
 
 // CF12 report-authoring prompts. Prompt bodies are Admin-only and are never
@@ -5139,7 +5483,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
     if (request.method === 'GET') {
       try {
         const actionSchema = await previewTutorialCompletionActionSchema(env);
-        return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF62_V1', phase: 'CF62_INTERACTIVE_TUTORIAL' });
+        return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF79_V1', phase: 'CF79_RENEWED_TUTORIAL' });
       }
       catch { return json({ error: 'Tutorial state migration is not ready', code: 'D1_MIGRATION_REQUIRED' }, 503); }
     }
@@ -5154,7 +5498,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
     const completionAction = actionSchema ? String(body.action) : 'COMPLETED';
     const current = await previewUserTutorialState(env, user.id);
     if (current.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
-    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: previewTutorialApiProjection(current, actionSchema), currentTutorialVersion: 'CF62_V1', phase: 'CF62_INTERACTIVE_TUTORIAL' });
+    if (current.completedTutorialVersion === body.tutorialVersion) return json({ tutorial: previewTutorialApiProjection(current, actionSchema), currentTutorialVersion: 'CF79_V1', phase: 'CF79_RENEWED_TUTORIAL' });
     const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt ?? '1970-01-01') + 1)).toISOString();
     const nextVersion = current.version + 1;
     const write = current.version === 0
@@ -5172,7 +5516,7 @@ async function handlePreviewWorkspaceSettings(request: Request, env: CloudflareE
           : env.DB.prepare('INSERT INTO preview_user_tutorial_history (id,user_id,tutorial_version,state_version,completed_by,completed_at) VALUES (?,?,?,?,?,?)').bind(crypto.randomUUID(), user.id, body.tutorialVersion, nextVersion, user.id, now)
       ]) as Array<{meta?:{changes?:number}}>;
       if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT' }, 409);
-      return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF62_V1', phase: 'CF62_INTERACTIVE_TUTORIAL' });
+      return json({ tutorial: previewTutorialApiProjection(await previewUserTutorialState(env, user.id), actionSchema), currentTutorialVersion: 'CF79_V1', phase: 'CF79_RENEWED_TUTORIAL' });
     } catch {
       const latest = await previewUserTutorialState(env, user.id).catch(() => null);
       if (latest && latest.version !== Number(body.expectedVersion)) return json({ error: 'Tutorial state changed in another session', code: 'VERSION_CONFLICT', currentVersion: latest.version }, 409);
@@ -5578,6 +5922,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!body || !exactObjectKeys(body, ['caseId']) || typeof body.caseId !== 'string' || !PREVIEW_DRAFT_KEY.test(body.caseId)) return json({ error: 'Outline generation payload is invalid', code: 'INVALID_OUTLINE_PAYLOAD' }, 400);
     const caseRow = await accessiblePreviewCase(env, user, body.caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (!await canManagePreviewProjectReport(env, user, caseRow.id)) return json({ error: '보고서 전체 목차와 초안은 담당 PM 또는 관리자만 생성할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
     const [prompts, guidelineRows, routes] = await Promise.all([previewPromptRows(env, caseRow.claimType), previewTypeGuidelines(env, caseRow.claimType), previewAiRoutes(env)]);
     const guideline = guidelineRows[0] ?? null;
     if (!guideline || guideline.status !== 'ACTIVE' || !prompts.length || prompts[0]?.setStatus !== 'ACTIVE') return json({ error: 'Approved report type guideline is unavailable', code: 'GUIDELINE_NOT_AVAILABLE' }, 409);
@@ -5610,6 +5955,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     }
     const caseRow = await accessiblePreviewCase(env, user, body.caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (!await canManagePreviewProjectReport(env, user, caseRow.id)) return json({ error: '보고서 전체 목차는 담당 PM 또는 관리자만 저장할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
     const prompts = await previewPromptRows(env, caseRow.claimType);
     if (!prompts.length || prompts[0]?.setStatus !== 'ACTIVE') return json({ error: 'Approved report template is unavailable', code: 'PROMPT_NOT_AVAILABLE' }, 409);
     const allowed = new Map(prompts.filter((row) => Boolean(row.id)).map((row) => [row.id, row]));
@@ -5652,6 +5998,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!body || !exactObjectKeys(body, ['caseId', 'chapterId', 'expectedDraftVersion']) || typeof body.caseId !== 'string' || typeof body.chapterId !== 'string' || !Number.isInteger(body.expectedDraftVersion)) return json({ error: 'Authoring request is invalid', code: 'INVALID_AUTHORING_PAYLOAD' }, 400);
     const caseRow = await accessiblePreviewCase(env, user, body.caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (!await canManagePreviewProjectReport(env, user, caseRow.id)) return json({ error: '보고서 전체 초안은 담당 PM 또는 관리자만 생성할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
     const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id = ? AND organization_id = ?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
     const currentVersion = Number(draft?.version ?? 0);
     if (currentVersion !== Number(body.expectedDraftVersion)) return json({ error: 'Report draft changed in another session', code: 'VERSION_CONFLICT', currentVersion }, 409);
@@ -5734,6 +6081,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!body.content.trim() || body.content.length > 500_000 || body.instruction.trim().length < 3 || body.instruction.length > 2_000) return json({ error: 'Writing improvement input is outside allowed limits', code: 'INVALID_IMPROVEMENT_PAYLOAD' }, 400);
     const caseRow = await accessiblePreviewCase(env, user, body.caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (!await canManagePreviewProjectReport(env, user, caseRow.id)) return json({ error: '보고서 전체 초안은 담당 PM 또는 관리자만 개선할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
     const draft = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id=? AND organization_id=?').bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ version: number }>();
     if (Number(draft?.version ?? 0) !== Number(body.expectedDraftVersion)) return json({ error: 'Report draft changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(draft?.version ?? 0) }, 409);
     const routes = await previewAiRoutes(env);
@@ -6745,6 +7093,202 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   }
 }
 
+interface BusinessCardFields {
+  name: string;
+  company: string;
+  department: string;
+  title: string;
+  mobile: string;
+  phone: string;
+  fax: string;
+  email: string;
+  address: string;
+  website: string;
+  notes: string;
+  tags: string;
+}
+
+const BUSINESS_CARD_LIBRARY_ID = '00000000-0000-4000-8000-000000000078';
+const BUSINESS_CARD_FIELD_KEYS = ['name','company','department','title','mobile','phone','fax','email','address','website','notes','tags'] as const;
+const BUSINESS_CARD_IMAGE_MIMES = new Set(['image/jpeg','image/png','image/webp']);
+
+function businessCardText(value: unknown, maxLength: number): string {
+  return typeof value === 'string' ? value.trim().replace(/[\u0000-\u001f\u007f]/gu, ' ').replace(/\s+/gu, ' ').slice(0, maxLength) : '';
+}
+
+function parseBusinessCardFields(value: unknown): BusinessCardFields | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (!exactObjectKeys(record, [...BUSINESS_CARD_FIELD_KEYS])) return null;
+  const fields: BusinessCardFields = {
+    name: businessCardText(record.name, 120), company: businessCardText(record.company, 200),
+    department: businessCardText(record.department, 160), title: businessCardText(record.title, 160),
+    mobile: businessCardText(record.mobile, 80), phone: businessCardText(record.phone, 80),
+    fax: businessCardText(record.fax, 80), email: businessCardText(record.email, 200).toLowerCase(),
+    address: businessCardText(record.address, 500), website: businessCardText(record.website, 300),
+    notes: businessCardText(record.notes, 2000), tags: businessCardText(record.tags, 500)
+  };
+  if (!fields.name || (fields.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(fields.email))) return null;
+  return fields;
+}
+
+async function validateBusinessCardImage(file: File): Promise<{ bytes: Uint8Array; mimeType: string; sha256: string }> {
+  const validated = await validateEvidenceFile(file);
+  if (!BUSINESS_CARD_IMAGE_MIMES.has(validated.mimeType)) throw new GoogleDriveError('BUSINESS_CARD_IMAGE_REQUIRED', 415, '명함은 JPG, PNG 또는 WEBP 이미지로 올려 주세요.');
+  return validated;
+}
+
+async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, file: File): Promise<Response> {
+  const validated = await validateBusinessCardImage(file);
+  const credential = await resolveOrganizationAiCredential(env, 'GEMINI');
+  if (!credential) return json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503);
+  const route = await previewOrganizationGeminiAutomationRoute(env);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60_000);
+  let response: Response;
+  try {
+    response = await (env.GEMINI_TEST_FETCH ?? fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(route.modelCode)}:generateContent`, {
+      method: 'POST', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': credential.apiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: '당신은 한국어와 영문 명함을 정확하게 구조화하는 회사 인맥관리 보조자입니다. 이미지에서 실제로 보이는 정보만 추출하고 추측하지 마세요. 값이 없거나 불확실하면 빈 문자열로 반환하세요. 전화번호 종류와 이름·회사·부서·직함을 문맥으로 구분하세요.' }] },
+        contents: [{ role: 'user', parts: [
+          { text: '이 명함을 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 짧게 정리하고, 개인정보를 새로 추측하지 마세요.' },
+          { inline_data: { mime_type: validated.mimeType, data: bytesToBase64(validated.bytes) } }
+        ] }],
+        generationConfig: {
+          responseMimeType: 'application/json', maxOutputTokens: 2048,
+          responseSchema: { type: 'OBJECT', required: [...BUSINESS_CARD_FIELD_KEYS], properties: Object.fromEntries(BUSINESS_CARD_FIELD_KEYS.map((key) => [key, { type: 'STRING' }])) }
+        }
+      })
+    });
+  } catch {
+    clearTimeout(timeout);
+    return json({ error: 'Gemini 명함 인식 시간이 초과되었습니다. 이미지를 확인한 뒤 다시 시도해 주세요.', code: 'GEMINI_BUSINESS_CARD_UNAVAILABLE' }, 504);
+  }
+  clearTimeout(timeout);
+  if (!response.ok) {
+    const safe = safeGeminiProviderError(await response.json().catch(() => null), response.status);
+    return json({ ...safe, providerStatus: response.status }, response.status === 401 || response.status === 403 ? 503 : 502);
+  }
+  const rawText = extractGeminiText(await response.json().catch(() => null));
+  let parsedJson: unknown = null;
+  if (rawText) {
+    try {
+      parsedJson = JSON.parse(rawText.replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '')).valueOf() as unknown;
+    } catch {
+      return json({ error: 'Gemini가 규격화된 명함 정보를 반환하지 못했습니다. 다른 사진으로 다시 시도해 주세요.', code: 'GEMINI_MALFORMED_BUSINESS_CARD' }, 502);
+    }
+  }
+  const fields = parseBusinessCardFields(parsedJson);
+  if (!fields) return json({ error: 'Gemini 인식값을 안전한 명함 필드로 확인하지 못했습니다. 다른 사진으로 다시 시도해 주세요.', code: 'GEMINI_MALFORMED_BUSINESS_CARD' }, 502);
+  const analysisId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
+  await env.DB!.prepare('INSERT INTO preview_business_card_analyses (id,organization_id,original_name,mime_type,byte_size,source_sha256,gemini_model_code,gemini_credential_source,extracted_json,created_by,created_at,expires_at,consumed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL)')
+    .bind(analysisId, PREVIEW_ORGANIZATION_ID, file.name.slice(0,240), validated.mimeType, file.size, validated.sha256, route.modelCode, credential.source, JSON.stringify(fields), user.id, createdAt, expiresAt).run();
+  return json({ analysis: { id: analysisId, fields, sourceSha256: validated.sha256, modelCode: route.modelCode, credentialSource: credential.source, expiresAt }, reviewRequired: true, rawImageStoredInD1: false, phase: 'CF78_GEMINI_BUSINESS_CARD' });
+}
+
+async function handleBusinessCards(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+  const isAdmin = user.roles.includes('admin');
+
+  if (url.pathname === '/api/business-cards/analyze' && request.method === 'POST') {
+    const form = await request.formData().catch(() => null);
+    const file = form?.get('file');
+    if (!(file instanceof File)) return json({ error: '명함 이미지 파일을 선택해 주세요.', code: 'BUSINESS_CARD_FILE_REQUIRED' }, 400);
+    try { return await analyzeBusinessCardImage(env, user, file); }
+    catch (reason) { return reason instanceof GoogleDriveError ? json({ error: reason.message, code: reason.code }, reason.status) : json({ error: '명함을 분석하지 못했습니다.', code: 'BUSINESS_CARD_ANALYSIS_FAILED' }, 500); }
+  }
+
+  if (url.pathname === '/api/business-cards' && request.method === 'GET') {
+    const query = businessCardText(url.searchParams.get('q'), 120);
+    const includeArchived = isAdmin && url.searchParams.get('includeArchived') === 'true';
+    const like = `%${query.replace(/[\\%_]/gu, '\\$&')}%`;
+    const rows = await env.DB.prepare(
+      `SELECT c.id,c.name,c.company,c.department,c.title,c.mobile,c.phone,c.fax,c.email,c.address,c.website,c.notes,c.tags_text AS tags,c.original_name AS originalName,c.google_drive_url AS googleDriveUrl,c.gemini_model_code AS geminiModelCode,c.version,c.created_at AS createdAt,c.updated_at AS updatedAt,c.deleted_at AS deletedAt,u.display_name AS createdByName ` +
+      `FROM preview_business_cards c JOIN preview_users u ON u.id=c.created_by WHERE c.organization_id=? AND (?=1 OR c.deleted_at IS NULL) AND (?='' OR c.name LIKE ? ESCAPE '\\' OR coalesce(c.company,'') LIKE ? ESCAPE '\\' OR coalesce(c.department,'') LIKE ? ESCAPE '\\' OR coalesce(c.title,'') LIKE ? ESCAPE '\\' OR coalesce(c.mobile,'') LIKE ? ESCAPE '\\' OR coalesce(c.phone,'') LIKE ? ESCAPE '\\' OR coalesce(c.email,'') LIKE ? ESCAPE '\\' OR coalesce(c.tags_text,'') LIKE ? ESCAPE '\\') ORDER BY c.deleted_at IS NOT NULL,c.name COLLATE NOCASE,c.created_at DESC LIMIT 300`
+    ).bind(PREVIEW_ORGANIZATION_ID, includeArchived ? 1 : 0, query, like, like, like, like, like, like, like, like).all<Record<string, unknown>>();
+    return json({ cards: rows.results, canManage: isAdmin, includeArchived, phase: 'CF78_GEMINI_BUSINESS_CARD' });
+  }
+
+  const cardMatch = url.pathname.match(/^\/api\/business-cards\/([0-9a-f-]{36})$/iu);
+  if (cardMatch && request.method === 'PUT') {
+    if (!isAdmin) return json({ error: '명함 DB관리는 관리자만 할 수 있습니다.', code: 'FORBIDDEN' }, 403);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, ['action','expectedVersion']) || !['ARCHIVE','RESTORE'].includes(String(body.action)) || !Number.isInteger(body.expectedVersion)) return json({ error: '명함 관리 요청이 올바르지 않습니다.', code: 'INVALID_BUSINESS_CARD_ACTION' }, 400);
+    if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    const current = await env.DB.prepare('SELECT id,name,version,deleted_at AS deletedAt FROM preview_business_cards WHERE id=? AND organization_id=?').bind(cardMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id:string; name:string; version:number; deletedAt:string|null }>();
+    if (!current) return json({ error: '명함을 찾을 수 없습니다.', code: 'BUSINESS_CARD_NOT_FOUND' }, 404);
+    if (Number(current.version) !== Number(body.expectedVersion)) return json({ error: '다른 화면에서 명함이 변경되었습니다.', code: 'VERSION_CONFLICT', currentVersion: current.version }, 409);
+    const archive = body.action === 'ARCHIVE';
+    if ((archive && current.deletedAt) || (!archive && !current.deletedAt)) return json({ error: '이미 처리된 명함입니다.', code: 'BUSINESS_CARD_STATE_CONFLICT' }, 409);
+    const now = new Date().toISOString();
+    const results = await env.DB.batch([
+      env.DB.prepare('UPDATE preview_business_cards SET deleted_at=?,deleted_by=?,updated_by=?,version=version+1,updated_at=? WHERE id=? AND version=?')
+        .bind(archive ? now : null, archive ? user.id : null, user.id, now, current.id, current.version),
+      env.DB.prepare('INSERT INTO preview_business_card_events (id,organization_id,card_id,event_type,detail_json,actor_id,created_at) SELECT ?,?,?,?, ?,?,? WHERE EXISTS (SELECT 1 FROM preview_business_cards WHERE id=? AND version=?)')
+        .bind(crypto.randomUUID(), PREVIEW_ORGANIZATION_ID, current.id, archive ? 'ADMIN_ARCHIVED' : 'ADMIN_RESTORED', JSON.stringify({ name:current.name, physicalDelete:false }), user.id, now, current.id, current.version + 1)
+    ]) as Array<{ meta?: { changes?: number } }>;
+    if (results.some((entry) => entry.meta?.changes !== 1)) return json({ error: '다른 화면에서 명함이 변경되었습니다.', code: 'VERSION_CONFLICT' }, 409);
+    return json({ ok:true, archived:archive, version:current.version+1, physicalDelete:false, phase:'CF78_GEMINI_BUSINESS_CARD' });
+  }
+
+  if (url.pathname !== '/api/business-cards' || request.method !== 'POST') return json({ error: 'Business card route was not found', code: 'BUSINESS_CARD_ROUTE_NOT_FOUND' }, 404);
+  const idempotencyKey = request.headers.get('Idempotency-Key');
+  if (!idempotencyKey || !GOOGLE_IDEMPOTENCY_KEY.test(idempotencyKey)) return json({ error: '안전한 등록 키가 필요합니다.', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
+  const form = await request.formData().catch(() => null);
+  const file = form?.get('file'); const analysisId = form?.get('analysisId'); const fieldsText = form?.get('fields');
+  if (!(file instanceof File) || typeof analysisId !== 'string' || !PREVIEW_DRAFT_KEY.test(analysisId) || typeof fieldsText !== 'string') return json({ error: '분석한 명함과 확인한 입력값이 필요합니다.', code: 'INVALID_BUSINESS_CARD_REGISTRATION' }, 400);
+  let fields: BusinessCardFields | null = null;
+  try { fields = parseBusinessCardFields(JSON.parse(fieldsText) as unknown); } catch { fields = null; }
+  if (!fields) return json({ error: '이름과 이메일 등 명함 입력값을 다시 확인해 주세요.', code: 'INVALID_BUSINESS_CARD_FIELDS' }, 400);
+  try {
+    const validated = await validateBusinessCardImage(file);
+    const analysis = await env.DB.prepare('SELECT id,source_sha256 AS sourceSha256,gemini_model_code AS modelCode,gemini_credential_source AS credentialSource,extracted_json AS extractedJson,expires_at AS expiresAt,consumed_at AS consumedAt FROM preview_business_card_analyses WHERE id=? AND organization_id=? AND created_by=?')
+      .bind(analysisId, PREVIEW_ORGANIZATION_ID, user.id).first<{id:string;sourceSha256:string;modelCode:string;credentialSource:string;extractedJson:string;expiresAt:string;consumedAt:string|null}>();
+    if (!analysis || analysis.consumedAt || analysis.expiresAt <= new Date().toISOString() || analysis.sourceSha256 !== validated.sha256) return json({ error: '분석 세션이 만료되었거나 다른 이미지입니다. 다시 인식해 주세요.', code: 'BUSINESS_CARD_ANALYSIS_EXPIRED' }, 409);
+    const fingerprint = await sha256Hex(`${analysisId}:${validated.sha256}:${JSON.stringify(fields)}`);
+    const existingOperation = await env.DB.prepare('SELECT status,request_fingerprint AS requestFingerprint,card_id AS cardId FROM preview_business_card_operations WHERE organization_id=? AND idempotency_key=?').bind(PREVIEW_ORGANIZATION_ID,idempotencyKey).first<{status:string;requestFingerprint:string;cardId:string|null}>();
+    if (existingOperation) {
+      if (existingOperation.requestFingerprint !== fingerprint) return json({ error:'등록 키가 다른 명함에 사용되었습니다.',code:'IDEMPOTENCY_MISMATCH' },409);
+      if (existingOperation.status === 'SUCCEEDED' && existingOperation.cardId) return json({ cardId:existingOperation.cardId,replay:true,phase:'CF78_GEMINI_BUSINESS_CARD' });
+      return json({ error:'동일 명함 등록이 진행 중이거나 확인 대기 중입니다.',code:'BUSINESS_CARD_OPERATION_PENDING' },409);
+    }
+    const duplicate = await env.DB.prepare('SELECT id,name,company FROM preview_business_cards WHERE organization_id=? AND source_sha256=? AND deleted_at IS NULL LIMIT 1').bind(PREVIEW_ORGANIZATION_ID,validated.sha256).first<Record<string,unknown>>();
+    if (duplicate) return json({ error:'같은 명함 이미지가 이미 등록되어 있습니다.',code:'BUSINESS_CARD_DUPLICATE',existing:duplicate },409);
+    if (!env.DB.batch) return json({ error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED' },503);
+    const operationId=crypto.randomUUID(); const cardId=crypto.randomUUID(); const reservedAt=new Date().toISOString();
+    const reserved=await env.DB.prepare("INSERT OR IGNORE INTO preview_business_card_operations (id,organization_id,idempotency_key,request_fingerprint,status,card_id,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?, 'PENDING',?,NULL,NULL,?,?,?)")
+      .bind(operationId,PREVIEW_ORGANIZATION_ID,idempotencyKey,fingerprint,cardId,user.id,reservedAt,reservedAt).run();
+    if(reserved.meta?.changes!==1)return json({error:'동일 명함 등록 요청이 이미 있습니다.',code:'BUSINESS_CARD_OPERATION_CONFLICT'},409);
+    try {
+      const token=await accessToken(env);
+      const folder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId:BUSINESS_CARD_LIBRARY_ID,kind:'BUSINESS_CARD_LIBRARY',period:'',name:'인맥관리·명함'});
+      const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:folder.id,evidenceId:cardId,fileName:file.name,mimeType:validated.mimeType,sha256:validated.sha256,bytes:validated.bytes,caseId:BUSINESS_CARD_LIBRARY_ID,category:'BUSINESS_CARD',uploadedById:user.id,uploadedAt:reservedAt});
+      const completedAt=new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString();
+      const results=await env.DB.batch([
+        env.DB.prepare('INSERT INTO preview_business_cards (id,organization_id,analysis_id,name,company,department,title,mobile,phone,fax,email,address,website,notes,tags_text,original_name,mime_type,byte_size,source_sha256,google_file_id,google_folder_id,google_drive_url,gemini_model_code,gemini_credential_source,extracted_json,review_confirmed,version,created_by,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,?)')
+          .bind(cardId,PREVIEW_ORGANIZATION_ID,analysisId,fields.name,fields.company||null,fields.department||null,fields.title||null,fields.mobile||null,fields.phone||null,fields.fax||null,fields.email||null,fields.address||null,fields.website||null,fields.notes||null,fields.tags||null,file.name.slice(0,240),validated.mimeType,file.size,validated.sha256,uploaded.fileId,folder.id,uploaded.webViewLink,analysis.modelCode,analysis.credentialSource,analysis.extractedJson,user.id,user.id,completedAt,completedAt),
+        env.DB.prepare('UPDATE preview_business_card_analyses SET consumed_at=? WHERE id=? AND consumed_at IS NULL').bind(completedAt,analysisId),
+        env.DB.prepare("UPDATE preview_business_card_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId,completedAt,operationId),
+        env.DB.prepare("INSERT INTO preview_business_card_events (id,organization_id,card_id,event_type,detail_json,actor_id,created_at) VALUES (?,?,?,'REGISTERED',?,?,?)").bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,cardId,JSON.stringify({modelCode:analysis.modelCode,sourceSha256:validated.sha256,driveFolder:'02_클레임센터/인맥관리·명함'}),user.id,completedAt)
+      ]) as Array<{meta?:{changes?:number}}>;
+      if(results.some((entry)=>entry.meta?.changes!==1))throw new GoogleDriveError('BUSINESS_CARD_METADATA_COMMIT_FAILED',503,'명함 원본은 Drive에 저장됐지만 DB 확인이 필요합니다.',true);
+      return json({card:{id:cardId,...fields,googleDriveUrl:uploaded.webViewLink,createdAt:completedAt},replay:false,driveStored:true,phase:'CF78_GEMINI_BUSINESS_CARD'},201);
+    } catch(reason) {
+      const uncertain=reason instanceof GoogleDriveError&&reason.uncertain;
+      await env.DB.prepare("UPDATE preview_business_card_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED',new Date().toISOString(),operationId).run().catch(()=>undefined);
+      return googleFailure(reason);
+    }
+  } catch(reason) {
+    return reason instanceof GoogleDriveError?json({error:reason.message,code:reason.code},reason.status):json({error:'명함을 등록하지 못했습니다.',code:'BUSINESS_CARD_REGISTRATION_FAILED'},500);
+  }
+}
+
 // Router dispatch
 const worker = {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
@@ -6823,6 +7367,10 @@ const worker = {
       return handlePreviewLitigation(request, env, url);
     }
 
+    if (url.pathname === '/api/business-cards' || url.pathname.startsWith('/api/business-cards/')) {
+      return handleBusinessCards(request, env, url);
+    }
+
     if (url.pathname === '/api/proposal-workflow' || url.pathname.startsWith('/api/proposal-workflow/')) {
       return handlePreviewProposalWorkflow(request, env, url);
     }
@@ -6859,6 +7407,10 @@ const worker = {
 
     if (url.pathname === '/api/report-drafts') {
       return handlePreviewReportDraft(request, env, url);
+    }
+
+    if (url.pathname === '/api/report-chapter-collaboration') {
+      return handlePreviewReportChapterCollaboration(request, env, url);
     }
 
     if (url.pathname === '/api/report-authoring/config' || url.pathname === '/api/report-authoring/generate' || url.pathname === '/api/report-authoring/improve' || url.pathname === '/api/report-authoring/outline' || url.pathname === '/api/report-authoring/outline/generate') {

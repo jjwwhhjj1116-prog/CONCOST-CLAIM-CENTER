@@ -152,7 +152,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
         ),
         apiRequest<{ blocks: BlockDefinition[] }>('/api/block-definitions'),
         apiRequest<{ inventory: ReferenceInventory[] }>('/api/reference-inventories'),
-        apiRequest<{ cases: CaseRecord[] }>('/api/cases?limit=100')
+        apiRequest<{ cases: CaseRecord[] }>('/api/cases?scope=project-work&limit=100')
       ]);
       setTemplates(catalog.templates);
       setActiveCounts(catalog.activeCounts);

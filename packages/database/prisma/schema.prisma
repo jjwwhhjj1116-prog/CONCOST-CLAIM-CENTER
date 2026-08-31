@@ -8,86 +8,100 @@ datasource db {
 }
 
 model Organization {
-  id        String     @id
-  name      String
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  users     User[]
-  cases     CaseItem[]
-  auditLogs AuditLog[]
-  reportTemplates ReportTemplate[]
-  reportInstances ReportInstance[]
-  aiProviderConfigs AiProviderConfig[]
-  aiUsageLedgers AiUsageLedger[]
-  aiGenerationRequests AiGenerationRequest[]
-  groundingSelections AiGroundingSelection[]
-  draftSuggestions AiDraftSuggestion[]
-  reportReviewRequests ReportReviewRequest[]
-  reportFinalizations ReportFinalization[]
-  reportOutputArtifacts ReportOutputArtifact[]
-  reportOutputDownloads ReportOutputDownload[]
-  feeConfigs            CaseFeeConfig[]
-  feeCalculations       CaseFeeCalculation[]
-  feePayments           CaseFeePayment[]
-  feeAudits             CaseFeeAudit[]
+  id                         String                      @id
+  name                       String
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+  users                      User[]
+  cases                      CaseItem[]
+  auditLogs                  AuditLog[]
+  reportTemplates            ReportTemplate[]
+  reportInstances            ReportInstance[]
+  aiProviderConfigs          AiProviderConfig[]
+  aiUsageLedgers             AiUsageLedger[]
+  aiGenerationRequests       AiGenerationRequest[]
+  groundingSelections        AiGroundingSelection[]
+  draftSuggestions           AiDraftSuggestion[]
+  reportReviewRequests       ReportReviewRequest[]
+  reportFinalizations        ReportFinalization[]
+  reportOutputArtifacts      ReportOutputArtifact[]
+  reportOutputDownloads      ReportOutputDownload[]
+  feeConfigs                 CaseFeeConfig[]
+  feeCalculations            CaseFeeCalculation[]
+  feePayments                CaseFeePayment[]
+  feeAudits                  CaseFeeAudit[]
   googleWorkspaceConnections GoogleWorkspaceConnection[]
   googleOAuthStates          GoogleOAuthState[]
   googleSyncOperations       GoogleSyncOperation[]
   googleResourceLinks        GoogleResourceLink[]
   googleImportSnapshots      GoogleImportSnapshot[]
   userRegistrationRequests   UserRegistrationRequest[]
+  businessCards              BusinessCard[]
+  businessCardAnalyses       BusinessCardAnalysis[]
+  businessCardOperations     BusinessCardOperation[]
+  businessCardEvents         BusinessCardEvent[]
 }
 
 model User {
-  id                      String            @id
-  email                   String            @unique
-  passwordHash            String
-  name                    String
-  organizationId          String
-  isActive                Boolean           @default(true)
-  createdAt               DateTime          @default(now())
-  updatedAt               DateTime          @updatedAt
-  organization            Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  roles                   UserRole[]
-  sessions                Session[]
-  assignments             CaseAssignment[]
-  assignedCases           CaseItem[]        @relation("AssignedCases")
-  statusHistories         StatusHistory[]
-  auditLogs               AuditLog[]
-  uploadedVersions        DocumentVersion[]
-  createdMeetings         Meeting[]
-  actionItems             MeetingActionItem[]
-  createdProposals        Proposal[]        @relation("ProposalCreator")
-  updatedProposals        Proposal[]        @relation("ProposalUpdater")
-  createdProposalVersions ProposalVersion[] @relation("ProposalVersionCreator")
-  proposalReviews         ProposalReview[]
-  createdReportTemplates  ReportTemplate[]        @relation("ReportTemplateCreator")
-  createdReportTemplateVersions ReportTemplateVersion[] @relation("ReportTemplateVersionCreator")
-  approvedReportTemplateVersions ReportTemplateVersion[] @relation("ReportTemplateVersionApprover")
-  createdReportInstances  ReportInstance[]         @relation("ReportInstanceCreator")
-  createdSectionRevisions ReportSectionRevision[] @relation("SectionRevisionAuthor")
-  createdSectionComments ReportSectionComment[]  @relation("SectionCommentAuthor")
-  resolvedSectionComments ReportSectionComment[] @relation("SectionCommentResolver")
-  approvedReportSections ReportSectionApproval[] @relation("SectionApprovalApprover")
-  createdReportMergeSnapshots ReportMergeSnapshot[] @relation("ReportMergeSnapshotCreator")
-  aiUsageLedgers AiUsageLedger[]
-  aiGenerationRequests AiGenerationRequest[]
-  groundingSelections AiGroundingSelection[]
-  createdSuggestions AiDraftSuggestion[] @relation("SuggestionActor")
-  appliedSuggestions AiDraftSuggestion[] @relation("SuggestionAppliedActor")
-  requestedReportReviews ReportReviewRequest[] @relation("ReportReviewRequestedBy")
-  assignedReportReviews  ReportReviewRequest[] @relation("ReportReviewAssignedReviewer")
-  finalizedReports       ReportFinalization[]  @relation("ReportFinalizedBy")
-  approvedFinalizationSections ReportFinalizationSection[] @relation("FinalizationSectionApprovedBy")
-  downloadedReportOutputs ReportOutputDownload[] @relation("ReportOutputDownloadedBy")
-  feeCalculations        CaseFeeCalculation[]  @relation("FeeCalculatedBy")
-  feePayments            CaseFeePayment[]      @relation("FeePaymentRecordedBy")
-  feeAudits              CaseFeeAudit[]        @relation("FeeAuditActor")
-  createdGoogleConnections GoogleWorkspaceConnection[] @relation("GoogleConnectionCreatedBy")
-  googleOAuthStates        GoogleOAuthState[]        @relation("GoogleOAuthActor")
-  createdGoogleSyncOps     GoogleSyncOperation[]     @relation("GoogleSyncOpActor")
-  createdGoogleSnapshots   GoogleImportSnapshot[]    @relation("GoogleSnapshotCreatedBy")
-  reviewedRegistrationRequests UserRegistrationRequest[] @relation("RegistrationReviewedBy")
+  id                              String                        @id
+  email                           String                        @unique
+  passwordHash                    String
+  name                            String
+  organizationId                  String
+  isActive                        Boolean                       @default(true)
+  createdAt                       DateTime                      @default(now())
+  updatedAt                       DateTime                      @updatedAt
+  organization                    Organization                  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  roles                           UserRole[]
+  sessions                        Session[]
+  assignments                     CaseAssignment[]
+  assignedCases                   CaseItem[]                    @relation("AssignedCases")
+  statusHistories                 StatusHistory[]
+  auditLogs                       AuditLog[]
+  uploadedVersions                DocumentVersion[]
+  createdMeetings                 Meeting[]
+  actionItems                     MeetingActionItem[]
+  createdProposals                Proposal[]                    @relation("ProposalCreator")
+  updatedProposals                Proposal[]                    @relation("ProposalUpdater")
+  createdProposalVersions         ProposalVersion[]             @relation("ProposalVersionCreator")
+  proposalReviews                 ProposalReview[]
+  createdReportTemplates          ReportTemplate[]              @relation("ReportTemplateCreator")
+  createdReportTemplateVersions   ReportTemplateVersion[]       @relation("ReportTemplateVersionCreator")
+  approvedReportTemplateVersions  ReportTemplateVersion[]       @relation("ReportTemplateVersionApprover")
+  createdReportInstances          ReportInstance[]              @relation("ReportInstanceCreator")
+  createdSectionRevisions         ReportSectionRevision[]       @relation("SectionRevisionAuthor")
+  createdSectionComments          ReportSectionComment[]        @relation("SectionCommentAuthor")
+  resolvedSectionComments         ReportSectionComment[]        @relation("SectionCommentResolver")
+  approvedReportSections          ReportSectionApproval[]       @relation("SectionApprovalApprover")
+  createdReportMergeSnapshots     ReportMergeSnapshot[]         @relation("ReportMergeSnapshotCreator")
+  aiUsageLedgers                  AiUsageLedger[]
+  aiGenerationRequests            AiGenerationRequest[]
+  groundingSelections             AiGroundingSelection[]
+  createdSuggestions              AiDraftSuggestion[]           @relation("SuggestionActor")
+  appliedSuggestions              AiDraftSuggestion[]           @relation("SuggestionAppliedActor")
+  requestedReportReviews          ReportReviewRequest[]         @relation("ReportReviewRequestedBy")
+  assignedReportReviews           ReportReviewRequest[]         @relation("ReportReviewAssignedReviewer")
+  finalizedReports                ReportFinalization[]          @relation("ReportFinalizedBy")
+  approvedFinalizationSections    ReportFinalizationSection[]   @relation("FinalizationSectionApprovedBy")
+  downloadedReportOutputs         ReportOutputDownload[]        @relation("ReportOutputDownloadedBy")
+  feeCalculations                 CaseFeeCalculation[]          @relation("FeeCalculatedBy")
+  feePayments                     CaseFeePayment[]              @relation("FeePaymentRecordedBy")
+  feeAudits                       CaseFeeAudit[]                @relation("FeeAuditActor")
+  createdGoogleConnections        GoogleWorkspaceConnection[]   @relation("GoogleConnectionCreatedBy")
+  googleOAuthStates               GoogleOAuthState[]            @relation("GoogleOAuthActor")
+  createdGoogleSyncOps            GoogleSyncOperation[]         @relation("GoogleSyncOpActor")
+  createdGoogleSnapshots          GoogleImportSnapshot[]        @relation("GoogleSnapshotCreatedBy")
+  reviewedRegistrationRequests    UserRegistrationRequest[]     @relation("RegistrationReviewedBy")
+  assignedReportSections          ReportSectionAssignment[]     @relation("ReportSectionAssignee")
+  createdReportSectionAssignments ReportSectionAssignment[]     @relation("ReportSectionAssignedBy")
+  updatedCaseScheduleVisibilities CaseScheduleVisibility[]      @relation("CaseScheduleVisibilityUpdatedBy")
+  caseScheduleVisibilityEvents    CaseScheduleVisibilityEvent[] @relation("CaseScheduleVisibilityEventActor")
+  createdBusinessCards            BusinessCard[]                @relation("BusinessCardCreatedBy")
+  businessCardAnalyses            BusinessCardAnalysis[]        @relation("BusinessCardAnalysisCreatedBy")
+  updatedBusinessCards            BusinessCard[]                @relation("BusinessCardUpdatedBy")
+  archivedBusinessCards           BusinessCard[]                @relation("BusinessCardDeletedBy")
+  createdBusinessCardOperations   BusinessCardOperation[]       @relation("BusinessCardOperationCreatedBy")
+  businessCardEvents              BusinessCardEvent[]           @relation("BusinessCardEventActor")
 }
 
 model UserRegistrationRequest {
@@ -140,46 +154,48 @@ model Session {
 }
 
 model CaseItem {
-  id             String           @id
-  organizationId String
-  caseNumber     String           @unique
-  title          String
-  description    String?
-  claimType      String
-  status         String           @default("INQUIRY")
-  assignedUserId String?
-  version        Int              @default(1)
-  deletedAt      DateTime?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  assignedUser   User?            @relation("AssignedCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
-  assignments    CaseAssignment[]
-  category       CaseCategory?
-  parties        Party[]
-  schedules      Schedule[]
-  statusHistories StatusHistory[]
-  reports        Report[]
-  documents      Document[]
-  meetings       Meeting[]
-  proposals      Proposal[]
-  reportInstances ReportInstance[]
-  aiPolicy       AiCasePolicy?
-  aiUsageLedgers AiUsageLedger[]
-  aiGenerationRequests AiGenerationRequest[]
-  groundingSelections AiGroundingSelection[]
-  reviewRequests        ReportReviewRequest[]
-  finalizations         ReportFinalization[]
-  outputArtifacts       ReportOutputArtifact[]
-  downloadedReportOutputs ReportOutputDownload[]
-  draftSuggestions AiDraftSuggestion[]
-  feeConfig             CaseFeeConfig?
-  feeCalculations       CaseFeeCalculation[]
-  feePayments           CaseFeePayment[]
-  feeAudits             CaseFeeAudit[]
-  googleSyncOperations  GoogleSyncOperation[]
-  googleResourceLinks   GoogleResourceLink[]
-  googleImportSnapshots GoogleImportSnapshot[]
+  id                       String                        @id
+  organizationId           String
+  caseNumber               String                        @unique
+  title                    String
+  description              String?
+  claimType                String
+  status                   String                        @default("INQUIRY")
+  assignedUserId           String?
+  version                  Int                           @default(1)
+  deletedAt                DateTime?
+  createdAt                DateTime                      @default(now())
+  updatedAt                DateTime                      @updatedAt
+  organization             Organization                  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  assignedUser             User?                         @relation("AssignedCases", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignments              CaseAssignment[]
+  category                 CaseCategory?
+  parties                  Party[]
+  schedules                Schedule[]
+  statusHistories          StatusHistory[]
+  reports                  Report[]
+  documents                Document[]
+  meetings                 Meeting[]
+  proposals                Proposal[]
+  reportInstances          ReportInstance[]
+  aiPolicy                 AiCasePolicy?
+  aiUsageLedgers           AiUsageLedger[]
+  aiGenerationRequests     AiGenerationRequest[]
+  groundingSelections      AiGroundingSelection[]
+  reviewRequests           ReportReviewRequest[]
+  finalizations            ReportFinalization[]
+  outputArtifacts          ReportOutputArtifact[]
+  downloadedReportOutputs  ReportOutputDownload[]
+  draftSuggestions         AiDraftSuggestion[]
+  feeConfig                CaseFeeConfig?
+  feeCalculations          CaseFeeCalculation[]
+  feePayments              CaseFeePayment[]
+  feeAudits                CaseFeeAudit[]
+  googleSyncOperations     GoogleSyncOperation[]
+  googleResourceLinks      GoogleResourceLink[]
+  googleImportSnapshots    GoogleImportSnapshot[]
+  scheduleVisibility       CaseScheduleVisibility?
+  scheduleVisibilityEvents CaseScheduleVisibilityEvent[]
 
   @@index([organizationId, deletedAt])
   @@index([caseNumber])
@@ -256,25 +272,25 @@ model StatusHistory {
 }
 
 model Document {
-  id               String            @id
-  caseId           String
-  scheduleId       String?
-  reportSectionId  String?
+  id                String            @id
+  caseId            String
+  scheduleId        String?
+  reportSectionId   String?
   proposalVersionId String?
-  title            String
-  category         String?
-  source           String            // RECEIVED, AUTHORED, SUBMITTED
-  currentVersionId String?
-  finalVersionId   String?
-  version          Int               @default(1)
-  deletedAt        DateTime?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  schedule         Schedule?         @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
-  reportSection    ReportSection?    @relation(fields: [reportSectionId], references: [id], onDelete: SetNull)
-  proposalVersion  ProposalVersion?  @relation(fields: [proposalVersionId], references: [id], onDelete: Restrict)
-  versions         DocumentVersion[]
+  title             String
+  category          String?
+  source            String // RECEIVED, AUTHORED, SUBMITTED
+  currentVersionId  String?
+  finalVersionId    String?
+  version           Int               @default(1)
+  deletedAt         DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  case              CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  schedule          Schedule?         @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  reportSection     ReportSection?    @relation(fields: [reportSectionId], references: [id], onDelete: SetNull)
+  proposalVersion   ProposalVersion?  @relation(fields: [proposalVersionId], references: [id], onDelete: Restrict)
+  versions          DocumentVersion[]
 
   @@index([caseId, deletedAt])
   @@index([scheduleId])
@@ -284,21 +300,21 @@ model Document {
 }
 
 model DocumentVersion {
-  id            String   @id
-  documentId    String
-  versionNumber Int
-  originalName  String
-  displayName   String
-  storageKey    String   @unique
-  fileSize      Int
-  mimeType      String
-  sha256        String
-  isFinal       Boolean  @default(false)
-  uploadedById  String
-  createdAt     DateTime @default(now())
-  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  uploadedBy    User     @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
-  evidenceLinks ReportEvidenceLink[]
+  id              String                 @id
+  documentId      String
+  versionNumber   Int
+  originalName    String
+  displayName     String
+  storageKey      String                 @unique
+  fileSize        Int
+  mimeType        String
+  sha256          String
+  isFinal         Boolean                @default(false)
+  uploadedById    String
+  createdAt       DateTime               @default(now())
+  document        Document               @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  uploadedBy      User                   @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  evidenceLinks   ReportEvidenceLink[]
   outputArtifacts ReportOutputArtifact[]
 
   @@unique([documentId, versionNumber])
@@ -307,7 +323,7 @@ model DocumentVersion {
 }
 
 model Meeting {
-  id            String              @id
+  id            String               @id
   caseId        String
   title         String
   meetingDate   DateTime
@@ -317,13 +333,13 @@ model Meeting {
   rawTextSha256 String?
   summary       String?
   decisions     String?
-  status        String              @default("DRAFT") // DRAFT, FINAL
-  version       Int                 @default(1)
+  status        String               @default("DRAFT") // DRAFT, FINAL
+  version       Int                  @default(1)
   createdById   String
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  case          CaseItem            @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  createdBy     User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  case          CaseItem             @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  createdBy     User                 @relation(fields: [createdById], references: [id], onDelete: Restrict)
   actionItems   MeetingActionItem[]
   evidenceLinks ReportEvidenceLink[]
 
@@ -352,57 +368,212 @@ model MeetingActionItem {
 }
 
 model Report {
-  id        String          @id
-  caseId    String
-  reportInstanceId String?  @unique
-  title     String
-  version   Int             @default(1)
-  deletedAt DateTime?
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
-  case      CaseItem        @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  reportInstance ReportInstance? @relation(fields: [reportInstanceId], references: [id], onDelete: Restrict)
-  sections  ReportSection[]
-  mergeSnapshots ReportMergeSnapshot[]
+  id                  String                 @id
+  caseId              String
+  reportInstanceId    String?                @unique
+  title               String
+  version             Int                    @default(1)
+  deletedAt           DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  case                CaseItem               @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  reportInstance      ReportInstance?        @relation(fields: [reportInstanceId], references: [id], onDelete: Restrict)
+  sections            ReportSection[]
+  mergeSnapshots      ReportMergeSnapshot[]
   groundingSelections AiGroundingSelection[]
-  draftSuggestions AiDraftSuggestion[]
-  reviewRequests ReportReviewRequest[]
-  finalizations ReportFinalization[]
-  outputArtifacts ReportOutputArtifact[]
+  draftSuggestions    AiDraftSuggestion[]
+  reviewRequests      ReportReviewRequest[]
+  finalizations       ReportFinalization[]
+  outputArtifacts     ReportOutputArtifact[]
 
   @@index([caseId, deletedAt])
 }
 
 model ReportSection {
-  id        String     @id
-  reportId  String
+  id                        String                      @id
+  reportId                  String
   templateSectionIdSnapshot String?
-  sectionNumber Int      @default(1)
-  title     String
-  content   String
-  status    String
-  isRequired Boolean     @default(false)
-  blockSchemaSnapshotJson String @default("{}")
-  version   Int        @default(1)
-  deletedAt DateTime?
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
-  report    Report     @relation(fields: [reportId], references: [id], onDelete: Cascade)
-  documents Document[]
-  revisions ReportSectionRevision[]
-  comments  ReportSectionComment[]
-  approvals ReportSectionApproval[]
-  groundingSelections AiGroundingSelection[]
-  draftSuggestions AiDraftSuggestion[]
-  finalizationSections ReportFinalizationSection[]
+  sectionNumber             Int                         @default(1)
+  title                     String
+  content                   String
+  status                    String
+  isRequired                Boolean                     @default(false)
+  blockSchemaSnapshotJson   String                      @default("{}")
+  version                   Int                         @default(1)
+  deletedAt                 DateTime?
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
+  report                    Report                      @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  documents                 Document[]
+  revisions                 ReportSectionRevision[]
+  comments                  ReportSectionComment[]
+  approvals                 ReportSectionApproval[]
+  groundingSelections       AiGroundingSelection[]
+  draftSuggestions          AiDraftSuggestion[]
+  finalizationSections      ReportFinalizationSection[]
+  assignment                ReportSectionAssignment?
 
   @@index([reportId, deletedAt])
+}
+
+model ReportSectionAssignment {
+  sectionId    String        @id
+  assigneeId   String
+  assignedById String
+  status       String        @default("IN_PROGRESS")
+  version      Int           @default(1)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  section      ReportSection @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  assignee     User          @relation("ReportSectionAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  assignedBy   User          @relation("ReportSectionAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@index([assigneeId, status, updatedAt])
+}
+
+model CaseScheduleVisibility {
+  caseId           String   @id
+  organizationId   String
+  visibility       String   @default("ACTIVE")
+  reasonCode       String?
+  reasonText       String?
+  driveVerified    Boolean  @default(false)
+  manifestSha256   String?
+  verificationJson String   @default("{}")
+  version          Int      @default(1)
+  updatedById      String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  case             CaseItem @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  updatedBy        User     @relation("CaseScheduleVisibilityUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, visibility, updatedAt])
+}
+
+model CaseScheduleVisibilityEvent {
+  id               String   @id
+  caseId           String
+  organizationId   String
+  fromVisibility   String
+  toVisibility     String
+  reasonCode       String
+  reasonText       String
+  driveVerified    Boolean
+  manifestSha256   String?
+  verificationJson String
+  actorId          String
+  createdAt        DateTime @default(now())
+  case             CaseItem @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  actor            User     @relation("CaseScheduleVisibilityEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([caseId, createdAt])
+}
+
+model BusinessCardOperation {
+  id                 String       @id
+  organizationId     String
+  idempotencyKey     String
+  requestFingerprint String
+  status             String       @default("PENDING")
+  cardId             String?
+  googleFileId       String?
+  errorCode          String?
+  createdById        String
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy          User         @relation("BusinessCardOperationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, status, updatedAt])
+}
+
+model BusinessCardAnalysis {
+  id                     String        @id
+  organizationId         String
+  originalName           String
+  mimeType               String
+  byteSize               Int
+  sourceSha256           String
+  geminiModelCode        String
+  geminiCredentialSource String
+  extractedJson          String
+  createdById            String
+  createdAt              DateTime      @default(now())
+  expiresAt              DateTime
+  consumedAt             DateTime?
+  organization           Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy              User          @relation("BusinessCardAnalysisCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  card                   BusinessCard?
+
+  @@index([createdById, expiresAt, consumedAt])
+}
+
+model BusinessCard {
+  id                     String               @id
+  organizationId         String
+  analysisId             String               @unique
+  name                   String
+  company                String?
+  department             String?
+  title                  String?
+  mobile                 String?
+  phone                  String?
+  fax                    String?
+  email                  String?
+  address                String?
+  website                String?
+  notes                  String?
+  tagsText               String?
+  originalName           String
+  mimeType               String
+  byteSize               Int
+  sourceSha256           String
+  googleFileId           String
+  googleFolderId         String
+  googleDriveUrl         String
+  geminiModelCode        String
+  geminiCredentialSource String
+  extractedJson          String
+  reviewConfirmed        Boolean              @default(true)
+  version                Int                  @default(1)
+  createdById            String
+  updatedById            String
+  deletedById            String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  deletedAt              DateTime?
+  organization           Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  analysis               BusinessCardAnalysis @relation(fields: [analysisId], references: [id], onDelete: Restrict)
+  createdBy              User                 @relation("BusinessCardCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy              User                 @relation("BusinessCardUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  deletedBy              User?                @relation("BusinessCardDeletedBy", fields: [deletedById], references: [id], onDelete: Restrict)
+  events                 BusinessCardEvent[]
+
+  @@index([organizationId, deletedAt, name, company, department])
+  @@index([createdById, createdAt])
+  @@index([organizationId, sourceSha256, deletedAt])
+}
+
+model BusinessCardEvent {
+  id             String       @id
+  organizationId String
+  cardId         String
+  eventType      String
+  detailJson     String
+  actorId        String
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  card           BusinessCard @relation(fields: [cardId], references: [id], onDelete: Restrict)
+  actor          User         @relation("BusinessCardEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([cardId, createdAt])
 }
 
 model ProposalTemplate {
   id               String     @id
   name             String
-  claimType        String     // TYPE-01 to TYPE-06
+  claimType        String // TYPE-01 to TYPE-06
   description      String?
   bodyTemplate     String
   placeholdersJson String
@@ -415,29 +586,29 @@ model ProposalTemplate {
 }
 
 model Proposal {
-  id               String            @id
-  caseId           String
-  templateId       String
-  templateVersionSnapshot Int
-  templateBodySnapshot String
+  id                               String            @id
+  caseId                           String
+  templateId                       String
+  templateVersionSnapshot          Int
+  templateBodySnapshot             String
   templatePlaceholdersSnapshotJson String
-  title            String
-  status           String            @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED, REJECTED
-  currentVersionId String?
-  approvedVersionId String?
-  outputDocumentId String?
-  version          Int               @default(1)
-  createdById      String
-  updatedById      String
-  deletedAt        DateTime?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  case             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  template         ProposalTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  createdBy        User              @relation("ProposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy        User              @relation("ProposalUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
-  versions         ProposalVersion[]
-  reviews          ProposalReview[]
+  title                            String
+  status                           String            @default("DRAFT") // DRAFT, IN_REVIEW, APPROVED, REJECTED
+  currentVersionId                 String?
+  approvedVersionId                String?
+  outputDocumentId                 String?
+  version                          Int               @default(1)
+  createdById                      String
+  updatedById                      String
+  deletedAt                        DateTime?
+  createdAt                        DateTime          @default(now())
+  updatedAt                        DateTime          @updatedAt
+  case                             CaseItem          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  template                         ProposalTemplate  @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy                        User              @relation("ProposalCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                        User              @relation("ProposalUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+  versions                         ProposalVersion[]
+  reviews                          ProposalReview[]
 
   @@index([caseId, deletedAt])
   @@index([templateId])
@@ -453,11 +624,11 @@ model ProposalVersion {
   structuredInputsJson         String
   renderedValuesJson           String
   missingFieldsJson            String
-  generationMode               String           // MANUAL, AI
+  generationMode               String // MANUAL, AI
   providerId                   String?
   modelId                      String?
   promptConfigVersion          String?
-  inputSha256                   String
+  inputSha256                  String
   generatedAt                  DateTime?
   sourceDocumentVersionIdsJson String?
   sha256                       String
@@ -478,7 +649,7 @@ model ProposalReview {
   proposalId String
   versionId  String
   reviewerId String
-  action     String          // REQUEST_REVIEW, APPROVE, REJECT
+  action     String // REQUEST_REVIEW, APPROVE, REJECT
   comment    String?
   createdAt  DateTime        @default(now())
   proposal   Proposal        @relation(fields: [proposalId], references: [id], onDelete: Cascade)
@@ -491,33 +662,33 @@ model ProposalReview {
 }
 
 model ReferenceInventory {
-  id             String   @id
-  fileId         String   @unique
-  sha256         String
-  fileSize       Int
-  scanStatus     String   @default("UNSCANNED")
-  approvalStatus String   @default("REVIEW_REQUIRED")
-  version        Int      @default(1)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id                 String              @id
+  fileId             String              @unique
+  sha256             String
+  fileSize           Int
+  scanStatus         String              @default("UNSCANNED")
+  approvalStatus     String              @default("REVIEW_REQUIRED")
+  version            Int                 @default(1)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
   templateReferences TemplateReference[]
 
   @@index([approvalStatus])
 }
 
 model ReportTemplate {
-  id             String   @id
+  id             String                  @id
   organizationId String
   code           String
   name           String
   description    String?
-  status         String   @default("ACTIVE")
-  version        Int      @default(1)
+  status         String                  @default("ACTIVE")
+  version        Int                     @default(1)
   createdById    String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  createdBy      User     @relation("ReportTemplateCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy      User                    @relation("ReportTemplateCreator", fields: [createdById], references: [id], onDelete: Restrict)
   versions       ReportTemplateVersion[]
 
   @@unique([organizationId, code])
@@ -525,44 +696,44 @@ model ReportTemplate {
 }
 
 model ReportTemplateVersion {
-  id                         String   @id
-  templateId                 String
-  versionNumber              Int
-  rowVersion                 Int      @default(1)
-  name                       String
-  companyForm                String
-  tocStructureJson           String
-  requiredSectionsJson       String
-  requiredEvidenceRulesJson  String
-  blockSchemasJson           String
-  contentSha256              String
-  status                     String   @default("DRAFT")
-  createdById                String
-  approvedById               String?
-  approvedAt                 DateTime?
-  activatedAt                DateTime?
-  archivedAt                 DateTime?
-  createdAt                  DateTime @default(now())
-  updatedAt                  DateTime @updatedAt
-  template                   ReportTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
-  createdBy                  User     @relation("ReportTemplateVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy                 User?    @relation("ReportTemplateVersionApprover", fields: [approvedById], references: [id], onDelete: Restrict)
-  typeMappings               TemplateTypeMapping[]
-  sections                   TemplateSection[]
-  references                 TemplateReference[]
-  reportInstances            ReportInstance[]
-  reportFinalizations        ReportFinalization[]
+  id                        String                @id
+  templateId                String
+  versionNumber             Int
+  rowVersion                Int                   @default(1)
+  name                      String
+  companyForm               String
+  tocStructureJson          String
+  requiredSectionsJson      String
+  requiredEvidenceRulesJson String
+  blockSchemasJson          String
+  contentSha256             String
+  status                    String                @default("DRAFT")
+  createdById               String
+  approvedById              String?
+  approvedAt                DateTime?
+  activatedAt               DateTime?
+  archivedAt                DateTime?
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+  template                  ReportTemplate        @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  createdBy                 User                  @relation("ReportTemplateVersionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy                User?                 @relation("ReportTemplateVersionApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  typeMappings              TemplateTypeMapping[]
+  sections                  TemplateSection[]
+  references                TemplateReference[]
+  reportInstances           ReportInstance[]
+  reportFinalizations       ReportFinalization[]
 
   @@unique([templateId, versionNumber])
   @@index([templateId, status])
 }
 
 model TemplateTypeMapping {
-  id                String   @id
+  id                String                @id
   templateVersionId String
   typeId            String
   kind              String
-  createdAt         DateTime @default(now())
+  createdAt         DateTime              @default(now())
   templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
 
   @@unique([templateVersionId, typeId])
@@ -570,62 +741,62 @@ model TemplateTypeMapping {
 }
 
 model TemplateSection {
-  id                String   @id
-  templateVersionId String
-  sectionNumber     Int
-  title             String
-  isRequired        Boolean  @default(false)
-  description       String?
+  id                      String                 @id
+  templateVersionId       String
+  sectionNumber           Int
+  title                   String
+  isRequired              Boolean                @default(false)
+  description             String?
   blockSchemaSnapshotJson String
-  createdAt         DateTime @default(now())
-  templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  blocks            TemplateSectionBlock[]
+  createdAt               DateTime               @default(now())
+  templateVersion         ReportTemplateVersion  @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  blocks                  TemplateSectionBlock[]
 
   @@unique([templateVersionId, sectionNumber])
   @@index([templateVersionId])
 }
 
 model TemplateSectionBlock {
-  id                     String   @id
-  templateSectionId      String
-  blockDefinitionId      String
-  position               Int
-  blockCodeSnapshot      String
-  blockVersionSnapshot   Int
+  id                      String          @id
+  templateSectionId       String
+  blockDefinitionId       String
+  position                Int
+  blockCodeSnapshot       String
+  blockVersionSnapshot    Int
   blockSchemaSnapshotJson String
-  createdAt              DateTime @default(now())
-  templateSection        TemplateSection @relation(fields: [templateSectionId], references: [id], onDelete: Restrict)
-  blockDefinition        BlockDefinition @relation(fields: [blockDefinitionId], references: [id], onDelete: Restrict)
+  createdAt               DateTime        @default(now())
+  templateSection         TemplateSection @relation(fields: [templateSectionId], references: [id], onDelete: Restrict)
+  blockDefinition         BlockDefinition @relation(fields: [blockDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([templateSectionId, position])
   @@index([blockDefinitionId])
 }
 
 model TemplateReference {
-  id                String   @id
+  id                String                @id
   templateVersionId String
   referenceId       String
   fileIdSnapshot    String
   sha256Snapshot    String
   fileSizeSnapshot  Int
-  createdAt         DateTime @default(now())
+  createdAt         DateTime              @default(now())
   templateVersion   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  reference         ReferenceInventory @relation(fields: [referenceId], references: [id], onDelete: Restrict)
+  reference         ReferenceInventory    @relation(fields: [referenceId], references: [id], onDelete: Restrict)
 
   @@unique([templateVersionId, referenceId])
   @@index([templateVersionId])
 }
 
 model BlockDefinition {
-  id          String   @id
-  code        String
-  name        String
-  description String?
-  schemaJson  String
-  version     Int      @default(1)
-  status      String   @default("ACTIVE")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String                 @id
+  code            String
+  name            String
+  description     String?
+  schemaJson      String
+  version         Int                    @default(1)
+  status          String                 @default("ACTIVE")
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
   sectionMappings TemplateSectionBlock[]
 
   @@unique([code, version])
@@ -633,29 +804,29 @@ model BlockDefinition {
 }
 
 model ReportInstance {
-  id                                  String   @id
-  organizationId                      String
-  caseId                              String
-  templateVersionId                   String
-  createdById                         String
-  version                             Int      @default(1)
-  templateCodeSnapshot                String
-  templateNameSnapshot                String
-  templateVersionNumberSnapshot       Int
-  companyFormSnapshot                 String
-  tocStructureSnapshotJson            String
-  requiredSectionsSnapshotJson        String
-  requiredEvidenceRulesSnapshotJson   String
-  blockSchemasSnapshotJson            String
-  referenceProvenanceSnapshotJson      String
-  snapshotSha256                      String
-  createdAt                           DateTime @default(now())
-  updatedAt                           DateTime @updatedAt
-  organization                        Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case                                CaseItem @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  templateVersion                     ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
-  createdBy                           User @relation("ReportInstanceCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  report                              Report?
+  id                                String                @id
+  organizationId                    String
+  caseId                            String
+  templateVersionId                 String
+  createdById                       String
+  version                           Int                   @default(1)
+  templateCodeSnapshot              String
+  templateNameSnapshot              String
+  templateVersionNumberSnapshot     Int
+  companyFormSnapshot               String
+  tocStructureSnapshotJson          String
+  requiredSectionsSnapshotJson      String
+  requiredEvidenceRulesSnapshotJson String
+  blockSchemasSnapshotJson          String
+  referenceProvenanceSnapshotJson   String
+  snapshotSha256                    String
+  createdAt                         DateTime              @default(now())
+  updatedAt                         DateTime              @updatedAt
+  organization                      Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                              CaseItem              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  templateVersion                   ReportTemplateVersion @relation(fields: [templateVersionId], references: [id], onDelete: Restrict)
+  createdBy                         User                  @relation("ReportInstanceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  report                            Report?
 
   @@index([organizationId, caseId])
   @@index([templateVersionId])
@@ -678,25 +849,25 @@ model AuditLog {
 }
 
 model ReportSectionRevision {
-  id                    String                @id
-  sectionId             String
-  revisionNumber        Int
-  title                 String
-  content               String
-  structuredDataJson    String                @default("{}")
-  validationStatus      String                @default("VALID") // VALID, INVALID, WARNING
-  validationErrorsJson  String                @default("[]")
-  inputSha256           String
-  sha256                String
-  authorId              String
-  createdAt             DateTime              @default(now())
-  section               ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  author                User                  @relation("SectionRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-  appliedSuggestion     AiDraftSuggestion?    @relation("AppliedSuggestionRevision")
-  evidenceLinks         ReportEvidenceLink[]
-  comments              ReportSectionComment[]
-  approvals             ReportSectionApproval[]
-  finalizationSections  ReportFinalizationSection[]
+  id                   String                      @id
+  sectionId            String
+  revisionNumber       Int
+  title                String
+  content              String
+  structuredDataJson   String                      @default("{}")
+  validationStatus     String                      @default("VALID") // VALID, INVALID, WARNING
+  validationErrorsJson String                      @default("[]")
+  inputSha256          String
+  sha256               String
+  authorId             String
+  createdAt            DateTime                    @default(now())
+  section              ReportSection               @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  author               User                        @relation("SectionRevisionAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  appliedSuggestion    AiDraftSuggestion?          @relation("AppliedSuggestionRevision")
+  evidenceLinks        ReportEvidenceLink[]
+  comments             ReportSectionComment[]
+  approvals            ReportSectionApproval[]
+  finalizationSections ReportFinalizationSection[]
 
   @@unique([sectionId, revisionNumber])
   @@index([sectionId])
@@ -706,7 +877,7 @@ model ReportSectionRevision {
 model ReportEvidenceLink {
   id                      String                @id
   revisionId              String
-  sourceType              String                // DOCUMENT, MEETING
+  sourceType              String // DOCUMENT, MEETING
   sourceId                String
   sourceDocumentVersionId String?
   sourceMeetingId         String?
@@ -727,20 +898,20 @@ model ReportEvidenceLink {
 }
 
 model ReportSectionComment {
-  id            String                 @id
-  sectionId     String
-  revisionId    String?
-  authorId      String
-  commentType   String                 @default("COMMENT") // COMMENT, REVISION_REQUEST
-  content       String
-  isResolved    Boolean                @default(false)
-  resolvedById  String?
-  resolvedAt    DateTime?
-  createdAt     DateTime               @default(now())
-  section       ReportSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  revision      ReportSectionRevision? @relation(fields: [revisionId], references: [id], onDelete: Restrict)
-  author        User                   @relation("SectionCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
-  resolvedBy    User?                  @relation("SectionCommentResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
+  id           String                 @id
+  sectionId    String
+  revisionId   String?
+  authorId     String
+  commentType  String                 @default("COMMENT") // COMMENT, REVISION_REQUEST
+  content      String
+  isResolved   Boolean                @default(false)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime               @default(now())
+  section      ReportSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  revision     ReportSectionRevision? @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  author       User                   @relation("SectionCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+  resolvedBy   User?                  @relation("SectionCommentResolver", fields: [resolvedById], references: [id], onDelete: Restrict)
 
   @@index([sectionId])
   @@index([revisionId])
@@ -767,17 +938,17 @@ model ReportSectionApproval {
 }
 
 model ReportMergeSnapshot {
-  id                    String   @id
-  reportId              String
-  snapshotVersion       Int
-  mergedBodyText        String
-  sectionsSnapshotJson  String
-  evidenceSnapshotJson  String
-  snapshotSha256        String
-  createdById           String
-  createdAt             DateTime @default(now())
-  report                Report   @relation(fields: [reportId], references: [id], onDelete: Restrict)
-  createdBy             User     @relation("ReportMergeSnapshotCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  id                   String   @id
+  reportId             String
+  snapshotVersion      Int
+  mergedBodyText       String
+  sectionsSnapshotJson String
+  evidenceSnapshotJson String
+  snapshotSha256       String
+  createdById          String
+  createdAt            DateTime @default(now())
+  report               Report   @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  createdBy            User     @relation("ReportMergeSnapshotCreator", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@unique([reportId, snapshotVersion])
   @@index([reportId])
@@ -785,23 +956,23 @@ model ReportMergeSnapshot {
 }
 
 model AiProviderConfig {
-  id                 String                @id
-  organizationId     String
-  providerKind       String                // LOCAL_FAKE, OPENAI, ANTHROPIC, GEMINI
-  name               String
-  baseUrl            String
-  secretRef          String                // API 키 환경변수/Secret Manager 참고 레퍼런스 (원문 키 아님)
-  status             String                @default("ACTIVE") // ACTIVE, DISABLED
-  allowedModelsJson  String                @default("[]")
-  timeoutMs          Int                   @default(30000)
-  maxRetries         Int                   @default(3)
-  dailyBudgetMicros  Int                   @default(100000000) // Micro-USD (e.g. 100 USD = 100,000,000 micros)
-  version            Int                   @default(1)
-  createdAt          DateTime              @default(now())
-  updatedAt          DateTime              @updatedAt
-  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  requests           AiGenerationRequest[]
-  ledgers            AiUsageLedger[]
+  id                String                @id
+  organizationId    String
+  providerKind      String // LOCAL_FAKE, OPENAI, ANTHROPIC, GEMINI
+  name              String
+  baseUrl           String
+  secretRef         String // API 키 환경변수/Secret Manager 참고 레퍼런스 (원문 키 아님)
+  status            String                @default("ACTIVE") // ACTIVE, DISABLED
+  allowedModelsJson String                @default("[]")
+  timeoutMs         Int                   @default(30000)
+  maxRetries        Int                   @default(3)
+  dailyBudgetMicros Int                   @default(100000000) // Micro-USD (e.g. 100 USD = 100,000,000 micros)
+  version           Int                   @default(1)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  organization      Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  requests          AiGenerationRequest[]
+  ledgers           AiUsageLedger[]
 
   @@index([organizationId, status])
 }
@@ -819,57 +990,57 @@ model AiCasePolicy {
 }
 
 model AiUsageLedger {
-  id                String               @id
-  organizationId    String
-  caseId            String
-  userId            String
-  providerConfigId  String
-  modelCode         String
-  requestId         String?
-  transactionType   String               // RESERVATION, RECONCILIATION, ADJUSTMENT
-  promptTokens      Int                  @default(0)
-  completionTokens  Int                  @default(0)
-  totalTokens       Int                  @default(0)
-  costMicros        Int                  @default(0) // Micro-USD 정수
-  createdAt         DateTime             @default(now())
-  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case              CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  user              User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
-  providerConfig    AiProviderConfig     @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
-  request           AiGenerationRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  id               String               @id
+  organizationId   String
+  caseId           String
+  userId           String
+  providerConfigId String
+  modelCode        String
+  requestId        String?
+  transactionType  String // RESERVATION, RECONCILIATION, ADJUSTMENT
+  promptTokens     Int                  @default(0)
+  completionTokens Int                  @default(0)
+  totalTokens      Int                  @default(0)
+  costMicros       Int                  @default(0) // Micro-USD 정수
+  createdAt        DateTime             @default(now())
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case             CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  providerConfig   AiProviderConfig     @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
+  request          AiGenerationRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
 
+  @@unique([requestId, transactionType])
   @@index([organizationId, createdAt])
   @@index([caseId])
   @@index([userId])
   @@index([requestId])
-  @@unique([requestId, transactionType])
 }
 
 model AiGenerationRequest {
-  id                   String                @id
-  organizationId       String
-  caseId               String
-  userId               String
-  providerConfigId     String
-  modelCode            String
-  status               String                @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, CANCELED
-  promptSha256         String
+  id                       String                @id
+  organizationId           String
+  caseId                   String
+  userId                   String
+  providerConfigId         String
+  modelCode                String
+  status                   String                @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, CANCELED
+  promptSha256             String
   requestFingerprintSha256 String
-  idempotencyKey       String
-  reservedCostMicros   Int                   @default(0)
-  actualCostMicros     Int                   @default(0)
-  totalTokens          Int                   @default(0)
-  responseMetadataJson String                @default("{}")
-  redactedErrorMessage String?
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
-  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case                 CaseItem              @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  user                 User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
-  providerConfig       AiProviderConfig      @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
-  attempts             AiGenerationAttempt[]
-  ledgers              AiUsageLedger[]
-  suggestion           AiDraftSuggestion?
+  idempotencyKey           String
+  reservedCostMicros       Int                   @default(0)
+  actualCostMicros         Int                   @default(0)
+  totalTokens              Int                   @default(0)
+  responseMetadataJson     String                @default("{}")
+  redactedErrorMessage     String?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  organization             Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                     CaseItem              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  user                     User                  @relation(fields: [userId], references: [id], onDelete: Restrict)
+  providerConfig           AiProviderConfig      @relation(fields: [providerConfigId], references: [id], onDelete: Restrict)
+  attempts                 AiGenerationAttempt[]
+  ledgers                  AiUsageLedger[]
+  suggestion               AiDraftSuggestion?
 
   @@unique([organizationId, caseId, userId, idempotencyKey])
   @@index([organizationId, status])
@@ -881,7 +1052,7 @@ model AiGenerationAttempt {
   id                   String              @id
   requestId            String
   attemptNumber        Int
-  status               String              // PROCESSING, SUCCESS, TRANSIENT_FAILURE, HARD_FAILURE, CANCELED, TIMEOUT
+  status               String // PROCESSING, SUCCESS, TRANSIENT_FAILURE, HARD_FAILURE, CANCELED, TIMEOUT
   statusCode           Int?
   redactedErrorMessage String?
   durationMs           Int                 @default(0)
@@ -896,26 +1067,26 @@ model AiGenerationAttempt {
 // ----------------------------------------------------
 
 model AiGroundingSelection {
-  id               String               @id
-  organizationId   String
-  caseId           String
-  reportId         String
-  sectionId        String
-  actorId          String
-  status           String               @default("LOCKED") // DRAFT, LOCKED, DISCARDED
-  policyHash       String
-  providerId       String
-  modelCode        String
-  instructionHash  String
-  manifestSha256   String
-  createdAt        DateTime             @default(now())
-  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case             CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  report           Report               @relation(fields: [reportId], references: [id], onDelete: Restrict)
-  section          ReportSection        @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  actor            User                 @relation(fields: [actorId], references: [id], onDelete: Restrict)
-  items            AiGroundingItem[]
-  suggestions      AiDraftSuggestion[]
+  id              String              @id
+  organizationId  String
+  caseId          String
+  reportId        String
+  sectionId       String
+  actorId         String
+  status          String              @default("LOCKED") // DRAFT, LOCKED, DISCARDED
+  policyHash      String
+  providerId      String
+  modelCode       String
+  instructionHash String
+  manifestSha256  String
+  createdAt       DateTime            @default(now())
+  organization    Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case            CaseItem            @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report          Report              @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  section         ReportSection       @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  actor           User                @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  items           AiGroundingItem[]
+  suggestions     AiDraftSuggestion[]
 
   @@index([organizationId, caseId])
   @@index([sectionId])
@@ -923,52 +1094,52 @@ model AiGroundingSelection {
 }
 
 model AiGroundingItem {
-  id                 String               @id
-  selectionId        String
-  sourceType         String               // MATERIAL, MEETING
-  sourceId           String
-  sourceVersionId    String
+  id                  String               @id
+  selectionId         String
+  sourceType          String // MATERIAL, MEETING
+  sourceId            String
+  sourceVersionId     String
   sourceVersionNumber Int
-  sourceSha256       String
-  allowedAnchorsJson String               @default("[]") // Array of allowed paragraph indices or section anchors
-  orderIndex         Int                  @default(0)
-  selection          AiGroundingSelection @relation(fields: [selectionId], references: [id], onDelete: Restrict)
+  sourceSha256        String
+  allowedAnchorsJson  String               @default("[]") // Array of allowed paragraph indices or section anchors
+  orderIndex          Int                  @default(0)
+  selection           AiGroundingSelection @relation(fields: [selectionId], references: [id], onDelete: Restrict)
 
   @@unique([selectionId, sourceType, sourceId, sourceVersionId])
   @@index([selectionId])
 }
 
 model AiDraftSuggestion {
-  id                     String                @id
+  id                     String                 @id
   selectionId            String
-  requestId              String                @unique
+  requestId              String                 @unique
   organizationId         String
   caseId                 String
   reportId               String
   sectionId              String
   actorId                String
-  status                 String                @default("PROCESSING") // PROCESSING, GENERATED, BLOCKED, FAILED, CANCELED, DISCARDED, APPLIED
-  schemaVersion          String                @default("P11_SUGGESTION_V1")
-  summaryText            String                @default("")
+  status                 String                 @default("PROCESSING") // PROCESSING, GENERATED, BLOCKED, FAILED, CANCELED, DISCARDED, APPLIED
+  schemaVersion          String                 @default("P11_SUGGESTION_V1")
+  summaryText            String                 @default("")
   outputSha256           String?
-  promptMode             String                @default("PRODUCTION")
+  promptMode             String                 @default("PRODUCTION")
   idempotencyKey         String
   idempotencyFingerprint String
-  appliedRevisionId      String?               @unique
+  appliedRevisionId      String?                @unique
   appliedAt              DateTime?
   appliedActorId         String?
   applyIdempotencyKey    String?
   applyFingerprint       String?
-  createdAt              DateTime              @default(now())
-  updatedAt              DateTime              @updatedAt
-  selection              AiGroundingSelection  @relation(fields: [selectionId], references: [id], onDelete: Restrict)
-  request                AiGenerationRequest   @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  organization           Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case                   CaseItem              @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  report                 Report                @relation(fields: [reportId], references: [id], onDelete: Restrict)
-  section                ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  actor                  User                  @relation("SuggestionActor", fields: [actorId], references: [id], onDelete: Restrict)
-  appliedActor           User?                 @relation("SuggestionAppliedActor", fields: [appliedActorId], references: [id], onDelete: Restrict)
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  selection              AiGroundingSelection   @relation(fields: [selectionId], references: [id], onDelete: Restrict)
+  request                AiGenerationRequest    @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  organization           Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                   CaseItem               @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report                 Report                 @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  section                ReportSection          @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  actor                  User                   @relation("SuggestionActor", fields: [actorId], references: [id], onDelete: Restrict)
+  appliedActor           User?                  @relation("SuggestionAppliedActor", fields: [appliedActorId], references: [id], onDelete: Restrict)
   appliedRevision        ReportSectionRevision? @relation("AppliedSuggestionRevision", fields: [appliedRevisionId], references: [id], onDelete: Restrict)
   citations              AiCitation[]
 
@@ -983,7 +1154,7 @@ model AiCitation {
   suggestionId     String
   targetClaimIndex Int
   claimText        String
-  sourceType       String            // MATERIAL, MEETING
+  sourceType       String // MATERIAL, MEETING
   sourceId         String
   sourceVersionId  String
   sourceSha256     String
@@ -1016,42 +1187,42 @@ model ReportReviewRequest {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  organization           Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case                   CaseItem      @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  report                 Report        @relation(fields: [reportId], references: [id], onDelete: Restrict)
-  requestedBy            User          @relation("ReportReviewRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
-  assignedReviewer       User?         @relation("ReportReviewAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case             CaseItem     @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report           Report       @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  requestedBy      User         @relation("ReportReviewRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  assignedReviewer User?        @relation("ReportReviewAssignedReviewer", fields: [assignedReviewerId], references: [id], onDelete: Restrict)
 
-  @@index([organizationId, caseId])
   @@unique([reportId, eventNumber])
   @@unique([reportId, requestedById, idempotencyKey])
+  @@index([organizationId, caseId])
   @@index([requestedById])
   @@index([assignedReviewerId])
 }
 
 model ReportFinalization {
-  id                      String                      @id
+  id                      String   @id
   organizationId          String
   caseId                  String
   reportId                String
   reportTemplateVersionId String
   finalizedById           String
-  status                  String                      @default("FINALIZED") // FINALIZED
+  status                  String   @default("FINALIZED") // FINALIZED
   canonicalSnapshotHash   String
   sectionCount            Int
   evidenceCount           Int
-  unresolvedFlagCount     Int                         @default(0)
+  unresolvedFlagCount     Int      @default(0)
   idempotencyKey          String?
   idempotencyFingerprint  String?
-  createdAt               DateTime                    @default(now())
+  createdAt               DateTime @default(now())
 
-  organization            Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case                    CaseItem                    @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  report                  Report                      @relation(fields: [reportId], references: [id], onDelete: Restrict)
-  reportTemplateVersion   ReportTemplateVersion       @relation(fields: [reportTemplateVersionId], references: [id], onDelete: Restrict)
-  finalizedBy             User                        @relation("ReportFinalizedBy", fields: [finalizedById], references: [id], onDelete: Restrict)
-  sections                ReportFinalizationSection[]
-  artifacts               ReportOutputArtifact[]
+  organization          Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case                  CaseItem                    @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report                Report                      @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  reportTemplateVersion ReportTemplateVersion       @relation(fields: [reportTemplateVersionId], references: [id], onDelete: Restrict)
+  finalizedBy           User                        @relation("ReportFinalizedBy", fields: [finalizedById], references: [id], onDelete: Restrict)
+  sections              ReportFinalizationSection[]
+  artifacts             ReportOutputArtifact[]
 
   @@unique([reportId, canonicalSnapshotHash])
   @@index([organizationId, caseId])
@@ -1059,7 +1230,7 @@ model ReportFinalization {
 }
 
 model ReportFinalizationSection {
-  id                   String                @id
+  id                   String   @id
   finalizationId       String
   sectionId            String
   sectionNumber        Int
@@ -1069,12 +1240,12 @@ model ReportFinalizationSection {
   approvedRevisionHash String
   approvedByUserId     String
   approvedAt           DateTime
-  createdAt            DateTime              @default(now())
+  createdAt            DateTime @default(now())
 
-  finalization         ReportFinalization    @relation(fields: [finalizationId], references: [id], onDelete: Restrict)
-  section              ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
-  approvedRevision     ReportSectionRevision @relation(fields: [approvedRevisionId], references: [id], onDelete: Restrict)
-  approvedByUser       User                  @relation("FinalizationSectionApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  finalization     ReportFinalization    @relation(fields: [finalizationId], references: [id], onDelete: Restrict)
+  section          ReportSection         @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  approvedRevision ReportSectionRevision @relation(fields: [approvedRevisionId], references: [id], onDelete: Restrict)
+  approvedByUser   User                  @relation("FinalizationSectionApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
 
   @@unique([finalizationId, sectionNumber])
   @@index([finalizationId])
@@ -1083,28 +1254,28 @@ model ReportFinalizationSection {
 }
 
 model ReportOutputArtifact {
-  id                     String                 @id
+  id                     String   @id
   organizationId         String
   caseId                 String
   reportId               String
   finalizationId         String
-  format                 String                 // DOCX, PDF
-  outputVersion          Int                    @default(1)
+  format                 String // DOCX, PDF
+  outputVersion          Int      @default(1)
   documentVersionId      String
   byteSize               Int
   sha256                 String
-  storageKey             String                 @unique
-  generatorVersion       String                 @default("P12_GENERATOR_V1")
+  storageKey             String   @unique
+  generatorVersion       String   @default("P12_GENERATOR_V1")
   idempotencyKey         String?
   idempotencyFingerprint String?
-  createdAt              DateTime               @default(now())
+  createdAt              DateTime @default(now())
 
-  organization           Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case                   CaseItem               @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  report                 Report                 @relation(fields: [reportId], references: [id], onDelete: Restrict)
-  finalization           ReportFinalization     @relation(fields: [finalizationId], references: [id], onDelete: Restrict)
-  documentVersion        DocumentVersion        @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
-  downloads              ReportOutputDownload[]
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case            CaseItem               @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  report          Report                 @relation(fields: [reportId], references: [id], onDelete: Restrict)
+  finalization    ReportFinalization     @relation(fields: [finalizationId], references: [id], onDelete: Restrict)
+  documentVersion DocumentVersion        @relation(fields: [documentVersionId], references: [id], onDelete: Restrict)
+  downloads       ReportOutputDownload[]
 
   @@unique([finalizationId, format])
   @@index([organizationId, caseId])
@@ -1114,19 +1285,19 @@ model ReportOutputArtifact {
 }
 
 model ReportOutputDownload {
-  id             String               @id
+  id             String   @id
   organizationId String
   caseId         String
   artifactId     String
   downloadedById String
   clientIp       String?
   userAgent      String?
-  downloadedAt   DateTime             @default(now())
+  downloadedAt   DateTime @default(now())
 
-  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case           CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  artifact       ReportOutputArtifact @relation(fields: [artifactId], references: [id], onDelete: Restrict)
-  downloadedBy   User                 @relation("ReportOutputDownloadedBy", fields: [downloadedById], references: [id], onDelete: Restrict)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case         CaseItem             @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  artifact     ReportOutputArtifact @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  downloadedBy User                 @relation("ReportOutputDownloadedBy", fields: [downloadedById], references: [id], onDelete: Restrict)
 
   @@index([organizationId, caseId])
   @@index([artifactId])
@@ -1157,66 +1328,66 @@ model CaseFeeConfig {
 }
 
 model CaseFeeCalculation {
-  id             String   @id
-  organizationId String
-  caseId         String
-  feeConfigId    String
-  calcType       String   @default("ESTIMATED")
-  contractAmount BigInt   @default(0)
-  hasSuccessFee  Boolean  @default(true)
-  billingDate    DateTime
-  baseAmount     BigInt   @default(0)
-  feeRateBps     Int      @default(0)
-  isTaxInclusive Boolean  @default(false)
-  calculatedFee  BigInt   @default(0)
-  taxAmount      BigInt   @default(0)
-  totalClaimFee  BigInt   @default(0)
-  formulaVersion String   @default("HALF_UP_BPS_V1")
-  feeConfigVersion Int
-  sourceCalculationId String?
-  actorId        String
-  idempotencyKey String?
+  id                     String   @id
+  organizationId         String
+  caseId                 String
+  feeConfigId            String
+  calcType               String   @default("ESTIMATED")
+  contractAmount         BigInt   @default(0)
+  hasSuccessFee          Boolean  @default(true)
+  billingDate            DateTime
+  baseAmount             BigInt   @default(0)
+  feeRateBps             Int      @default(0)
+  isTaxInclusive         Boolean  @default(false)
+  calculatedFee          BigInt   @default(0)
+  taxAmount              BigInt   @default(0)
+  totalClaimFee          BigInt   @default(0)
+  formulaVersion         String   @default("HALF_UP_BPS_V1")
+  feeConfigVersion       Int
+  sourceCalculationId    String?
+  actorId                String
+  idempotencyKey         String?
   idempotencyFingerprint String?
-  createdAt      DateTime @default(now())
+  createdAt              DateTime @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   case         CaseItem      @relation(fields: [caseId], references: [id], onDelete: Restrict)
   feeConfig    CaseFeeConfig @relation(fields: [feeConfigId], references: [id], onDelete: Restrict)
   actor        User          @relation("FeeCalculatedBy", fields: [actorId], references: [id], onDelete: Restrict)
 
+  @@unique([organizationId, caseId, actorId, idempotencyKey])
   @@index([organizationId, caseId])
   @@index([feeConfigId])
   @@index([actorId])
   @@index([sourceCalculationId])
-  @@unique([organizationId, caseId, actorId, idempotencyKey])
 }
 
 model CaseFeePayment {
-  id              String    @id
-  organizationId  String
-  caseId          String
-  feeConfigId     String
-  paymentType     String    @default("PARTIAL")
-  amount          BigInt    @default(0)
-  paymentDate     DateTime  @default(now())
-  invoiceStatus   String    @default("NOT_ISSUED")
-  invoiceIssuedAt DateTime?
-  invoiceNumber   String?
-  note            String?
-  actorId         String
-  idempotencyKey  String?
+  id                     String    @id
+  organizationId         String
+  caseId                 String
+  feeConfigId            String
+  paymentType            String    @default("PARTIAL")
+  amount                 BigInt    @default(0)
+  paymentDate            DateTime  @default(now())
+  invoiceStatus          String    @default("NOT_ISSUED")
+  invoiceIssuedAt        DateTime?
+  invoiceNumber          String?
+  note                   String?
+  actorId                String
+  idempotencyKey         String?
   idempotencyFingerprint String?
-  createdAt       DateTime  @default(now())
+  createdAt              DateTime  @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   case         CaseItem      @relation(fields: [caseId], references: [id], onDelete: Restrict)
   feeConfig    CaseFeeConfig @relation(fields: [feeConfigId], references: [id], onDelete: Restrict)
   actor        User          @relation("FeePaymentRecordedBy", fields: [actorId], references: [id], onDelete: Restrict)
 
+  @@unique([organizationId, caseId, actorId, idempotencyKey])
   @@index([organizationId, caseId])
   @@index([feeConfigId])
   @@index([actorId])
-  @@unique([organizationId, caseId, actorId, idempotencyKey])
 }
 
 model CaseFeeAudit {
@@ -1246,7 +1417,7 @@ model GoogleWorkspaceConnection {
   organizationId    String    @unique
   status            String    @default("CONNECTED") // CONNECTED, EXPIRED, RECONSENT_REQUIRED, DISCONNECTED
   grantedScopesJson String    @default("[]")
-  secretRef         String    // Server secret reference (never raw tokens)
+  secretRef         String // Server secret reference (never raw tokens)
   tokenExpiresAt    DateTime?
   lastSyncedAt      DateTime?
   createdById       String
@@ -1262,17 +1433,17 @@ model GoogleWorkspaceConnection {
 }
 
 model GoogleOAuthState {
-  id              String    @id
-  stateHash       String    @unique
-  pkceVerifierRef String
-  pkceChallenge   String
+  id                String    @id
+  stateHash         String    @unique
+  pkceVerifierRef   String
+  pkceChallenge     String
   connectionVersion Int?
-  organizationId  String
-  actorId         String
-  redirectTarget  String
-  expiresAt       DateTime
-  usedAt          DateTime?
-  createdAt       DateTime  @default(now())
+  organizationId    String
+  actorId           String
+  redirectTarget    String
+  expiresAt         DateTime
+  usedAt            DateTime?
+  createdAt         DateTime  @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   actor        User         @relation("GoogleOAuthActor", fields: [actorId], references: [id], onDelete: Restrict)
@@ -1282,46 +1453,46 @@ model GoogleOAuthState {
 }
 
 model GoogleSyncOperation {
-  id                 String               @id
+  id                 String    @id
   organizationId     String
   caseId             String?
-  operationKind      String               // DRIVE_FOLDER, GMAIL_IMPORT, CALENDAR_EVENT, DOCS_EXPORT, SHEETS_IMPORT
+  operationKind      String // DRIVE_FOLDER, GMAIL_IMPORT, CALENDAR_EVENT, DOCS_EXPORT, SHEETS_IMPORT
   idempotencyKey     String?
   requestFingerprint String
-  status             String               @default("PENDING") // PENDING, SUCCESS, FAILED, CANCELLED
+  status             String    @default("PENDING") // PENDING, SUCCESS, FAILED, CANCELLED
   resultJson         String?
   completedAt        DateTime?
   actorId            String
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  case         CaseItem?              @relation(fields: [caseId], references: [id], onDelete: Restrict)
-  actor        User                   @relation("GoogleSyncOpActor", fields: [actorId], references: [id], onDelete: Restrict)
-  attempts     GoogleSyncAttempt[]
-  resourceLinks GoogleResourceLink[]
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  case            CaseItem?              @relation(fields: [caseId], references: [id], onDelete: Restrict)
+  actor           User                   @relation("GoogleSyncOpActor", fields: [actorId], references: [id], onDelete: Restrict)
+  attempts        GoogleSyncAttempt[]
+  resourceLinks   GoogleResourceLink[]
   importSnapshots GoogleImportSnapshot[]
 
+  @@unique([organizationId, caseId, actorId, operationKind, idempotencyKey])
   @@index([organizationId, caseId])
   @@index([operationKind, status])
   @@index([actorId])
-  @@unique([organizationId, caseId, actorId, operationKind, idempotencyKey])
 }
 
 model GoogleSyncAttempt {
-  id            String   @id
+  id            String    @id
   operationId   String
   attemptNumber Int
-  responseClass String   // SUCCESS, BAD_SCOPE, TOKEN_EXPIRED, RECONSENT_REQUIRED, RATE_LIMIT_RETRY_AFTER, SERVER_ERROR, TIMEOUT, USER_CANCEL, MALFORMED_PROVIDER_RESPONSE, REVOKE_FAILURE
+  responseClass String // SUCCESS, BAD_SCOPE, TOKEN_EXPIRED, RECONSENT_REQUIRED, RATE_LIMIT_RETRY_AFTER, SERVER_ERROR, TIMEOUT, USER_CANCEL, MALFORMED_PROVIDER_RESPONSE, REVOKE_FAILURE
   redactedError String?
   retryAt       DateTime?
   durationMs    Int
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   operation GoogleSyncOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
 
-  @@index([operationId])
   @@unique([operationId, attemptNumber])
+  @@index([operationId])
 }
 
 model GoogleResourceLink {
@@ -1329,7 +1500,7 @@ model GoogleResourceLink {
   organizationId       String
   caseId               String?
   operationId          String?
-  entityType           String   // CASE_DRIVE_FOLDER, CALENDAR_EVENT, DOCS_EXPORT, GMAIL_ATTACHMENT, SHEETS_RANGE
+  entityType           String // CASE_DRIVE_FOLDER, CALENDAR_EVENT, DOCS_EXPORT, GMAIL_ATTACHMENT, SHEETS_RANGE
   internalEntityId     String
   externalResourceId   String
   resourceMetadataJson String   @default("{}")
@@ -1339,9 +1510,9 @@ model GoogleResourceLink {
   case         CaseItem?            @relation(fields: [caseId], references: [id], onDelete: Restrict)
   operation    GoogleSyncOperation? @relation(fields: [operationId], references: [id], onDelete: Restrict)
 
+  @@unique([organizationId, entityType, internalEntityId, externalResourceId])
   @@index([organizationId, caseId])
   @@index([entityType, internalEntityId])
-  @@unique([organizationId, entityType, internalEntityId, externalResourceId])
 }
 
 model GoogleImportSnapshot {
@@ -1349,7 +1520,7 @@ model GoogleImportSnapshot {
   organizationId     String
   caseId             String
   operationId        String?
-  sourceType         String   // GMAIL_ATTACHMENT, SHEETS_RANGE, DOCS_TEXT
+  sourceType         String // GMAIL_ATTACHMENT, SHEETS_RANGE, DOCS_TEXT
   externalResourceId String
   sha256             String
   version            Int      @default(1)
@@ -1362,10 +1533,8 @@ model GoogleImportSnapshot {
   operation    GoogleSyncOperation? @relation(fields: [operationId], references: [id], onDelete: Restrict)
   createdBy    User                 @relation("GoogleSnapshotCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
+  @@unique([organizationId, caseId, sourceType, externalResourceId, sha256])
   @@index([organizationId, caseId])
   @@index([externalResourceId, sha256])
   @@index([createdById])
-  @@unique([organizationId, caseId, sourceType, externalResourceId, sha256])
 }
-
-

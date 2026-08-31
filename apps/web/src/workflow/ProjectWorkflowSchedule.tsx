@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button } from '@claim-studio/ui';
+import { Button, Dialog } from '@claim-studio/ui';
 import { apiRequest } from '../api';
 import {
   WORKFLOW_STAGES,
@@ -11,6 +11,13 @@ import { scheduleDayInfo } from './schedule-holidays';
 
 const DAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 const PROJECT_SCHEDULE_CODES: readonly string[] = ['KICKOFF', 'SITE_SURVEY', 'TAKEOFF_COST', 'REPORT_WRITING'];
+
+interface ProjectArchiveReadiness {
+  complete: boolean;
+  manifestSha256: string;
+  checkedAt: string;
+  checklist: Array<{ code: string; label: string; complete: boolean; detail: string }>;
+}
 
 const isoDate = (year: number, monthIndex: number, day: number) => `${year}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 const monthBarStyle = (startDate: string | null | undefined, endDate: string | null | undefined, year: number, monthIndex: number, dayCount: number): React.CSSProperties | undefined => {
@@ -291,7 +298,7 @@ export const ProjectWorkflowSchedule: React.FC<ProjectWorkflowScheduleProps> = (
               <div className="schedule-project-row" role="row" key={project.id}>
                 <button className="schedule-project-info" role="cell" onClick={() => openProjectDialog(project)} aria-haspopup="dialog">
                   <span className={`award-dot award-${project.awardStatus.toLowerCase()}`} aria-hidden="true" />
-                  <span className="schedule-project-copy"><strong>{project.name}</strong><small>{project.code} · {project.claimType} · {awardLabel(project.awardStatus)} · {project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 미지정'}</small></span>
+                  <span className="schedule-project-copy"><strong>{project.name}{project.deliveryStatus === 'DELIVERED' && <em className="schedule-delivered-badge">납품완료</em>}</strong><small>{project.code} · {project.claimType} · {project.deliveryStatus === 'DELIVERED' ? 'Drive 최종 납품본 보관' : awardLabel(project.awardStatus)} · {project.responsiblePm ? `PM ${project.responsiblePm.name}` : 'PM 미지정'}</small></span>
                   <span className="schedule-progress"><b>{project.progress}%</b><i><em style={{ width: `${project.progress}%` }} /></i></span>
                 </button>
                 <div className="schedule-track" role="cell" aria-label={`${project.name} ${project.start}부터 ${project.end}까지`}>
@@ -414,6 +421,10 @@ const ProjectDetail: React.FC<{
   const [scheduleBusy, setScheduleBusy] = useState('');
   const [scheduleError, setScheduleError] = useState('');
   const [scheduleNotice, setScheduleNotice] = useState('');
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [archiveReadiness, setArchiveReadiness] = useState<ProjectArchiveReadiness | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveReason, setArchiveReason] = useState('납품 완료 및 Google Drive 보관 상태 확인 후 일정표에서 보관 처리');
   const [drafts, setDrafts] = useState<Record<string, { startDate: string; endDate: string; status: string; noteText: string; reasonText: string }>>(() => Object.fromEntries(
     project.stages.filter((stage) => Number(stage.stageId) >= 3).map((stage) => [stage.stageCode ?? '', { startDate: stage.startDate ?? '', endDate: stage.endDate ?? '', status: stage.scheduleStatus ?? 'PLANNED', noteText: stage.scheduleNote ?? '', reasonText: '' }])
   ));
@@ -524,12 +535,41 @@ const ProjectDetail: React.FC<{
     finally { setScheduleBusy(''); }
   };
 
+  const openArchiveDialog = async () => {
+    setArchiveDialogOpen(true); setArchiveReadiness(null); setArchiveBusy(true); setScheduleError('');
+    try {
+      const result = await apiRequest<{ readiness: ProjectArchiveReadiness }>(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/archive-readiness`);
+      setArchiveReadiness(result.readiness);
+    } catch (reason) { setScheduleError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setArchiveBusy(false); }
+  };
+
+  const hideDeliveredProject = async () => {
+    if (!archiveReadiness?.complete) return;
+    setArchiveBusy(true); setScheduleError('');
+    try {
+      await apiRequest(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/schedule-visibility`, {
+        method: 'POST',
+        body: JSON.stringify({ reasonCode: 'DELIVERED_ARCHIVED', reasonText: archiveReason.trim(), manifestSha256: archiveReadiness.manifestSha256, expectedVersion: project.scheduleVisibilityVersion ?? 0 })
+      });
+      setArchiveDialogOpen(false);
+      await onReload();
+      onClose?.();
+    } catch (reason) {
+      setScheduleError(reason instanceof Error ? reason.message : String(reason));
+      try {
+        const latest = await apiRequest<{ readiness: ProjectArchiveReadiness }>(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/archive-readiness`);
+        setArchiveReadiness(latest.readiness);
+      } catch { /* keep the original actionable error */ }
+    } finally { setArchiveBusy(false); }
+  };
+
   return (
     <>
       <div className="project-workflow-summary">
         <div><span>거래처</span><strong>{project.client}</strong></div>
         <div><span>업무 유형</span><strong>{project.claimType}</strong></div>
-        <div><span>수주 상태</span><strong>{awardLabel(project.awardStatus)}</strong></div>
+        <div><span>수주·납품 상태</span><strong>{project.deliveryStatus === 'DELIVERED' ? '납품완료' : awardLabel(project.awardStatus)}</strong></div>
         <div><span>전체 공정률</span><strong>{project.progress}%</strong></div>
         <div><span>프로젝트 기간</span><strong>{project.start && project.end ? `${project.start} ~ ${project.end}` : '일정 입력 필요'}</strong></div>
       </div>
@@ -544,7 +584,7 @@ const ProjectDetail: React.FC<{
             const code = item.stageCode ?? '';
             const draft = drafts[code] ?? { startDate:'',endDate:'',status:'PLANNED',noteText:'',reasonText:'' };
             const setDraft = (next: Partial<typeof draft>) => setDrafts((current) => ({ ...current, [code]: { ...draft, ...next } }));
-            return <article key={code} style={{ borderTopColor: stage?.color }}>
+            return <article key={code} style={{ '--stage-accent': stage?.color } as React.CSSProperties}>
               <header><span className="stage-number" style={{ background: stage?.color }}>{item.stageId}</span><div><strong>{stage?.name}</strong><small>{item.scheduleExplicit ? `저장된 기준 일정 · v${item.scheduleVersion}` : '일정 미입력'}</small></div><em>{item.owner}</em></header>
               <div className="project-stage-fields"><label>시작일<input type="date" value={draft.startDate} onChange={(event) => setDraft({ startDate:event.target.value })} /></label><label>종료일<input type="date" value={draft.endDate} min={draft.startDate} onChange={(event) => setDraft({ endDate:event.target.value })} /></label><label>상태<select value={draft.status} onChange={(event) => setDraft({ status:event.target.value })}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option><option value="DELAYED">지연</option></select></label><label className="project-stage-note">일정 메모<input value={draft.noteText} maxLength={5000} placeholder="현장·팀·마감 특이사항" onChange={(event) => setDraft({ noteText:event.target.value })} /></label></div>
               {project.canManageSchedule ? <div className="project-stage-actions"><Button className="stage-schedule-save-button" size="sm" onClick={() => void saveStage(code,item.scheduleVersion ?? 0)} disabled={!pmId || !draft.startDate || !draft.endDate || Boolean(scheduleBusy)}>{scheduleBusy === code ? '저장 중…' : item.scheduleExplicit ? '수정 내용 저장' : '일정 저장'}</Button></div> : <div className="project-change-request"><label>일정 변경 사유<input value={draft.reasonText} maxLength={5000} placeholder="담당 PM에게 보낼 변경 사유를 입력하세요" onChange={(event) => setDraft({ reasonText:event.target.value })} /></label><Button size="sm" variant="secondary" onClick={() => void requestChange(code,item.scheduleVersion ?? 0)} disabled={!project.responsiblePm || !draft.startDate || !draft.endDate || draft.reasonText.trim().length < 2 || scheduleBusy === `request:${code}`}>PM에게 변경 승인 요청</Button></div>}
@@ -553,7 +593,7 @@ const ProjectDetail: React.FC<{
         </div>
         {Boolean(project.pendingChangeRequests?.length) && <section className="pending-schedule-requests"><h4>담당 PM 승인 대기</h4>{project.pendingChangeRequests?.map((request) => <article key={request.id}><div><strong>{request.requestedByName} · {WORKFLOW_STAGES.find((stage) => stage.id === ({KICKOFF:3,SITE_SURVEY:4,TAKEOFF_COST:5,REPORT_WRITING:6} as Record<string,number>)[request.stageCode])?.name}</strong><span>{request.proposedStartDate} ~ {request.proposedEndDate}</span><p>{request.reasonText}</p></div>{project.canManageSchedule && <div><Button size="sm" onClick={() => void decideChange(request.id,'APPROVED')} disabled={scheduleBusy === `decision:${request.id}`}>승인·일정 반영</Button><Button size="sm" variant="secondary" onClick={() => void decideChange(request.id,'REJECTED')} disabled={scheduleBusy === `decision:${request.id}`}>반려</Button></div>}</article>)}</section>}
         {scheduleNotice && <p className="notice-box" role="status">{scheduleNotice}</p>}{scheduleError && <p className="error-box" role="alert">{scheduleError}</p>}
-        {project.canManageSchedule && <footer className="project-schedule-completion-actions"><Button variant="secondary" onClick={() => onReload()} disabled={Boolean(scheduleBusy)}>최신 일정 다시 불러오기</Button><Button className="schedule-complete-button" onClick={() => void saveAllStages()} disabled={!pmId || Boolean(scheduleBusy)}>{scheduleBusy === 'all' ? '전체 일정 저장 중…' : '전체 일정 저장 완료'}</Button>{onClose && <Button className="schedule-confirm-button" variant="secondary" onClick={onClose} disabled={Boolean(scheduleBusy)}>확인하고 닫기</Button>}</footer>}
+        {project.canManageSchedule && <footer className="project-schedule-completion-actions">{project.canRemoveFromSchedule && <Button className="schedule-archive-button" variant="secondary" onClick={() => void openArchiveDialog()} disabled={Boolean(scheduleBusy)}>Drive 확인 후 일정표 보관</Button>}<Button variant="secondary" onClick={() => onReload()} disabled={Boolean(scheduleBusy)}>최신 일정 다시 불러오기</Button><Button className="schedule-complete-button" onClick={() => void saveAllStages()} disabled={!pmId || Boolean(scheduleBusy)}>{scheduleBusy === 'all' ? '전체 일정 저장 중…' : '전체 일정 저장 완료'}</Button>{onClose && <Button className="schedule-confirm-button" variant="secondary" onClick={onClose} disabled={Boolean(scheduleBusy)}>확인하고 닫기</Button>}</footer>}
       </section>
 
       {selectedStage && (
@@ -609,6 +649,16 @@ const ProjectDetail: React.FC<{
           );
         })}
       </div>
+
+      <Dialog isOpen={archiveDialogOpen} title="납품완료 프로젝트를 일정표에서 보관할까요?" onClose={() => !archiveBusy && setArchiveDialogOpen(false)}>
+        <div className="schedule-archive-dialog">
+          <p>이 작업은 프로젝트나 파일을 물리 삭제하지 않습니다. Drive 보관 원장과 최종 납품본을 다시 확인한 뒤 일정표에서만 숨기며, 담당 PM·관리자 감사기록을 남깁니다.</p>
+          {archiveBusy && !archiveReadiness ? <p className="notice-box">Google Drive 보관 원장을 확인하고 있습니다…</p> : <ul>{archiveReadiness?.checklist.map((item) => <li key={item.code} data-complete={item.complete}><span aria-hidden="true">{item.complete ? '✓' : '!'}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div></li>)}</ul>}
+          <label>보관 사유<textarea value={archiveReason} maxLength={1000} onChange={(event) => setArchiveReason(event.target.value)} /></label>
+          {archiveReadiness && !archiveReadiness.complete && <p className="error-box">완료되지 않은 항목이 있습니다. Drive 연결·업로드·최종 납품본 보관을 마친 뒤 다시 확인해 주세요.</p>}
+          <footer><Button variant="secondary" onClick={() => setArchiveDialogOpen(false)} disabled={archiveBusy}>취소</Button><Button className="schedule-archive-confirm" onClick={() => void hideDeliveredProject()} disabled={archiveBusy || !archiveReadiness?.complete || archiveReason.trim().length < 2}>{archiveBusy ? '확인 중…' : '확인 완료 · 일정표에서 보관'}</Button></footer>
+        </div>
+      </Dialog>
 
     </>
   );

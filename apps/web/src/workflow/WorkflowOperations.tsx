@@ -238,7 +238,7 @@ export const WorkflowOperations: React.FC<{
 
   useEffect(() => {
     let active = true;
-    apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100').then((response) => {
+    apiRequest<{ cases: CaseSummary[] }>('/api/cases?scope=project-work&limit=100').then((response) => {
       if (!active) return;
       setCases(response.cases);
       const requested = selectedCaseRef.current;

@@ -133,10 +133,15 @@ export interface WorkflowProject {
   name: string;
   client: string;
   claimType: string;
+  caseStatus?: string;
   progress: number;
   start: string;
   end: string;
   awardStatus: 'WON' | 'PENDING' | 'LOST';
+  deliveryStatus?: 'IN_PROGRESS' | 'FINALIZED_PENDING_ARCHIVE' | 'DELIVERED';
+  finalDeliverableCount?: number;
+  scheduleVisibilityVersion?: number;
+  canRemoveFromSchedule?: boolean;
   responsiblePm?: { id: string; name: string } | null;
   profileVersion?: number;
   canManageSchedule?: boolean;

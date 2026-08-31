@@ -2646,7 +2646,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const where: Prisma.CaseItemWhereInput = {
           organizationId: context.user.organizationId,
           deletedAt: null,
-          ...(!isAdminOrExec || assignedOnly ? { assignments: { some: { userId: context.user.id } } } : {}),
+          ...((scope === 'project-work' || assignedOnly) && !isAdminOrExec ? { assignments: { some: { userId: context.user.id } } } : {}),
           ...(claimType ? { claimType } : {}),
           ...(status ? { status } : scope === 'project-work' ? { status: { in: [...PROJECT_WORK_CASE_STATUSES] } } : {}),
           ...(scope === 'project-work' ? { NOT: { caseNumber: { startsWith: 'DEMO-' } } } : {}),
@@ -7968,9 +7968,6 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
         const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
         const caseRow = await requireGoogleCase(caseId);
-        if (!PROJECT_WORK_CASE_STATUSES.includes(caseRow.status as (typeof PROJECT_WORK_CASE_STATUSES)[number]) || caseRow.caseNumber.startsWith('DEMO-')) {
-          throw new HttpError(404, 'Active project-work case not found');
-        }
         const fingerprint = sha256Hex(canonicalJson({ caseId, expectedVersion }));
         const reservation = await reserveGoogleOperation(caseId, 'DRIVE_FOLDER', idempotencyKey, fingerprint);
         if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }

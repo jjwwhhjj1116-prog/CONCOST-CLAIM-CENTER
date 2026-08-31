@@ -130,14 +130,14 @@ test('CF06 D1 case workflow persists case, party, schedule, status, and dashboar
   sql.close();
 });
 
-test('CF06 enforces assignment, mutation role, strict six types, append-only history, and optimistic version', async () => {
+test('CF06 shares intake work with members while preserving strict types, append-only history, and optimistic versions', async () => {
   const { sql, env } = await seededDatabase();
   const payload = { title: '현장 수량산출', claimType: 'TYPE-01', description: '', category: { major: '건설', middle: '현장', minor: '수량' } };
   const created = await worker.fetch(request('/api/cases', ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf06-security-case-1' }, body: JSON.stringify(payload) }), env);
   const id = (await created.json() as { case: { id: string } }).case.id;
 
-  assert.equal((await worker.fetch(request(`/api/cases/${id}`, STAFF_TOKEN), env)).status, 404);
-  assert.equal((await worker.fetch(request('/api/cases', STAFF_TOKEN, { method: 'POST', body: JSON.stringify(payload) }), env)).status, 403);
+  assert.equal((await worker.fetch(request(`/api/cases/${id}`, STAFF_TOKEN), env)).status, 200);
+  assert.equal((await worker.fetch(request('/api/cases', STAFF_TOKEN, { method: 'POST', body: JSON.stringify(payload) }), env)).status, 201);
   const stale = await worker.fetch(request(`/api/cases/${id}/status`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ toStatus: 'PROPOSAL', reason: 'stale', version: 99 }) }), env);
   assert.equal(stale.status, 409);
   const badType = await worker.fetch(request('/api/cases', ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ ...payload, claimType: 'TYPE-07' }) }), env);

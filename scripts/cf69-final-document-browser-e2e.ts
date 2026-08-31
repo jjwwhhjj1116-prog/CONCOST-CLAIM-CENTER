@@ -181,7 +181,7 @@ async function main(): Promise<void> {
       id: 'user-1', email: 'qa@con-cost.com', name: 'CF69 검수자', organizationId: 'concost', roles: ['admin'], previewMode: true,
     }) }));
     await page.route('**/api/settings/tutorial', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
-      tutorial: { completedTutorialVersion: 'CF62_V1', completedAt: '2026-08-28T00:00:00.000Z', completionAction: 'COMPLETED', version: 1, updatedAt: '2026-08-28T00:00:00.000Z' }, currentTutorialVersion: 'CF62_V1',
+      tutorial: { completedTutorialVersion: 'CF79_V1', completedAt: '2026-08-31T00:00:00.000Z', completionAction: 'COMPLETED', version: 1, updatedAt: '2026-08-31T00:00:00.000Z' }, currentTutorialVersion: 'CF79_V1',
     }) }));
     await page.route('**/api/cases', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ cases: [
       { id: 'case-1', caseNumber: 'CC-2026-00999', title: 'CF69 브라우저 검수 프로젝트', description: '확정 문서 출력 검수', claimType: 'TYPE-03', status: 'CONTRACT' },

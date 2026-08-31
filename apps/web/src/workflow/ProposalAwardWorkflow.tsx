@@ -103,7 +103,7 @@ interface ProposalReception {
   driveArchivedAt: string | null;
 }
 
-const MUTATION_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm'];
+const MUTATION_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer'];
 const awardLabel: Record<AwardStatus, string> = { PENDING: '회신 대기', WON: '수주 확정', LOST: '미수주' };
 const verificationLabel: Record<VerificationStatus, string> = { UNVERIFIED: '원문 미확인', VERIFIED: '원문 검증', CONFLICT: '자료 충돌' };
 const isReceptionReady = (status: ReceptionStatus): boolean => status === 'READY' || status === 'PENDING';
