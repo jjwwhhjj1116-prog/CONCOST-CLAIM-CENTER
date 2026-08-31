@@ -2982,6 +2982,7 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
   if (!await projectScheduleSchema(env)) return json({ error: 'Project schedule migration is required', code: 'D1_MIGRATION_REQUIRED' }, 503);
   const profileMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/profile$/iu);
   const erpSyncMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/erp-sync$/iu);
+  const stagesMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/stages$/iu);
   const stageMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/stages\/(KICKOFF|SITE_SURVEY|TAKEOFF_COST|REPORT_WRITING)$/u);
   const requestMatch = url.pathname.match(/^\/api\/project-workflow\/projects\/([0-9a-f-]{36})\/change-requests$/iu);
   const decisionMatch = url.pathname.match(/^\/api\/project-workflow\/change-requests\/([0-9a-f-]{36})\/decision$/iu);
@@ -2998,7 +2999,7 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     return json({ users: rows.results, phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
   }
 
-  const caseId = profileMatch?.[1] ?? erpSyncMatch?.[1] ?? stageMatch?.[1] ?? requestMatch?.[1] ?? '';
+  const caseId = profileMatch?.[1] ?? erpSyncMatch?.[1] ?? stagesMatch?.[1] ?? stageMatch?.[1] ?? requestMatch?.[1] ?? '';
   const caseRow = caseId ? await accessiblePreviewCase(env,user,caseId) : null;
   if (caseId && !caseRow) return json({ error: 'Project was not found or is outside your assignment', code: 'CASE_NOT_FOUND' }, 404);
   const profileFor = async (targetCaseId: string) => env.DB?.prepare(
@@ -3033,6 +3034,68 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     return json({ profile: await profileFor(caseId), phase: 'CF40_RESPONSIBLE_PM_SCHEDULE' });
   }
 
+  if (stagesMatch && request.method === 'PUT') {
+    const profile = await profileFor(caseId);
+    if (!profile) return json({ error: '담당 PM을 먼저 지정해 주세요.', code: 'RESPONSIBLE_PM_REQUIRED' }, 409);
+    if (!canManage(profile)) return json({ error: '기준 일정은 담당 PM 또는 관리자만 저장할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
+    if (!env.DB.batch) return json({ error: 'D1 일괄 저장 기능을 사용할 수 없습니다.', code: 'D1_BATCH_REQUIRED' }, 503);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body,['items']) || !Array.isArray(body.items) || body.items.length < 1 || body.items.length > PROJECT_STAGE_CODES.size) {
+      return json({ error: '저장할 단계 일정 목록이 올바르지 않습니다.', code: 'INVALID_STAGE_SCHEDULE_BATCH' }, 400);
+    }
+    type StageBatchItem = { stageCode:string;startDate:string;endDate:string;status:string;noteText:string;expectedVersion:number };
+    type CurrentSchedule = { id:string;stageCode:string;version:number;updatedBy:string;updatedAt:string };
+    const items: StageBatchItem[] = [];
+    const seen = new Set<string>();
+    for (const raw of body.items) {
+      if (!raw || typeof raw !== 'object') return json({ error: '단계 일정 항목이 올바르지 않습니다.', code: 'INVALID_STAGE_SCHEDULE_BATCH' }, 400);
+      const item = raw as Record<string, unknown>;
+      if (!exactObjectKeys(item,['stageCode','startDate','endDate','status','noteText','expectedVersion'])) return json({ error: '단계 일정 항목이 올바르지 않습니다.', code: 'INVALID_STAGE_SCHEDULE_BATCH' }, 400);
+      const stageCode = typeof item.stageCode === 'string' && PROJECT_STAGE_CODES.has(item.stageCode) ? item.stageCode : '';
+      const startDate = validWorkflowDate(item.startDate) ? item.startDate : '';
+      const endDate = validWorkflowDate(item.endDate) ? item.endDate : '';
+      const status = typeof item.status === 'string' && ['PLANNED','IN_PROGRESS','COMPLETED','DELAYED'].includes(item.status) ? item.status : '';
+      const noteText = typeof item.noteText === 'string' && item.noteText.trim().length <= 5000 ? item.noteText.trim() : null;
+      const expectedVersion = Number(item.expectedVersion);
+      if (!stageCode || seen.has(stageCode) || !startDate || !endDate || endDate < startDate || !status || noteText === null || !Number.isInteger(expectedVersion) || expectedVersion < 0) {
+        return json({ error: '단계별 날짜·상태·버전을 확인해 주세요.', code: 'INVALID_STAGE_SCHEDULE_BATCH' }, 400);
+      }
+      seen.add(stageCode);
+      items.push({ stageCode,startDate,endDate,status,noteText,expectedVersion });
+    }
+    const currentRows = new Map<string, CurrentSchedule>();
+    for (const item of items) {
+      const current = await env.DB.prepare('SELECT id,stage_code AS stageCode,version,updated_by AS updatedBy,updated_at AS updatedAt FROM preview_project_stage_schedules WHERE case_id=? AND stage_code=?').bind(caseId,item.stageCode).first<CurrentSchedule>();
+      if (current) currentRows.set(item.stageCode,current);
+      const currentVersion = Number(current?.version ?? 0);
+      // The same signed-in PM may legitimately save from the schedule dialog and then from
+      // a linked workflow screen. Accept that user's latest version; never overwrite another
+      // user's newer change without an explicit reload.
+      if (currentVersion !== item.expectedVersion && current?.updatedBy !== user.id) {
+        return json({ error: `${item.stageCode} 일정이 다른 사용자에 의해 변경되었습니다. 입력값은 유지했으니 최신 일정을 확인한 뒤 다시 저장해 주세요.`, code: 'VERSION_CONFLICT', stageCode:item.stageCode, currentVersion },409);
+      }
+    }
+    const nowSeed = Date.now();
+    const statements: D1StatementLike[] = [];
+    const scheduleIds: string[] = [];
+    items.forEach((item,index) => {
+      const current = currentRows.get(item.stageCode);
+      const effectiveVersion = Number(current?.version ?? item.expectedVersion);
+      const scheduleId = current?.id ?? crypto.randomUUID();
+      const now = new Date(Math.max(nowSeed + index,Date.parse(current?.updatedAt ?? '1970-01-01')+1)).toISOString();
+      scheduleIds.push(scheduleId);
+      statements.push(
+        env.DB!.prepare('INSERT INTO preview_project_stage_schedules (id,organization_id,case_id,stage_code,start_date,end_date,status,note_text,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?,?) ON CONFLICT(case_id,stage_code) DO UPDATE SET start_date=excluded.start_date,end_date=excluded.end_date,status=excluded.status,note_text=excluded.note_text,version=preview_project_stage_schedules.version+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE preview_project_stage_schedules.version=?').bind(scheduleId,PREVIEW_ORGANIZATION_ID,caseId,item.stageCode,item.startDate,item.endDate,item.status,item.noteText,user.id,now,now,effectiveVersion),
+        env.DB!.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'PROJECT_SCHEDULE_SAVED',?,?,? WHERE EXISTS (SELECT 1 FROM preview_project_stage_schedules WHERE id=? AND version=? AND updated_at=?)").bind(crypto.randomUUID(),caseId,user.id,'프로젝트 단계 일정 일괄 저장',`${item.stageCode} · ${item.startDate} ~ ${item.endDate}`,now,scheduleId,effectiveVersion+1,now)
+      );
+    });
+    const results = await env.DB.batch(statements) as Array<{meta?:{changes?:number}}>;
+    if (items.some((_,index) => results[index*2]?.meta?.changes !== 1)) return json({ error: '저장 중 일정이 변경되었습니다. 입력값은 유지되며 최신 일정을 확인한 뒤 다시 시도할 수 있습니다.', code: 'VERSION_CONFLICT' },409);
+    const schedules = [];
+    for (const scheduleId of scheduleIds) schedules.push(await env.DB.prepare('SELECT id,stage_code AS stageCode,start_date AS startDate,end_date AS endDate,status,note_text AS noteText,version,updated_at AS updatedAt FROM preview_project_stage_schedules WHERE id=?').bind(scheduleId).first());
+    return json({ schedules,phase:'CF70_ATOMIC_PROJECT_SCHEDULE_BATCH' });
+  }
+
   if (stageMatch && request.method === 'PUT') {
     const profile = await profileFor(caseId);
     if (!profile) return json({ error: 'Assign the responsible PM before entering schedules', code: 'RESPONSIBLE_PM_REQUIRED' }, 409);
@@ -3045,14 +3108,16 @@ async function handleProjectWorkflowManagement(request: Request, env: Cloudflare
     const noteText = typeof body.noteText === 'string' && body.noteText.trim().length <= 5000 ? body.noteText.trim() : null;
     const expectedVersion = Number(body.expectedVersion);
     if (!startDate || !endDate || endDate<startDate || !status || noteText===null || !Number.isInteger(expectedVersion) || expectedVersion<0) return json({ error: 'Schedule dates, status, or version are invalid', code: 'INVALID_STAGE_SCHEDULE' }, 400);
-    const current = await env.DB.prepare('SELECT id,version,updated_at AS updatedAt FROM preview_project_stage_schedules WHERE case_id=? AND stage_code=?').bind(caseId,stageMatch[2]).first<{ id:string;version:number;updatedAt:string }>();
-    if (Number(current?.version ?? 0)!==expectedVersion) return json({ error: 'Schedule changed. Reload before saving.', code: 'VERSION_CONFLICT', currentVersion:Number(current?.version??0) },409);
+    const current = await env.DB.prepare('SELECT id,version,updated_by AS updatedBy,updated_at AS updatedAt FROM preview_project_stage_schedules WHERE case_id=? AND stage_code=?').bind(caseId,stageMatch[2]).first<{ id:string;version:number;updatedBy:string;updatedAt:string }>();
+    const currentVersion = Number(current?.version ?? 0);
+    if (currentVersion!==expectedVersion && current?.updatedBy!==user.id) return json({ error: '다른 사용자가 이 일정을 변경했습니다. 입력값은 유지했으니 최신 일정을 확인한 뒤 다시 저장해 주세요.', code: 'VERSION_CONFLICT', currentVersion },409);
+    const effectiveVersion = currentVersion;
     const now = new Date(Math.max(Date.now(),Date.parse(current?.updatedAt ?? '1970-01-01')+1)).toISOString();
     const scheduleId=current?.id??crypto.randomUUID();
     if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
     const results=await env.DB.batch([
-      env.DB.prepare('INSERT INTO preview_project_stage_schedules (id,organization_id,case_id,stage_code,start_date,end_date,status,note_text,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?,?) ON CONFLICT(case_id,stage_code) DO UPDATE SET start_date=excluded.start_date,end_date=excluded.end_date,status=excluded.status,note_text=excluded.note_text,version=preview_project_stage_schedules.version+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE preview_project_stage_schedules.version=?').bind(scheduleId,PREVIEW_ORGANIZATION_ID,caseId,stageMatch[2],startDate,endDate,status,noteText,user.id,now,now,expectedVersion),
-      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'PROJECT_SCHEDULE_SAVED',?,?,? WHERE EXISTS (SELECT 1 FROM preview_project_stage_schedules WHERE id=? AND version=? AND updated_at=?)").bind(crypto.randomUUID(),caseId,user.id,'프로젝트 단계 일정 저장',`${stageMatch[2]} · ${startDate} ~ ${endDate}`,now,scheduleId,expectedVersion+1,now)
+      env.DB.prepare('INSERT INTO preview_project_stage_schedules (id,organization_id,case_id,stage_code,start_date,end_date,status,note_text,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,1,?,?,?) ON CONFLICT(case_id,stage_code) DO UPDATE SET start_date=excluded.start_date,end_date=excluded.end_date,status=excluded.status,note_text=excluded.note_text,version=preview_project_stage_schedules.version+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE preview_project_stage_schedules.version=?').bind(scheduleId,PREVIEW_ORGANIZATION_ID,caseId,stageMatch[2],startDate,endDate,status,noteText,user.id,now,now,effectiveVersion),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'PROJECT_SCHEDULE_SAVED',?,?,? WHERE EXISTS (SELECT 1 FROM preview_project_stage_schedules WHERE id=? AND version=? AND updated_at=?)").bind(crypto.randomUUID(),caseId,user.id,'프로젝트 단계 일정 저장',`${stageMatch[2]} · ${startDate} ~ ${endDate}`,now,scheduleId,effectiveVersion+1,now)
     ]) as Array<{meta?:{changes?:number}}>;
     if(results[0]?.meta?.changes!==1)return json({error:'Schedule changed. Reload and retry.',code:'VERSION_CONFLICT'},409);
     return json({ schedule:await env.DB.prepare('SELECT id,stage_code AS stageCode,start_date AS startDate,end_date AS endDate,status,note_text AS noteText,version,updated_at AS updatedAt FROM preview_project_stage_schedules WHERE id=?').bind(scheduleId).first(),phase:'CF40_PM_STAGE_SCHEDULE' });

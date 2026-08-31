@@ -125,7 +125,7 @@ function localDateTime(value?: string): string {
 }
 
 function messageFrom(error: unknown): string {
-  if (error instanceof ApiError && error.status === 409) return '다른 화면에서 먼저 변경했습니다. 최신 데이터를 다시 불러온 뒤 시도해 주세요.';
+  if (error instanceof ApiError && error.status === 409) return error.message || '다른 사용자가 먼저 변경했습니다. 입력값은 유지되며 최신 데이터를 확인한 뒤 다시 저장할 수 있습니다.';
   if (error instanceof ApiError && error.status === 403) return '이 프로젝트를 수정할 권한이 없습니다.';
   return error instanceof Error ? error.message : '요청을 처리하지 못했습니다.';
 }

@@ -114,6 +114,26 @@ const receptions = [
   })),
 ];
 
+const scheduleProject = {
+  id: 'project-ready-case-2', caseId: 'ready-case-2', code: 'CC-READY-002', name: '접수대기-2 프로젝트',
+  client: '테스트 발주처', claimType: 'TYPE-03', progress: 36, start: '2026-09-01', end: '2026-10-30', awardStatus: 'WON',
+  responsiblePm: { id: 'pm-1', name: '현동명' }, profileVersion: 2, canManageSchedule: true,
+  pendingChangeRequests: [], highlights: [{ label: '브라우저 일정 연동 검수', tone: 'survey' }],
+  stages: [
+    { stageId: 1, stageCode: 'PROPOSAL', startDay: 1, endDay: 2, startDate: '2026-08-28', endDate: '2026-08-28', scheduleVersion: 1, scheduleStatus: 'COMPLETED', scheduleNote: '', scheduleExplicit: true, status: 'DONE', owner: '제안 담당', detail: '확정 제안서' },
+    { stageId: 2, stageCode: 'AWARD', startDay: 2, endDay: 3, startDate: '2026-08-29', endDate: '2026-08-29', scheduleVersion: 1, scheduleStatus: 'COMPLETED', scheduleNote: '', scheduleExplicit: true, status: 'DONE', owner: '수주 담당', detail: '프로젝트 접수' },
+    ...[
+      ['KICKOFF', 3, '2026-09-01', '2026-09-02', '착수회의'],
+      ['SITE_SURVEY', 4, '2026-09-03', '2026-09-05', '현장조사'],
+      ['TAKEOFF_COST', 5, '2026-09-07', '2026-09-25', '수량산출·내역작성'],
+      ['REPORT_WRITING', 6, '2026-09-28', '2026-10-30', '보고서 작성'],
+    ].map(([stageCode, stageId, startDate, endDate, detail]) => ({
+      stageId, stageCode, startDay: Number(String(startDate).slice(8, 10)), endDay: Number(String(endDate).slice(8, 10)), startDate, endDate,
+      scheduleVersion: 3, scheduleStatus: 'PLANNED', scheduleNote: `${detail} 기준 일정`, scheduleExplicit: true, status: 'PLANNED', owner: '현동명', detail,
+    })),
+  ],
+};
+
 async function verifyDownload(download: Download, extension: 'docx' | 'pdf' | 'hwp', expectedSignature: number[]): Promise<{ bytes: Buffer; fileName: string }> {
   const failure = await download.failure();
   assert.equal(failure, null, `${extension.toUpperCase()} browser download failed: ${failure}`);
@@ -124,6 +144,11 @@ async function verifyDownload(download: Download, extension: 'docx' | 'pdf' | 'h
   const bytes = fs.readFileSync(filePath);
   assert.ok(bytes.byteLength > 512, `${extension.toUpperCase()} browser download is unexpectedly small`);
   expectedSignature.forEach((value, index) => assert.equal(bytes[index], value, `${extension.toUpperCase()} signature byte ${index} mismatch`));
+  const outputDirectory = process.env.CF69_OUTPUT_DIR;
+  if (outputDirectory) {
+    fs.mkdirSync(outputDirectory, { recursive: true });
+    fs.copyFileSync(filePath, path.join(outputDirectory, `cf69-proposal.${extension}`));
+  }
   return { bytes, fileName };
 }
 
@@ -184,6 +209,21 @@ async function main(): Promise<void> {
       }
       return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ receptions }) });
     });
+    const scheduleBatchRequests: Array<{ items: Array<{ stageCode: string; startDate: string; endDate: string; expectedVersion: number }> }> = [];
+    await page.route('**/api/project-workflow/pm-options*', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ users: [
+      { id: 'pm-1', displayName: '현동명', email: 'pm@con-cost.com' },
+    ] }) }));
+    await page.route('**/api/project-workflow/schedule', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ projects: [scheduleProject], dataBasis: 'REAL_D1_WORKFLOW_RECORDS' }) }));
+    await page.route('**/api/project-workflow/projects/ready-case-2/stages', async (route) => {
+      assert.equal(route.request().method(), 'PUT');
+      const payload = route.request().postDataJSON() as { items: Array<{ stageCode: string; startDate: string; endDate: string; expectedVersion: number }> };
+      scheduleBatchRequests.push(payload);
+      payload.items.forEach((saved) => {
+        const stage = scheduleProject.stages.find((candidate) => candidate.stageCode === saved.stageCode);
+        if (stage) Object.assign(stage, { startDate: saved.startDate, endDate: saved.endDate, scheduleVersion: stage.scheduleVersion + 1, scheduleExplicit: true });
+      });
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ project: scheduleProject }) });
+    });
 
     await page.goto(`${origin}/proposals/editor?caseId=case-1`, { waitUntil: 'domcontentloaded' });
     await page.getByText('CF69 확정 제안서 · 4단계 제안서 스튜디오').waitFor({ state: 'visible', timeout: 15_000 });
@@ -198,7 +238,9 @@ async function main(): Promise<void> {
     console.log('  1/4 reviewed cover, TOC and 12 chapters render without raw HTML or duplicate title PASS');
 
     const docx = await verifyDownload(await clickFinalDownload(page, '확정 제안서 Word DOCX 내려받기'), 'docx', [0x50, 0x4b, 0x03, 0x04]);
-    assert.ok(docx.bytes.includes(Buffer.from('word/media/page-14.jpg')), 'DOCX must contain all 14 rendered A4 pages');
+    const docxDirectory = docx.bytes.toString('latin1');
+    const docxMedia = new Set(docxDirectory.match(/word\/media\/[a-f0-9]{40}\.jpg/gu) ?? []);
+    assert.equal(docxMedia.size,14,'DOCX must contain all 14 rendered A4 pages');
     console.log(`  2/4 browser downloaded valid DOCX (${docx.fileName}, ${docx.bytes.byteLength} bytes, 14 pages) PASS`);
 
     const unexpectedDialogs = await page.locator('.modal-backdrop').allInnerTexts();
@@ -241,11 +283,24 @@ async function main(): Promise<void> {
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: '✓ 수주 확인 · 프로젝트 접수', exact: true }).click();
     await page.waitForURL((url) => url.pathname === '/projects/schedule' && url.searchParams.get('projectId') === 'project-ready-case-2' && url.searchParams.get('erpSync') === 'PENDING', { timeout: 15_000 });
-    console.log('  5/5 reception lists stay separated, searchable, scrollable, selection-safe and one-click reception routes to schedule PASS');
+    const scheduleDialog = page.getByRole('dialog', { name: /CC-READY-002 · 접수대기-2 프로젝트/u });
+    await scheduleDialog.getByRole('heading', { name: '담당 PM과 단계별 기준 일정' }).waitFor({ state: 'visible', timeout: 15_000 });
+    const kickoffCard = scheduleDialog.locator('.project-stage-editor-list > article').filter({ hasText: '착수회의' });
+    await kickoffCard.getByLabel('시작일').fill('2026-09-02');
+    await kickoffCard.getByLabel('종료일').fill('2026-09-04');
+    await kickoffCard.getByLabel('일정 메모').fill('접수 후 확정한 착수회의 일정');
+    page.once('dialog', (dialog) => dialog.accept());
+    await scheduleDialog.getByRole('button', { name: '전체 일정 저장 완료', exact: true }).click();
+    await scheduleDialog.getByText('4개 단계 일정을 저장 완료했습니다. 모든 업무 화면이 이 기준 일정을 함께 사용합니다.').waitFor({ state: 'visible', timeout: 15_000 });
+    assert.equal(scheduleBatchRequests.length, 1, '전체 저장은 부분 저장 없이 단 한 번의 batch API를 사용해야 한다');
+    assert.deepEqual(scheduleBatchRequests[0].items.map((item) => item.stageCode), ['KICKOFF', 'SITE_SURVEY', 'TAKEOFF_COST', 'REPORT_WRITING']);
+    assert.deepEqual(scheduleBatchRequests[0].items.find((item) => item.stageCode === 'KICKOFF'), { stageCode: 'KICKOFF', startDate: '2026-09-02', endDate: '2026-09-04', status: 'PLANNED', noteText: '접수 후 확정한 착수회의 일정', expectedVersion: 3 });
+    console.log('  5/6 reception lists stay separated, searchable, scrollable, selection-safe and one-click reception routes to schedule PASS');
+    console.log('  6/6 schedule dialog saves four linked stages through one atomic browser request and reloads the shared dates PASS');
 
     assert.deepEqual(consoleErrors, [], `browser console errors: ${consoleErrors.join(' | ')}`);
     await context.close();
-    console.log('✅ CF69 final document and reception real-Chrome E2E PASS (5 flows)');
+    console.log('✅ CF69 final document, reception and linked schedule real-Chrome E2E PASS (6 flows)');
   } finally {
     await browser?.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -25,6 +25,7 @@
     "@tiptap/pm": "^3.30.3",
     "@tiptap/react": "^3.30.3",
     "@tiptap/starter-kit": "^3.30.3",
+    "docx": "9.6.1",
     "dompurify": "^3.4.14",
     "fflate": "^0.8.3",
     "html2canvas": "^1.4.1",

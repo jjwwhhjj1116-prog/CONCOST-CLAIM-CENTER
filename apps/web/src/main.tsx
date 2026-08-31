@@ -6,6 +6,7 @@ import './fees/FeeSuccessCompensation.css';
 import './integrations/GoogleWorkspaceCaseTools.css';
 import './layout/StatusFeedbackState.css';
 import './layout/WorkspaceHelpCenter.css';
+import './layout/SoftLaunchNotice.css';
 import './workflow/ProjectWorkflowSchedule.css';
 import './workflow/ProjectSchedulePrint.css';
 import './documents/RhwpEditorDialog.css';

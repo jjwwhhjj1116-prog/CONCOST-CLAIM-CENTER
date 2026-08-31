@@ -1,6 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { AlignmentType, Document, ImageRun, Packer, Paragraph } from 'docx';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 
 export type FinalDocumentFormat = 'docx' | 'pdf' | 'hwp';
@@ -19,10 +20,6 @@ export interface FinalDocumentExportResult {
 }
 
 const A4_RATIO = 297 / 210;
-// Word reserves a small amount of paragraph layout space even with zero page margins.
-// Keeping the full-page image at 99% prevents an otherwise blank overflow page.
-const A4_WIDTH_EMU = 7_484_400;
-const A4_HEIGHT_EMU = 10_585_080;
 const A4_WIDTH_HWPUNIT = 59_520;
 const A4_HEIGHT_HWPUNIT = 84_180;
 
@@ -139,20 +136,40 @@ const capturePages = async (root: HTMLElement, onProgress?: (message: string) =>
   return result;
 };
 
-const docxDocumentXml = (pages: CapturedPage[]): string => {
-  const drawings = pages.map((_, index) => `<w:p><w:pPr>${index > 0 ? '<w:pageBreakBefore/>' : ''}<w:jc w:val="center"/><w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${A4_WIDTH_EMU}" cy="${A4_HEIGHT_EMU}"/><wp:docPr id="${index + 1}" name="확정 문서 페이지 ${index + 1}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${index + 1}" name="page-${index + 1}.jpg"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId${index + 1}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${A4_WIDTH_EMU}" cy="${A4_HEIGHT_EMU}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`).join('');
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${drawings}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`;
-};
-
-const createDocx = (pages: CapturedPage[]): Uint8Array => {
-  const files: Zippable = {
-    '[Content_Types].xml': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`),
-    '_rels/.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`),
-    'word/document.xml': strToU8(docxDocumentXml(pages)),
-    'word/_rels/document.xml.rels': strToU8(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${pages.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/page-${index + 1}.jpg"/>`).join('')}</Relationships>`),
-  };
-  pages.forEach((page, index) => { files[`word/media/page-${index + 1}.jpg`] = page.bytes; });
-  return zipSync(files, { level: 6 });
+const createDocx = async (pages: CapturedPage[]): Promise<Uint8Array> => {
+  // Use docx's standards-compliant OOXML relationships and drawing records. The previous
+  // handwritten DrawingML package contained the JPEG files but Word ignored the incomplete
+  // drawing records, which produced apparently valid, blank documents.
+  const document = new Document({
+    creator: '클레임센터 스튜디오',
+    description: '화면 미리보기와 동일한 A4 확정본',
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 11_906, height: 16_838 },
+          margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 },
+        },
+      },
+      children: pages.map((page, index) => new Paragraph({
+        alignment: AlignmentType.CENTER,
+        pageBreakBefore: index > 0,
+        spacing: { before: 0, after: 0, line: 1 },
+        children: [new ImageRun({
+          type: 'jpg',
+          data: page.bytes,
+          // Keep a narrow safety area for Word's paragraph mark so it cannot overflow
+          // onto an extra blank page, while preserving the A4 preview aspect ratio.
+          transformation: { width: 786, height: 1_111 },
+          altText: {
+            title: `확정 문서 페이지 ${index + 1}`,
+            description: `미리보기 ${index + 1}페이지`,
+            name: `page-${index + 1}.jpg`,
+          },
+        })],
+      })),
+    }],
+  });
+  return new Uint8Array(await Packer.toArrayBuffer(document));
 };
 
 const createPdf = (pages: CapturedPage[]): Uint8Array => {
@@ -166,7 +183,7 @@ const createPdf = (pages: CapturedPage[]): Uint8Array => {
 
 const hwpxPicture = (index: number, page: CapturedPage): string => {
   const id = 910_000_000 + index;
-  return `<hp:run charPrIDRef="0"><hp:pic id="${id}" zOrder="${index}" numberingType="PICTURE" textWrap="BEHIND_TEXT" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${id}" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:curSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="29760" centerY="42090" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="pageImage${index}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${A4_WIDTH_HWPUNIT}" y="0"/><hc:pt2 x="${A4_WIDTH_HWPUNIT}" y="${A4_HEIGHT_HWPUNIT}"/><hc:pt3 x="0" y="${A4_HEIGHT_HWPUNIT}"/></hp:imgRect><hp:imgClip left="0" right="${page.width}" top="0" bottom="${page.height}"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="${page.width}" dimheight="${page.height}"/><hp:effects/><hp:sz width="${A4_WIDTH_HWPUNIT}" widthRelTo="ABSOLUTE" height="${A4_HEIGHT_HWPUNIT}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="1" holdAnchorAndSO="0" vertRelTo="PAPER" horzRelTo="PAPER" vertAlign="TOP" horzAlign="CENTER" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>확정 문서 페이지 ${index}</hp:shapeComment></hp:pic></hp:run>`;
+  return `<hp:run charPrIDRef="0"><hp:pic id="${id}" zOrder="${index}" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${id}" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:curSz width="${A4_WIDTH_HWPUNIT}" height="${A4_HEIGHT_HWPUNIT}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="29760" centerY="42090" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:scaMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="1" e5="0" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="pageImage${index}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${A4_WIDTH_HWPUNIT}" y="0"/><hc:pt2 x="${A4_WIDTH_HWPUNIT}" y="${A4_HEIGHT_HWPUNIT}"/><hc:pt3 x="0" y="${A4_HEIGHT_HWPUNIT}"/></hp:imgRect><hp:imgClip left="0" right="${page.width}" top="0" bottom="${page.height}"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="${page.width}" dimheight="${page.height}"/><hp:effects/><hp:sz width="${A4_WIDTH_HWPUNIT}" widthRelTo="ABSOLUTE" height="${A4_HEIGHT_HWPUNIT}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="1" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="CENTER" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>확정 문서 페이지 ${index}</hp:shapeComment></hp:pic></hp:run>`;
 };
 
 const createHwpx = (pages: CapturedPage[], title: string): Uint8Array => {
@@ -203,6 +220,9 @@ const createHwp = async (pages: CapturedPage[], title: string, onProgress?: (mes
     const hwp = await editor.exportHwp();
     const oleSignature = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
     if (hwp.byteLength <= 512 || oleSignature.some((value, index) => hwp[index] !== value)) throw new Error('완성된 HWP 파일 형식 검증에 실패했습니다.');
+    onProgress?.('완성된 HWP 파일을 다시 열어 백지·페이지 누락을 검사하고 있습니다.');
+    const reopened = await editor.loadFile(hwp, `${fileSafe(title)}.hwp`, { suppressDialogs: true, skipUnsavedGuard: true });
+    if (reopened.pageCount !== pages.length) throw new Error(`완성된 HWP 재열기 검증에서 페이지가 누락되었습니다. (${reopened.pageCount}/${pages.length})`);
     return hwp;
   } finally {
     editor.destroy();
@@ -220,7 +240,7 @@ export async function downloadFinalDocument(options: {
   const baseName = fileSafe(options.fileName.replace(/\.(?:docx|pdf|hwp)$/iu, ''));
   options.onProgress?.(`${pages.length}개 A4 페이지를 ${options.format.toUpperCase()}로 묶고 있습니다.`);
   const bytes = options.format === 'docx'
-    ? createDocx(pages)
+    ? await createDocx(pages)
     : options.format === 'pdf'
       ? createPdf(pages)
       : await createHwp(pages, baseName, options.onProgress);

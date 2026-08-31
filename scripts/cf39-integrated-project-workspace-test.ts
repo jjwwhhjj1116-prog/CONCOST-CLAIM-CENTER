@@ -286,6 +286,63 @@ test('CF40 responsible PM owns explicit stage schedules and approved change requ
   sql.close();
 });
 
+test('CF70 linked schedule screens accept the same PM latest version and batch-save all workflow stages together', async () => {
+  const { sql, env } = await setup();
+  const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, {
+    method:'PUT',body:JSON.stringify({ responsiblePmId:PM_ID,expectedProfileVersion:0 })
+  }),env);
+  assert.equal(assigned.status,200);
+
+  const first = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/KICKOFF`,PM_TOKEN,{
+    method:'PUT',body:JSON.stringify({ startDate:'2026-09-01',endDate:'2026-09-01',status:'PLANNED',noteText:'일정표 최초 저장',expectedVersion:0 })
+  }),env);
+  assert.equal(first.status,200);
+  const samePmStale = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/KICKOFF`,PM_TOKEN,{
+    method:'PUT',body:JSON.stringify({ startDate:'2026-09-02',endDate:'2026-09-02',status:'IN_PROGRESS',noteText:'착수회의 화면 연동 저장',expectedVersion:0 })
+  }),env);
+  assert.equal(samePmStale.status,200);
+  assert.equal((await samePmStale.json() as any).schedule.version,2);
+
+  const otherUserStale = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/KICKOFF`,ADMIN_TOKEN,{
+    method:'PUT',body:JSON.stringify({ startDate:'2026-09-03',endDate:'2026-09-03',status:'PLANNED',noteText:'다른 사용자 구버전 덮어쓰기',expectedVersion:0 })
+  }),env);
+  assert.equal(otherUserStale.status,409);
+
+  const batch = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages`,PM_TOKEN,{
+    method:'PUT',body:JSON.stringify({ items:[
+      { stageCode:'KICKOFF',startDate:'2026-09-04',endDate:'2026-09-04',status:'COMPLETED',noteText:'착수 완료',expectedVersion:1 },
+      { stageCode:'SITE_SURVEY',startDate:'2026-09-05',endDate:'2026-09-06',status:'PLANNED',noteText:'현장 일정',expectedVersion:0 },
+      { stageCode:'TAKEOFF_COST',startDate:'2026-09-07',endDate:'2026-09-12',status:'PLANNED',noteText:'물량 일정',expectedVersion:0 },
+      { stageCode:'REPORT_WRITING',startDate:'2026-09-13',endDate:'2026-09-20',status:'PLANNED',noteText:'보고서 일정',expectedVersion:0 }
+    ] })
+  }),env);
+  assert.equal(batch.status,200);
+  const batchBody = await batch.json() as any;
+  assert.equal(batchBody.phase,'CF70_ATOMIC_PROJECT_SCHEDULE_BATCH');
+  assert.equal(batchBody.schedules.length,4);
+  const rows = sql.exec('SELECT stage_code,start_date,end_date,version FROM preview_project_stage_schedules WHERE case_id=? ORDER BY stage_code',[CASE_ID])[0].values;
+  assert.equal(rows.length,4);
+  assert.deepEqual(rows.find((row)=>row[0]==='KICKOFF'),['KICKOFF','2026-09-04','2026-09-04',3]);
+
+  const before = JSON.stringify(rows);
+  const rejectedBatch = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages`,ADMIN_TOKEN,{
+    method:'PUT',body:JSON.stringify({ items:[
+      { stageCode:'KICKOFF',startDate:'2026-10-01',endDate:'2026-10-01',status:'PLANNED',noteText:'충돌',expectedVersion:0 },
+      { stageCode:'SITE_SURVEY',startDate:'2026-10-02',endDate:'2026-10-02',status:'PLANNED',noteText:'함께 저장되면 안 됨',expectedVersion:1 }
+    ] })
+  }),env);
+  assert.equal(rejectedBatch.status,409);
+  const after = JSON.stringify(sql.exec('SELECT stage_code,start_date,end_date,version FROM preview_project_stage_schedules WHERE case_id=? ORDER BY stage_code',[CASE_ID])[0].values);
+  assert.equal(after,before,'conflicted batch must not partially change another stage');
+
+  const scheduleUi = readFileSync(join(process.cwd(),'apps','web','src','workflow','ProjectWorkflowSchedule.tsx'),'utf8');
+  const operationsUi = readFileSync(join(process.cwd(),'apps','web','src','workflow','WorkflowOperations.tsx'),'utf8');
+  assert.match(scheduleUi,/projects\/\$\{encodeURIComponent\(project\.caseId\)\}\/stages`/u);
+  assert.doesNotMatch(scheduleUi,/for \(const stage of filled\)[\s\S]{0,500}apiRequest/u);
+  assert.match(operationsUi,/error\.message \|\| '다른 사용자가/u);
+  sql.close();
+});
+
 test('CF53 project intake needs only the linked proposal result, then PM and dates are set on the schedule page', async () => {
   const { sql, env } = await setup();
   let erpRequest: { url: string; headers: Headers; payload: Record<string, unknown> } | null = null;

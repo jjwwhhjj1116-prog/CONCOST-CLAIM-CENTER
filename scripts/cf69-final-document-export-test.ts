@@ -28,15 +28,23 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.match(exporter, /querySelectorAll<HTMLElement>\('\[data-export-page\]'\)/u);
   assert.match(exporter, /미리보기에 HTML 코드가 노출되어 내보내기를 중단/u);
   assert.match(exporter, /createDocx\(pages\)/u);
+  assert.match(exporter, /new Document\(/u);
+  assert.match(exporter, /new ImageRun\(/u);
+  assert.match(exporter, /Packer\.toArrayBuffer/u);
+  assert.doesNotMatch(exporter, /docxDocumentXml/u);
   assert.match(exporter, /createPdf\(pages\)/u);
   assert.match(exporter, /createHwp\(pages/u);
   assert.match(exporter, /exportHwpVerify/u);
+  assert.match(exporter, /loadFile\(hwp/u);
+  assert.match(exporter, /완성된 HWP 재열기 검증/u);
   assert.match(exporter, /oleSignature/u);
   assert.match(exporter, /clonedPage\.style\.width = '794px'/u);
   assert.match(exporter, /scale: 1\.5/u);
   assert.match(exporter, /imageTimeout: 15_000/u);
   assert.match(exporter, /removeContainer: true/u);
   assert.match(exporter, /expectedSignature/u);
+  assert.match(exporter, /treatAsChar="1"/u);
+  assert.doesNotMatch(exporter, /textWrap="BEHIND_TEXT"/u);
   assert.doesNotMatch(exporter, /dataUrl: string/u);
   assert.match(proposal, /onChange=\{\(next,json\)=>\{setChapters[\s\S]*?setDirty\(true\)/u);
 });
@@ -65,4 +73,19 @@ test('CF69 approved proposal assets resolve immutable versions', () => {
   assert.match(worker, /FROM preview_proposal_company_asset_versions/u);
   assert.match(worker, /INSERT INTO preview_proposal_company_asset_versions/u);
   assert.doesNotMatch(docx, /paragraph\(block\.text, 'Normal', '<w:jc w:val="both"\/>'\)/u);
+});
+
+test('CF70 development deploy is isolated from the soft-launch Worker and D1', () => {
+  const softLaunch = JSON.parse(read('wrangler.jsonc')) as { name: string; d1_databases: Array<{ database_name: string; database_id: string }> };
+  const development = JSON.parse(read('wrangler.development.jsonc')) as { name: string; d1_databases: Array<{ database_name: string; database_id: string }>; vars: { GOOGLE_OAUTH_REDIRECT_ORIGIN: string } };
+  const packageJson = read('package.json');
+
+  assert.notEqual(development.name, softLaunch.name);
+  assert.notEqual(development.d1_databases[0].database_name, softLaunch.d1_databases[0].database_name);
+  assert.notEqual(development.d1_databases[0].database_id, softLaunch.d1_databases[0].database_id);
+  assert.equal(development.name, 'concost-claim-center-development');
+  assert.match(development.vars.GOOGLE_OAUTH_REDIRECT_ORIGIN, /concost-claim-center-development/u);
+  assert.match(packageJson, /cf:deploy:development/u);
+  assert.match(packageJson, /wrangler deploy --config wrangler\.development\.jsonc/u);
+  assert.match(packageJson, /cf:d1:migrate:development/u);
 });

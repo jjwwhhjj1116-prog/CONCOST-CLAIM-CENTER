@@ -3,6 +3,7 @@ import { Button, Drawer, SkipLink } from '@claim-studio/ui';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 import { WorkspaceHelpCenter } from './WorkspaceHelpCenter';
+import { SoftLaunchNotice } from './SoftLaunchNotice';
 
 const NAVIGATION_GROUPS: readonly {
   label: string;
@@ -282,6 +283,8 @@ export const AppShell: React.FC<AppShellProps> = ({
           <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
         </div>
       </header>
+
+      <SoftLaunchNotice />
 
       <div className="shell-body">
         {!isTablet && <aside className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>

@@ -69,8 +69,11 @@
     "cf:dev": "corepack pnpm cf:build && wrangler dev",
     "cf:upload": "corepack pnpm cf:build && wrangler versions upload",
     "cf:deploy": "corepack pnpm cf:build && wrangler deploy",
+    "cf:dev:development": "corepack pnpm cf:build && wrangler dev --config wrangler.development.jsonc",
+    "cf:deploy:development": "corepack pnpm cf:build && wrangler deploy --config wrangler.development.jsonc",
     "cf:d1:migrate:local": "wrangler d1 migrations apply DB --local",
-    "cf:d1:migrate:remote": "wrangler d1 migrations apply DB --remote"
+    "cf:d1:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "cf:d1:migrate:development": "wrangler d1 migrations apply DB --remote --config wrangler.development.jsonc"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

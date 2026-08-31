@@ -417,14 +417,16 @@ const ProjectDetail: React.FC<{
     setScheduleBusy('all'); setScheduleError(''); setScheduleNotice('');
     try {
       await ensurePmAssigned();
-      for (const stage of filled) {
-        const code = stage.stageCode ?? '';
-        const draft = drafts[code];
-        await apiRequest(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/stages/${code}`, {
-          method: 'PUT',
-          body: JSON.stringify({ startDate: draft.startDate, endDate: draft.endDate, status: draft.status, noteText: draft.noteText, expectedVersion: stage.scheduleVersion ?? 0 })
-        });
-      }
+      await apiRequest(`/api/project-workflow/projects/${encodeURIComponent(project.caseId)}/stages`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          items: filled.map((stage) => {
+            const stageCode = stage.stageCode ?? '';
+            const draft = drafts[stageCode];
+            return { stageCode, startDate: draft.startDate, endDate: draft.endDate, status: draft.status, noteText: draft.noteText, expectedVersion: stage.scheduleVersion ?? 0 };
+          })
+        })
+      });
       setScheduleNotice(`${filled.length}개 단계 일정을 저장 완료했습니다. 모든 업무 화면이 이 기준 일정을 함께 사용합니다.`);
       await onReload();
     } catch (reason) { setScheduleError(reason instanceof Error ? reason.message : String(reason)); }
