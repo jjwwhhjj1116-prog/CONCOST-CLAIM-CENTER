@@ -63,6 +63,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
   sql.exec(migration('0010_cf10_product_experience.sql'));
   insertUser(OUTSIDER_ID, 'outsider', '["staff"]');
   sql.exec(migration('0011_cf11_project_workflow.sql'));
+  sql.exec(migration('0048_cf73_workflow_minutes_parity.sql'));
   sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(ADMIN_TOKEN), ADMIN_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);
   sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(OUTSIDER_TOKEN), OUTSIDER_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);
   return { sql, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']> } };
@@ -100,11 +101,25 @@ test('CF11 persists kickoff, local structured minutes, site-survey folder plans,
   assert.match(generatedBody.kickoff.summaryText, /외부 AI 연결 전/u);
   assert.equal(generatedBody.kickoff.timeline.length, 3);
 
-  const siteSurvey = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ surveyDate: '2030-08-14', location: '101동 외벽', scopeText: '외벽 균열 및 누수 전수 확인', leadUnit: '현장조사팀', status: 'PLANNED', expectedVersion: 0 }) }), env);
+  const siteSurvey = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ surveyDate: '2030-08-14', location: '101동 외벽', scopeText: '외벽 균열 및 누수 전수 확인', leadUnit: '현장조사팀', rawNotes: '101동 동측 균열을 확인했고 누수 흔적은 추가 확인이 필요하다.', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0 }) }), env);
   assert.equal(siteSurvey.status, 200);
-  const surveyBody = await siteSurvey.json() as { siteSurveys: Array<{ version: number; folderPath: string }> };
+  const surveyBody = await siteSurvey.json() as { siteSurveys: Array<{ version: number; outputVersion: number; rawNotes: string; folderPath: string }> };
   assert.equal(surveyBody.siteSurveys[0].version, 1);
+  assert.equal(surveyBody.siteSurveys[0].outputVersion, 1);
+  assert.match(surveyBody.siteSurveys[0].rawNotes, /동측 균열/u);
   assert.match(surveyBody.siteSurveys[0].folderPath, /04_현장조사\/30\.08\.14/u);
+
+  const surveyDraft = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey-summary`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ surveyDate: '2030-08-14', expectedVersion: 1 }) }), env);
+  assert.equal(surveyDraft.status, 200);
+  const surveyDraftBody = await surveyDraft.json() as { siteSurveys: Array<{ outputVersion: number; outputStatus: string; summaryText: string; timeline: unknown[] }> };
+  assert.equal(surveyDraftBody.siteSurveys[0].outputVersion, 2);
+  assert.equal(surveyDraftBody.siteSurveys[0].outputStatus, 'DRAFTED');
+  assert.match(surveyDraftBody.siteSurveys[0].summaryText, /현장조사/u);
+  assert.ok(surveyDraftBody.siteSurveys[0].timeline.length >= 1);
+
+  const surveyConfirmed = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey-confirm`, ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ surveyDate: '2030-08-14', expectedVersion: 2 }) }), env);
+  assert.equal(surveyConfirmed.status, 200);
+  assert.equal((await surveyConfirmed.json() as { siteSurveys: Array<{ outputVersion: number; outputStatus: string }> }).siteSurveys[0].outputStatus, 'CONFIRMED');
 
   const allocationPayload = { unitKey: 'vietqs-02', unitLabel: 'Finish Internal 1', office: 'VIETQS', schedulingMode: 'TEAM', discipline: 'FINISH', scopeText: '외벽 마감 물량 산출', basisText: '설계도서·현장실측', startDate: '2030-08-15', endDate: '2030-08-20' };
   const allocation = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/allocations`, ADMIN_TOKEN, { method: 'POST', headers: { 'Idempotency-Key': 'cf11-allocation-0001' }, body: JSON.stringify(allocationPayload) }), env);
@@ -118,7 +133,7 @@ test('CF11 persists kickoff, local structured minutes, site-survey folder plans,
   const SQL = await initSqlJs();
   const restarted = new SQL.Database(exported);
   assert.deepEqual(restarted.exec('SELECT status, version FROM preview_workflow_kickoffs')[0].values[0], ['DRAFTED', 3]);
-  assert.equal(restarted.exec('SELECT COUNT(*) FROM preview_workflow_events')[0].values[0][0], 4);
+  assert.equal(restarted.exec('SELECT COUNT(*) FROM preview_workflow_events')[0].values[0][0], 6);
   restarted.close();
   sql.close();
 });

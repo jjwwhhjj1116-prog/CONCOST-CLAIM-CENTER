@@ -32,7 +32,7 @@ const migrations = [
   '0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql',
   '0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0029_cf37_report_workspace_resume.sql',
   '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql','0035_cf43_navigation_pm_password.sql',
-  '0041_cf53_erp_project_bridge.sql','0047_cf72_project_members_calendar.sql'
+  '0041_cf53_erp_project_bridge.sql','0047_cf72_project_members_calendar.sql','0048_cf73_workflow_minutes_parity.sql'
 ];
 
 async function sha256(value: string): Promise<string> {
@@ -403,7 +403,7 @@ test('CF53 project intake needs only the linked proposal result, then PM and dat
   sql.close();
 });
 
-test('CF40 external AI is default-deny for internal documents, then minimizes identifiers under acknowledged paid policy', async () => {
+test('CF40 internal text stays local by default, then minimizes identifiers under acknowledged paid policy', async () => {
   const { sql, env } = await setup();
   let providerCalls = 0;
   env.GEMINI_TEST_FETCH = async () => {
@@ -419,9 +419,13 @@ test('CF40 external AI is default-deny for internal documents, then minimizes id
     const value = new FormData(); value.set('workflowKind', 'KICKOFF'); value.set('dataClass', 'INTERNAL');
     value.set('file', new File(['담당 010-1234-5678, pm@example.com\n10시 현장 범위 확인'], '착수회의.csv', { type: 'text/csv' })); return value;
   };
-  const blocked = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/ai-import`, PM_TOKEN, { method: 'POST', body: form() }), env);
-  assert.equal(blocked.status, 423); assert.equal(providerCalls, 0);
-  assert.equal(sql.exec("SELECT status FROM preview_workflow_ai_imports ORDER BY created_at DESC LIMIT 1")[0].values[0][0], 'BLOCKED_BY_POLICY');
+  const local = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/ai-import`, PM_TOKEN, { method: 'POST', body: form() }), env);
+  assert.equal(local.status, 200); assert.equal(providerCalls, 0);
+  const localBody = await local.json() as any;
+  assert.equal(localBody.generator, 'LOCAL_STRUCTURED_FALLBACK');
+  assert.equal(localBody.security.providerTier, 'LOCAL_ONLY');
+  assert.match(localBody.import.sourceNotes, /현장 범위 확인/u);
+  assert.deepEqual(sql.exec("SELECT status,error_code FROM preview_workflow_ai_imports ORDER BY created_at DESC LIMIT 1")[0].values[0], ['SUCCEEDED', 'LOCAL_STRUCTURED_FALLBACK']);
   const acknowledged = await worker.fetch(request('/api/settings/ai-governance', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ providerServiceTier: 'PAID_NO_PRODUCT_IMPROVEMENT', confidentialExternalAiEnabled: true, expectedVersion: 1, acknowledgement: '유료 서비스의 비학습 조건과 회사 보안정책을 확인했습니다' }) }), env);
   assert.equal(acknowledged.status, 200);
   const imported = await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/ai-import`, PM_TOKEN, { method: 'POST', body: form() }), env);
@@ -435,8 +439,8 @@ test('CF40 external AI is default-deny for internal documents, then minimizes id
   assert.match(ui, /끌어 놓으면/u); assert.match(ui, /회사 회의록 XLSX 내보내기/u); assert.match(ui, /CONCOST_회의록_양식\.xlsx/u); assert.match(ui, /비학습 조건/u);
   assert.match(ui, /PROJECT CALENDAR · SINGLE SOURCE/u);
   assert.match(ui, /persistSharedSchedule/u);
-  assert.match(ui, /착수회의·기준 일정 저장/u);
-  assert.match(ui, /현장조사·기준 일정 저장/u);
+  assert.match(ui, /착수회의 기록 저장/u);
+  assert.match(ui, /현장조사 기록 저장/u);
   assert.match(ui, /팀 투입·기준 일정 저장/u);
   const scheduleUi = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'workflow', 'ProjectWorkflowSchedule.tsx'), 'utf8');
   assert.match(scheduleUi, /전체 일정 저장 완료/u);

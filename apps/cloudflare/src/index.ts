@@ -751,6 +751,30 @@ function kickoffDraft(agenda: string, notes: string, meetingAt: string): { summa
   return { summary, timeline };
 }
 
+function siteSurveyDraft(scopeText: string, notes: string, surveyDate: string, location: string | null): { summary: string; timeline: Array<{ order: number; title: string; detail: string }> } {
+  const sentences = notes
+    .split(/(?:\r?\n|[.!?]\s+)/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  const timeline = (sentences.length > 0 ? sentences : [scopeText]).map((detail, index) => ({
+    order: index + 1,
+    title: index === 0 ? '조사 핵심 범위' : index < 5 ? '현장 관찰·확인 사항' : '추가 확인 업무',
+    detail: detail.slice(0, 1_200)
+  }));
+  const summary = [
+    `조사 일자: ${surveyDate}`,
+    `현장 위치: ${location || '미입력'}`,
+    `조사 범위: ${scopeText}`,
+    '',
+    '현장조사 정리',
+    ...timeline.map((item) => `${item.order}. ${item.detail}`),
+    '',
+    '※ 외부 AI 연결 전 생성된 구조화 초안입니다. 담당자가 원문과 대조한 뒤 확정해야 합니다.'
+  ].join('\n').slice(0, 30_000);
+  return { summary, timeline };
+}
+
 function parseGeminiKickoffDraft(content: string): { summary: string; timeline: Array<{ order: number; title: string; detail: string }> } | null {
   try {
     const normalized = content.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '');
@@ -837,6 +861,39 @@ function parseWorkflowAiImport(content: string, kind: WorkflowImportKind): Workf
   }
 }
 
+function localWorkflowAiImport(fileName: string, kind: WorkflowImportKind, sourceText: string): WorkflowAiImportResult {
+  const normalized = sourceText.replace(/\r\n?/gu, '\n').trim().slice(0, 50_000);
+  const lines = normalized.split('\n').map((entry) => entry.trim()).filter(Boolean);
+  const contentLines = lines.filter((entry) => !/^\[(?:sheet\d+|[^\]]+)\]$/iu.test(entry));
+  const timeline = (contentLines.length ? contentLines : [normalized]).slice(0, 12).map((detail, index) => ({
+    order: index + 1,
+    title: kind === 'KICKOFF'
+      ? (index === 0 ? '회의 핵심 내용' : index < 5 ? '확인·결정 사항' : '후속 업무')
+      : (index === 0 ? '조사 핵심 내용' : index < 5 ? '관찰·확인 사항' : '추가 확인 업무'),
+    detail: detail.replace(/^[A-Z]{1,4}\d+:\s*/u, '').slice(0, 1_200)
+  })).filter((entry) => entry.detail.length > 0);
+  const subject = timeline[0]?.detail.slice(0, 12_000) || `${fileName} 원문 확인 필요`;
+  const summary = [
+    `${kind === 'KICKOFF' ? '회의록' : '현장조사 기록'} 자동 정리 · ${fileName}`,
+    '',
+    ...timeline.map((entry) => `${entry.order}. ${entry.detail}`),
+    '',
+    '※ 회사 서버에서 원문을 외부 AI로 전송하지 않고 구조화한 초안입니다. 담당자가 원문과 대조한 뒤 확정해 주세요.'
+  ].join('\n').slice(0, 30_000);
+  return {
+    meetingAt: null,
+    surveyDate: null,
+    location: '',
+    agenda: subject,
+    participants: [],
+    leadUnit: '',
+    sourceNotes: normalized,
+    summary,
+    timeline: timeline.length ? timeline : [{ order: 1, title: '원문 확인', detail: subject }],
+    missingFields: kind === 'KICKOFF' ? ['회의 일시', '회의 장소', '참석자'] : ['조사 일자', '현장 위치', '조사 책임팀']
+  };
+}
+
 async function workflowAiGovernance(env: CloudflareEnv): Promise<{ serviceTier: string; confidentialEnabled: boolean; version: number }> {
   if (!env.DB) return { serviceTier: 'UNVERIFIED_OR_FREE', confidentialEnabled: false, version: 0 };
   try {
@@ -903,7 +960,9 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     env.DB.prepare(
       'SELECT s.id, s.survey_date AS surveyDate, s.location, s.scope_text AS scopeText, s.lead_unit AS leadUnit, s.folder_path AS folderPath, ' +
       's.photo_count AS photoCount, s.audio_count AS audioCount, s.document_count AS documentCount, s.status, s.version, s.updated_at AS updatedAt, ' +
-      'u.display_name AS updatedByName FROM preview_site_surveys s JOIN preview_users u ON u.id = s.updated_by WHERE s.case_id = ? AND s.organization_id = ? ORDER BY s.survey_date DESC LIMIT 100'
+      "COALESCE(o.source_notes,'') AS rawNotes, COALESCE(o.summary_text,'') AS summaryText, COALESCE(o.timeline_json,'[]') AS timelineJson, " +
+      "COALESCE(o.status,'DRAFTED') AS outputStatus, COALESCE(o.version,0) AS outputVersion, " +
+      'u.display_name AS updatedByName FROM preview_site_surveys s LEFT JOIN preview_site_survey_outputs o ON o.survey_id=s.id JOIN preview_users u ON u.id = s.updated_by WHERE s.case_id = ? AND s.organization_id = ? ORDER BY s.survey_date DESC LIMIT 100'
     ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
     env.DB.prepare(
       'SELECT a.id, a.unit_key AS unitKey, a.unit_label AS unitLabel, a.office, a.scheduling_mode AS schedulingMode, a.discipline, ' +
@@ -926,7 +985,11 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
       participantUnitsJson: undefined,
       timelineJson: undefined
     } : null,
-    siteSurveys: surveys.results,
+    siteSurveys: surveys.results.map((survey) => ({
+      ...survey,
+      timeline: workflowJsonArray<{ order: number; title: string; detail: string }>(String(survey.timelineJson ?? '[]')),
+      timelineJson: undefined
+    })),
     allocations: allocations.results,
     events: events.results.map((event) => ({ ...event, detail: JSON.parse(event.detailJson) as unknown, detailJson: undefined })),
     googleDrive: { connected: driveConnected, deferredByUser: !driveConfigured, uploadEnabled: driveConnected },
@@ -956,13 +1019,33 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     const classification = String(dataClass) as WorkflowImportDataClass;
     const governance = await workflowAiGovernance(env);
     const paidPolicy = governance.confidentialEnabled && ['PAID_NO_PRODUCT_IMPROVEMENT','VERTEX_AI_ENTERPRISE'].includes(governance.serviceTier);
+    let localSource: IntakeSource | null = null;
+    try { localSource = await extractIntakeSource(file.name, validated.mimeType, validated.bytes); }
+    catch { localSource = null; }
+    const organizationGemini = await resolveOrganizationAiCredential(env, 'GEMINI');
+    const canUseLocalFallback = Boolean(localSource?.extractedText);
+    const mustStayLocal = classification !== 'GENERAL' && !paidPolicy;
+    if (canUseLocalFallback && (mustStayLocal || !organizationGemini)) {
+      const result = localWorkflowAiImport(file.name, workflowKind, localSource?.extractedText ?? '');
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        "INSERT INTO preview_workflow_ai_imports (id,organization_id,case_id,workflow_kind,original_name,mime_type,byte_size,source_sha256,data_class,redaction_count,provider_kind,model_code,status,error_code,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,'GEMINI','local-structured-v1','SUCCEEDED','LOCAL_STRUCTURED_FALLBACK',?,?)"
+      ).bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,workflowKind,file.name,validated.mimeType,file.size,validated.sha256,classification,user.id,now).run();
+      return json({
+        import: result,
+        security: { dataClass: classification, redactionCount: 0, providerTier: 'LOCAL_ONLY', rawProviderPayloadStored: false },
+        modelCode: 'local-structured-v1',
+        generator: 'LOCAL_STRUCTURED_FALLBACK',
+        phase: 'CF73_LOCAL_WORKFLOW_IMPORT'
+      });
+    }
     if (classification !== 'GENERAL' && !paidPolicy) {
       const modelCode = (await previewOrganizationGeminiAutomationRoute(env)).modelCode;
       await env.DB.prepare(
         "INSERT INTO preview_workflow_ai_imports (id,organization_id,case_id,workflow_kind,original_name,mime_type,byte_size,source_sha256,data_class,redaction_count,provider_kind,model_code,status,error_code,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,'GEMINI',?,'BLOCKED_BY_POLICY','PAID_NO_TRAINING_REQUIRED',?,?)"
       ).bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,caseId,workflowKind,file.name,validated.mimeType,file.size,validated.sha256,classification,modelCode,user.id,new Date().toISOString()).run();
       return json({
-        error: '회사 내부·기밀 자료는 Gemini 유료 서비스(Cloud Billing 활성)와 비학습 조건을 관리자가 확인하기 전 외부 AI로 전송하지 않습니다.',
+        error: '회사 내부·기밀 자료는 Gemini 유료 서비스의 비학습 조건을 확인하기 전 외부 AI로 전송하지 않습니다. XLSX·TXT·CSV는 회사 서버 내부 자동정리를 사용할 수 있고, 그 밖의 문서는 관리자 설정 후 다시 실행해 주세요.',
         code: 'PAID_NO_TRAINING_REQUIRED', governance
       }, 423);
     }
@@ -1052,30 +1135,98 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     return previewWorkflowPayload(env, caseRow);
   }
 
+  if (action === 'site-survey-summary' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['surveyDate','expectedVersion'])) return json({ error: 'Site survey summary payload is invalid', code: 'INVALID_SITE_SURVEY_SUMMARY_PAYLOAD' }, 400);
+    const surveyDate = validWorkflowDate(body.surveyDate) ? body.surveyDate : null;
+    const expectedVersion = Number(body.expectedVersion);
+    const current = surveyDate ? await env.DB.prepare(
+      'SELECT s.id,s.survey_date AS surveyDate,s.location,s.scope_text AS scopeText,o.source_notes AS rawNotes,o.version FROM preview_site_surveys s JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.case_id=? AND s.organization_id=? AND s.survey_date=?'
+    ).bind(caseId,PREVIEW_ORGANIZATION_ID,surveyDate).first<{id:string;surveyDate:string;location:string|null;scopeText:string;rawNotes:string;version:number}>() : null;
+    if (!current || !Number.isInteger(expectedVersion) || current.version !== expectedVersion) return json({ error: 'Site survey has changed. Reload before generating the draft.', code: 'VERSION_CONFLICT' }, 409);
+    let draft = siteSurveyDraft(current.scopeText,current.rawNotes,current.surveyDate,current.location);
+    let generator = 'LOCAL_STRUCTURED_FALLBACK';
+    const organizationGemini = await resolveOrganizationAiCredential(env,'GEMINI');
+    if (organizationGemini) {
+      const route = await previewOrganizationGeminiAutomationRoute(env);
+      const generated = await generatePreviewAiText(
+        env,
+        route,
+        '당신은 건설 클레임 현장조사 기록 담당자입니다. 입력 원문에 없는 위치·하자·물량·판단을 만들지 마세요. 조사 범위, 관찰사항, 미확인 항목, 담당자와 후속 업무를 분리하고 JSON 이외의 문장은 출력하지 마세요.',
+        JSON.stringify({ project:{caseNumber:caseRow.caseNumber,title:caseRow.title,claimType:caseRow.claimType},surveyDate:current.surveyDate,location:current.location,scopeText:current.scopeText,rawNotes:current.rawNotes,outputSchema:{summary:'한국어 현장조사 요약',timeline:[{title:'항목 제목',detail:'원문에 근거한 관찰·확인·후속조치'}]}}),
+        user.id,
+        organizationGemini
+      );
+      if (generated.response) return generated.response;
+      const parsed = generated.content ? parseGeminiKickoffDraft(generated.content) : null;
+      if (!parsed) return json({ error: 'Gemini 현장조사 응답을 안전한 정리 형식으로 확인하지 못했습니다.', code: 'GEMINI_MALFORMED_RESPONSE' }, 502);
+      draft = parsed;
+      generator = `GEMINI:${route.modelCode}:ORGANIZATION`;
+    }
+    const nextVersion = expectedVersion + 1;
+    await env.DB.batch([
+      env.DB.prepare("UPDATE preview_site_survey_outputs SET summary_text=?,timeline_json=?,status='DRAFTED',version=version+1,updated_by=?,updated_at=? WHERE survey_id=? AND version=?")
+        .bind(draft.summary,JSON.stringify(draft.timeline),user.id,now,current.id,expectedVersion),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id,case_id,actor_id,event_type,entity_id,detail_json,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_site_survey_outputs WHERE survey_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(),caseId,user.id,'SITE_SURVEY_DRAFT_GENERATED',current.id,JSON.stringify({generator,timelineCount:draft.timeline.length}),now,current.id,nextVersion,now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT version FROM preview_site_survey_outputs WHERE survey_id=?').bind(current.id).first<{version:number}>();
+    if (canonical?.version !== nextVersion) return json({ error: 'Concurrent site survey output update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewWorkflowPayload(env,caseRow);
+  }
+
+  if (action === 'site-survey-confirm' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['surveyDate','expectedVersion'])) return json({ error: 'Site survey confirmation payload is invalid', code: 'INVALID_SITE_SURVEY_CONFIRM_PAYLOAD' }, 400);
+    const surveyDate = validWorkflowDate(body.surveyDate) ? body.surveyDate : null;
+    const expectedVersion = Number(body.expectedVersion);
+    const current = surveyDate ? await env.DB.prepare('SELECT s.id,o.summary_text AS summaryText,o.version FROM preview_site_surveys s JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.case_id=? AND s.organization_id=? AND s.survey_date=?').bind(caseId,PREVIEW_ORGANIZATION_ID,surveyDate).first<{id:string;summaryText:string;version:number}>() : null;
+    if (!current || !current.summaryText.trim() || !Number.isInteger(expectedVersion) || current.version !== expectedVersion) return json({ error: 'Site survey output has changed or has no draft to confirm.', code: 'VERSION_CONFLICT' }, 409);
+    const nextVersion = expectedVersion + 1;
+    await env.DB.batch([
+      env.DB.prepare("UPDATE preview_site_survey_outputs SET status='CONFIRMED',version=version+1,updated_by=?,updated_at=? WHERE survey_id=? AND version=? AND summary_text<>''")
+        .bind(user.id,now,current.id,expectedVersion),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id,case_id,actor_id,event_type,entity_id,detail_json,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_site_survey_outputs WHERE survey_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(),caseId,user.id,'SITE_SURVEY_CONFIRMED',current.id,JSON.stringify({surveyDate}),now,current.id,nextVersion,now)
+    ]);
+    const canonical = await env.DB.prepare('SELECT version,status FROM preview_site_survey_outputs WHERE survey_id=?').bind(current.id).first<{version:number;status:string}>();
+    if (canonical?.version !== nextVersion || canonical.status !== 'CONFIRMED') return json({ error: 'Concurrent site survey output update detected', code: 'VERSION_CONFLICT' }, 409);
+    return previewWorkflowPayload(env,caseRow);
+  }
+
   if (action === 'site-survey' && request.method === 'PUT') {
-    if (!exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'status', 'expectedVersion'])) return json({ error: 'Site survey payload is invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
+    const currentShape = exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'rawNotes', 'status', 'expectedVersion', 'outputExpectedVersion']);
+    const legacyShape = exactObjectKeys(body, ['surveyDate', 'location', 'scopeText', 'leadUnit', 'status', 'expectedVersion']);
+    if (!currentShape && !legacyShape) return json({ error: 'Site survey payload is invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
     const surveyDate = validWorkflowDate(body.surveyDate) ? body.surveyDate : null;
     const location = typeof body.location === 'string' ? body.location.trim() : '';
     const scopeText = normalizedWorkflowText(body.scopeText, 12000);
     const leadUnit = normalizedWorkflowText(body.leadUnit, 120);
+    const rawNotes = legacyShape ? '' : typeof body.rawNotes === 'string' && body.rawNotes.length <= 50000 ? body.rawNotes.trim() : null;
     const status = typeof body.status === 'string' && ['PLANNED', 'IN_PROGRESS', 'COMPLETED'].includes(body.status) ? body.status : null;
     const expectedVersion = Number(body.expectedVersion);
-    if (!surveyDate || location.length > 300 || !scopeText || !leadUnit || !status || !Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error: 'Site survey fields are invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
-    const current = await env.DB.prepare('SELECT id, version FROM preview_site_surveys WHERE case_id=? AND survey_date=?').bind(caseId, surveyDate).first<{ id: string; version: number }>();
+    if (!surveyDate || location.length > 300 || !scopeText || !leadUnit || rawNotes === null || !status || !Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error: 'Site survey fields are invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
+    const current = await env.DB.prepare('SELECT s.id, s.version, COALESCE(o.version,0) AS outputVersion FROM preview_site_surveys s LEFT JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.case_id=? AND s.survey_date=?').bind(caseId, surveyDate).first<{ id: string; version: number; outputVersion: number }>();
+    const outputExpectedVersion = legacyShape ? Number(current?.outputVersion ?? 0) : Number(body.outputExpectedVersion);
+    if (!Number.isInteger(outputExpectedVersion) || outputExpectedVersion < 0) return json({ error: 'Site survey output version is invalid', code: 'INVALID_SITE_SURVEY_PAYLOAD' }, 400);
     if (Number(current?.version ?? 0) !== expectedVersion) return json({ error: 'Site survey has changed. Reload the latest version.', code: 'VERSION_CONFLICT' }, 409);
+    if (Number(current?.outputVersion ?? 0) !== outputExpectedVersion) return json({ error: 'Site survey output has changed. Reload the latest version.', code: 'VERSION_CONFLICT' }, 409);
     const surveyId = current?.id ?? crypto.randomUUID();
     const folderPath = `${caseRow.caseNumber}_${caseRow.title}/04_현장조사/${surveyDate.slice(2).replaceAll('-', '.')}`.slice(0, 600);
     const nextVersion = expectedVersion + 1;
+    const nextOutputVersion = outputExpectedVersion + 1;
     await env.DB.batch([
       env.DB.prepare(
         'INSERT INTO preview_site_surveys (id, case_id, organization_id, survey_date, location, scope_text, lead_unit, folder_path, photo_count, audio_count, document_count, status, version, updated_by, created_at, updated_at) ' +
         'VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 1, ?, ?, ?) ON CONFLICT(case_id, survey_date) DO UPDATE SET location=excluded.location, scope_text=excluded.scope_text, lead_unit=excluded.lead_unit, folder_path=excluded.folder_path, status=excluded.status, version=preview_site_surveys.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_site_surveys.version=?'
       ).bind(surveyId, caseId, PREVIEW_ORGANIZATION_ID, surveyDate, location || null, scopeText, leadUnit, folderPath, status, user.id, now, now, expectedVersion),
-      env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_site_surveys WHERE id=? AND version=? AND updated_at=?)')
-        .bind(crypto.randomUUID(), caseId, user.id, 'SITE_SURVEY_SAVED', surveyId, JSON.stringify({ surveyDate, leadUnit, folderPath }), now, surveyId, nextVersion, now)
+      env.DB.prepare(
+        "INSERT INTO preview_site_survey_outputs (survey_id,case_id,organization_id,source_notes,summary_text,timeline_json,status,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,'','[]','DRAFTED',1,?,?,?) " +
+        "ON CONFLICT(survey_id) DO UPDATE SET source_notes=excluded.source_notes, summary_text=CASE WHEN preview_site_survey_outputs.source_notes<>excluded.source_notes THEN '' ELSE preview_site_survey_outputs.summary_text END, timeline_json=CASE WHEN preview_site_survey_outputs.source_notes<>excluded.source_notes THEN '[]' ELSE preview_site_survey_outputs.timeline_json END, status=CASE WHEN preview_site_survey_outputs.source_notes<>excluded.source_notes THEN 'DRAFTED' ELSE preview_site_survey_outputs.status END, version=preview_site_survey_outputs.version+1, updated_by=excluded.updated_by, updated_at=excluded.updated_at WHERE preview_site_survey_outputs.version=?"
+      ).bind(surveyId,caseId,PREVIEW_ORGANIZATION_ID,rawNotes,user.id,now,now,outputExpectedVersion),
+      env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_site_surveys WHERE id=? AND version=? AND updated_at=?) AND EXISTS (SELECT 1 FROM preview_site_survey_outputs WHERE survey_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(), caseId, user.id, 'SITE_SURVEY_SAVED', surveyId, JSON.stringify({ surveyDate, leadUnit, folderPath }), now, surveyId, nextVersion, now, surveyId, nextOutputVersion, now)
     ]);
-    const canonical = await env.DB.prepare('SELECT version FROM preview_site_surveys WHERE id=?').bind(surveyId).first<{ version: number }>();
-    if (canonical?.version !== nextVersion) return json({ error: 'Concurrent site survey update detected', code: 'VERSION_CONFLICT' }, 409);
+    const canonical = await env.DB.prepare('SELECT s.version, o.version AS outputVersion FROM preview_site_surveys s JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.id=?').bind(surveyId).first<{ version: number; outputVersion: number }>();
+    if (canonical?.version !== nextVersion || canonical.outputVersion !== nextOutputVersion) return json({ error: 'Concurrent site survey update detected', code: 'VERSION_CONFLICT' }, 409);
     return previewWorkflowPayload(env, caseRow);
   }
 
@@ -3351,7 +3502,7 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   if(url.pathname==='/api/cases/intake-source/draft')return handlePreviewIntakeDraft(request,env,user);
   const intakeSourcePath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/(?:intake-source|intake-audio)$/iu);
   if(intakeSourcePath)return handlePreviewIntakeSource(request,env,user,intakeSourcePath[1]);
-  const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|allocations|ai-import))?$/iu);
+  const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|site-survey-summary|site-survey-confirm|allocations|ai-import))?$/iu);
   if (workflowPath) return handlePreviewCaseWorkflow(request, env, url, user, workflowPath[1], workflowPath[2]);
   const casePath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})(?:\/(status|parties|schedules))?$/iu);
 
