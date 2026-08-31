@@ -2897,7 +2897,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const callChapter=async(chapterNumber:1|2|3,context:Record<string,unknown>)=>{
         const prompt=promptProfile.chapters.find((item)=>item.chapterNumber===chapterNumber);
         if(!prompt)return {response:json({error:`${chapterNumber}장 지침이 없습니다.`,code:'PROPOSAL_TEMPLATE_PROMPTS_NOT_READY'},503),value:null as Record<string,unknown>|null};
-        const generated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[선택 템플릿]\n${selectedSource.sourceName}\n분류: ${promptProfile.templateCategory}\n\n[관리자 승인 ${chapterNumber}장 지침 · v${prompt.version}]\n${prompt.instructionText}`,JSON.stringify(context),user.id,organizationGemini,40_000);
+        const generated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[선택 템플릿]\n${selectedSource.sourceName}\n분류: ${promptProfile.templateCategory}\n\n[관리자 승인 ${chapterNumber}장 지침 · v${prompt.version}]\n${prompt.instructionText}`,JSON.stringify(context),user.id,organizationGemini,75_000);
         if(generated.response)return {response:generated.response,value:null as Record<string,unknown>|null};
         const value=proposalAiJson(generated.content??'');
         if(!value)return {response:json({error:`Gemini ${chapterNumber}장 응답이 JSON 형식이 아닙니다. 다시 생성해 주세요.`,code:'MALFORMED_PROPOSAL_AI_RESPONSE',chapterNumber},502),value:null as Record<string,unknown>|null};
@@ -2908,7 +2908,7 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const chapter3Result=await callChapter(3,{input:generationInput,확정된_2장:chapter2,확정된_1장:chapter1});if(chapter3Result.response)return chapter3Result.response;const chapter3=chapter3Result.value!;
       const rendered1=proposalRenderedAiChapter(1,chapter1);const rendered2=proposalRenderedAiChapter(2,chapter2);const rendered3=proposalRenderedAiChapter(3,chapter3);
       if(!rendered1||!rendered2||!rendered3)return json({error:'Gemini 초안이 선택 템플릿의 1~3장 구조 기준에 미달하여 저장하지 않았습니다.',code:'INCOMPLETE_PROPOSAL_AI_RESPONSE',requiredOrder:[2,1,3]},502);
-      const validationGenerated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}`,JSON.stringify({input:generationInput,chapter1,chapter2,chapter3}),user.id,organizationGemini,40_000);
+      const validationGenerated=await generatePreviewAiText(env,route,`${promptProfile.systemInstruction}\n\n[관리자 승인 최종 자가검증 지침 · v${promptProfile.version}]\n${promptProfile.validationInstruction}`,JSON.stringify({input:generationInput,chapter1,chapter2,chapter3}),user.id,organizationGemini,45_000);
       let validation:Record<string,unknown>;
       if(validationGenerated.response){
         validation={result:'REVIEW_REQUIRED',findings:[{level:'WARNING',location:'1~3장 전체',issue:'AI 최종 자가검증 서비스가 응답하지 않았습니다.',fix:'초안은 보존되며 3단계에서 사람이 사실·수치·근거를 직접 검수해야 합니다.'}],fallbackReason:'PROVIDER_VALIDATION_UNAVAILABLE'};
@@ -4591,7 +4591,8 @@ function previewPersonalGeminiAssistantRoute(routes: PreviewAiRouteRow[]): Previ
 
 async function previewOrganizationGeminiAutomationRoute(env: CloudflareEnv): Promise<PreviewAiRouteRow> {
   const routes = await previewAiRoutes(env);
-  const configured = routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'CHAPTER_WRITING' && previewModelAllowed('GEMINI', route.modelCode))
+  const configured = routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'FACT_CHECK' && previewModelAllowed('GEMINI', route.modelCode))
+    ?? routes.find((route) => route.providerKind === 'GEMINI' && route.taskKind === 'CHAPTER_WRITING' && previewModelAllowed('GEMINI', route.modelCode))
     ?? routes.find((route) => route.providerKind === 'GEMINI' && previewModelAllowed('GEMINI', route.modelCode));
   return configured ?? {
     taskKind: 'CHAPTER_WRITING',
@@ -7144,7 +7145,7 @@ async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, f
   if (!credential) return json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503);
   const route = await previewOrganizationGeminiAutomationRoute(env);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  const timeout = setTimeout(() => controller.abort(), 90_000);
   let response: Response;
   try {
     response = await (env.GEMINI_TEST_FETCH ?? fetch)(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(route.modelCode)}:generateContent`, {

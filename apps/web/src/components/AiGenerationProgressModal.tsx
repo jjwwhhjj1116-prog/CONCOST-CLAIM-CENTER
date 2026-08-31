@@ -12,6 +12,8 @@ interface AiGenerationProgressModalProps {
   errorMessage?: string;
   confirmLabel?: string;
   timeoutHintSeconds?: number;
+  retryLabel?: string;
+  onRetry?: () => void;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -26,6 +28,8 @@ export function AiGenerationProgressModal({
   errorMessage,
   confirmLabel = '확인하고 다음 단계로',
   timeoutHintSeconds = 220,
+  retryLabel = '다시 시도',
+  onRetry,
   onConfirm,
   onClose
 }: AiGenerationProgressModalProps): React.ReactElement | null {
@@ -47,8 +51,11 @@ export function AiGenerationProgressModal({
     setProgress(8);
     setElapsedSeconds(0);
     const timer = window.setInterval(() => {
-      setElapsedSeconds((current) => current + 1);
-      setProgress((current) => Math.min(98, current + (current < 72 ? 4 : current < 90 ? 2 : 1)));
+      setElapsedSeconds((current) => {
+        const next = current + 1;
+        setProgress(Math.min(98, 8 + Math.round((next / timeoutHintSeconds) * 90)));
+        return next;
+      });
     }, 1_000);
     return () => window.clearInterval(timer);
   }, [isOpen, status, title]);
@@ -74,9 +81,9 @@ export function AiGenerationProgressModal({
       <span className="ai-generation-modal__eyebrow">GEMINI · CLAIM CENTER STUDIO</span>
       <h2 id="ai-generation-title">{title}</h2>
       <p id="ai-generation-description">{status === 'complete' ? completeMessage : status === 'error' ? errorMessage ?? 'AI 작성 결과를 저장하지 못했습니다.' : description}</p>
-      <div className="ai-generation-modal__meter" role="progressbar" aria-label={statusLabel} aria-valuemin={0} aria-valuemax={100} aria-valuenow={status === 'error' ? progress : status === 'complete' ? 100 : progress} aria-valuetext={status === 'running' ? `${progress}% · ${elapsedSeconds}초 경과` : statusLabel}>
+      <div className="ai-generation-modal__meter" role="progressbar" aria-label={`${statusLabel} 예상 진행률`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={status === 'error' ? progress : status === 'complete' ? 100 : progress} aria-valuetext={status === 'running' ? `예상 ${progress}% · ${elapsedSeconds}초 경과` : statusLabel}>
         <span><i style={{ width: `${status === 'complete' ? 100 : progress}%` }} /></span>
-        <strong>{status === 'error' ? '중단' : `${status === 'complete' ? 100 : progress}%${status === 'running' ? ` · ${elapsedSeconds}초` : ''}`}</strong>
+        <strong>{status === 'error' ? '중단' : status === 'complete' ? '100%' : `예상 ${progress}% · ${elapsedSeconds}초`}</strong>
       </div>
       <ol className="ai-generation-modal__stages" aria-label="AI 작성 처리 단계">
         {stages.map((stage, index) => <li key={stage} className={status === 'complete' || index < stageIndex ? 'is-complete' : index === stageIndex && status === 'running' ? 'is-current' : ''}>
@@ -85,7 +92,10 @@ export function AiGenerationProgressModal({
       </ol>
       <div className="ai-generation-modal__actions">
         {status === 'complete' && <button ref={actionRef} type="button" className="ai-generation-modal__confirm" onClick={onConfirm}>✓ {confirmLabel}</button>}
-        {status === 'error' && <button ref={actionRef} type="button" className="ai-generation-modal__close" onClick={onClose}>닫고 입력 확인</button>}
+        {status === 'error' && <>
+          {onRetry && <button ref={actionRef} type="button" className="ai-generation-modal__retry" onClick={onRetry}>{retryLabel}</button>}
+          <button ref={onRetry ? undefined : actionRef} type="button" className="ai-generation-modal__close" onClick={onClose}>닫고 입력 확인</button>
+        </>}
         {status === 'running' && <small>{progress >= 90 ? `Gemini 최종 응답과 보안 검증을 기다리고 있습니다. ${timeoutHintSeconds}초를 넘기면 원인을 표시하고 자동 중단합니다.` : '창을 닫지 않아도 완료되면 자동으로 ✓ 표시가 나타납니다.'}</small>}
       </div>
     </section>

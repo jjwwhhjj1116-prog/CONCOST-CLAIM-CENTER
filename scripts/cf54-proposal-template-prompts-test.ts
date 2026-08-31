@@ -45,7 +45,7 @@ test('CF54 proposal AI generation is explicitly chained 2 to 1 to 3 and then val
   const source=read('apps/cloudflare/src/index.ts');
   const chapter2=source.indexOf('const chapter2Result=await callChapter(2');const chapter1=source.indexOf('const chapter1Result=await callChapter(1');const chapter3=source.indexOf('const chapter3Result=await callChapter(3');const validation=source.indexOf('const validationGenerated=await generatePreviewAiText',chapter3);
   assert.ok(chapter2>0&&chapter1>chapter2&&chapter3>chapter1&&validation>chapter3);assert.match(source,/AI_VALIDATION_REQUIRES_HUMAN_REVIEW/u);assert.match(source,/aiGenerationTrace/u);assert.match(source,/promptProfile\.templateCategory/u);
-  assert.match(source,/reasoningEffort: 'minimal'/u);assert.match(source,/organizationGemini,40_000/u);
-  const ui=read('apps/web/src/proposals/ProposalView.tsx');assert.match(ui,/timeoutMs:generationMode==='AI'\?220_000:30_000/u);
+  assert.match(source,/taskKind === 'FACT_CHECK'[\s\S]*taskKind === 'CHAPTER_WRITING'/u);assert.match(source,/organizationGemini,75_000/u);assert.match(source,/organizationGemini,45_000/u);
+  const ui=read('apps/web/src/proposals/ProposalView.tsx');assert.match(ui,/timeoutMs:generationMode==='AI'\?330_000:30_000/u);assert.match(ui,/Gemini 초안 다시 작성/u);
   const progress=read('apps/web/src/components/AiGenerationProgressModal.tsx');assert.match(progress,/timeoutHintSeconds = 220/u);assert.doesNotMatch(progress,/Math\.min\(92/u);
 });

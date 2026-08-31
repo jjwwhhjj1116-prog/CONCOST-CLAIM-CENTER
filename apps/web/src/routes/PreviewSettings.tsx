@@ -230,7 +230,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     setBusy(`test:${field}`); setError(''); setNotice('');
     try {
       const result = await apiRequest<{ source: string; checkedAt: string }>(`/api/settings/ai-credentials/${provider.providerKind}/test`, {
-        method: 'POST', body: JSON.stringify({ scope, modelCode: selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
+        method: 'POST', timeoutMs: 105_000, body: JSON.stringify({ scope, modelCode: selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
       });
       setNotice(`${PROVIDER_COPY[provider.providerKind].short} 연결 확인 완료 · ${result.source} · ${new Date(result.checkedAt).toLocaleString('ko-KR')}`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
