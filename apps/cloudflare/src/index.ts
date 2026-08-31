@@ -237,6 +237,28 @@ async function previewSessionUser(request: Request, env: CloudflareEnv): Promise
 async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED', phase: 'CF04_AUTH' }, 503);
 
+  if (url.pathname.endsWith('/registration-requests') && request.method === 'POST') {
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    const expectedKeys = ['loginId','displayName','email','password','requestedRole','requestNote'];
+    if (!body || !exactObjectKeys(body, expectedKeys) || typeof body.loginId !== 'string' || typeof body.displayName !== 'string' || typeof body.email !== 'string' || typeof body.password !== 'string' || typeof body.requestedRole !== 'string' || typeof body.requestNote !== 'string') {
+      return json({ error:'가입 신청 내용을 확인해 주세요.',code:'INVALID_REGISTRATION_REQUEST' },400);
+    }
+    const loginId=body.loginId.trim().toLowerCase(); const displayName=body.displayName.trim(); const email=body.email.trim().toLowerCase();
+    const requestedRole=['staff','reviewer','pm'].includes(body.requestedRole)?body.requestedRole:''; const requestNote=body.requestNote.trim();
+    const emailPattern=/^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+    if(!emailPattern.test(loginId)||!emailPattern.test(email)||displayName.length<1||displayName.length>100||body.password.length<4||body.password.length>128||!requestedRole||requestNote.length>1000){
+      return json({ error:'아이디·이메일·이름·비밀번호를 확인해 주세요.',code:'INVALID_REGISTRATION_REQUEST' },400);
+    }
+    const existing=await env.DB.prepare("SELECT 1 AS found FROM preview_users WHERE login_id=? COLLATE NOCASE OR email=? COLLATE NOCASE UNION ALL SELECT 1 FROM preview_user_registration_requests WHERE status='PENDING' AND (login_id=? COLLATE NOCASE OR email=? COLLATE NOCASE) LIMIT 1").bind(loginId,email,loginId,email).first<{found:number}>().catch(()=>null);
+    if(existing)return json({ error:'이미 등록되었거나 승인 대기 중인 아이디·이메일입니다.',code:'REGISTRATION_CONFLICT' },409);
+    const salt=bytesToHex(crypto.getRandomValues(new Uint8Array(16))); const iterations=310_000; const passwordHash=await derivePreviewPassword(body.password,salt,iterations);
+    if(!passwordHash)return json({ error:'비밀번호를 안전하게 보호하지 못했습니다.',code:'PASSWORD_HASH_FAILED' },500);
+    const id=crypto.randomUUID(); const now=new Date().toISOString();
+    try{await env.DB.prepare('INSERT INTO preview_user_registration_requests (id,login_id,display_name,email,password_salt,password_hash,password_iterations,requested_role,request_note,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,\'PENDING\',1,?,?)').bind(id,loginId,displayName,email,salt,passwordHash,iterations,requestedRole,requestNote||null,now,now).run();}
+    catch{return json({ error:'이미 같은 가입 신청이 접수되어 있습니다.',code:'REGISTRATION_CONFLICT' },409);}
+    return json({ request:{id,status:'PENDING',displayName,requestedRole,createdAt:now},message:'가입 신청이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.',phase:'CF72_MEMBER_REGISTRATION' },201);
+  }
+
   if ((url.pathname.endsWith('/me') || url.pathname.endsWith('/session')) && request.method === 'GET') {
     const user = await previewSessionUser(request, env);
     if (!user) return json({ error: 'Authentication required', code: 'AUTH_REQUIRED', user: null, phase: 'CF04_AUTH' }, 401);
@@ -525,7 +547,37 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   if (!user.roles.includes('admin')) return json({ error: 'Admin role is required', code: 'FORBIDDEN' }, 403);
+  const url = new URL(request.url);
   const accountSchemaAvailable = await env.DB.prepare('SELECT version FROM preview_users LIMIT 0').all().then(() => true).catch(() => false);
+
+  if (url.pathname === '/api/admin/registration-requests' && request.method === 'GET') {
+    const rows=await env.DB.prepare('SELECT r.id,r.login_id AS loginId,r.display_name AS displayName,r.email,r.requested_role AS requestedRole,r.request_note AS requestNote,r.status,r.review_note AS reviewNote,r.reviewed_at AS reviewedAt,r.version,r.created_at AS createdAt,reviewer.display_name AS reviewedByName FROM preview_user_registration_requests r LEFT JOIN preview_users reviewer ON reviewer.id=r.reviewed_by ORDER BY CASE r.status WHEN \'PENDING\' THEN 0 ELSE 1 END,r.created_at DESC LIMIT 200').all<Record<string,unknown>>().catch(()=>({results:[]}));
+    return json({ requests:rows.results,phase:'CF72_MEMBER_REGISTRATION' });
+  }
+
+  const registrationMatch=url.pathname.match(/^\/api\/admin\/registration-requests\/([0-9a-f-]{36})$/iu);
+  if(registrationMatch&&request.method==='PUT'){
+    if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
+    const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
+    if(!body||!exactObjectKeys(body,['action','expectedVersion','reviewNote'])||!['APPROVE','REJECT'].includes(String(body.action))||!Number.isInteger(body.expectedVersion)||typeof body.reviewNote!=='string'||body.reviewNote.trim().length>1000)return json({error:'승인·거절 요청을 확인해 주세요.',code:'INVALID_REGISTRATION_DECISION'},400);
+    const row=await env.DB.prepare('SELECT id,login_id AS loginId,display_name AS displayName,email,password_salt AS passwordSalt,password_hash AS passwordHash,password_iterations AS passwordIterations,requested_role AS requestedRole,status,version FROM preview_user_registration_requests WHERE id=?').bind(registrationMatch[1]).first<Record<string,unknown>>();
+    if(!row)return json({error:'가입 신청을 찾을 수 없습니다.',code:'REGISTRATION_NOT_FOUND'},404);
+    if(row.status!=='PENDING'||Number(row.version)!==Number(body.expectedVersion))return json({error:'이미 처리되었거나 다른 화면에서 변경되었습니다.',code:'VERSION_CONFLICT'},409);
+    const now=new Date().toISOString(); const approved=body.action==='APPROVE'; const targetId=crypto.randomUUID(); const expectedVersion=Number(body.expectedVersion);
+    if(approved){
+      const duplicate=await env.DB.prepare('SELECT 1 AS found FROM preview_users WHERE login_id=? COLLATE NOCASE OR email=? COLLATE NOCASE LIMIT 1').bind(row.loginId,row.email).first();
+      if(duplicate)return json({error:'이미 등록된 아이디 또는 이메일입니다.',code:'ACCOUNT_CREATE_CONFLICT'},409);
+    }
+    const statements:D1StatementLike[]=[];
+    if(approved)statements.push(
+      env.DB.prepare('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at,version) VALUES (?,?,?,?,?,?,?,?,1,?,1)').bind(targetId,row.loginId,row.passwordSalt,row.passwordHash,row.passwordIterations,row.displayName,row.email,JSON.stringify([row.requestedRole]),now),
+      env.DB.prepare("INSERT INTO preview_user_admin_events (id,actor_id,target_user_id,action,detail_json,created_at) VALUES (?,?,?,'ACCOUNT_CREATED',?,?)").bind(crypto.randomUUID(),user.id,targetId,JSON.stringify({loginId:row.loginId,source:'REGISTRATION_REQUEST'}),now)
+    );
+    statements.push(env.DB.prepare('UPDATE preview_user_registration_requests SET status=?,review_note=?,reviewed_by=?,reviewed_at=?,version=version+1,updated_at=? WHERE id=? AND status=\'PENDING\' AND version=?').bind(approved?'APPROVED':'REJECTED',body.reviewNote.trim()||null,user.id,now,now,registrationMatch[1],expectedVersion));
+    try{const results=await env.DB.batch(statements) as Array<{meta?:{changes?:number}}>;if(results.some((entry)=>entry.meta?.changes!==1))return json({error:'가입 신청이 동시에 변경되었습니다.',code:'VERSION_CONFLICT'},409);}
+    catch{return json({error:'계정을 승인하지 못했습니다. 중복 계정을 확인해 주세요.',code:'ACCOUNT_CREATE_CONFLICT'},409);}
+    return json({ok:true,status:approved?'APPROVED':'REJECTED',version:expectedVersion+1,phase:'CF72_MEMBER_REGISTRATION'});
+  }
 
   if (request.method === 'GET') {
     const rows = await env.DB.prepare(
@@ -1262,8 +1314,12 @@ interface ProposalReceptionCandidateRow {
   proposalLinkId: string | null;
   awardStatus: string | null;
   linkVersion: number | null;
+  effectiveStateVersion: number | null;
   awardDecidedAt: string | null;
   awardDecidedByName: string | null;
+  catalogVersion: number | null;
+  driveArchiveUrl: string | null;
+  driveArchivedAt: string | null;
 }
 
 const proposalReceptionSelect =
@@ -1271,12 +1327,15 @@ const proposalReceptionSelect =
   'c.description AS caseDescription,c.claim_type AS claimType,p.title AS proposalTitle,p.version AS proposalVersion,p.status AS proposalStatus,' +
   'v.version_number AS versionNumber,COALESCE(NULLIF(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\'),\'[클라이언트명 확인 필요]\') AS clientName,' +
   'v.sha256 AS documentSha256,p.updated_at AS confirmedAt,(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AS proposalNumber,' +
-  '(\'확정 v\'||v.version_number) AS revisionLabel,link.id AS proposalLinkId,link.award_status AS awardStatus,link.version AS linkVersion,' +
-  'link.award_decided_at AS awardDecidedAt,decider.display_name AS awardDecidedByName ' +
+  '(\'확정 v\'||v.version_number) AS revisionLabel,link.id AS proposalLinkId,COALESCE(effective.effective_status,link.award_status) AS awardStatus,link.version AS linkVersion,' +
+  'effective.version AS effectiveStateVersion,link.award_decided_at AS awardDecidedAt,decider.display_name AS awardDecidedByName,' +
+  'COALESCE(catalog.version,0) AS catalogVersion,catalog.drive_archive_url AS driveArchiveUrl,catalog.drive_archived_at AS driveArchivedAt ' +
   'FROM preview_proposals p JOIN preview_cases c ON c.id=p.case_id AND c.organization_id=p.organization_id ' +
   'JOIN preview_proposal_versions v ON v.id=p.current_version_id AND v.id=p.approved_version_id AND v.proposal_id=p.id ' +
   'LEFT JOIN preview_proposal_links link ON link.organization_id=p.organization_id AND link.case_id=p.case_id ' +
   'AND link.proposal_number=(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AND link.revision_label=(\'확정 v\'||v.version_number) ' +
+  'LEFT JOIN preview_award_effective_states effective ON effective.proposal_link_id=link.id ' +
+  'LEFT JOIN preview_catalog_records catalog ON catalog.record_kind=\'PROPOSAL\' AND catalog.record_id=p.id ' +
   'LEFT JOIN preview_users decider ON decider.id=link.award_decided_by ';
 
 function proposalReceptionProjection(row: ProposalReceptionCandidateRow): Record<string, unknown> {
@@ -1286,6 +1345,8 @@ function proposalReceptionProjection(row: ProposalReceptionCandidateRow): Record
     caseVersion: Number(row.caseVersion),
     versionNumber: Number(row.versionNumber),
     linkVersion: row.linkVersion === null ? null : Number(row.linkVersion),
+    effectiveStateVersion: row.effectiveStateVersion === null ? null : Number(row.effectiveStateVersion),
+    catalogVersion: Number(row.catalogVersion ?? 0),
     receptionStatus: row.awardStatus ?? 'READY'
   };
 }
@@ -1312,12 +1373,39 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
     const admin = user.roles.includes('admin') ? 1 : 0;
     const rows = await env.DB.prepare(
       proposalReceptionSelect +
-      'WHERE p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL ' +
+      'WHERE p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL AND COALESCE(catalog.db_deleted,0)=0 ' +
       'AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=c.id AND a.user_id=?)) ' +
       'AND (?=\'\' OR p.title LIKE ? OR c.case_number LIKE ? OR c.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ?) ' +
-      'ORDER BY CASE COALESCE(link.award_status,\'READY\') WHEN \'READY\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.updated_at DESC LIMIT 200'
+      'ORDER BY CASE COALESCE(effective.effective_status,link.award_status,\'READY\') WHEN \'READY\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.updated_at DESC LIMIT 200'
     ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id, q, like, like, like, like).all<ProposalReceptionCandidateRow>();
     return json({ receptions: rows.results.map(proposalReceptionProjection), phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
+  }
+
+  const receptionStatusMatch=url.pathname.match(/^\/api\/proposal-workflow\/receptions\/([0-9a-f-]{36})\/status$/iu);
+  if(receptionStatusMatch&&request.method==='POST'){
+    if(!canMutatePreviewCases(user))return json({error:'수주 상태를 정정할 권한이 없습니다.',code:'FORBIDDEN'},403);
+    if(!env.DB.batch)return json({error:'D1 일괄 저장 기능을 사용할 수 없습니다.',code:'D1_BATCH_REQUIRED'},503);
+    const body=await request.json().catch(()=>null) as Record<string,unknown>|null;
+    if(!body||!exactObjectKeys(body,['decision','reason','expectedStateVersion','expectedCaseVersion'])||!['WON','LOST'].includes(String(body.decision))||typeof body.reason!=='string'||body.reason.trim().length<2||body.reason.trim().length>3000||!Number.isInteger(body.expectedStateVersion)||!Number.isInteger(body.expectedCaseVersion))return json({error:'변경할 상태와 사유를 확인해 주세요.',code:'INVALID_AWARD_ADJUSTMENT'},400);
+    const current=await proposalReceptionDetail(env,user,receptionStatusMatch[1]);
+    if(!current||!current.proposalLinkId||!['WON','LOST'].includes(String(current.awardStatus)))return json({error:'수주 결정이 완료된 프로젝트를 찾을 수 없습니다.',code:'RECEPTION_NOT_ADJUSTABLE'},404);
+    const nextStatus=String(body.decision); const previousStatus=String(current.awardStatus); const expectedStateVersion=Number(body.expectedStateVersion); const expectedCaseVersion=Number(body.expectedCaseVersion);
+    if(previousStatus===nextStatus)return json({error:'현재 상태와 다른 상태를 선택해 주세요.',code:'AWARD_STATUS_UNCHANGED'},409);
+    if(Number(current.effectiveStateVersion??1)!==expectedStateVersion||Number(current.caseVersion)!==expectedCaseVersion)return json({error:'다른 화면에서 프로젝트가 변경되었습니다. 최신 데이터를 다시 불러오세요.',code:'VERSION_CONFLICT'},409);
+    const requestKey=request.headers.get('Idempotency-Key')??'';if(!PREVIEW_CASE_CREATE_KEY.test(requestKey))return json({error:'올바른 중복 방지 키가 필요합니다.',code:'INVALID_IDEMPOTENCY_KEY'},400);
+    const fingerprint=await sha256Hex(JSON.stringify({proposalId:receptionStatusMatch[1],previousStatus,nextStatus,reason:body.reason.trim(),expectedStateVersion,expectedCaseVersion}));
+    const replay=await env.DB.prepare('SELECT request_fingerprint AS fingerprint FROM preview_award_adjustments WHERE request_key=?').bind(requestKey).first<{fingerprint:string}>();
+    if(replay){if(replay.fingerprint!==fingerprint)return json({error:'동일 요청 키가 다른 정정 작업에 사용되었습니다.',code:'IDEMPOTENCY_MISMATCH'},409);const canonical=await proposalReceptionDetail(env,user,receptionStatusMatch[1]);return json({reception:canonical?proposalReceptionProjection(canonical):null,replay:true,phase:'CF72_AWARD_ADJUSTMENT'});}
+    const now=new Date().toISOString();const nextCaseStatus=nextStatus==='WON'?'CONTRACT':'PROPOSAL';
+    const results=await env.DB.batch([
+      env.DB.prepare('INSERT INTO preview_award_adjustments (id,proposal_link_id,case_id,previous_status,next_status,reason,expected_state_version,request_key,request_fingerprint,adjusted_by,adjusted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),current.proposalLinkId,current.caseId,previousStatus,nextStatus,body.reason.trim(),expectedStateVersion,requestKey,fingerprint,user.id,now),
+      env.DB.prepare('UPDATE preview_award_effective_states SET effective_status=?,version=version+1,updated_by=?,updated_at=? WHERE proposal_link_id=? AND version=? AND effective_status=?').bind(nextStatus,user.id,now,current.proposalLinkId,expectedStateVersion,previousStatus),
+      env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL').bind(nextCaseStatus,now,current.caseId,PREVIEW_ORGANIZATION_ID,expectedCaseVersion),
+      env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,'AWARD_DECIDED',?,?,?)").bind(crypto.randomUUID(),current.caseId,user.id,nextStatus==='WON'?'수주 상태 재확정':'수주 확정 취소',body.reason.trim(),now)
+    ]) as Array<{meta?:{changes?:number}}>;
+    if(results.some((entry)=>entry.meta?.changes!==1))return json({error:'수주 상태가 동시에 변경되었습니다.',code:'VERSION_CONFLICT'},409);
+    const canonical=await proposalReceptionDetail(env,user,receptionStatusMatch[1]);
+    return json({reception:canonical?proposalReceptionProjection(canonical):null,phase:'CF72_AWARD_ADJUSTMENT'});
   }
 
   if (url.pathname === '/api/proposal-workflow/receptions' && request.method === 'POST') {
@@ -1372,6 +1460,8 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
         .bind(crypto.randomUUID(), linkId, current.caseId, decision, decisionNote, decidedAt, contractAmountKrw, projectDate, projectDate, decisionRequestKey, fingerprint, user.id, decidedAt),
       env.DB.prepare('UPDATE preview_proposal_links SET award_status=?,award_decided_at=?,award_decided_by=?,contract_amount_krw=?,project_start_on=?,project_end_on=?,version=2,updated_at=? WHERE id=? AND version=1 AND award_status=\'PENDING\'')
         .bind(decision, decidedAt, user.id, contractAmountKrw, projectDate, projectDate, decidedAt, linkId),
+      env.DB.prepare('INSERT INTO preview_award_effective_states (proposal_link_id,case_id,effective_status,version,updated_by,updated_at) VALUES (?,?,?,1,?,?)')
+        .bind(linkId,current.caseId,decision,user.id,decidedAt),
       env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL')
         .bind(nextCaseStatus, decidedAt, current.caseId, PREVIEW_ORGANIZATION_ID, expectedCaseVersion),
       env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) VALUES (?,?,?,\'PROPOSAL_LINKED\',?,?,?)')
@@ -1496,6 +1586,8 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
         .bind(crypto.randomUUID(),current.id,current.caseId,decision,decisionNote,decidedAt,contractAmountKrw,projectStartOn,projectEndOn,expectedLinkVersion,requestKey,fingerprint,user.id,now),
       env.DB.prepare('UPDATE preview_proposal_links SET award_status=?,award_decided_at=?,award_decided_by=?,contract_amount_krw=?,project_start_on=?,project_end_on=?,version=version+1,updated_at=? WHERE id=? AND version=? AND award_status=\'PENDING\'')
         .bind(decision,decidedAt,user.id,contractAmountKrw,projectStartOn,projectEndOn,now,current.id,expectedLinkVersion),
+      env.DB.prepare('INSERT INTO preview_award_effective_states (proposal_link_id,case_id,effective_status,version,updated_by,updated_at) VALUES (?,?,?,1,?,?)')
+        .bind(current.id,current.caseId,decision,user.id,now),
       env.DB.prepare('UPDATE preview_cases SET status=?,version=version+1,updated_at=? WHERE id=? AND organization_id=? AND version=? AND deleted_at IS NULL')
         .bind(nextCaseStatus,now,current.caseId,PREVIEW_ORGANIZATION_ID,expectedCaseVersion),
       env.DB.prepare('INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,\'AWARD_DECIDED\',?,?,? WHERE EXISTS (SELECT 1 FROM preview_cases WHERE id=? AND version=? AND updated_at=?)')
@@ -2870,7 +2962,7 @@ async function handleProjectWorkflowSchedule(request: Request, env: CloudflareEn
       (SELECT COALESCE(r.reviewed_at,r.requested_at) FROM preview_report_reviews r WHERE r.case_id=c.id ORDER BY r.requested_at DESC LIMIT 1) AS reviewAt,
       (SELECT f.finalized_at FROM preview_report_finalizations f WHERE f.case_id=c.id ORDER BY f.finalized_at DESC LIMIT 1) AS finalizedAt
     FROM preview_cases c WHERE c.organization_id=? AND c.deleted_at IS NULL AND c.status='CONTRACT'
-      AND EXISTS (SELECT 1 FROM preview_proposal_links accepted WHERE accepted.case_id=c.id AND accepted.organization_id=c.organization_id AND accepted.award_status='WON')
+      AND EXISTS (SELECT 1 FROM preview_proposal_links accepted LEFT JOIN preview_award_effective_states effective ON effective.proposal_link_id=accepted.id WHERE accepted.case_id=c.id AND accepted.organization_id=c.organization_id AND COALESCE(effective.effective_status,accepted.award_status)='WON')
       AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments x WHERE x.case_id=c.id AND x.user_id=?))
     ORDER BY c.updated_at DESC LIMIT 100`
   ).bind(PREVIEW_ORGANIZATION_ID, admin, user.id).all<RealWorkflowScheduleRow>();
@@ -6473,7 +6565,7 @@ const worker = {
       return handlePreviewDashboard(request, env);
     }
 
-    if (url.pathname === '/api/admin/users' || url.pathname.startsWith('/api/admin/users/')) {
+    if (url.pathname === '/api/admin/users' || url.pathname.startsWith('/api/admin/users/') || url.pathname === '/api/admin/registration-requests' || url.pathname.startsWith('/api/admin/registration-requests/')) {
       return handlePreviewAdminUsers(request, env);
     }
 

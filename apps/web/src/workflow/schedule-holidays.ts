@@ -58,7 +58,7 @@ export function scheduleDayInfo(year: number, monthIndex: number, day: number): 
   const hasVietnamHoliday = holidays.some((holiday) => holiday.country === 'VN');
   const weekday = new Date(year, monthIndex, day).getDay();
   const isWeekend = weekday === 0 || weekday === 6;
-  const className = [isWeekend && 'is-weekend', hasKoreanHoliday && 'is-korean-holiday', hasVietnamHoliday && 'is-vietnam-holiday', hasKoreanHoliday && hasVietnamHoliday && 'is-shared-holiday'].filter(Boolean).join(' ');
+  const className = [isWeekend && 'is-weekend', weekday === 6 && 'is-saturday', weekday === 0 && 'is-sunday', hasKoreanHoliday && 'is-korean-holiday', hasVietnamHoliday && 'is-vietnam-holiday', hasKoreanHoliday && hasVietnamHoliday && 'is-shared-holiday'].filter(Boolean).join(' ');
   const label = holidays.length ? holidays.map((holiday) => `${holiday.country === 'KR' ? '한국' : '베트남'} ${holiday.name}`).join(', ') : isWeekend ? '주말' : '일반 근무일';
   return { iso, isWeekend, holidays, hasKoreanHoliday, hasVietnamHoliday, label, className };
 }

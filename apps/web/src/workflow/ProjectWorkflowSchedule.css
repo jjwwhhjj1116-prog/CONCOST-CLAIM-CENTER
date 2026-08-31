@@ -176,6 +176,8 @@
 .schedule-board,
 .detail-schedule-board {
   overflow-x: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior-inline: contain;
   border: 1px solid rgba(127, 143, 186, 0.22);
   border-radius: 14px;
   background: #0c1122;
@@ -187,8 +189,8 @@
 .detail-schedule-header,
 .workflow-stage-row {
   display: grid;
-  grid-template-columns: 330px minmax(992px, 1fr);
-  min-width: 1322px;
+  grid-template-columns: 330px 1364px;
+  min-width: 1694px;
 }
 
 .schedule-board-header,
@@ -217,11 +219,13 @@
 }
 
 .schedule-left-heading span { color: #8190b0; }
-.schedule-days { display: grid; grid-template-columns: repeat(31, minmax(32px, 1fr)); }
-.schedule-day { position:relative;display: grid; place-items: center; align-content: center; gap: 2px; min-width: 32px; border-right: 1px solid #25304d; color: #b8c3db; font-size: 0.69rem; }
+.schedule-days { display: grid; grid-template-columns: repeat(31, 44px); }
+.schedule-day { position:relative;display: grid; place-items: center; align-content: center; gap: 2px; min-width: 44px; border-right: 1px solid #25304d; color: #b8c3db; font-size: 0.69rem; }
 .schedule-day small { color: #73809c; font-size: 0.61rem; }
 .schedule-day b { position:absolute;right:2px;bottom:2px;padding:1px 3px;border-radius:3px;background:rgb(255 255 255 / 88%);color:#334155;font-size:.43rem;line-height:1.1;letter-spacing:-.03em; }
 .schedule-day.is-weekend { background: rgba(75, 87, 123, 0.22); color: #93a0bd; }
+.schedule-day.is-saturday,.schedule-grid-cell.is-saturday { background-color:#eaf7ff;color:#1670a6; }
+.schedule-day.is-sunday,.schedule-grid-cell.is-sunday { background-color:#fff0f5;color:#b64169; }
 .schedule-day.is-korean-holiday,.schedule-grid-cell.is-korean-holiday { background-color:#fff3f4;background-image:repeating-linear-gradient(45deg,transparent 0,transparent 5px,rgba(232,91,111,.2) 5px,rgba(232,91,111,.2) 7px),repeating-linear-gradient(-45deg,transparent 0,transparent 5px,rgba(232,91,111,.14) 5px,rgba(232,91,111,.14) 7px); }
 .schedule-day.is-vietnam-holiday,.schedule-grid-cell.is-vietnam-holiday { background-color:#eef8ff;background-image:repeating-linear-gradient(135deg,transparent 0,transparent 6px,rgba(39,151,213,.22) 6px,rgba(39,151,213,.22) 8px); }
 .schedule-day.is-shared-holiday,.schedule-grid-cell.is-shared-holiday { background-color:#f3f0ff;background-image:repeating-linear-gradient(45deg,transparent 0,transparent 5px,rgba(223,75,102,.18) 5px,rgba(223,75,102,.18) 7px),repeating-linear-gradient(135deg,transparent 0,transparent 9px,rgba(37,145,205,.22) 9px,rgba(37,145,205,.22) 11px); }
@@ -265,9 +269,8 @@
 .schedule-progress i { display: block; width: 52px; height: 4px; overflow: hidden; border-radius: 99px; background: #2a3452; }
 .schedule-progress em { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7867ff, #29dbe4); }
 
-.schedule-track { position: relative; display: grid; grid-template-columns: repeat(31, minmax(32px, 1fr)); min-width: 992px; overflow: hidden; }
-.schedule-grid-cell { min-width: 32px; border-right: 1px solid rgba(41, 51, 80, 0.65); background: rgba(14, 21, 40, 0.64); }
-.schedule-grid-cell:nth-child(7n + 1), .schedule-grid-cell:nth-child(7n + 2) { background: rgba(73, 83, 115, 0.12); }
+.schedule-track { position: relative; display: grid; grid-template-columns: repeat(31, 44px); min-width: 1364px; overflow: hidden; }
+.schedule-grid-cell { min-width: 44px; border-right: 1px solid rgba(41, 51, 80, 0.65); background: rgba(14, 21, 40, 0.64); }
 .schedule-grid-cell.is-today { background: rgba(31, 209, 232, 0.08); box-shadow: inset 1px 0 rgba(39, 216, 237, 0.7), inset -1px 0 rgba(39, 216, 237, 0.7); }
 .project-range-bar,
 .stage-range-bar {

@@ -35,6 +35,7 @@ model Organization {
   googleSyncOperations       GoogleSyncOperation[]
   googleResourceLinks        GoogleResourceLink[]
   googleImportSnapshots      GoogleImportSnapshot[]
+  userRegistrationRequests   UserRegistrationRequest[]
 }
 
 model User {
@@ -86,6 +87,29 @@ model User {
   googleOAuthStates        GoogleOAuthState[]        @relation("GoogleOAuthActor")
   createdGoogleSyncOps     GoogleSyncOperation[]     @relation("GoogleSyncOpActor")
   createdGoogleSnapshots   GoogleImportSnapshot[]    @relation("GoogleSnapshotCreatedBy")
+  reviewedRegistrationRequests UserRegistrationRequest[] @relation("RegistrationReviewedBy")
+}
+
+model UserRegistrationRequest {
+  id             String       @id
+  organizationId String
+  loginId        String
+  displayName    String
+  email          String
+  passwordHash   String
+  requestedRole  String       @default("staff")
+  requestNote    String?
+  status         String       @default("PENDING")
+  reviewNote     String?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  version        Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  reviewedBy     User?        @relation("RegistrationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status, createdAt])
 }
 
 model Role {

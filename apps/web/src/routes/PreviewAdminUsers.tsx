@@ -14,10 +14,16 @@ interface WorkspaceUser {
   assignedCaseCount: number;
 }
 
+interface RegistrationRequest {
+  id:string; loginId:string; displayName:string; email:string; requestedRole:string; requestNote:string|null;
+  status:'PENDING'|'APPROVED'|'REJECTED'; reviewNote:string|null; reviewedAt:string|null; reviewedByName:string|null; version:number; createdAt:string;
+}
+
 const ACCOUNT_ROLES = ['admin', 'ceo', 'director', 'pm', 'staff', 'reviewer'] as const;
 
 export function PreviewAdminUsers(): React.ReactElement {
   const [users, setUsers] = useState<WorkspaceUser[]>([]);
+  const [requests, setRequests] = useState<RegistrationRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -30,8 +36,11 @@ export function PreviewAdminUsers(): React.ReactElement {
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const result = await apiRequest<{ users: WorkspaceUser[] }>('/api/admin/users');
-      setUsers(result.users);
+      const [result,requestResult] = await Promise.all([
+        apiRequest<{ users: WorkspaceUser[] }>('/api/admin/users'),
+        apiRequest<{ requests: RegistrationRequest[] }>('/api/admin/registration-requests')
+      ]);
+      setUsers(result.users);setRequests(requestResult.requests);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setLoading(false); }
   }, []);
@@ -71,6 +80,13 @@ export function PreviewAdminUsers(): React.ReactElement {
     finally { setBusy(false); }
   };
 
+  const decideRegistration = async (target:RegistrationRequest,action:'APPROVE'|'REJECT') => {
+    if(busy)return;const reviewNote=window.prompt(action==='APPROVE'?'승인 메모(선택)':'거절 사유를 입력하세요.')??(action==='APPROVE'?'':null);if(reviewNote===null)return;
+    setBusy(true);setError('');setNotice('');
+    try{await apiRequest(`/api/admin/registration-requests/${encodeURIComponent(target.id)}`,{method:'PUT',body:JSON.stringify({action,expectedVersion:target.version,reviewNote})});setNotice(action==='APPROVE'?`${target.displayName} 회원가입을 승인했습니다. 이제 로그인할 수 있습니다.`:`${target.displayName} 회원가입 신청을 거절했습니다.`);await load();}
+    catch(reason){setError(reason instanceof Error?reason.message:String(reason));}finally{setBusy(false);}
+  };
+
   if (loading && users.length === 0) return <StatusFeedbackState type="loading" message="사용자와 사건 배정 현황을 불러오고 있습니다." />;
 
   return (
@@ -82,6 +98,12 @@ export function PreviewAdminUsers(): React.ReactElement {
 
       {error && <p className="error-box" role="alert">{error}</p>}
       {notice && <p className="notice-box" role="status">{notice}</p>}
+
+      <Card title={`회원가입 승인 대기 ${requests.filter((request)=>request.status==='PENDING').length}명`}>
+        <div className="admin-registration-list">
+          {requests.filter((request)=>request.status==='PENDING').length===0?<p className="empty-box">승인 대기 중인 회원가입 신청이 없습니다.</p>:requests.filter((request)=>request.status==='PENDING').map((request)=><article key={request.id}><div><strong>{request.displayName}</strong><small>{request.loginId} · {request.email}</small><p>{request.requestNote||'신청 메모 없음'}</p></div><span>{request.requestedRole.toUpperCase()}</span><small>{new Date(request.createdAt).toLocaleString('ko-KR')}</small><div><Button variant="secondary" onClick={()=>void decideRegistration(request,'REJECT')} disabled={busy}>거절</Button><Button onClick={()=>void decideRegistration(request,'APPROVE')} disabled={busy}>승인·계정 생성</Button></div></article>)}
+        </div>
+      </Card>
 
       <Card title={`승인 계정 ${users.length}명`}>
         <div className="admin-user-toolbar"><p>계정 삭제는 감사 이력을 보존하기 위해 영구 삭제 대신 <strong>접속 차단</strong>으로 처리합니다.</p><Button onClick={() => setShowCreate(true)}>+ 로그인 계정 추가</Button></div>

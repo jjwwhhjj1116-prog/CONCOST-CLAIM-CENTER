@@ -93,8 +93,14 @@ interface ProposalReception {
   proposalNumber: string;
   revisionLabel: string;
   receptionStatus: ReceptionStatus;
+  proposalLinkId: string | null;
+  linkVersion: number | null;
+  effectiveStateVersion: number | null;
   awardDecidedAt: string | null;
   awardDecidedByName: string | null;
+  catalogVersion: number;
+  driveArchiveUrl: string | null;
+  driveArchivedAt: string | null;
 }
 
 const MUTATION_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'pm'];
@@ -163,6 +169,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   const keysRef = useRef(new Map<string, string>());
   const detailEpoch = useRef(0);
   const canMutate = roles.some((role) => MUTATION_ROLES.includes(role));
+  const isAdmin = roles.includes('admin');
 
   const loadCases = useCallback(async () => {
     const result = await apiRequest<{ cases: CaseOption[] }>('/api/cases?limit=100&q=');
@@ -309,6 +316,37 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
     finally { setBusy(''); }
   };
 
+  const adjustReception = async (item: ProposalReception) => {
+    if (!canMutate || !['WON','LOST'].includes(item.receptionStatus)) return;
+    const decision = isReceptionWon(item.receptionStatus) ? 'LOST' : 'WON';
+    const reason = window.prompt(decision === 'LOST' ? '수주 확정을 취소하는 사유를 입력하세요. 기존 제안서·일정·이력은 삭제되지 않습니다.' : '프로젝트를 다시 수주 확정하는 사유를 입력하세요.');
+    if (reason === null) return;
+    if (reason.trim().length < 2) { setError('상태 변경 사유를 2자 이상 입력하세요.'); return; }
+    const payload = { decision, reason: reason.trim(), expectedStateVersion: item.effectiveStateVersion ?? 1, expectedCaseVersion: item.caseVersion };
+    const stable = stableKey(keysRef.current, `reception-adjust-${item.proposalId}`, payload);
+    setBusy(`adjust:${item.proposalId}`); setError(''); setNotice('');
+    try {
+      await apiRequest(`/api/proposal-workflow/receptions/${encodeURIComponent(item.proposalId)}/status`, { method:'POST', headers:{'Idempotency-Key':stable.key}, body:JSON.stringify(payload) });
+      keysRef.current.delete(stable.fingerprint);
+      setNotice(decision === 'LOST' ? '수주 확정을 취소했습니다. 원본 자료와 일정 이력은 보존됩니다.' : '프로젝트를 다시 수주 확정했습니다.');
+      await loadReceptions(item.proposalId);
+    } catch (reasonValue) { setError(errorMessage(reasonValue)); }
+    finally { setBusy(''); }
+  };
+
+  const projectCatalogAction = async (item: ProposalReception, action: 'ARCHIVE_TO_DRIVE' | 'ADMIN_DELETE') => {
+    if (!isAdmin) return;
+    if (action === 'ADMIN_DELETE' && !window.confirm(`${item.caseNumber} 프로젝트를 DB관리 목록에서 삭제할까요?\n원본 제안서·수주 이력·일정은 보존됩니다.`)) return;
+    setBusy(`catalog:${item.proposalId}`); setError(''); setNotice('');
+    try {
+      const result = await apiRequest<{catalog:{driveArchiveUrl?:string|null}}>(`/api/proposal-catalog/${encodeURIComponent(item.proposalId)}`, { method:'POST', body:JSON.stringify({action,expectedVersion:item.catalogVersion}) });
+      setNotice(action === 'ARCHIVE_TO_DRIVE' ? '프로젝트 제안서·접수 스냅샷을 Google Drive에 보관했습니다.' : '프로젝트를 DB관리 목록에서 삭제했습니다. 감사 원본은 보존됩니다.');
+      if (action === 'ARCHIVE_TO_DRIVE' && result.catalog.driveArchiveUrl) window.open(result.catalog.driveArchiveUrl,'_blank','noopener,noreferrer');
+      await loadReceptions();
+    } catch (reasonValue) { setError(errorMessage(reasonValue)); }
+    finally { setBusy(''); }
+  };
+
   if (routeId === 'WF-07') {
     if (receptionLoading && receptions.length === 0) return <StatusFeedbackState type="loading" message="프로젝트 접수 전체 이력을 불러오고 있습니다." />;
     const readyCount = receptions.filter((item) => isReceptionReady(item.receptionStatus)).length;
@@ -317,7 +355,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
     return (
       <section className="route-view proposal-flow reception-flow reception-database" aria-labelledby="project-database-title">
         <header className="proposal-flow-hero reception-hero">
-          <div><span>ADMIN · PROJECT DATABASE</span><h2 id="project-database-title">프로젝트 DB관리</h2><p>접수 예정부터 수주 확정·취소까지 전체 이력을 관리자만 읽기 전용으로 확인합니다.</p></div>
+          <div><span>ADMIN · PROJECT DATABASE</span><h2 id="project-database-title">프로젝트 DB관리</h2><p>접수 이력을 보존하면서 수주 상태를 정정하고, 프로젝트 스냅샷을 Drive에 보관하거나 목록에서 삭제할 수 있습니다.</p></div>
           <div className="proposal-flow-actions"><button type="button" className="is-secondary" onClick={() => onNavigate('/workflow/award')}>프로젝트 접수 열기</button></div>
         </header>
         <div className="reception-kpis" aria-label="프로젝트 DB 전체 현황">
@@ -332,7 +370,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
         {error && <div className="proposal-flow-error" role="alert"><span>{error}</span><button type="button" onClick={() => void loadReceptions()}>최신 데이터 다시 불러오기</button></div>}
         <section className="reception-database-card" aria-label="프로젝트 접수 전체 이력">
           <header><div><small>READ ONLY · ADMIN</small><h3>프로젝트 접수 전체 이력</h3></div><strong>{receptions.length}건</strong></header>
-          {receptions.length === 0 ? <div className="reception-empty"><strong>저장된 프로젝트 접수 이력이 없습니다.</strong><span>확정 제안서가 접수 단계로 넘어오면 이곳에 보존됩니다.</span></div> : <div className="reception-database-table-wrap"><table className="reception-database-table"><thead><tr><th>상태</th><th>프로젝트</th><th>제안서</th><th>클라이언트</th><th>제안서 확정</th><th>결정 담당·시각</th><th>버전</th></tr></thead><tbody>{receptions.map((item) => <tr key={item.proposalId}><td><span className={`proposal-award is-${receptionTone(item.receptionStatus)}`}>{receptionLabel(item.receptionStatus)}</span></td><td><strong>{item.caseNumber}</strong><small>{item.caseTitle}</small></td><td><strong>{item.proposalNumber} · {item.revisionLabel}</strong><small>{item.proposalTitle}</small></td><td>{item.clientName || '미입력'}</td><td>{dateLabel(item.confirmedAt, true)}</td><td>{item.awardDecidedAt ? <><strong>{item.awardDecidedByName ?? '담당자'}</strong><small>{dateLabel(item.awardDecidedAt, true)}</small></> : <small>결정 전</small>}</td><td>제안서 v{item.versionNumber}<br/><small>DB v{item.proposalVersion}</small></td></tr>)}</tbody></table></div>}
+          {receptions.length === 0 ? <div className="reception-empty"><strong>저장된 프로젝트 접수 이력이 없습니다.</strong><span>확정 제안서가 접수 단계로 넘어오면 이곳에 보존됩니다.</span></div> : <div className="reception-database-table-wrap"><table className="reception-database-table"><thead><tr><th>상태</th><th>프로젝트</th><th>제안서</th><th>클라이언트</th><th>제안서 확정</th><th>결정 담당·시각</th><th>버전</th><th>관리</th></tr></thead><tbody>{receptions.map((item) => <tr key={item.proposalId}><td><span className={`proposal-award is-${receptionTone(item.receptionStatus)}`}>{receptionLabel(item.receptionStatus)}</span></td><td><strong>{item.caseNumber}</strong><small>{item.caseTitle}</small></td><td><strong>{item.proposalNumber} · {item.revisionLabel}</strong><small>{item.proposalTitle}</small></td><td>{item.clientName || '미입력'}</td><td>{dateLabel(item.confirmedAt, true)}</td><td>{item.awardDecidedAt ? <><strong>{item.awardDecidedByName ?? '담당자'}</strong><small>{dateLabel(item.awardDecidedAt, true)}</small></> : <small>결정 전</small>}</td><td>제안서 v{item.versionNumber}<br/><small>DB v{item.proposalVersion}</small></td><td><div className="reception-database-actions">{['WON','LOST'].includes(item.receptionStatus)&&<button type="button" className="is-secondary" disabled={!canMutate||Boolean(busy)} onClick={()=>void adjustReception(item)}>{isReceptionWon(item.receptionStatus)?'수주 취소':'수주 재확정'}</button>}<button type="button" className="is-drive" disabled={!isAdmin||Boolean(busy)} onClick={()=>void projectCatalogAction(item,'ARCHIVE_TO_DRIVE')}>{item.driveArchiveUrl?'Drive 다시 보관':'Google Drive 보관'}</button>{item.driveArchiveUrl&&<a href={item.driveArchiveUrl} target="_blank" rel="noreferrer">보관본 열기</a>}<button type="button" className="is-delete" disabled={!isAdmin||Boolean(busy)} onClick={()=>void projectCatalogAction(item,'ADMIN_DELETE')}>관리자 삭제</button></div></td></tr>)}</tbody></table></div>}
         </section>
       </section>
     );

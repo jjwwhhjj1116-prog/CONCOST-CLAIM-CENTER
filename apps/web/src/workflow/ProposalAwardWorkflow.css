@@ -33,7 +33,7 @@
 .proposal-flow-list > button.is-active { box-shadow: inset 3px 0 #676dff; }
 .proposal-flow-list > button > span:not(.proposal-award) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proposal-flow-list > button small { color: #7f8ca4; }
-.proposal-award { width: max-content; padding: 3px 8px; border: 1px solid; border-radius: 999px; font-size: .64rem; font-weight: 900; letter-spacing: .03em; }
+.proposal-award { display:inline-flex;width:max-content;min-width:max-content;padding:3px 8px;border:1px solid;border-radius:999px;font-size:.64rem;font-weight:900;letter-spacing:.03em;white-space:nowrap; }
 .proposal-award.is-pending { color: #ffd47a; border-color: rgba(246, 189, 55, .4); background: rgba(246, 189, 55, .08); }
 .proposal-award.is-won { color: #69efbd; border-color: rgba(42, 222, 152, .43); background: rgba(42, 222, 152, .09); }
 .proposal-award.is-lost { color: #b3c0d6; border-color: #485670; background: #1b2537; }
@@ -143,12 +143,13 @@
 .reception-database-card > header h3 { margin: 4px 0 0; color: #ffffff; }
 .reception-database-card > header > strong { color: #ffffff; font-size: 1.35rem; }
 .reception-database-table-wrap { overflow-x: auto; }
-.reception-database-table { width: 100%; min-width: 1080px; border-collapse: collapse; color: #dfe8f8; font-size: .82rem; }
+.reception-database-table { width: 100%; min-width: 1370px; border-collapse: collapse; color: #dfe8f8; font-size: .82rem; }
 .reception-database-table th, .reception-database-table td { padding: 14px 16px; border-bottom: 1px solid #26344d; text-align: left; vertical-align: top; }
 .reception-database-table th { color: #8fa1bb; background: #0b1424; font-size: .72rem; letter-spacing: .04em; }
 .reception-database-table tbody tr:hover { background: rgba(84, 201, 255, .05); }
 .reception-database-table td strong, .reception-database-table td small { display: block; }
 .reception-database-table td small { margin-top: 4px; color: #8291aa; line-height: 1.4; }
+.reception-database-actions{display:grid;grid-template-columns:repeat(2,max-content);gap:6px;align-items:center}.reception-database-actions button{padding:7px 9px;font-size:.68rem;white-space:nowrap}.reception-database-actions .is-drive{background:#15803d}.reception-database-actions .is-delete{border:1px solid #ef4444;color:#fecaca;background:transparent}.reception-database-actions a{grid-column:1/-1;color:#38bdf8;font-size:.68rem;font-weight:800;text-decoration:none;white-space:nowrap}
 :root[data-theme='light'] .reception-kpis article,
 :root[data-theme='light'] .reception-card,
 :root[data-theme='light'] .reception-status-list,

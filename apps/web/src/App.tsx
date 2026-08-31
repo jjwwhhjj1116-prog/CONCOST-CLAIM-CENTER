@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Button } from '@claim-studio/ui';
+import { Button, Dialog } from '@claim-studio/ui';
 import { apiRequest } from './api';
 import { AppShell } from './layout/AppShell';
 import { requestNavigation } from './navigation-guard';
@@ -43,6 +43,11 @@ export const App: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [previewMode, setPreviewMode] = useState(false);
+  const [showSignup, setShowSignup] = useState(false);
+  const [signupBusy, setSignupBusy] = useState(false);
+  const [signupNotice, setSignupNotice] = useState('');
+  const [signupError, setSignupError] = useState('');
+  const [signupForm, setSignupForm] = useState({ loginId:'',displayName:'',email:'',password:'',confirmPassword:'',requestedRole:'staff',requestNote:'' });
 
   const navigate = useCallback((path: string, replace = false) => {
     const url = new URL(path, window.location.origin);
@@ -118,6 +123,18 @@ export const App: React.FC = () => {
     }
   };
 
+  const submitSignup = async (event: React.FormEvent) => {
+    event.preventDefault(); setSignupError(''); setSignupNotice('');
+    if(signupForm.password!==signupForm.confirmPassword){setSignupError('비밀번호 확인이 일치하지 않습니다.');return;}
+    setSignupBusy(true);
+    try{
+      await apiRequest('/auth/registration-requests',{method:'POST',body:JSON.stringify({loginId:signupForm.loginId,displayName:signupForm.displayName,email:signupForm.email,password:signupForm.password,requestedRole:signupForm.requestedRole,requestNote:signupForm.requestNote})});
+      setSignupNotice('가입 신청이 접수되었습니다. 관리자 승인 후 입력한 아이디로 로그인할 수 있습니다.');
+      setSignupForm({loginId:'',displayName:'',email:'',password:'',confirmPassword:'',requestedRole:'staff',requestNote:''});
+    }catch(reason){setSignupError(reason instanceof Error?reason.message:String(reason));}
+    finally{setSignupBusy(false);}
+  };
+
   if (currentPath === '/about') return <PublicOAuthPages page="about" />;
   if (currentPath === '/privacy') return <PublicOAuthPages page="privacy" />;
   if (currentPath === '/terms') return <PublicOAuthPages page="terms" />;
@@ -177,10 +194,24 @@ export const App: React.FC = () => {
               </Button>
             </form>
 
-            <div className="login-help"><span>계정 관련 문의는 클레임센터 관리자에게 요청해 주세요.</span><strong>AUTHORIZED USERS ONLY</strong></div>
+            <div className="login-help"><span>아직 계정이 없다면 가입을 신청하고 관리자 승인을 받아 주세요.</span><button type="button" onClick={()=>{setShowSignup(true);setSignupError('');setSignupNotice('');}}>회원가입 신청하기 →</button><strong>AUTHORIZED USERS ONLY</strong></div>
             <nav className="login-public-links" aria-label="서비스 및 개인정보 안내"><a href="/about">서비스 소개</a><a href="/privacy">개인정보처리방침</a><a href="/terms">서비스 약관</a></nav>
           </div>
         </section>
+        <Dialog isOpen={showSignup} title="클레임센터 회원가입 신청" onClose={()=>!signupBusy&&setShowSignup(false)}>
+          <form className="signup-request-form" onSubmit={(event)=>void submitSignup(event)}>
+            <p>신청 후 관리자가 승인해야 로그인할 수 있습니다. 입력한 비밀번호는 즉시 PBKDF2로 보호되며 원문은 저장되지 않습니다.</p>
+            <label>로그인 아이디(이메일)<input type="email" autoComplete="username" value={signupForm.loginId} onChange={(event)=>setSignupForm((current)=>({...current,loginId:event.target.value,email:current.email||event.target.value}))} required /></label>
+            <label>이름<input value={signupForm.displayName} maxLength={100} onChange={(event)=>setSignupForm((current)=>({...current,displayName:event.target.value}))} required /></label>
+            <label>연락 이메일<input type="email" value={signupForm.email} onChange={(event)=>setSignupForm((current)=>({...current,email:event.target.value}))} required /></label>
+            <label>신청 역할<select value={signupForm.requestedRole} onChange={(event)=>setSignupForm((current)=>({...current,requestedRole:event.target.value}))}><option value="staff">일반 회원</option><option value="reviewer">담당자 검수</option><option value="pm">프로젝트 PM</option></select></label>
+            <label>비밀번호<input type="password" minLength={4} maxLength={128} autoComplete="new-password" value={signupForm.password} onChange={(event)=>setSignupForm((current)=>({...current,password:event.target.value}))} required /></label>
+            <label>비밀번호 확인<input type="password" minLength={4} maxLength={128} autoComplete="new-password" value={signupForm.confirmPassword} onChange={(event)=>setSignupForm((current)=>({...current,confirmPassword:event.target.value}))} required /></label>
+            <label className="span-2">신청 메모<textarea value={signupForm.requestNote} maxLength={1000} placeholder="소속·담당 업무 등 관리자가 확인할 내용을 입력하세요." onChange={(event)=>setSignupForm((current)=>({...current,requestNote:event.target.value}))}/></label>
+            {signupError&&<p className="login-error span-2" role="alert">{signupError}</p>}{signupNotice&&<p className="signup-notice span-2" role="status">{signupNotice}</p>}
+            <div className="action-row span-2"><Button type="button" variant="secondary" onClick={()=>setShowSignup(false)} disabled={signupBusy}>닫기</Button><Button type="submit" disabled={signupBusy||signupForm.password.length<4}>{signupBusy?'신청 접수 중…':'가입 신청 접수'}</Button></div>
+          </form>
+        </Dialog>
       </main>
     );
   }

@@ -32,7 +32,7 @@ const migrations = [
   '0021_cf29_report_memory_learning.sql','0022_cf30_settings_template_preview.sql','0023_cf31_google_oauth_app_settings.sql','0024_cf32_source_template_library.sql','0025_cf33_type_authoring_guidelines.sql',
   '0026_cf34_hermes_memory_architecture.sql','0027_cf35_guided_workspace.sql','0028_cf36_workflow_integrity_tutorial_approval_intake.sql','0029_cf37_report_workspace_resume.sql',
   '0030_cf38_admin_account_management.sql','0031_cf39_integrated_project_workspace.sql','0032_cf40_pm_schedule_ai_import_security.sql','0035_cf43_navigation_pm_password.sql',
-  '0041_cf53_erp_project_bridge.sql'
+  '0041_cf53_erp_project_bridge.sql','0047_cf72_project_members_calendar.sql'
 ];
 
 async function sha256(value: string): Promise<string> {

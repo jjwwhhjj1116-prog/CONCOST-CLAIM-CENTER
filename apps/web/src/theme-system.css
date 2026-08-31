@@ -729,6 +729,10 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .schedule-day { border-right-color: #dfe5ed; color: #46556b; }
 :root[data-theme='light'] .schedule-day small { color: #8794a7; }
 :root[data-theme='light'] .schedule-day.is-weekend { background: #f6f8fb; color: #718096; }
+:root[data-theme='light'] .schedule-day.is-saturday,
+:root[data-theme='light'] .schedule-grid-cell.is-saturday { background:#eaf7ff;color:#1670a6; }
+:root[data-theme='light'] .schedule-day.is-sunday,
+:root[data-theme='light'] .schedule-grid-cell.is-sunday { background:#fff0f5;color:#b64169; }
 :root[data-theme='light'] .schedule-day.is-korean-holiday,
 :root[data-theme='light'] .schedule-grid-cell.is-korean-holiday { background-color:#fff3f4; }
 :root[data-theme='light'] .schedule-day.is-vietnam-holiday,
@@ -752,8 +756,6 @@ body { background: var(--page-bg); color: var(--text-primary); }
 :root[data-theme='light'] .schedule-progress i,
 :root[data-theme='light'] .mini-track { background: #e5eaf0; }
 :root[data-theme='light'] .schedule-grid-cell { border-right-color: #e3e8ef; background: #ffffff; }
-:root[data-theme='light'] .schedule-grid-cell:nth-child(7n + 1),
-:root[data-theme='light'] .schedule-grid-cell:nth-child(7n + 2) { background: #f7f9fb; }
 :root[data-theme='light'] .schedule-grid-cell.is-today { background: #ebfafb; box-shadow: inset 1px 0 rgba(34, 184, 200, .65), inset -1px 0 rgba(34, 184, 200, .65); }
 :root[data-theme='light'] .schedule-legend { color: #5f6e82; }
 :root[data-theme='light'] .legend-weekend { background: #dfe5ed; }
