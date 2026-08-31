@@ -318,7 +318,8 @@ export async function ensureReportTemplateFolder(
     }
     return result.id;
   };
-  const rootId = await ensureFolder('REPORT_TEMPLATE_LIBRARY', 'CONCOST CLAIM CENTER - 보고서 템플릿');
+  const department = await ensureClaimCenterDepartmentRoot(fetcher, input.accessToken);
+  const rootId = await ensureFolder('REPORT_TEMPLATE_LIBRARY', 'CONCOST CLAIM CENTER - 보고서 템플릿', department.departmentRootId);
   const categoryId = await ensureFolder('REPORT_TEMPLATE_CATEGORY', `${input.categoryCode} ${input.categoryName}`, rootId);
   return { rootId, categoryId };
 }
@@ -354,6 +355,63 @@ function driveQueryValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
 }
 
+export const CONCOST_DRIVE_ROOT_NAME = 'CONCOST ERP 그룹웨어';
+export const CLAIM_CENTER_DEPARTMENT_FOLDER_NAME = '02_클레임센터';
+
+export async function ensureClaimCenterDepartmentRoot(
+  fetcher: GoogleFetch,
+  accessToken: string
+): Promise<{ organizationRootId: string; departmentRootId: string }> {
+  const ensureFolder = async (
+    kind: 'ORGANIZATION_ROOT' | 'DEPARTMENT_ROOT',
+    name: string,
+    parentId?: string
+  ): Promise<string> => {
+    const department = kind === 'ORGANIZATION_ROOT' ? 'ROOT' : 'CLAIM_CENTER';
+    const q = [
+      "trashed = false",
+      "mimeType = 'application/vnd.google-apps.folder'",
+      `appProperties has { key='concostFolderKind' and value='${kind}' }`,
+      `appProperties has { key='concostDepartment' and value='${department}' }`
+    ];
+    if (parentId) q.push(`'${driveQueryValue(parentId)}' in parents`);
+    const listUrl = new URL(`${GOOGLE_DRIVE_API}/files`);
+    listUrl.searchParams.set('q', q.join(' and '));
+    listUrl.searchParams.set('spaces', 'drive');
+    listUrl.searchParams.set('pageSize', '10');
+    listUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed,parents,appProperties)');
+    const listed = await fetchWithTimeout(fetcher, listUrl.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!listed.ok) throw providerFailure(listed, 'Google Drive department folder lookup');
+    const listing = await safeJson(listed);
+    if (!Array.isArray(listing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid department folder list');
+    const existing = listing.files
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
+      .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+    if (existing) return String(existing.id);
+    const metadata = {
+      name,
+      mimeType: 'application/vnd.google-apps.folder',
+      ...(parentId ? { parents: [parentId] } : {}),
+      appProperties: { concostFolderKind: kind, concostDepartment: department }
+    };
+    const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(metadata)
+    });
+    if (!created.ok) throw providerFailure(created, 'Google Drive department folder creation', true);
+    const result = await safeJson(created);
+    if (typeof result.id !== 'string' || !GOOGLE_ID.test(result.id) || result.name !== name || result.mimeType !== 'application/vnd.google-apps.folder' || result.trashed === true) {
+      throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid department folder metadata', true);
+    }
+    return result.id;
+  };
+  const organizationRootId = await ensureFolder('ORGANIZATION_ROOT', CONCOST_DRIVE_ROOT_NAME);
+  const departmentRootId = await ensureFolder('DEPARTMENT_ROOT', CLAIM_CENTER_DEPARTMENT_FOLDER_NAME, organizationRootId);
+  return { organizationRootId, departmentRootId };
+}
+
 export async function ensureClaimCenterFolder(
   fetcher: GoogleFetch,
   input: { accessToken: string; caseId: string; kind: ClaimCenterFolderKind; period: string; name: string; parentId?: string }
@@ -362,7 +420,12 @@ export async function ensureClaimCenterFolder(
     throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder context is invalid');
   }
   const name = input.name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/gu, '-').replace(/\s+/gu, ' ').slice(0, 180);
-  if (!name || (input.parentId && !GOOGLE_ID.test(input.parentId))) throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder name or parent is invalid');
+  let parentId = input.parentId;
+  const usesDepartmentRoot = input.kind === 'PROJECT_ROOT' && !parentId;
+  if (input.kind === 'PROJECT_ROOT' && !parentId) {
+    parentId = (await ensureClaimCenterDepartmentRoot(fetcher, input.accessToken)).departmentRootId;
+  }
+  if (!name || (parentId && !GOOGLE_ID.test(parentId))) throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_CONTEXT', 400, 'Google Drive project folder name or parent is invalid');
   const q = [
     "trashed = false",
     "mimeType = 'application/vnd.google-apps.folder'",
@@ -370,7 +433,7 @@ export async function ensureClaimCenterFolder(
     `appProperties has { key='claimCenterFolderKind' and value='${driveQueryValue(input.kind)}' }`,
     `appProperties has { key='claimCenterPeriod' and value='${driveQueryValue(input.period)}' }`
   ];
-  if (input.parentId) q.push(`'${driveQueryValue(input.parentId)}' in parents`);
+  if (parentId) q.push(`'${driveQueryValue(parentId)}' in parents`);
   const listUrl = new URL(`${GOOGLE_DRIVE_API}/files`);
   listUrl.searchParams.set('q', q.join(' and '));
   listUrl.searchParams.set('spaces', 'drive');
@@ -385,11 +448,56 @@ export async function ensureClaimCenterFolder(
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
   if (candidates[0]) return { id: String(candidates[0].id), name: typeof candidates[0].name === 'string' ? candidates[0].name : name, created: false };
 
+  // Preserve folders created before departmental routing was introduced. The
+  // app owns these folders under drive.file, so it can move them without
+  // copying files or breaking their stable Google Drive URLs.
+  if (usesDepartmentRoot && parentId) {
+    const legacyQuery = q.filter((entry) => !entry.endsWith(' in parents')).join(' and ');
+    const legacyUrl = new URL(`${GOOGLE_DRIVE_API}/files`);
+    legacyUrl.searchParams.set('q', legacyQuery);
+    legacyUrl.searchParams.set('spaces', 'drive');
+    legacyUrl.searchParams.set('pageSize', '10');
+    legacyUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed,parents,appProperties)');
+    const legacyResponse = await fetchWithTimeout(fetcher, legacyUrl.toString(), { headers: { Authorization: `Bearer ${input.accessToken}` } });
+    if (!legacyResponse.ok) throw providerFailure(legacyResponse, 'Google Drive legacy project folder lookup');
+    const legacyListing = await safeJson(legacyResponse);
+    if (!Array.isArray(legacyListing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid legacy folder list');
+    const legacy = legacyListing.files
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
+      .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0];
+    if (legacy) {
+      const legacyId = String(legacy.id);
+      const legacyParents = Array.isArray(legacy.parents)
+        ? legacy.parents.filter((value): value is string => typeof value === 'string' && GOOGLE_ID.test(value))
+        : [];
+      const moveUrl = new URL(`${GOOGLE_DRIVE_API}/files/${encodeURIComponent(legacyId)}`);
+      moveUrl.searchParams.set('addParents', parentId);
+      if (legacyParents.length) moveUrl.searchParams.set('removeParents', legacyParents.join(','));
+      moveUrl.searchParams.set('fields', 'id,name,mimeType,trashed,parents,appProperties');
+      const movedResponse = await fetchWithTimeout(fetcher, moveUrl.toString(), {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${input.accessToken}` }
+      });
+      if (!movedResponse.ok) throw providerFailure(movedResponse, 'Google Drive legacy project folder move', true);
+      const moved = await safeJson(movedResponse);
+      if (moved.id !== legacyId || moved.mimeType !== 'application/vnd.google-apps.folder' || moved.trashed === true) {
+        throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid moved project-folder metadata', true);
+      }
+      return { id: legacyId, name: typeof moved.name === 'string' ? moved.name : name, created: false };
+    }
+  }
+
   const metadata = {
     name,
     mimeType: 'application/vnd.google-apps.folder',
-    ...(input.parentId ? { parents: [input.parentId] } : {}),
-    appProperties: { claimCenterCaseId: input.caseId, claimCenterFolderKind: input.kind, claimCenterPeriod: input.period }
+    ...(parentId ? { parents: [parentId] } : {}),
+    appProperties: {
+      claimCenterCaseId: input.caseId,
+      claimCenterFolderKind: input.kind,
+      claimCenterPeriod: input.period,
+      concostDepartment: 'CLAIM_CENTER'
+    }
   };
   const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
     method: 'POST',

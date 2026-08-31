@@ -11,7 +11,7 @@ export function PreviewEvidenceHub({ roles, onNavigate }: { userName: string; ro
   const [error, setError] = useState('');
 
   useEffect(() => {
-    void apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100&q=').then((result) => {
+    void apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100&q=&scope=project-work').then((result) => {
       setCases(result.cases);
       setSelectedCaseId((current) => result.cases.some((entry) => entry.id === current) ? current : result.cases[0]?.id ?? '');
     }).catch((reason) => setError(reason instanceof Error ? reason.message : '프로젝트를 불러오지 못했습니다.'));
@@ -21,13 +21,13 @@ export function PreviewEvidenceHub({ roles, onNavigate }: { userName: string; ro
   return <section className="route-view preview-evidence-hub" aria-labelledby="preview-evidence-title">
     <div className="workspace-hero preview-evidence-hero">
       <div><span className="workspace-eyebrow">PROJECT EVIDENCE LIBRARY · GOOGLE DRIVE</span><h2 id="preview-evidence-title">의뢰부터 최종 납품까지<br />모든 자료를 한곳에 모읍니다.</h2><p>발주처 제공자료, 회의록·녹음, 현장사진, 산출·내역, 법원자료와 최종 납품본을 프로젝트별로 분류합니다. 파일명·업로드 시간·사용자·SHA-256을 기록합니다.</p></div>
-      <div className="preview-drive-card"><span>COMPANY STORAGE</span><strong>Google Drive 직접 저장</strong><small>프로젝트 / 업무단계별 자료 / YYYY-MM 폴더 · 최대 10MB · R2 미사용</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·계정 변경</button>}</div>
+      <div className="preview-drive-card"><span>COMPANY STORAGE · CLAIM CENTER ONLY</span><strong>클레임센터 전용 Google Drive</strong><small>CONCOST ERP 그룹웨어 / 02_클레임센터 / 프로젝트 / 업무단계별 자료 · 최대 10MB · R2 미사용</small>{roles.includes('admin') && <button type="button" onClick={() => onNavigate('/settings?section=admin')}>회사 Drive 연결·계정 변경</button>}</div>
     </div>
     <Card title="프로젝트 자료실 선택">
       <div className="inline-form"><Select label="프로젝트" value={selectedCaseId} onChange={(event) => setSelectedCaseId(event.target.value)} options={cases.map((entry) => ({ value: entry.id, label: `${entry.caseNumber} · ${entry.title}` }))} />{selected && <span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div>
       {error && <p className="error-box" role="alert">{error}</p>}
     </Card>
-    {selectedCaseId ? <CaseEvidencePanel caseId={selectedCaseId} onNavigate={onNavigate} /> : <p className="empty-box">자료를 연결할 프로젝트가 없습니다. 먼저 프로젝트 의뢰를 등록하세요.</p>}
+    {selectedCaseId ? <CaseEvidencePanel caseId={selectedCaseId} onNavigate={onNavigate} /> : <p className="empty-box">자료를 연결할 수행 프로젝트가 없습니다. 프로젝트 접수에서 수주 확정하여 프로젝트 워크로 전환해 주세요.</p>}
   </section>;
 }
 

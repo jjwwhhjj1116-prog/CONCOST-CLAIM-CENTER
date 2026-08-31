@@ -34,7 +34,7 @@ const MAX_GMAIL_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export interface GoogleHttpRequest {
   url: string;
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH';
   headers: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
@@ -403,7 +403,7 @@ export class GoogleWorkspaceRealAdapter implements GoogleWorkspaceAdapter {
     return { secretRef, credential };
   }
 
-  private async authorizedJson(url: string, signal?: AbortSignal, method: 'GET' | 'POST' = 'GET', body?: unknown, extraHeaders: Record<string, string> = {}): Promise<Record<string, unknown>> {
+  private async authorizedJson(url: string, signal?: AbortSignal, method: 'GET' | 'POST' | 'PATCH' = 'GET', body?: unknown, extraHeaders: Record<string, string> = {}): Promise<Record<string, unknown>> {
     const { credential } = await this.resolveCredential(signal);
     return this.requestJson({
       url,
@@ -614,24 +614,71 @@ export class GoogleWorkspaceRealAdapter implements GoogleWorkspaceAdapter {
       const safeCaseId = validateResourceId(caseId);
       const safeTitle = validateDisplayText(caseTitle, 100);
       const safeKey = validateResourceId(idempotencyKey);
+      const ensureFolder = async (name: string, kind: 'ORGANIZATION_ROOT' | 'DEPARTMENT_ROOT', department: 'ROOT' | 'CLAIM_CENTER', parentId?: string): Promise<string> => {
+        const queryParts = [
+          "mimeType='application/vnd.google-apps.folder'",
+          'trashed=false',
+          `appProperties has { key='concostFolderKind' and value='${kind}' }`,
+          `appProperties has { key='concostDepartment' and value='${department}' }`
+        ];
+        if (parentId) queryParts.push(`'${parentId}' in parents`);
+        const search = new URLSearchParams({ q: queryParts.join(' and '), spaces: 'drive', pageSize: '10', fields: 'files(id,name,parents)' });
+        const listing = await this.authorizedJson(`https://www.googleapis.com/drive/v3/files?${search.toString()}`, signal);
+        if (listing.files !== undefined && !Array.isArray(listing.files)) throw new ProviderFailure('MALFORMED_PROVIDER_RESPONSE');
+        const existing = Array.isArray(listing.files) ? listing.files.find(isRecord) : undefined;
+        if (isRecord(existing)) return validateResourceId(requiredString(existing, 'id', 200));
+        const created = await this.authorizedJson(
+          'https://www.googleapis.com/drive/v3/files?fields=id,name,parents',
+          signal,
+          'POST',
+          {
+            name,
+            mimeType: 'application/vnd.google-apps.folder',
+            ...(parentId ? { parents: [parentId] } : {}),
+            appProperties: { concostFolderKind: kind, concostDepartment: department }
+          }
+        );
+        return validateResourceId(requiredString(created, 'id', 200));
+      };
+
+      const organizationRootId = await ensureFolder('CONCOST ERP 그룹웨어', 'ORGANIZATION_ROOT', 'ROOT');
+      const departmentRootId = await ensureFolder('02_클레임센터', 'DEPARTMENT_ROOT', 'CLAIM_CENTER', organizationRootId);
       const query = `mimeType='application/vnd.google-apps.folder' and trashed=false and appProperties has { key='claimCenterCaseId' and value='${safeCaseId}' }`;
-      const search = new URLSearchParams({ q: query, spaces: 'drive', pageSize: '2', fields: 'files(id,name)' });
-      const listing = await this.authorizedJson(`https://www.googleapis.com/drive/v3/files?${search.toString()}`, signal);
-      if (listing.files !== undefined && !Array.isArray(listing.files)) throw new ProviderFailure('MALFORMED_PROVIDER_RESPONSE');
-      const existing = Array.isArray(listing.files) ? listing.files[0] : undefined;
-      if (isRecord(existing)) {
+      const listFolders = async (withinDepartment: boolean): Promise<Record<string, unknown> | undefined> => {
+        const scopedQuery = withinDepartment ? `${query} and '${departmentRootId}' in parents` : query;
+        const search = new URLSearchParams({ q: scopedQuery, spaces: 'drive', pageSize: '10', fields: 'files(id,name,parents)' });
+        const listing = await this.authorizedJson(`https://www.googleapis.com/drive/v3/files?${search.toString()}`, signal);
+        if (listing.files !== undefined && !Array.isArray(listing.files)) throw new ProviderFailure('MALFORMED_PROVIDER_RESPONSE');
+        return Array.isArray(listing.files) ? listing.files.find(isRecord) : undefined;
+      };
+      const existing = await listFolders(true);
+      if (existing) {
         const folderId = validateResourceId(requiredString(existing, 'id', 200));
         const folderName = validateDisplayText(requiredString(existing, 'name', 200), 200);
         return { folderId, folderName, webViewLink: `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`, isExisting: true };
       }
+      const legacy = await listFolders(false);
+      if (legacy) {
+        const folderId = validateResourceId(requiredString(legacy, 'id', 200));
+        const folderName = validateDisplayText(requiredString(legacy, 'name', 200), 200);
+        const parents = Array.isArray(legacy.parents)
+          ? legacy.parents.filter((parent): parent is string => typeof parent === 'string').map(validateResourceId)
+          : [];
+        const move = new URLSearchParams({ addParents: departmentRootId, fields: 'id,name,parents' });
+        if (parents.length) move.set('removeParents', parents.join(','));
+        const moved = await this.authorizedJson(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?${move.toString()}`, signal, 'PATCH');
+        if (validateResourceId(requiredString(moved, 'id', 200)) !== folderId) throw new ProviderFailure('MALFORMED_PROVIDER_RESPONSE');
+        return { folderId, folderName, webViewLink: `https://drive.google.com/drive/folders/${encodeURIComponent(folderId)}`, isExisting: true };
+      }
       const created = await this.authorizedJson(
-        'https://www.googleapis.com/drive/v3/files?fields=id,name',
+        'https://www.googleapis.com/drive/v3/files?fields=id,name,parents',
         signal,
         'POST',
         {
           name: `[사건] ${safeTitle}`,
           mimeType: 'application/vnd.google-apps.folder',
-          appProperties: { claimCenterCaseId: safeCaseId, idempotencyKey: safeKey }
+          parents: [departmentRootId],
+          appProperties: { claimCenterCaseId: safeCaseId, claimCenterFolderKind: 'PROJECT_ROOT', concostDepartment: 'CLAIM_CENTER', idempotencyKey: safeKey }
         },
         { 'X-Claim-Center-Idempotency-Key': safeKey }
       );

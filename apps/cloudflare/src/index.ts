@@ -361,6 +361,36 @@ const PREVIEW_CASE_STATUSES = [
 ] as const;
 const PREVIEW_CASE_MUTATION_ROLES = new Set(['admin', 'ceo', 'director', 'pm']);
 const PREVIEW_CASE_CREATE_KEY = /^[A-Za-z0-9._:-]{8,128}$/u;
+const ACTIVE_PROJECT_WORK_FILTER = `
+  c.status IN ('CONTRACT','MATERIAL_RECEIVED','ANALYSIS','REPORT_DRAFTING','SUBMITTED','LITIGATION','JUDGEMENT','CLOSED')
+  AND c.case_number NOT LIKE 'DEMO-%'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM preview_catalog_records deleted_intake
+    WHERE deleted_intake.record_kind = 'INTAKE'
+      AND deleted_intake.record_id = c.id
+      AND deleted_intake.organization_id = c.organization_id
+      AND deleted_intake.db_deleted = 1
+  )
+  AND
+  EXISTS (
+    SELECT 1
+    FROM preview_proposal_links accepted
+    JOIN preview_proposals accepted_proposal
+      ON accepted_proposal.case_id = accepted.case_id
+      AND accepted_proposal.organization_id = accepted.organization_id
+      AND accepted_proposal.status = 'APPROVED'
+      AND accepted.proposal_number = ('PROP-' || upper(substr(replace(accepted_proposal.id,'-',''),1,8)))
+    LEFT JOIN preview_award_effective_states effective ON effective.proposal_link_id = accepted.id
+    LEFT JOIN preview_catalog_records accepted_catalog
+      ON accepted_catalog.record_kind = 'PROPOSAL'
+      AND accepted_catalog.record_id = accepted_proposal.id
+      AND accepted_catalog.organization_id = accepted.organization_id
+    WHERE accepted.case_id = c.id
+      AND accepted.organization_id = c.organization_id
+      AND COALESCE(effective.effective_status, accepted.award_status) = 'WON'
+      AND COALESCE(accepted_catalog.db_deleted, 0) = 0
+  )`;
 
 interface PreviewCaseRow {
   id: string;
@@ -439,6 +469,27 @@ async function accessiblePreviewCase(env: CloudflareEnv, user: SessionUser, case
     'FROM preview_cases c WHERE c.id = ? AND c.organization_id = ? AND c.deleted_at IS NULL ' +
     'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID, user.roles.includes('admin') ? 1 : 0, user.id).first<PreviewCaseRow>();
+}
+
+async function projectWorkGateSchemaAvailable(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try {
+    await env.DB.prepare('SELECT effective_status FROM preview_award_effective_states LIMIT 0').all();
+    await env.DB.prepare('SELECT db_deleted FROM preview_catalog_records LIMIT 0').all();
+    await env.DB.prepare('SELECT status FROM preview_proposals LIMIT 0').all();
+    await env.DB.prepare('SELECT proposal_number FROM preview_proposal_links LIMIT 0').all();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isActiveProjectWorkCase(env: CloudflareEnv, caseId: string): Promise<boolean> {
+  if (!env.DB || !await projectWorkGateSchemaAvailable(env)) return false;
+  const row = await env.DB.prepare(
+    `SELECT 1 AS found FROM preview_cases c WHERE c.id=? AND c.organization_id=? AND c.deleted_at IS NULL AND ${ACTIVE_PROJECT_WORK_FILTER} LIMIT 1`
+  ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ found: number }>();
+  return Number(row?.found ?? 0) === 1;
 }
 
 async function previewCaseDetail(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<Response> {
@@ -3512,11 +3563,14 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
 
   if (url.pathname === '/api/cases' && request.method === 'GET') {
     const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200);
+    const scope = url.searchParams.get('scope') ?? '';
+    if (scope && scope !== 'project-work') return json({ error: 'scope is invalid', code: 'INVALID_CASE_SCOPE' }, 400);
+    if (scope === 'project-work' && !await projectWorkGateSchemaAvailable(env)) return json({ error: '프로젝트 워크 연동 migration이 필요합니다.', code: 'D1_MIGRATION_REQUIRED' }, 503);
     const limitRaw = Number(url.searchParams.get('limit') ?? 50);
     if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 100) return json({ error: 'limit must be between 1 and 100', code: 'INVALID_PAGINATION' }, 400);
     const admin = user.roles.includes('admin') ? 1 : 0;
     const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
-    const where = "c.organization_id = ? AND c.deleted_at IS NULL AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')";
+    const where = "c.organization_id = ? AND c.deleted_at IS NULL AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?)) AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')" + (scope === 'project-work' ? ` AND ${ACTIVE_PROJECT_WORK_FILTER}` : '');
     const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
       ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail,'
       : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail,";
@@ -6520,6 +6574,9 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     }
     if (googleEvidence) {
       if (!await accessiblePreviewCase(env, user, googleEvidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+      if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, googleEvidence.caseId)) {
+        return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+      }
       try {
         const providerResponse = await downloadEvidenceFromDrive(googleFetch(env), await accessToken(env), googleEvidence.googleFileId);
         return new Response(providerResponse.body, { headers: { 'Cache-Control': 'private, no-store', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(googleEvidence.originalName)}`, 'Content-Type': googleEvidence.mimeType, 'X-Content-Type-Options': 'nosniff' } });
@@ -6530,6 +6587,9 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       'FROM preview_case_evidence e WHERE e.id=? AND e.organization_id=?'
     ).bind(downloadMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; originalName: string; mimeType: string; byteSize: number; sha256: string; chunkCount: number }>();
     if (!evidence || !await accessiblePreviewCase(env, user, evidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+    if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, evidence.caseId)) {
+      return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
+    }
     const chunks = await db.prepare('SELECT chunk_index AS chunkIndex,payload FROM preview_case_evidence_chunks WHERE evidence_id=? ORDER BY chunk_index ASC')
       .bind(evidence.id).all<{ chunkIndex: number; payload: ArrayBuffer | Uint8Array | number[] }>();
     if (chunks.results.length !== Number(evidence.chunkCount)) return json({ error: 'Evidence chunks are incomplete', code: 'EVIDENCE_INTEGRITY_FAILED' }, 503);
@@ -6549,6 +6609,9 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
   const caseId = collectionMatch[1];
   const caseRow = await accessiblePreviewCase(env, user, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+  if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, caseId)) {
+    return json({ error: '수주 확정 후 프로젝트 워크로 전환된 활성 프로젝트만 자료실에 연결할 수 있습니다.', code: 'PROJECT_WORK_REQUIRED' }, 404);
+  }
   const workflowSchema = await hasEvidenceWorkflowCategory(db);
 
   if (request.method === 'GET') {

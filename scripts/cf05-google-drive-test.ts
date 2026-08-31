@@ -17,6 +17,7 @@ import {
   downloadEvidenceFromDrive,
   encryptSecret,
   exchangeAuthorizationCode,
+  ensureClaimCenterFolder,
   getDriveAccount,
   isAllowedGoogleAccountEmail,
   refreshAccessToken,
@@ -269,5 +270,47 @@ describe('CF05 Google Drive direct storage contract', () => {
       '00000000-0000-4000-8000-000000000004', 'a'.repeat(64), 'google-drive/missing', 'bad.pdf', 'application/pdf', 7, new Date().toISOString(), '관리자', 'GOOGLE_DRIVE', 'SYNCED_TO_GOOGLE_DRIVE', 'SYNCED', 'CLEAN'
     ]), /metadata is incomplete|requires a pending operation/u);
     db.close();
+  });
+
+  test('17 project folders are routed under the Claim Center department and legacy folders keep their ID when moved', async () => {
+    const calls: Array<{ url: URL; method: string; body: Record<string, unknown> | null }> = [];
+    const fetcher: GoogleFetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : null;
+      calls.push({ url, method, body });
+      if (method === 'GET') {
+        const query = url.searchParams.get('q') ?? '';
+        if (query.includes("concostFolderKind' and value='ORGANIZATION_ROOT")) return Response.json({ files: [] });
+        if (query.includes("concostFolderKind' and value='DEPARTMENT_ROOT")) return Response.json({ files: [] });
+        if (query.includes("claimCenterFolderKind' and value='PROJECT_ROOT") && query.includes("'claim_department_12345' in parents")) return Response.json({ files: [] });
+        if (query.includes("claimCenterFolderKind' and value='PROJECT_ROOT")) {
+          return Response.json({ files: [{ id: 'legacy_project_12345', name: '기존 프로젝트', mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: ['legacy_parent_12345'] }] });
+        }
+      }
+      if (method === 'POST' && body?.appProperties && (body.appProperties as Record<string, unknown>).concostFolderKind === 'ORGANIZATION_ROOT') {
+        return Response.json({ id: 'concost_root_12345', name: 'CONCOST ERP 그룹웨어', mimeType: 'application/vnd.google-apps.folder', trashed: false });
+      }
+      if (method === 'POST' && body?.appProperties && (body.appProperties as Record<string, unknown>).concostFolderKind === 'DEPARTMENT_ROOT') {
+        return Response.json({ id: 'claim_department_12345', name: '02_클레임센터', mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: ['concost_root_12345'] });
+      }
+      if (method === 'PATCH' && url.pathname.endsWith('/legacy_project_12345')) {
+        return Response.json({ id: 'legacy_project_12345', name: '기존 프로젝트', mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: ['claim_department_12345'] });
+      }
+      return new Response('unexpected request', { status: 500 });
+    };
+    const folder = await ensureClaimCenterFolder(fetcher, {
+      accessToken: 'access-token-12345',
+      caseId: '10000000-0000-4000-8000-000000000001',
+      kind: 'PROJECT_ROOT',
+      period: '',
+      name: 'CC-2026-00001 테스트 프로젝트'
+    });
+    assert.deepEqual(folder, { id: 'legacy_project_12345', name: '기존 프로젝트', created: false });
+    const move = calls.find((call) => call.method === 'PATCH');
+    assert.ok(move);
+    assert.equal(move.url.searchParams.get('addParents'), 'claim_department_12345');
+    assert.equal(move.url.searchParams.get('removeParents'), 'legacy_parent_12345');
+    assert.equal(calls.some((call) => call.method === 'POST' && call.body?.name === 'CC-2026-00001 테스트 프로젝트'), false);
   });
 });

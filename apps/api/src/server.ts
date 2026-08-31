@@ -116,6 +116,7 @@ export const CASE_STATUSES = [
   'INQUIRY', 'PROPOSAL', 'ESTIMATE', 'CONTRACT', 'MATERIAL_RECEIVED', 'ANALYSIS',
   'REPORT_DRAFTING', 'SUBMITTED', 'LITIGATION', 'JUDGEMENT', 'SUCCESS_FEE', 'CLOSED'
 ] as const;
+const PROJECT_WORK_CASE_STATUSES = CASE_STATUSES.slice(CASE_STATUSES.indexOf('CONTRACT'));
 
 const VALID_STATUS_TRANSITIONS: Record<string, string[]> = {
   INQUIRY: ['PROPOSAL'],
@@ -2627,6 +2628,7 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const q = url.searchParams.get('q')?.trim() ?? '';
         const claimType = url.searchParams.get('claimType')?.trim();
         const status = url.searchParams.get('status')?.trim();
+        const scope = url.searchParams.get('scope')?.trim() ?? '';
         const assignedOnly = url.searchParams.get('assignedOnly') === 'true';
         const requestedPage = Number(url.searchParams.get('page') || 1);
         const requestedLimit = Number(url.searchParams.get('limit') || 50);
@@ -2635,6 +2637,10 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
         if (claimType && !ALLOWED_CLAIM_TYPES.has(claimType)) throw new HttpError(400, 'Invalid claimType filter');
         if (status && !CASE_STATUSES.includes(status as (typeof CASE_STATUSES)[number])) throw new HttpError(400, 'Invalid status filter');
+        if (scope && scope !== 'project-work') throw new HttpError(400, 'Invalid case scope');
+        if (scope === 'project-work' && status && !PROJECT_WORK_CASE_STATUSES.includes(status as (typeof PROJECT_WORK_CASE_STATUSES)[number])) {
+          throw new HttpError(400, 'Status is outside the project-work scope');
+        }
 
         const isAdminOrExec = context.roles.some((role) => ['admin', 'ceo', 'director'].includes(role));
         const where: Prisma.CaseItemWhereInput = {
@@ -2642,7 +2648,8 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
           deletedAt: null,
           ...(!isAdminOrExec || assignedOnly ? { assignments: { some: { userId: context.user.id } } } : {}),
           ...(claimType ? { claimType } : {}),
-          ...(status ? { status } : {}),
+          ...(status ? { status } : scope === 'project-work' ? { status: { in: [...PROJECT_WORK_CASE_STATUSES] } } : {}),
+          ...(scope === 'project-work' ? { NOT: { caseNumber: { startsWith: 'DEMO-' } } } : {}),
           ...(q
             ? {
                 OR: [
@@ -7961,6 +7968,9 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         const idempotencyKey = strictIdempotencyKey(body.idempotencyKey);
         const expectedVersion = boundedInteger(body.expectedCaseVersion, -1, 1, 2_147_483_647, 'expectedCaseVersion');
         const caseRow = await requireGoogleCase(caseId);
+        if (!PROJECT_WORK_CASE_STATUSES.includes(caseRow.status as (typeof PROJECT_WORK_CASE_STATUSES)[number]) || caseRow.caseNumber.startsWith('DEMO-')) {
+          throw new HttpError(404, 'Active project-work case not found');
+        }
         const fingerprint = sha256Hex(canonicalJson({ caseId, expectedVersion }));
         const reservation = await reserveGoogleOperation(caseId, 'DRIVE_FOLDER', idempotencyKey, fingerprint);
         if (reservation.replay) { sendJson(res, reservation.replay.httpStatus, reservation.replay.body); return; }
