@@ -185,12 +185,17 @@
 }
 
 .schedule-board-header,
-.schedule-project-row,
-.detail-schedule-header,
-.workflow-stage-row {
+.schedule-project-row {
   display: grid;
   grid-template-columns: 330px 1364px;
   min-width: 1694px;
+}
+
+.detail-schedule-header,
+.workflow-stage-row {
+  display: grid;
+  grid-template-columns: 330px var(--detail-timeline-width, 1364px);
+  min-width: calc(330px + var(--detail-timeline-width, 1364px));
 }
 
 .schedule-board-header,
@@ -201,6 +206,13 @@
   min-height: 54px;
   background: #151d36;
 }
+
+.detail-schedule-header { min-height: 82px; }
+.detail-calendar-header { display: grid; grid-template-rows: 28px 54px; min-width: var(--detail-timeline-width, 1364px); }
+.schedule-months { display: flex; overflow: hidden; border-bottom: 1px solid #2b3659; background: #10182d; }
+.schedule-months > div { display: grid; place-items: center; flex: 0 0 auto; border-right: 2px solid #52617d; color: #dce6ff; font-size: .72rem; font-weight: 900; letter-spacing: .02em; }
+.detail-schedule-label { flex-direction: column; justify-content: center; align-items: flex-start !important; gap: 5px; }
+.detail-schedule-label small { color: #91a0bc; font-size: .64rem; font-weight: 750; }
 
 .schedule-left-heading,
 .detail-schedule-header > div:first-child {
@@ -270,6 +282,7 @@
 .schedule-progress em { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7867ff, #29dbe4); }
 
 .schedule-track { position: relative; display: grid; grid-template-columns: repeat(31, 44px); min-width: 1364px; overflow: hidden; }
+.detail-schedule-board .schedule-track { grid-template-columns: repeat(var(--detail-day-count), 44px); min-width: var(--detail-timeline-width, 1364px); }
 .schedule-grid-cell { min-width: 44px; border-right: 1px solid rgba(41, 51, 80, 0.65); background: rgba(14, 21, 40, 0.64); }
 .schedule-grid-cell.is-today { background: rgba(31, 209, 232, 0.08); box-shadow: inset 1px 0 rgba(39, 216, 237, 0.7), inset -1px 0 rgba(39, 216, 237, 0.7); }
 .project-range-bar,
@@ -411,9 +424,9 @@
   .workflow-summary,
   .project-workflow-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .schedule-board-header,
-  .schedule-project-row,
+  .schedule-project-row { grid-template-columns: 270px minmax(992px, 1fr); min-width: 1262px; }
   .detail-schedule-header,
-  .workflow-stage-row { grid-template-columns: 270px minmax(992px, 1fr); min-width: 1262px; }
+  .workflow-stage-row { grid-template-columns: 270px var(--detail-timeline-width, 992px); min-width: calc(270px + var(--detail-timeline-width, 992px)); }
   .workforce-row { grid-template-columns: 1fr; gap: 5px; padding: 9px 0; }
   .report-author-panel ul { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .project-brief-board > header { align-items: flex-start; flex-direction: column; }

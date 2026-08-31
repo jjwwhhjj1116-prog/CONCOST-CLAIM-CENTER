@@ -26,6 +26,74 @@ const monthBarStyle = (startDate: string | null | undefined, endDate: string | n
   };
 };
 
+interface ProjectTimelineDay {
+  iso: string;
+  year: number;
+  monthIndex: number;
+  day: number;
+}
+
+interface ProjectTimelineMonth {
+  key: string;
+  label: string;
+  dayCount: number;
+}
+
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
+
+function validIsoDate(value: string | null | undefined): value is string {
+  if (!value || !ISO_DATE_PATTERN.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
+function buildProjectTimeline(project: WorkflowProject, fallbackYear: number, fallbackMonthIndex: number): { days: ProjectTimelineDay[]; months: ProjectTimelineMonth[] } {
+  const startCandidates = [project.start, ...project.stages.map((stage) => stage.startDate)].filter(validIsoDate).sort();
+  const endCandidates = [project.end, ...project.stages.map((stage) => stage.endDate)].filter(validIsoDate).sort();
+  const fallbackStart = isoDate(fallbackYear, fallbackMonthIndex, 1);
+  const fallbackEnd = isoDate(fallbackYear, fallbackMonthIndex, new Date(fallbackYear, fallbackMonthIndex + 1, 0).getDate());
+  const startIso = startCandidates[0] ?? fallbackStart;
+  const endIso = endCandidates.at(-1) ?? fallbackEnd;
+  const safeStart = endIso >= startIso ? startIso : fallbackStart;
+  const safeEnd = endIso >= startIso ? endIso : fallbackEnd;
+  const [startYear, startMonth, startDay] = safeStart.split('-').map(Number);
+  const [endYear, endMonth, endDay] = safeEnd.split('-').map(Number);
+  const cursor = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+  const endTime = Date.UTC(endYear, endMonth - 1, endDay);
+  const days: ProjectTimelineDay[] = [];
+  while (cursor.getTime() <= endTime && days.length < 3_660) {
+    days.push({
+      iso: `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}-${String(cursor.getUTCDate()).padStart(2, '0')}`,
+      year: cursor.getUTCFullYear(),
+      monthIndex: cursor.getUTCMonth(),
+      day: cursor.getUTCDate()
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  const months: ProjectTimelineMonth[] = [];
+  for (const day of days) {
+    const key = `${day.year}-${String(day.monthIndex + 1).padStart(2, '0')}`;
+    const current = months.at(-1);
+    if (current?.key === key) current.dayCount += 1;
+    else months.push({ key, label: `${day.year}년 ${day.monthIndex + 1}월`, dayCount: 1 });
+  }
+  return { days, months };
+}
+
+function timelineBarStyle(startDate: string | null | undefined, endDate: string | null | undefined, days: ProjectTimelineDay[]): React.CSSProperties | undefined {
+  if (!validIsoDate(startDate) || !validIsoDate(endDate) || days.length === 0) return undefined;
+  const firstIso = days[0].iso;
+  const lastIso = days.at(-1)!.iso;
+  if (endDate < firstIso || startDate > lastIso) return undefined;
+  const visibleStart = startDate < firstIso ? firstIso : startDate;
+  const visibleEnd = endDate > lastIso ? lastIso : endDate;
+  const startIndex = days.findIndex((day) => day.iso === visibleStart);
+  const endIndex = days.findIndex((day) => day.iso === visibleEnd);
+  if (startIndex < 0 || endIndex < startIndex) return undefined;
+  return { left: `${startIndex * 44}px`, width: `${(endIndex - startIndex + 1) * 44}px` };
+}
+
 const statusLabel = (status: 'DONE' | 'IN_PROGRESS' | 'PLANNED') => ({
   DONE: '완료', IN_PROGRESS: '진행 중', PLANNED: '예정'
 }[status]);
@@ -337,6 +405,10 @@ const ProjectDetail: React.FC<{
   calendar: { year: number; monthIndex: number; days: number[]; todayDay?: number };
 }> = ({ project, focusedStageId, onNavigate, onAction, onReload, onClose, calendar }) => {
   const selectedStage = WORKFLOW_STAGES.find((stage) => stage.id === focusedStageId);
+  const timeline = useMemo(() => buildProjectTimeline(project, calendar.year, calendar.monthIndex), [calendar.monthIndex, calendar.year, project]);
+  const timelineWidth = timeline.days.length * 44;
+  const timelineStyle = { '--detail-timeline-width': `${timelineWidth}px`, '--detail-day-count': timeline.days.length } as React.CSSProperties;
+  const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
   const [pmOptions, setPmOptions] = useState<Array<{ id: string; displayName: string; email: string }>>([]);
   const [pmId, setPmId] = useState(project.responsiblePm?.id ?? '');
   const [scheduleBusy, setScheduleBusy] = useState('');
@@ -493,14 +565,20 @@ const ProjectDetail: React.FC<{
         </article>
       )}
 
-      <div className="detail-schedule-board" role="table" aria-label={`${project.name} 1단계부터 6단계까지 일정`}>
+      <div className="detail-schedule-board" style={timelineStyle} role="table" aria-label={`${project.name} 1단계부터 6단계까지 일정`}>
         <div className="detail-schedule-header" role="row">
-          <div role="columnheader">1~6단계 업무 · 담당</div>
-          <div className="schedule-days" role="row">
-            {calendar.days.map((day) => {
-              const detail = scheduleDayInfo(calendar.year, calendar.monthIndex, day);
-              return <div key={day} title={detail.label} className={`schedule-day ${detail.className} ${day === calendar.todayDay ? 'is-today' : ''}`} role="columnheader" aria-label={`${detail.iso} · ${detail.label}`}><strong>{day}</strong>{detail.holidays.length > 0 && <b aria-hidden="true">{detail.hasKoreanHoliday && detail.hasVietnamHoliday ? 'KR·VN' : detail.hasKoreanHoliday ? 'KR' : 'VN'}</b>}</div>;
-            })}
+          <div className="detail-schedule-label" role="columnheader"><strong>1~6단계 업무 · 담당</strong><small>{timeline.days[0]?.iso} ~ {timeline.days.at(-1)?.iso}</small></div>
+          <div className="detail-calendar-header">
+            <div className="schedule-months" aria-label="프로젝트 월 구분">
+              {timeline.months.map((month) => <div key={month.key} style={{ width: `${month.dayCount * 44}px` }}>{month.label}</div>)}
+            </div>
+            <div className="schedule-days" style={{ gridTemplateColumns: `repeat(${timeline.days.length}, 44px)` }} role="row">
+              {timeline.days.map((day) => {
+                const detail = scheduleDayInfo(day.year, day.monthIndex, day.day);
+                const weekday = DAY_LABELS[new Date(Date.UTC(day.year, day.monthIndex, day.day)).getUTCDay()];
+                return <div key={day.iso} title={detail.label} className={`schedule-day ${detail.className} ${day.iso === todayIso ? 'is-today' : ''}`} role="columnheader" aria-label={`${detail.iso} ${weekday}요일 · ${detail.label}`}><strong>{day.day}</strong><small>{weekday}</small>{detail.holidays.length > 0 && <b aria-hidden="true">{detail.hasKoreanHoliday && detail.hasVietnamHoliday ? 'KR·VN' : detail.hasKoreanHoliday ? 'KR' : 'VN'}</b>}</div>;
+              })}
+            </div>
           </div>
         </div>
         {WORKFLOW_STAGES.map((stage) => {
@@ -514,18 +592,18 @@ const ProjectDetail: React.FC<{
                 <b className={`stage-status status-${item.status.toLowerCase()}`}>{statusLabel(item.status)}</b>
               </button>
               <div className="schedule-track" role="cell">
-                {calendar.days.map((day) => {
-                  const detail = scheduleDayInfo(calendar.year, calendar.monthIndex, day);
-                  return <span key={day} title={detail.label} className={`schedule-grid-cell ${detail.className} ${day === calendar.todayDay ? 'is-today' : ''}`} />;
+                {timeline.days.map((day) => {
+                  const detail = scheduleDayInfo(day.year, day.monthIndex, day.day);
+                  return <span key={day.iso} title={detail.label} className={`schedule-grid-cell ${detail.className} ${day.iso === todayIso ? 'is-today' : ''}`} />;
                 })}
-                {item.scheduleExplicit && monthBarStyle(item.startDate, item.endDate, calendar.year, calendar.monthIndex, calendar.days.length) ? <button
+                {item.scheduleExplicit && timelineBarStyle(item.startDate, item.endDate, timeline.days) ? <button
                   className={`stage-range-bar status-${item.status.toLowerCase()}`}
-                  style={{ ...monthBarStyle(item.startDate, item.endDate, calendar.year, calendar.monthIndex, calendar.days.length), backgroundColor: stage.color }}
+                  style={{ ...timelineBarStyle(item.startDate, item.endDate, timeline.days), backgroundColor: stage.color }}
                   onClick={() => onNavigate(`${stage.path}?projectId=${encodeURIComponent(project.id)}`)}
                 >
                   <span>{item.startDate ?? `${item.startDay}일`} ~ {item.endDate ?? `${item.endDay}일`}</span>
                 </button>
-                : <span className="schedule-unscheduled">{item.scheduleExplicit ? '이 달 일정 없음' : '일정 미입력'}</span>}
+                : <span className="schedule-unscheduled">{item.scheduleExplicit ? '표시 범위 밖 일정' : '일정 미입력'}</span>}
               </div>
             </div>
           );

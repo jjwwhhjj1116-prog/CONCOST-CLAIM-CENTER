@@ -124,6 +124,18 @@ test('CF47 extracts shared-string and numeric cells from lowercase HWP/Excel-pro
   assert.match(result.extractedText ?? '', /C1: 125000/u);
 });
 
+test('CF74 extracts namespace-prefixed cells from Excel meeting-minute workbooks', async () => {
+  const bytes = xlsxZip([
+    { name: '[Content_Types].xml', text: '<?xml version="1.0"?><x:Types xmlns:x="urn:types"><x:Override PartName="/xl/worksheets/sheet1.xml"/></x:Types>' },
+    { name: 'xl/sharedStrings.xml', text: '<?xml version="1.0"?><x:sst xmlns:x="urn:sheet"><x:si><x:t>회의 안건</x:t></x:si><x:si><x:t>공사비 검토 일정 확정</x:t></x:si></x:sst>' },
+    { name: 'xl/worksheets/sheet1.xml', text: '<?xml version="1.0"?><x:worksheet xmlns:x="urn:sheet"><x:sheetData><x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c><x:c r="B1" t="s"><x:v>1</x:v></x:c></x:row></x:sheetData></x:worksheet>' }
+  ]);
+  const result = await extractIntakeSource('회의록_AI자동작성_테스트.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes);
+  assert.equal(result.kind, 'SPREADSHEET');
+  assert.match(result.extractedText ?? '', /A1: 회의 안건/u);
+  assert.match(result.extractedText ?? '', /B1: 공사비 검토 일정 확정/u);
+});
+
 test('CF47 rejects legacy, disguised, binary, and empty source files before Gemini', async () => {
   await assert.rejects(() => extractIntakeSource('구형자료.xls', 'application/vnd.ms-excel', Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0])), (error: unknown) => error instanceof IntakeSourceError && error.code === 'UNSUPPORTED_INTAKE_SOURCE');
   await assert.rejects(() => extractIntakeSource('가짜.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', new TextEncoder().encode('not a zip')), (error: unknown) => error instanceof IntakeSourceError && error.code === 'INVALID_INTAKE_XLSX');

@@ -105,6 +105,14 @@ interface WorkflowAiImport {
   missingFields: string[];
 }
 
+interface WorkflowArchivedFile {
+  id?: string;
+  originalName?: string;
+  storageProvider: 'GOOGLE_DRIVE' | 'D1_TEMPORARY';
+  driveUrl?: string | null;
+  downloadUrl?: string | null;
+}
+
 const stageRoute: Record<WorkflowRouteId, 3 | 4 | 5> = { 'WF-03': 3, 'WF-04': 4, 'WF-05': 5 };
 const sharedStageCode: Record<WorkflowRouteId, SharedStageCode> = { 'WF-03': 'KICKOFF', 'WF-04': 'SITE_SURVEY', 'WF-05': 'TAKEOFF_COST' };
 const WORKFORCE_OPTIONS = WORKFORCE_UNITS
@@ -328,19 +336,37 @@ export const WorkflowOperations: React.FC<{
     }
   });
 
-  const generateSummary = () => mutate('Gemini 회의록·타임라인 정리', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff-summary`, {
-    method: 'POST', body: JSON.stringify({ expectedVersion: kickoff.expectedVersion })
-  }));
+  const generateSummary = () => mutate('Gemini 회의록·타임라인 정리', async () => {
+    const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff-summary`, {
+      method: 'POST', body: JSON.stringify({ expectedVersion: kickoff.expectedVersion })
+    });
+    if (!payload.kickoff?.summaryText) return payload;
+    try {
+      const archived = await archiveWorkflowResult(selectedCaseId, 'KICKOFF', kickoffRecordAsImport(payload.kickoff), `자동작성_v${payload.kickoff.version}`);
+      return { payload, notice: workflowArchiveNotice('회의록 자동작성 완료', archived) };
+    } catch (error) {
+      return { payload, notice: `회의록 자동작성 결과는 D1과 우측 검수본에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+    }
+  });
 
-  const confirmKickoff = () => mutate('회의록 최종본 확정', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff`, {
-    method: 'PUT',
-    body: JSON.stringify({
-      ...kickoff,
-      meetingAt: new Date(kickoff.meetingAt).toISOString(),
-      participantUnits: kickoff.participantUnits.split(',').map((entry) => entry.trim()).filter(Boolean),
-      status: 'CONFIRMED'
-    })
-  }));
+  const confirmKickoff = () => mutate('회의록 최종본 확정', async () => {
+    const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        ...kickoff,
+        meetingAt: new Date(kickoff.meetingAt).toISOString(),
+        participantUnits: kickoff.participantUnits.split(',').map((entry) => entry.trim()).filter(Boolean),
+        status: 'CONFIRMED'
+      })
+    });
+    if (!payload.kickoff?.summaryText) return payload;
+    try {
+      const archived = await archiveWorkflowResult(selectedCaseId, 'KICKOFF', kickoffRecordAsImport(payload.kickoff), `최종확정_v${payload.kickoff.version}`);
+      return { payload, notice: workflowArchiveNotice('회의록 최종본 확정 완료', archived) };
+    } catch (error) {
+      return { payload, notice: `회의록 최종본은 D1에 확정했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+    }
+  });
 
   const saveSurvey = () => mutate('현장조사 기록 저장', async () => {
     const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey`, {
@@ -354,13 +380,33 @@ export const WorkflowOperations: React.FC<{
     }
   });
 
-  const generateSurveySummary = () => mutate('현장조사 자동작성·정리', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey-summary`, {
-    method: 'POST', body: JSON.stringify({ surveyDate: survey.surveyDate, expectedVersion: survey.outputExpectedVersion })
-  }));
+  const generateSurveySummary = () => mutate('현장조사 자동작성·정리', async () => {
+    const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey-summary`, {
+      method: 'POST', body: JSON.stringify({ surveyDate: survey.surveyDate, expectedVersion: survey.outputExpectedVersion })
+    });
+    const record = payload.siteSurveys.find((item) => item.surveyDate === survey.surveyDate);
+    if (!record?.summaryText) return payload;
+    try {
+      const archived = await archiveWorkflowResult(selectedCaseId, 'SITE_SURVEY', surveyRecordAsImport(record), `자동작성_v${record.outputVersion}`);
+      return { payload, notice: workflowArchiveNotice('현장조사 자동작성 완료', archived) };
+    } catch (error) {
+      return { payload, notice: `현장조사 자동작성 결과는 D1과 우측 검수본에 저장했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+    }
+  });
 
-  const confirmSurvey = () => mutate('현장조사 최종본 확정', () => apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey-confirm`, {
-    method: 'POST', body: JSON.stringify({ surveyDate: survey.surveyDate, expectedVersion: survey.outputExpectedVersion })
-  }));
+  const confirmSurvey = () => mutate('현장조사 최종본 확정', async () => {
+    const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey-confirm`, {
+      method: 'POST', body: JSON.stringify({ surveyDate: survey.surveyDate, expectedVersion: survey.outputExpectedVersion })
+    });
+    const record = payload.siteSurveys.find((item) => item.surveyDate === survey.surveyDate);
+    if (!record?.summaryText) return payload;
+    try {
+      const archived = await archiveWorkflowResult(selectedCaseId, 'SITE_SURVEY', surveyRecordAsImport(record), `최종확정_v${record.outputVersion}`);
+      return { payload, notice: workflowArchiveNotice('현장조사 최종본 확정 완료', archived) };
+    } catch (error) {
+      return { payload, notice: `현장조사 최종본은 D1에 확정했습니다. Google Drive 보관은 실패했습니다: ${messageFrom(error)}` };
+    }
+  });
 
   const saveAllocation = () => {
     if (!selectedUnit) return;
@@ -425,11 +471,90 @@ export const WorkflowOperations: React.FC<{
 
 const WORKFLOW_IMPORT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.hwp,.hwpx,.txt,.csv,.png,.jpg,.jpeg,.webp,.mp3,.m4a,.wav,.ogg,.webm';
 const evidenceCategoryFor = (kind: 'KICKOFF' | 'SITE_SURVEY', file: File) => {
-  if (kind === 'KICKOFF') return file.type.startsWith('audio/') ? 'MEETING_RECORDING' : 'MEETING_MINUTES';
+  if (kind === 'KICKOFF') return file.type.startsWith('audio/') ? 'MEETING_RECORDING' : 'KICKOFF_MATERIAL';
   if (file.type.startsWith('audio/')) return 'SITE_RECORDING';
   if (file.type.startsWith('image/')) return 'SITE_PHOTO';
   return 'SITE_DOCUMENT';
 };
+
+function kickoffRecordAsImport(record: KickoffRecord): WorkflowAiImport {
+  return {
+    meetingAt: record.meetingAt,
+    surveyDate: null,
+    location: record.location ?? '',
+    agenda: record.agenda,
+    participants: record.participantUnits,
+    leadUnit: '',
+    sourceNotes: record.rawNotes,
+    summary: record.summaryText,
+    timeline: record.timeline,
+    missingFields: []
+  };
+}
+
+function surveyRecordAsImport(record: SurveyRecord): WorkflowAiImport {
+  return {
+    meetingAt: null,
+    surveyDate: record.surveyDate,
+    location: record.location ?? '',
+    agenda: record.scopeText,
+    participants: [],
+    leadUnit: record.leadUnit,
+    sourceNotes: record.rawNotes,
+    summary: record.summaryText,
+    timeline: record.timeline,
+    missingFields: []
+  };
+}
+
+function workflowArchiveText(kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiImport, statusLabel: string): string {
+  const title = kind === 'KICKOFF' ? '착수회의 회의록' : '현장조사 기록';
+  const schedule = kind === 'KICKOFF' ? value.meetingAt : value.surveyDate;
+  const timeline = value.timeline.length
+    ? value.timeline.map((item) => `${item.order}. ${item.title}\n${item.detail}`).join('\n\n')
+    : '정리된 후속업무가 없습니다.';
+  return [
+    title,
+    `저장 상태: ${statusLabel}`,
+    `일시·일자: ${schedule || '미입력'}`,
+    `장소: ${value.location || '미입력'}`,
+    kind === 'KICKOFF' ? `참석 팀·담당자: ${value.participants.join(', ') || '미입력'}` : `조사 책임 팀: ${value.leadUnit || '미입력'}`,
+    kind === 'KICKOFF' ? `회의 안건: ${value.agenda || '미입력'}` : `조사 범위: ${value.agenda || '미입력'}`,
+    '',
+    '[자동작성 결과]',
+    value.summary || '자동작성 결과가 없습니다.',
+    '',
+    '[결정사항·후속업무]',
+    timeline,
+    '',
+    '[원문]',
+    value.sourceNotes || '원문이 없습니다.'
+  ].join('\n');
+}
+
+async function archiveWorkflowResult(caseId: string, kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiImport, statusLabel: string): Promise<WorkflowArchivedFile> {
+  const category = kind === 'KICKOFF' ? 'MEETING_MINUTES' : 'SITE_DOCUMENT';
+  const sourceDate = (kind === 'KICKOFF' ? value.meetingAt : value.surveyDate)?.slice(0, 10) || kstToday();
+  const safeStatus = statusLabel.replace(/[^0-9A-Za-z가-힣_-]+/g, '_');
+  const fileName = `${kind === 'KICKOFF' ? '착수회의_회의록' : '현장조사_정리본'}_${sourceDate}_${safeStatus}.txt`;
+  const form = new FormData();
+  form.set('file', new File([workflowArchiveText(kind, value, statusLabel)], fileName, { type: 'text/plain;charset=utf-8' }));
+  form.set('category', category);
+  const response = await fetch(`/api/cases/${encodeURIComponent(caseId)}/evidence`, {
+    method: 'POST',
+    headers: { 'Idempotency-Key': `workflow-result-${crypto.randomUUID()}` },
+    body: form
+  });
+  const payload = await response.json().catch(() => ({})) as { file?: WorkflowArchivedFile; error?: string };
+  if (!response.ok || !payload.file) throw new Error(payload.error ?? '자동작성 결과를 Google Drive에 보관하지 못했습니다.');
+  return payload.file;
+}
+
+function workflowArchiveNotice(prefix: string, file: WorkflowArchivedFile): string {
+  return file.storageProvider === 'GOOGLE_DRIVE'
+    ? `${prefix} · Google Drive 회의록 폴더에 자동 저장했습니다.`
+    : `${prefix} · Drive 미설정 테스트 환경이어서 D1 임시보관에 안전하게 저장했습니다.`;
+}
 
 function downloadWorkflowTemplate(kind: 'KICKOFF' | 'SITE_SURVEY'): void {
   if (kind === 'KICKOFF') {
@@ -450,7 +575,8 @@ const WorkflowAiImporter: React.FC<{
   kind: 'KICKOFF' | 'SITE_SURVEY';
   disabled: boolean;
   onImported: (value: WorkflowAiImport) => void;
-}> = ({ caseId, kind, disabled, onImported }) => {
+  onArchived?: (file: WorkflowArchivedFile | null) => void;
+}> = ({ caseId, kind, disabled, onImported, onArchived }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dataClass,setDataClass] = useState<'GENERAL'|'INTERNAL'|'CONFIDENTIAL'|'RESTRICTED'>('INTERNAL');
   const [dragging,setDragging] = useState(false);
@@ -460,7 +586,7 @@ const WorkflowAiImporter: React.FC<{
   const [message,setMessage] = useState('');
   const [error,setError] = useState('');
 
-  useEffect(() => { setSelectedFile(null); setStoredFileName(''); setMessage(''); setError(''); }, [caseId,kind]);
+  useEffect(() => { setSelectedFile(null); setStoredFileName(''); setMessage(''); setError(''); onArchived?.(null); }, [caseId,kind,onArchived]);
 
   const importFile = async (file?: File) => {
     if (!file || disabled || busy) return;
@@ -487,7 +613,15 @@ const WorkflowAiImporter: React.FC<{
       if (!response.ok || !payload.import) throw new Error(payload.error ?? 'AI 문서 정리를 완료하지 못했습니다.');
       onImported(payload.import);
       const generatorLabel = payload.generator === 'LOCAL_STRUCTURED_FALLBACK' || payload.security?.providerTier === 'LOCAL_ONLY' ? '회사 서버 내부 자동정리' : 'Gemini 자동정리';
-      setMessage(`2단계 ${generatorLabel} 완료 · 좌측 입력과 우측 검수본에 반영했습니다.${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''} 원문과 대조한 뒤 저장·확정해 주세요.`);
+      try {
+        const archived = await archiveWorkflowResult(caseId, kind, payload.import, '파일_자동작성');
+        onArchived?.(archived);
+        setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영하고 ${archived.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive에 자동 저장했습니다.' : 'D1 임시보관에 저장했습니다.'}${payload.security?.redactionCount ? ` 개인정보 ${payload.security.redactionCount}건 마스킹` : ''}`);
+      } catch (archiveError) {
+        onArchived?.(null);
+        setMessage(`2단계 ${generatorLabel} 완료 · 우측 검수본에 반영했습니다.`);
+        setError(`자동작성 결과는 화면에 보존됐지만 Google Drive 자동 저장에 실패했습니다: ${messageFrom(archiveError)}`);
+      }
     } catch (reason) { setError(reason instanceof Error ? reason.message : '파일을 처리하지 못했습니다.'); }
     finally { setBusy(false); }
   };
@@ -514,7 +648,8 @@ const KickoffEditor: React.FC<{
   onNavigate: (path: string) => void;
 }> = ({ caseId, form, setForm, record, disabled, busy, onSave, onGenerate, onConfirm, onNavigate }) => {
   const [importedDraft, setImportedDraft] = useState<WorkflowAiImport | null>(null);
-  useEffect(() => { setImportedDraft(null); }, [caseId]);
+  const [archivedFile, setArchivedFile] = useState<WorkflowArchivedFile | null>(null);
+  useEffect(() => { setImportedDraft(null); setArchivedFile(null); }, [caseId]);
   const savedSourcePreview = record?.rawNotes.trim() || record?.agenda.trim() || '';
   const displayedSummary = record?.summaryText || importedDraft?.summary || (savedSourcePreview ? `저장된 회의 원문 미리보기\n\n${savedSourcePreview}` : '');
   const displayedTimeline = record?.summaryText ? record.timeline : importedDraft?.timeline ?? (savedSourcePreview ? [{ order:1,title:'저장된 원문',detail:'자동작성·정리를 실행하면 결정사항과 후속업무가 항목별로 표시됩니다.' }] : []);
@@ -523,7 +658,8 @@ const KickoffEditor: React.FC<{
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>KICKOFF INTAKE</span><h3>착수회의 기록</h3></div><em>v{form.expectedVersion}</em></header>
-      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onImported={(value) => { setImportedDraft(value); setForm((current) => ({ ...current, meetingAt:value.meetingAt?localDateTime(value.meetingAt):current.meetingAt,location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:value.sourceNotes,status:'DRAFTED' })); }}/>
+      <WorkflowAiImporter caseId={caseId} kind="KICKOFF" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => ({ ...current, meetingAt:value.meetingAt?localDateTime(value.meetingAt):current.meetingAt,location:value.location,agenda:value.agenda,participantUnits:value.participants.join(', '),rawNotes:value.sourceNotes,status:'DRAFTED' })); }}/>
+      <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>가져온 내용도 아래에서 보완할 수 있으며, 저장 후 다시 자동정리할 수 있습니다.</span></div>
       <div className="workflow-form-grid">
         <label>회의 일시<input type="datetime-local" value={form.meetingAt} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, meetingAt: event.target.value }))} /></label>
         <label>회의 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">진행 예정</option><option value="COMPLETED">진행 완료</option><option value="DRAFTED">회의록 초안</option><option value="CONFIRMED">확정</option></select></label>
@@ -538,6 +674,7 @@ const KickoffEditor: React.FC<{
     <article className="workflow-editor-card is-output">
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문이 먼저 미리보기로 표시됩니다. 자동작성·정리 후에는 결정사항과 후속업무를 검수하고 최종 확정합니다.</p>
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : 'D1 임시보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 자동작성 회의록'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
       {displayedSummary ? <><pre className="workflow-summary-text">{displayedSummary}</pre><ol className="workflow-timeline">{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol>{record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}</> : <div className="workflow-empty"><strong>아직 정리된 회의록이 없습니다.</strong><p>회사 양식을 가져오거나 회의 메모를 저장한 뒤 Gemini 정리를 실행하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
@@ -563,7 +700,8 @@ const SurveyEditor: React.FC<{
   onNavigate: (path: string) => void;
 }> = ({ caseId, form, setForm, surveys, drive, disabled, busy, onSave, onGenerate, onConfirm, onNavigate }) => {
   const [importedDraft,setImportedDraft] = useState<WorkflowAiImport | null>(null);
-  useEffect(() => { setImportedDraft(null); }, [caseId]);
+  const [archivedFile,setArchivedFile] = useState<WorkflowArchivedFile | null>(null);
+  useEffect(() => { setImportedDraft(null); setArchivedFile(null); }, [caseId]);
   const record = surveys.find((item) => item.surveyDate === form.surveyDate) ?? null;
   const savedSourcePreview = record?.rawNotes.trim() || record?.scopeText.trim() || '';
   const displayedSummary = record?.summaryText || importedDraft?.summary || (savedSourcePreview ? `저장된 현장조사 원문 미리보기\n\n${savedSourcePreview}` : '');
@@ -580,7 +718,8 @@ const SurveyEditor: React.FC<{
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>SITE SURVEY PLAN</span><h3>현장조사 계획·원본 분류</h3></div><em>v{form.expectedVersion}</em></header>
-      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onImported={(value) => { setImportedDraft(value); setForm((current) => { const surveyDate=value.surveyDate??current.surveyDate; const existing=surveys.find((item)=>item.surveyDate===surveyDate); return { ...current,surveyDate,location:value.location,scopeText:value.agenda||current.scopeText,leadUnit:value.leadUnit||current.leadUnit,rawNotes:value.sourceNotes,status:'IN_PROGRESS',expectedVersion:existing?.version??0,outputExpectedVersion:existing?.outputVersion??0 }; }); }}/>
+      <WorkflowAiImporter caseId={caseId} kind="SITE_SURVEY" disabled={disabled} onArchived={setArchivedFile} onImported={(value) => { setImportedDraft(value); setForm((current) => { const surveyDate=value.surveyDate??current.surveyDate; const existing=surveys.find((item)=>item.surveyDate===surveyDate); return { ...current,surveyDate,location:value.location,scopeText:value.agenda||current.scopeText,leadUnit:value.leadUnit||current.leadUnit,rawNotes:value.sourceNotes,status:'IN_PROGRESS',expectedVersion:existing?.version??0,outputExpectedVersion:existing?.outputVersion??0 }; }); }}/>
+      <div className="workflow-manual-heading"><strong>직접 입력·수정</strong><span>가져온 현장 기록을 아래에서 보완하고 저장할 수 있습니다.</span></div>
       <div className="workflow-form-grid">
         <label>조사 일자<input type="date" value={form.surveyDate} disabled={disabled} onChange={(event) => changeSurveyDate(event.target.value)} /></label>
         <label>진행 상태<select value={form.status} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, status: event.target.value }))}><option value="PLANNED">예정</option><option value="IN_PROGRESS">진행 중</option><option value="COMPLETED">완료</option></select></label>
@@ -595,6 +734,7 @@ const SurveyEditor: React.FC<{
     <article className="workflow-editor-card is-output">
       <header><div><span>SITE NOTES · HUMAN REVIEW</span><h3>현장조사 최종본 · 관찰사항 · 후속확인</h3></div><em>{outputState}</em></header>
       <p className="workflow-output-guide">좌측에서 가져오거나 저장한 원문을 먼저 미리보기로 확인합니다. 자동작성·정리 후에는 관찰사항과 추가 확인업무를 원문과 대조하고 최종 확정합니다.</p>
+      {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 자동 저장 완료' : 'D1 임시보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 자동작성 정리본'}</span></div>{archivedFile.driveUrl && <a href={archivedFile.driveUrl} target="_blank" rel="noreferrer noopener">Drive에서 열기</a>}</div>}
       {displayedSummary ? <><pre className="workflow-summary-text">{displayedSummary}</pre><ol className="workflow-timeline">{displayedTimeline.map((item) => <li key={`${item.order}-${item.detail}`}><span>{item.order}</span><div><strong>{item.title}</strong><p>{item.detail}</p></div></li>)}</ol>{record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}</> : <div className="workflow-empty"><strong>아직 정리된 현장조사 기록이 없습니다.</strong><p>현장 원본을 가져오거나 조사 메모를 저장한 뒤 자동작성·정리를 실행하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-survey-ledger-card">

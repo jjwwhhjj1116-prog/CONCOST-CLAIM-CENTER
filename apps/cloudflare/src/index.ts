@@ -147,6 +147,10 @@ function hexToBytes(value: string): Uint8Array | null {
 // Authentication & Session
 const PREVIEW_SESSION_COOKIE = 'claim_center_session';
 const PREVIEW_SESSION_SECONDS = 12 * 60 * 60;
+// Cloudflare Workers' WebCrypto CPU budget is lower than the local Node test
+// runtime. Keep this value aligned with the proven production credentials so
+// login, signup, and password changes use the same Worker-safe cost.
+const PREVIEW_PASSWORD_ITERATIONS = 100_000;
 const PREVIEW_ROLES = new Set(['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin']);
 const RESPONSIBLE_PM_NAMES = ['현동명', '이원희', '이경훈', '최영배', '장범선'] as const;
 const RESPONSIBLE_PM_NAME_SET = new Set<string>(RESPONSIBLE_PM_NAMES);
@@ -251,7 +255,7 @@ async function handlePreviewAuth(request: Request, env: CloudflareEnv, url: URL)
     }
     const existing=await env.DB.prepare("SELECT 1 AS found FROM preview_users WHERE login_id=? COLLATE NOCASE OR email=? COLLATE NOCASE UNION ALL SELECT 1 FROM preview_user_registration_requests WHERE status='PENDING' AND (login_id=? COLLATE NOCASE OR email=? COLLATE NOCASE) LIMIT 1").bind(loginId,email,loginId,email).first<{found:number}>().catch(()=>null);
     if(existing)return json({ error:'이미 등록되었거나 승인 대기 중인 아이디·이메일입니다.',code:'REGISTRATION_CONFLICT' },409);
-    const salt=bytesToHex(crypto.getRandomValues(new Uint8Array(16))); const iterations=310_000; const passwordHash=await derivePreviewPassword(body.password,salt,iterations);
+    const salt=bytesToHex(crypto.getRandomValues(new Uint8Array(16))); const iterations=PREVIEW_PASSWORD_ITERATIONS; const passwordHash=await derivePreviewPassword(body.password,salt,iterations);
     if(!passwordHash)return json({ error:'비밀번호를 안전하게 보호하지 못했습니다.',code:'PASSWORD_HASH_FAILED' },500);
     const id=crypto.randomUUID(); const now=new Date().toISOString();
     try{await env.DB.prepare('INSERT INTO preview_user_registration_requests (id,login_id,display_name,email,password_salt,password_hash,password_iterations,requested_role,request_note,status,version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,\'PENDING\',1,?,?)').bind(id,loginId,displayName,email,salt,passwordHash,iterations,requestedRole,requestNote||null,now,now).run();}
@@ -602,7 +606,7 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
     const roles = [...new Set(body.roles.filter((role): role is string => typeof role === 'string' && PREVIEW_ROLES.has(role)))];
     if (!emailPattern.test(loginId) || !emailPattern.test(email) || loginId.length > 100 || displayName.length < 1 || displayName.length > 100 || body.password.length < 4 || body.password.length > 128 || roles.length < 1 || roles.length !== body.roles.length) return json({ error: 'Account fields are invalid', code: 'INVALID_ACCOUNT_PAYLOAD' }, 400);
     const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-    const iterations = 310_000;
+    const iterations = PREVIEW_PASSWORD_ITERATIONS;
     const passwordHash = await derivePreviewPassword(body.password, salt, iterations);
     if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
     const targetId = crypto.randomUUID();
@@ -636,7 +640,7 @@ async function handlePreviewAdminUsers(request: Request, env: CloudflareEnv): Pr
   } else if (body.action === 'RESET_PASSWORD') {
     if (typeof body.password !== 'string' || body.password.length < 4 || body.password.length > 128) return json({ error: 'Password must be between 4 and 128 characters', code: 'INVALID_PASSWORD' }, 400);
     const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-    const iterations = 310_000;
+    const iterations = PREVIEW_PASSWORD_ITERATIONS;
     const passwordHash = await derivePreviewPassword(body.password, salt, iterations);
     if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
     action = 'PASSWORD_RESET';
@@ -678,7 +682,7 @@ async function handlePreviewPasswordChange(request: Request, env: CloudflareEnv)
   const currentHash = await derivePreviewPassword(body.currentPassword, target.passwordSalt, Number(target.passwordIterations));
   if (!constantTimeHexEqual(currentHash, target.passwordHash)) return json({ error: '현재 비밀번호가 일치하지 않습니다.', code: 'CURRENT_PASSWORD_MISMATCH' }, 403);
   const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-  const iterations = 310_000;
+  const iterations = PREVIEW_PASSWORD_ITERATIONS;
   const passwordHash = await derivePreviewPassword(body.newPassword, salt, iterations);
   if (!passwordHash) return json({ error: 'Password could not be protected', code: 'PASSWORD_HASH_FAILED' }, 500);
   const cookieToken = parseCookies(request.headers.get('Cookie'))[PREVIEW_SESSION_COOKIE];
@@ -1811,7 +1815,7 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
   const current=await previewCatalogRecord(env,'PROPOSAL',actionMatch[1]);if(Number(current?.version??0)!==expectedVersion)return json({error:'다른 화면에서 먼저 변경되었습니다.',code:'VERSION_CONFLICT'},409);
   let driveFileId=current?.driveArchiveFileId??null,driveUrl=current?.driveArchiveUrl??null,archivedAt=current?.driveArchivedAt??null;
   if(action==='ARCHIVE_TO_DRIVE')try{const token=await accessToken(env);const now=new Date().toISOString();const caseId=String(row.caseId);const root=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'PROJECT_ROOT',period:'',name:`${row.caseNumber} ${row.caseTitle}`});const folder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId,kind:'PROPOSAL_DB_ARCHIVE',period:'',name:'제안서 DB 보관',parentId:root.id});const snapshot=JSON.stringify({schema:'CLAIM_CENTER_PROPOSAL_ARCHIVE_V1',archivedAt:now,archivedBy:{id:user.id,name:user.displayName},proposal:row},null,2);const bytes=new TextEncoder().encode(snapshot);const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:folder.id,evidenceId:crypto.randomUUID(),fileName:`${row.caseNumber}_${row.proposalNumber}_${now.slice(0,10)}.json`,mimeType:'application/json',sha256:await sha256Hex(snapshot),bytes,caseId,category:'PROPOSAL_DB_ARCHIVE',uploadedById:user.id,uploadedAt:now});driveFileId=uploaded.fileId;driveUrl=uploaded.webViewLink;archivedAt=now;}catch(reason){return googleFailure(reason);}
-  const now=new Date(Math.max(Date.now(),Date.parse(current?.updatedAt??'1970-01-01')+1)).toISOString();const nextHidden=action==='HIDE_FROM_LIST'?1:action==='RESTORE_TO_LIST'?0:Number(current?.listHidden??0);const nextDeleted=action==='ADMIN_DELETE'?1:Number(current?.dbDeleted??0);const nextVersion=expectedVersion+1;
+  const now=new Date(Math.max(Date.now(),Date.parse(current?.updatedAt??'1970-01-01')+1)).toISOString();const nextHidden=action==='ADMIN_DELETE'?1:action==='HIDE_FROM_LIST'?1:action==='RESTORE_TO_LIST'?0:Number(current?.listHidden??0);const nextDeleted=action==='RESTORE_TO_LIST'?0:action==='ADMIN_DELETE'?1:Number(current?.dbDeleted??0);const nextVersion=expectedVersion+1;
   const write=current?env.DB.prepare('UPDATE preview_catalog_records SET list_hidden=?,db_deleted=?,drive_archive_file_id=?,drive_archive_url=?,drive_archived_at=?,drive_archived_by=?,version=version+1,updated_by=?,updated_at=? WHERE record_kind=\'PROPOSAL\' AND record_id=? AND version=?').bind(nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:current.driveArchivedBy,user.id,now,actionMatch[1],expectedVersion):env.DB.prepare('INSERT INTO preview_catalog_records (record_kind,record_id,organization_id,list_hidden,db_deleted,drive_archive_file_id,drive_archive_url,drive_archived_at,drive_archived_by,version,updated_by,created_at,updated_at) SELECT \'PROPOSAL\',?,?,?, ?,?,?,?,?,1,?,?,? WHERE ?=0').bind(actionMatch[1],PREVIEW_ORGANIZATION_ID,nextHidden,nextDeleted,driveFileId,driveUrl,archivedAt,action==='ARCHIVE_TO_DRIVE'?user.id:null,user.id,now,now,expectedVersion);
   const results=await env.DB.batch([write,env.DB.prepare('INSERT INTO preview_catalog_actions (id,record_kind,record_id,action_code,detail_json,actor_id,created_at) SELECT ?,\'PROPOSAL\',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_catalog_records WHERE record_kind=\'PROPOSAL\' AND record_id=? AND version=?)').bind(crypto.randomUUID(),actionMatch[1],action,JSON.stringify({driveFileId,driveUrl}),user.id,now,actionMatch[1],nextVersion)]) as Array<{meta?:{changes?:number}}>;
   if(results.some((entry)=>entry.meta?.changes!==1))return json({error:'제안서 원장이 동시에 변경되었습니다.',code:'VERSION_CONFLICT'},409);

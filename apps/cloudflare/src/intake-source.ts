@@ -126,7 +126,7 @@ async function unzipEntry(bytes: Uint8Array, entry: ZipEntry): Promise<Uint8Arra
 }
 
 function textNodes(xml: string): string {
-  return [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/giu)].map((match) => xmlText(match[1])).join('');
+  return [...xml.matchAll(/<(?:[A-Za-z_][\w.-]*:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?t>/giu)].map((match) => xmlText(match[1])).join('');
 }
 
 async function extractXlsx(bytes: Uint8Array): Promise<string> {
@@ -143,7 +143,7 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
   const sharedEntry = byName.get('xl/sharedstrings.xml');
   if (sharedEntry) {
     const sharedXml = decoder.decode(await unzipEntry(bytes, sharedEntry));
-    for (const match of sharedXml.matchAll(/<si(?:\s[^>]*)?>([\s\S]*?)<\/si>/giu)) shared.push(textNodes(match[1]));
+    for (const match of sharedXml.matchAll(/<(?:[A-Za-z_][\w.-]*:)?si(?:\s[^>]*)?>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?si>/giu)) shared.push(textNodes(match[1]));
   }
   const lines: string[] = [];
   let cellCount = 0;
@@ -154,14 +154,14 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
     // Empty formatted cells are commonly serialized as <c .../>. Match those
     // atomically so they cannot swallow the next populated cell and shift all
     // references/values in company meeting-minute templates.
-    for (const match of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/giu)) {
+    for (const match of xml.matchAll(/<(?:[A-Za-z_][\w.-]*:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?c>)/giu)) {
       cellCount += 1;
       if (cellCount > 20_000) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel 셀이 20,000개를 넘습니다. 필요한 시트만 남겨 다시 올려 주세요.');
       const attrs = match[1];
       const body = match[2] ?? '';
       const ref = /\br="([^"]+)"/iu.exec(attrs)?.[1] ?? `CELL-${cellCount}`;
       const type = /\bt="([^"]+)"/iu.exec(attrs)?.[1] ?? '';
-      const raw = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/iu.exec(body)?.[1] ?? '';
+      const raw = /<(?:[A-Za-z_][\w.-]*:)?v(?:\s[^>]*)?>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?v>/iu.exec(body)?.[1] ?? '';
       let value = '';
       if (type === 's') value = shared[Number(raw)] ?? '';
       else if (type === 'inlineStr') value = textNodes(body);

@@ -55,6 +55,10 @@ test('CF73 exposes independent import, automatic writing, persistent save, and r
   assert.match(source, /3\. 조사 원문 저장/u);
   assert.match(source, /현장조사 최종본 · 관찰사항 · 후속확인/u);
   assert.match(source, /파일 자동작성 결과 · 저장 전/u);
+  assert.match(source, /archiveWorkflowResult/u);
+  assert.match(source, /MEETING_MINUTES/u);
+  assert.match(source, /Google Drive 자동 저장 완료/u);
+  assert.match(source, /D1 임시보관 완료/u);
   assert.ok(source.indexOf('/workflow/kickoff`,') < source.indexOf('await persistSharedSchedule({ startDate: meetingDate'));
   assert.ok(source.indexOf('/workflow/site-survey`,') < source.indexOf('await persistSharedSchedule({ startDate: survey.surveyDate'));
   assert.match(worker, /site-survey-summary/u);
@@ -62,4 +66,6 @@ test('CF73 exposes independent import, automatic writing, persistent save, and r
   assert.match(worker, /LOCAL_STRUCTURED_FALLBACK/u);
   assert.match(css, /workflow-autodraft-button/u);
   assert.match(css, /workflow-survey-ledger-card/u);
+  assert.match(css, /workflow-drive-state/u);
+  assert.match(css, /align-items:\s*stretch/u);
 });

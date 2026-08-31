@@ -41,7 +41,7 @@ test('CF72 signup requests are PBKDF2 protected and require an admin decision', 
   assert.match(migration,/preview_user_registration_requests/u);
   assert.match(migration,/status IN \('PENDING','APPROVED','REJECTED'\)/u);
   assert.match(worker,/derivePreviewPassword\(body\.password,salt,iterations\)/u);
-  assert.match(worker,/310_000/u);
+  assert.match(worker,/PREVIEW_PASSWORD_ITERATIONS\s*=\s*100_000/u);
   assert.match(worker,/\/api\/admin\/registration-requests/u);
   assert.match(login,/회원가입 신청하기/u);
   assert.match(admin,/승인·계정 생성/u);

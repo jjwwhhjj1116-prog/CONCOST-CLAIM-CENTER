@@ -159,7 +159,7 @@ export function ProposalLibraryView({ mode, onNavigate }: { mode: 'projects' | '
                   <div><strong>{proposal.proposalTitle}</strong><span>{proposal.proposalNumber} · {proposal.revisionLabel}</span></div>
                   <div><span>{proposal.clientName}</span><small>{dateLabel(proposal.sentAt, true)}</small></div>
                   <em className={`status-${proposal.verificationStatus.toLowerCase()}`}>{verificationLabels[proposal.verificationStatus]}</em>
-                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 원문 열기</a> : <span className="is-muted">원문 미연결</span>}
+                  {proposal.documentUrl ? <a href={proposal.documentUrl} target="_blank" rel="noreferrer">확정 파일 열기</a> : <span className="is-muted" title="제안서 작성본은 D1에 보존되어 있으나 별도 파일 다운로드 주소는 등록되지 않았습니다.">확정 파일 링크 없음</span>}
                 </div>)}
               </div>
               <footer><button type="button" onClick={() => onNavigate(`/proposals/editor?caseId=${encodeURIComponent(project.caseId)}`)}>이 프로젝트 제안서 작성</button><button type="button" className="is-secondary" onClick={() => onNavigate('/workflow/award')}>접수·수주 상태 확인</button><button type="button" className="is-secondary" disabled={Boolean(busy)} onClick={()=>void catalogAction(latest,'HIDE_FROM_LIST')}>목록에서 숨기기</button></footer>
