@@ -169,10 +169,10 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       const content = pages.join('\n\n').trim();
       if (!content) throw new Error('HWP에서 편집 가능한 텍스트를 찾지 못했습니다. 이미지로만 된 문서는 원본 이미지 삽입 기능을 사용하세요.');
       await onApplyContent(content);
-      setStatus(`${count}페이지의 현재 편집 내용을 선택 챕터에 적용했습니다.`);
+      setStatus(`${count}페이지의 현재 편집 내용을 보고서 작업본에 적용했습니다.`);
       setConfirmClose(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '현재 HWP 내용을 선택 챕터에 적용하지 못했습니다.');
+      setError(reason instanceof Error ? reason.message : '현재 HWP 내용을 보고서 작업본에 적용하지 못했습니다.');
     } finally {
       setBusy(false);
     }

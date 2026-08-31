@@ -11,7 +11,7 @@ import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/fi
 import { StructuredDocumentEditor, renderStructuredDocumentHtml, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
-import { readReportDocx, readReportStudioWorkbook, reportStudioWorkbook } from '../proposals/proposal-excel';
+import { readReportDocx, readReportStudioWorkbook, readSpreadsheetExcerpt, reportStudioWorkbook } from '../proposals/proposal-excel';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
 import type { UserRole } from './Router';
 import type { PreviewReportReview } from './PreviewApprovalInbox';
@@ -24,7 +24,7 @@ interface ReportDraft {
   updatedBy: { id: string; name: string };
 }
 interface ReportRevision {
-  id: string; version: number; title: string; contentSha256: string; savedAt: string;
+  id: string; version: number; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null; contentSha256: string; savedAt: string;
   savedBy: { id: string; name: string };
 }
 interface ReportPayload { draft: ReportDraft | null; revisions: ReportRevision[] }
@@ -60,8 +60,8 @@ const REPORT_WIZARD_STEPS: readonly {
 }[] = [
   { id: 1, title: '프로젝트·템플릿 확인', shortHelp: '어떤 프로젝트의 보고서를 만들지 먼저 고릅니다.', tasks: ['프로젝트 이름 확인', '클레임 유형 확인', 'AI가 참고할 자료 준비도 확인'], doneText: '프로젝트와 승인 템플릿이 연결되면 완료' },
   { id: 2, title: '목차 기획', shortHelp: '선택한 템플릿에서 목차를 자동 만들고 제목만 쉽게 다듬습니다.', tasks: ['AI·템플릿으로 목차 자동 만들기', '이상한 챕터 제목만 바로 수정하기', '목차 확정 누르기'], doneText: '목차 확정 표시가 나오면 완료' },
-  { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성 또는 수동·외부 LLM 입력을 선택합니다.', tasks: ['작성할 챕터 선택', 'AI 자동작성 또는 수동 입력 선택', 'HWP 원본·참고자료 연결 후 저장'], doneText: '모든 챕터에 초안 있음이 표시되면 완료' },
-  { id: 4, title: '사람 검토·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 사람이 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', 'D1 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
+  { id: 3, title: '보고서 초안 작성', shortHelp: 'AI 자동작성, 직접 작성 또는 HWP·DOCX 전체 문서 적용을 선택합니다.', tasks: ['작성 방식 선택', '전체 문서 적용 또는 챕터 작성', 'Ctrl+S·자동저장 확인'], doneText: '전체 문서 적용 또는 모든 챕터 초안 작성 시 완료' },
+  { id: 4, title: '담당자 검수·수정', shortHelp: '작성 방식과 관계없이 숫자와 근거를 담당자가 확인합니다.', tasks: ['본문을 처음부터 읽기', '틀린 숫자·표현·출처 고치기', 'D1 저장 완료 표시 확인'], doneText: '수정 내용이 최신 버전으로 저장되면 완료' },
   { id: 5, title: '검토·승인·출력', shortHelp: '검토자에게 보내고 승인된 파일을 내려받습니다.', tasks: ['검토 요청 메모 작성', '독립 검토자 승인 확인', '미리보기와 동일한 DOCX·PDF·HWP 내려받기'], doneText: '승인본을 확정하면 보고서 작업 완료' }
 ] as const;
 const CHAPTER_SOURCE_CODES: Record<string, SourceGroup['code'][]> = {
@@ -89,6 +89,13 @@ function replaceReportChapterBlock(content: string, chapterCode: string, chapter
   const block = `<!-- MANUAL-CHAPTER:${chapterCode}:START -->\n## ${chapterCode} ${chapterTitle}\n\n${body.trim()}\n<!-- MANUAL-CHAPTER:${chapterCode}:END -->`;
   const pattern = new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${code}:START -->[\\s\\S]*?<!-- (?:AI|MANUAL)-CHAPTER:${code}:END -->`, 'u');
   return pattern.test(content) ? content.replace(pattern, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
+}
+
+const WHOLE_DOCUMENT_START = '<!-- MANUAL-WHOLE-DOCUMENT:START -->';
+const WHOLE_DOCUMENT_END = '<!-- MANUAL-WHOLE-DOCUMENT:END -->';
+
+function wholeReportDocument(content: string): string {
+  return `${WHOLE_DOCUMENT_START}\n${content.trim()}\n${WHOLE_DOCUMENT_END}`;
 }
 
 function reportPreviewHtml(content: string, editorJson: import('@tiptap/core').JSONContent | null): string {
@@ -163,10 +170,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [hwpSourceFile, setHwpSourceFile] = useState<File | null>(null);
   const [linkedHwpName, setLinkedHwpName] = useState('');
   const [linkingHwp, setLinkingHwp] = useState(false);
+  const [quantityRange, setQuantityRange] = useState('');
+  const [quantityFileName, setQuantityFileName] = useState('');
+  const [quantityExcerpt, setQuantityExcerpt] = useState('');
   const [finalExportMessage, setFinalExportMessage] = useState('');
   const reportExcelInputRef = useRef<HTMLInputElement | null>(null);
   const reportDocxInputRef = useRef<HTMLInputElement | null>(null);
   const hwpInputRef = useRef<HTMLInputElement | null>(null);
+  const quantityExcelInputRef = useRef<HTMLInputElement | null>(null);
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
   const titleRef = useRef('');
@@ -305,6 +316,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const timer = window.setTimeout(() => { void saveNow(); }, 900);
     return () => window.clearTimeout(timer);
   }, [activeStep, content, dirty, saveNow, saving, selectedChapterId, title, workspaceDirty]);
+
+  useEffect(() => {
+    const saveShortcut = (event: KeyboardEvent) => {
+      if (event.isComposing || (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 's') return;
+      event.preventDefault();
+      void saveNow();
+    };
+    window.addEventListener('keydown', saveShortcut, { capture: true });
+    return () => window.removeEventListener('keydown', saveShortcut, { capture: true });
+  }, [saveNow]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty || outlineDirty) event.preventDefault(); };
@@ -506,9 +527,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         contentRef.current=nextContent;setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
         setMemoryNotice(`${selectedChapter.chapterCode} 검수용 Excel 내용을 현재 챕터에만 반영했습니다.`);
       } else {
-        titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
-        setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDirty(true);
-        setMemoryNotice('입력용 Excel 가져오기 완료. 보고서 제목과 본문을 1단계 초안에 반영했으며 자동 저장을 시작합니다.');
+        const nextContent = activeStep === 3 ? wholeReportDocument(values.reportContent) : values.reportContent;
+        titleRef.current=values.reportTitle;contentRef.current=nextContent;
+        setTitle(values.reportTitle);setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
+        setMemoryNotice(activeStep === 3 ? 'Excel 보고서 전체를 챕터 구분 없는 단일 수동 초안으로 반영했습니다. 저장 후 담당자 검수로 이동할 수 있습니다.' : '입력용 Excel 가져오기 완료. 보고서 제목과 본문을 반영했으며 자동 저장을 시작합니다.');
       }
     }catch(reason){setError(reason instanceof Error?reason.message:'보고서 Excel을 읽지 못했습니다.');}
     finally{setSaving(false);if(reportExcelInputRef.current)reportExcelInputRef.current.value='';}
@@ -525,9 +547,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         contentRef.current=nextContent;setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
         setMemoryNotice(`Word DOCX 본문을 ${selectedChapter.chapterCode} 챕터에만 반영했습니다.`);
       } else {
-        titleRef.current=values.reportTitle;contentRef.current=values.reportContent;
-        setTitle(values.reportTitle);setContent(values.reportContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
-        setMemoryNotice('Word DOCX 가져오기 완료. 제목과 본문을 수동 초안으로 반영했으며 자동 저장을 시작합니다.');
+        const nextContent = activeStep === 3 ? wholeReportDocument(values.reportContent) : values.reportContent;
+        titleRef.current=values.reportTitle;contentRef.current=nextContent;
+        setTitle(values.reportTitle);setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
+        setMemoryNotice(activeStep === 3 ? 'Word DOCX 전체를 챕터 구분 없는 단일 수동 초안으로 반영했습니다. 저장 후 담당자 검수로 이동할 수 있습니다.' : 'Word DOCX 가져오기 완료. 제목과 본문을 수동 초안으로 반영했으며 자동 저장을 시작합니다.');
       }
     }catch(reason){setError(reason instanceof Error?reason.message:'Word 보고서를 읽지 못했습니다.');}
     finally{setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}
@@ -547,7 +570,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const response = await fetch(`/api/cases/${encodeURIComponent(selectedCaseId)}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': `report-hwp-${crypto.randomUUID()}` }, body: form });
       const payload = await response.json() as { file?: { originalName: string }; error?: string };
       if (!response.ok || !payload.file) throw new Error(payload.error ?? 'HWP 원본을 프로젝트 보고서 자료에 연결하지 못했습니다.');
-      setMemoryNotice(`${payload.file.originalName} 원본을 프로젝트 보고서 근거자료에 연결했습니다. HWP 서식은 팝업에서 유지하고 웹 본문은 아래 편집기에서 계속 작성합니다.`);
+      setMemoryNotice(`${payload.file.originalName} 원본을 프로젝트 보고서 근거자료에 연결했습니다. 팝업의 “보고서 전체에 적용”을 누르면 현재 본문을 이 문서로 교체합니다.`);
     } catch (reason) {
       setError(`${reason instanceof Error ? reason.message : 'HWP 원본 연결에 실패했습니다.'} 편집기는 계속 사용할 수 있습니다.`);
     } finally {
@@ -569,6 +592,61 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setDraftMethod('MANUAL');
     setDirty(true);
     setMemoryNotice(`HWP/HWPX 본문을 ${selectedChapter.chapterCode} ${chapterTitle}에 반영했습니다. 저장하면 현재 보고서 버전에 기록됩니다.`);
+  };
+
+  const applyHwpTextToWholeReport = (importedContent: string) => {
+    const nextContent = wholeReportDocument(importedContent);
+    contentRef.current = nextContent;
+    setContent(nextContent);
+    setEditorJson(null);
+    setDraftMethod('MANUAL');
+    setDirty(true);
+    setMemoryNotice('HWP/HWPX 전체 문서를 챕터 구분 없이 보고서 본문 전체에 적용했습니다. 0.9초 자동저장 또는 Ctrl+S로 D1 백업본을 남길 수 있습니다.');
+  };
+
+  const importQuantitySpreadsheet = async (file: File | undefined) => {
+    if (!file || !selectedCaseId) return;
+    setSaving(true); setError('');
+    try {
+      const excerpt = await readSpreadsheetExcerpt(file, quantityRange);
+      const form = new FormData();
+      form.set('file', file);
+      form.set('category', 'COST_BREAKDOWN');
+      const response = await fetch(`/api/cases/${encodeURIComponent(selectedCaseId)}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': `report-quantity-${crypto.randomUUID()}` }, body: form });
+      const payload = await response.json() as { file?: { originalName: string }; error?: string };
+      if (!response.ok || !payload.file) throw new Error(payload.error ?? '산출·내역자료 원본을 프로젝트에 첨부하지 못했습니다.');
+      setQuantityFileName(payload.file.originalName);
+      setQuantityExcerpt(excerpt.markdown);
+      setMemoryNotice(`${payload.file.originalName} 원본을 첨부하고 ${excerpt.range} 범위를 발췌했습니다. 아래 표를 확인한 뒤 현재 챕터에 넣으세요.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '산출·내역 XLSX를 첨부하지 못했습니다.');
+    } finally {
+      setSaving(false);
+      if (quantityExcelInputRef.current) quantityExcelInputRef.current.value = '';
+    }
+  };
+
+  const applyQuantityExcerptToCurrentChapter = () => {
+    if (!selectedChapter || !quantityExcerpt.trim()) { setError('산출·내역자료를 넣을 챕터와 발췌 내용을 먼저 확인해 주세요.'); return; }
+    const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
+    const currentBody = reportChapterBlock(contentRef.current, selectedChapter.chapterCode);
+    const attachment = `### 첨부 산출·내역자료\n\n- 원본: ${quantityFileName || '산출·내역자료.xlsx'}\n- 발췌 범위: ${quantityRange.trim() || '사용 영역'}\n\n${quantityExcerpt.trim()}`;
+    const nextContent = replaceReportChapterBlock(contentRef.current, selectedChapter.chapterCode, chapterTitle, `${currentBody}${currentBody ? '\n\n' : ''}${attachment}`);
+    contentRef.current = nextContent; setContent(nextContent); setEditorJson(null); setDraftMethod('MANUAL'); setDirty(true);
+    setMemoryNotice(`${selectedChapter.chapterCode}에 산출·내역자료 발췌 표를 넣었습니다. 원본 파일은 프로젝트 자료에 별도 보존됩니다.`);
+  };
+
+  const restoreRevision = (revision: ReportRevision) => {
+    titleRef.current = revision.title; contentRef.current = revision.content;
+    setTitle(revision.title); setContent(revision.content); setEditorJson(revision.editorJson); setDraftMethod('MANUAL'); setDirty(true);
+    setMemoryNotice(`D1 백업 버전 ${revision.version}을 작업 화면에 불러왔습니다. 현재 버전을 덮어쓰지 않았으며 저장하면 새 버전으로 기록됩니다.`);
+  };
+
+  const continueWithoutAi = () => {
+    const nextContent = contentRef.current.trim() ? contentRef.current : wholeReportDocument(`# ${titleRef.current || '보고서'}\n\n[담당자 검수 단계에서 보고서 본문을 직접 작성하세요.]`);
+    contentRef.current = nextContent; setContent(nextContent); setEditorJson(null); setDraftMethod('MANUAL'); setDirty(true);
+    activeStepRef.current = 4; setActiveStep(4); setWorkspaceDirty(true); setError('');
+    setMemoryNotice('AI 초안 작성을 건너뛰고 담당자 검수로 이동했습니다. Ctrl+S 또는 0.9초 자동저장으로 현재 작업을 보존합니다.');
   };
 
   const improveWriting = async () => {
@@ -696,7 +774,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const projectStepComplete = Boolean(selectedCaseId && loadedCaseId === selectedCaseId && authoring?.available);
   const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty;
-  const chapterStepComplete = Boolean(outlineStepComplete && authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length);
+  const wholeDocumentImported = content.includes(WHOLE_DOCUMENT_START) && content.includes(WHOLE_DOCUMENT_END);
+  const chapterStepComplete = Boolean(outlineStepComplete && (wholeDocumentImported || (authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length)));
   const editingStepComplete = Boolean(chapterStepComplete && version > 0 && title.trim() && content.trim() && !dirty && !saving);
   const outputStepComplete = Boolean(editingStepComplete && currentFinalization);
   const stepComplete: Record<ReportWizardStep, boolean> = {
@@ -721,20 +800,20 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     : activeStep === 2
       ? '템플릿 목차를 불러와 필요한 제목을 수정한 뒤 목차를 확정해 주세요.'
       : activeStep === 3
-        ? '모든 챕터를 한 번씩 자동 작성하면 편집 단계가 열립니다.'
+        ? '모든 챕터를 작성하거나 HWP·DOCX 전체 문서를 적용하세요. AI 없이 바로 담당자 검수로 이동할 수도 있습니다.'
         : activeStep === 4
           ? '본문을 저장해 D1 저장 완료 표시를 확인해 주세요.'
           : '';
-  const reportDocumentTools=(stepId: ReportWizardStep)=>stepId === 1 || stepId === 4 ? <DocumentToolMenus groups={[
+  const reportDocumentTools=(stepId: ReportWizardStep)=>stepId === 1 || stepId === 3 || stepId === 4 ? <DocumentToolMenus groups={[
     {id:'excel',label:'Excel',actions:[
       {id:'export',label:stepId===4?'현재 챕터 Excel 내보내기':'보고서 입력 양식 내보내기',onClick:exportReportExcel},
-      {id:'import',label:stepId===4?'현재 챕터 Excel 가져오기':'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:saving},
+      {id:'import',label:stepId===4?'현재 챕터 Excel 가져오기':stepId===3?'Excel 전체 문서 적용':'작성 Excel 가져오기',onClick:()=>reportExcelInputRef.current?.click(),disabled:saving},
     ]},
     {id:'docx',label:'DOCX',actions:[
-      {id:'import',label:stepId===4?'현재 챕터에 DOCX 반영':'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:saving},
+      {id:'import',label:stepId===4?'현재 챕터에 DOCX 반영':stepId===3?'DOCX 전체 문서 적용':'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:saving},
     ]},
     {id:'hwp',label:'HWP',actions:[
-      {id:'import',label:stepId===4?'현재 챕터에 HWP 반영':'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
+      {id:'import',label:stepId===4?'현재 챕터에 HWP 반영':stepId===3?'HWP 전체 문서 적용':'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:linkingHwp},
     ]},
   ]}/> : null;
   const renderStageHeader = (stepId: ReportWizardStep) => {
@@ -750,10 +829,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="D1 보고서 자동 저장 스튜디오">
-      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel={activeStep===4&&selectedChapter?`현재 내용을 ${selectedChapter.chapterCode}에 적용`:'현재 HWP 내용을 보고서에 적용'} onApplyContent={activeStep===4?applyHwpTextToCurrentChapter:undefined} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
+      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel={activeStep===4&&selectedChapter?`현재 내용을 ${selectedChapter.chapterCode}에 적용`:'HWP 전체 문서를 보고서에 적용'} onApplyContent={activeStep===4?applyHwpTextToCurrentChapter:applyHwpTextToWholeReport} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
+      <input ref={quantityExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importQuantitySpreadsheet(event.target.files?.[0])}/>
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['프로젝트 유형 확인','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['현재 저장본 확인','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['챕터 프롬프트 확인','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 D1에 저장하세요.':'선택 챕터 초안이 완성되었습니다. 확인 후 다음 챕터를 이어서 작성하세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
       <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
         <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">템플릿에서 목차를 설계하고,<br />챕터별 근거로 완성합니다.</h2><p>프로젝트 유형과 승인 템플릿을 기준으로 회의록·현장조사·물량산출·제안서 근거를 챕터별 AI 작성에 연결합니다.</p></div>
@@ -840,16 +920,17 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           {renderStageHeader(3)}
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 챕터 프롬프트가 없습니다.'}</div> : <div className="form-stack">
             <div className="report-draft-methods" role="radiogroup" aria-label="보고서 초안 작성 방식">
-              <button type="button" role="radio" aria-checked={draftMethod === 'AI'} className={draftMethod === 'AI' ? 'is-selected is-ai' : ''} onClick={() => setDraftMethod('AI')}><span>✦ AI 자동작성</span><strong>프로젝트 근거로 챕터 초안 생성</strong><small>API가 연결되어 있을 때 사용합니다. 생성 뒤 사람이 전부 수정할 수 있습니다.</small></button>
+              <button type="button" role="radio" aria-checked={draftMethod === 'AI'} className={draftMethod === 'AI' ? 'is-selected is-ai' : ''} onClick={() => setDraftMethod('AI')}><span>✦ AI 자동작성</span><strong>프로젝트 근거로 챕터 초안 생성</strong><small>API가 연결되어 있을 때 사용합니다. 생성 뒤 담당자가 전부 수정할 수 있습니다.</small></button>
               <button type="button" role="radio" aria-checked={draftMethod === 'MANUAL'} className={draftMethod === 'MANUAL' ? 'is-selected is-manual' : ''} onClick={() => setDraftMethod('MANUAL')}><span>⌨ 수동·외부 LLM</span><strong>직접 작성하거나 결과 붙여넣기</strong><small>API 키 없이 ChatGPT·Claude 등에서 만든 초안과 HWP 원본을 사용할 수 있습니다.</small></button>
             </div>
             <div className="inline-form">
               <Select label="초안을 작성할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title} · prompt v${chapter.promptVersion}` }))} />
               {draftMethod === 'AI' ? <Button className="report-action-ai" onClick={() => void generateChapter()} disabled={!editable || !authoring.aiConnected || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || dirty || saving || generating}>{generating ? '근거 분석·작성 중…' : '✦ 선택 챕터 AI 자동 작성'}</Button> : <Button className="report-action-manual" onClick={startManualChapter} disabled={!editable || outlineStatus !== 'CONFIRMED' || outlineDirty || !selectedChapterId || saving}>{authoredChapterCodes.has(selectedChapter?.chapterCode ?? '') ? '현재 초안 직접 편집' : '수동 입력 시작'}</Button>}
             </div>
-            {draftMethod === 'MANUAL' && <section className="report-manual-source"><div><b>HWP 원본·외부 초안 연결</b><span>HWP/HWPX는 프로젝트 보고서 근거자료에 저장하고 원본 서식을 팝업에서 유지합니다. 웹 본문에는 외부 LLM 결과를 바로 붙여넣으세요.</span>{linkedHwpName && <small>연결된 원본: {linkedHwpName}</small>}</div><Button className="report-action-hwp" onClick={() => hwpInputRef.current?.click()} disabled={linkingHwp}>{linkingHwp ? 'HWP 연결 중…' : 'HWP 가져오기·연결'}</Button></section>}
+            {draftMethod === 'MANUAL' && <section className="report-manual-source"><div><b>HWP·DOCX 전체 문서 적용</b><span>가져온 문서는 챕터로 임의 분할하지 않고 현재 보고서 본문 전체를 교체합니다. HWP는 팝업에서 원본을 확인한 뒤 “전체 문서를 보고서에 적용”을 누르세요.</span>{linkedHwpName && <small>연결된 원본: {linkedHwpName}</small>}</div><div className="report-manual-source__actions"><Button className="report-action-hwp" onClick={() => hwpInputRef.current?.click()} disabled={linkingHwp}>{linkingHwp ? 'HWP 연결 중…' : 'HWP 전체 적용'}</Button><Button className="report-action-review" variant="secondary" onClick={() => reportDocxInputRef.current?.click()} disabled={saving}>DOCX 전체 적용</Button><Button className="report-action-confirm" onClick={continueWithoutAi} disabled={!editable || outlineStatus !== 'CONFIRMED' || outlineDirty || saving}>AI 없이 담당자 검수로 이동</Button></div></section>}
+            <section className="report-quantity-attachment" aria-label="산출서 및 내역자료 첨부"><header><div><b>산출서·내역자료 XLSX 첨부 및 발췌</b><span>원본 파일은 프로젝트 자료에 보존하고, 지정한 셀 범위만 표로 현재 챕터에 넣습니다.</span></div><Button variant="secondary" onClick={() => quantityExcelInputRef.current?.click()} disabled={saving || !selectedChapter}>XLSX 첨부·발췌</Button></header><label><span>발췌 범위</span><input value={quantityRange} onChange={(event) => setQuantityRange(event.target.value)} placeholder="예: A1:H40 · 비워두면 사용영역 전체" /></label>{quantityExcerpt && <div className="report-quantity-attachment__preview"><label><span>{quantityFileName} · 보고서에 넣기 전 수정 가능</span><textarea value={quantityExcerpt} onChange={(event) => setQuantityExcerpt(event.target.value)} /></label><Button className="report-action-confirm" onClick={applyQuantityExcerptToCurrentChapter}>현재 챕터에 표 넣기</Button></div>}</section>
             {selectedChapter && <div className="report-chapter-source-pack"><header><div><span>CURRENT CHAPTER AGENT</span><h3>{selectedChapter.agentCode} · {selectedChapter.chapterCode} {outlineTitles[selectedChapter.id] || selectedChapter.title}</h3></div><em>{selectedChapterSources.filter((source) => source.status === 'READY').length}/{selectedChapterSources.length} SOURCES READY</em></header><div>{selectedChapterSources.map((source) => <span key={source.code} data-source-state={source.status}>{source.status === 'READY' ? '✓' : source.status === 'PARTIAL' ? '!' : '○'} {source.label}</span>)}</div><p><strong>{draftMethod === 'AI' ? 'AI 작성 기준' : '수동 작성 참고자료'}</strong> {draftMethod === 'AI' ? '관리자 승인 프롬프트 + 현재 프로젝트 근거 + 확정 목차 제목을 사용합니다.' : '연결된 프로젝트 근거를 확인하고, 외부 LLM에서 만든 문장도 사실·수치와 대조한 뒤 붙여넣습니다.'}</p></div>}
-            {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>사람 직접 편집</b><span>AI·수동·외부 LLM 초안을 같은 편집기에서 고치고 저장합니다. 제목·목록·표·이미지·찾기/바꾸기를 사용할 수 있습니다.</span></div><Button className="report-action-review" variant="secondary" onClick={() => void saveNow()} disabled={!dirty || saving}>{saving ? '저장 중…' : '수정 본문 저장'}</Button></header><StructuredDocumentEditor ref={reportBodyRef} compact documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></section>}
+            {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>담당자 직접 편집</b><span>AI·수동·외부 문서 초안을 전체폭 편집기에서 고치고 저장합니다. Ctrl+Z로 되돌리고 Ctrl+S로 즉시 저장할 수 있습니다.</span></div><div className="report-stage-inline-editor__actions"><Button className="report-action-review" variant="secondary" onClick={() => void saveNow()} disabled={!dirty || saving}>{saving ? '저장 중…' : '수정 본문 저장'}</Button>{revisions.length > 0 && <a href="#report-backups">백업파일 불러오기</a>}</div></header><StructuredDocumentEditor ref={reportBodyRef} documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></section>}
             {draftMethod === 'AI' && <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? 'Cloudflare 서버 Secret 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>}
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
             {draftMethod === 'AI' && !authoring.aiConnected && <div className="error-box">AI 연결이 없어 자동작성을 사용할 수 없습니다. 수동·외부 LLM을 선택하면 API 키 없이 계속 작성할 수 있습니다.</div>}
@@ -866,7 +947,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <p className="muted">{editable ? '입력 후 0.9초가 지나면 자동 저장됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             {error && <p className="error-box" role="alert">{error}</p>}
           </div>
-          <details className="report-revision-history"><summary>저장 이력 {revisions.length}건 보기</summary>{revisions.length ? <ul className="dashboard-work-list">{revisions.map((revision) => <li key={revision.id}><span><strong>버전 {revision.version} · {revision.title}</strong><small>{new Date(revision.savedAt).toLocaleString('ko-KR')} · {revision.savedBy.name} · SHA {revision.contentSha256.slice(0, 12)}…</small></span></li>)}</ul> : <p className="empty-box">아직 저장된 버전이 없습니다. 첫 내용을 입력하면 자동 저장됩니다.</p>}</details>
+          <details id="report-backups" className="report-revision-history"><summary>백업파일 불러오기 · D1 저장 이력 {revisions.length}건</summary>{revisions.length ? <ul className="dashboard-work-list">{revisions.map((revision) => <li key={revision.id}><span><strong>버전 {revision.version} · {revision.title}</strong><small>{new Date(revision.savedAt).toLocaleString('ko-KR')} · {revision.savedBy.name} · SHA {revision.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(revision)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">아직 저장된 백업이 없습니다. 입력 후 0.9초가 지나거나 Ctrl+S를 누르면 D1에 버전이 저장됩니다.</p>}</details>
         </Card>
         <Card title="" className="report-step-card report-step-card--5 report-stage-card">
           {renderStageHeader(5)}

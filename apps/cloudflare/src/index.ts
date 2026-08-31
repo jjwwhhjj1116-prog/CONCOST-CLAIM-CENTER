@@ -3445,9 +3445,9 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
     'JOIN preview_users u ON u.id = d.updated_by WHERE d.case_id = ? AND d.organization_id = ?'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewReportDraftRow>();
   const revisions = await env.DB.prepare(
-    'SELECT r.id, r.version, r.title, r.content_sha256 AS contentSha256, r.saved_at AS savedAt, u.id AS savedById, u.display_name AS savedByName ' +
+    `SELECT r.id, r.version, r.title, r.content, ${editorSchema ? 'r.editor_json' : 'NULL'} AS editorJson, r.content_sha256 AS contentSha256, r.saved_at AS savedAt, u.id AS savedById, u.display_name AS savedByName ` +
     'FROM preview_report_revisions r JOIN preview_users u ON u.id = r.saved_by WHERE r.case_id = ? ORDER BY r.version DESC LIMIT 20'
-  ).bind(caseId).all<{ id: string; version: number; title: string; contentSha256: string; savedAt: string; savedById: string; savedByName: string }>();
+  ).bind(caseId).all<{ id: string; version: number; title: string; content: string; editorJson: string | null; contentSha256: string; savedAt: string; savedById: string; savedByName: string }>();
   return json({
     draft: draft ? {
       caseId: draft.caseId,
@@ -3465,6 +3465,8 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
       id: revision.id,
       version: Number(revision.version),
       title: revision.title,
+      content: revision.content,
+      editorJson: parsePreviewEditorJson(revision.editorJson),
       contentSha256: revision.contentSha256,
       savedAt: revision.savedAt,
       savedBy: { id: revision.savedById, name: revision.savedByName }
@@ -3731,14 +3733,30 @@ async function previewReportSourceGroups(env: CloudflareEnv, caseRow: PreviewCas
     try { return Number((await env.DB?.prepare(sql).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ total: number }>())?.total ?? 0); }
     catch { return 0; }
   };
+  const workflowEvidenceSchema = await hasEvidenceWorkflowCategory(env.DB);
+  const evidenceCategoryColumn = workflowEvidenceSchema ? 'workflow_category' : 'category';
+  const countEvidence = async (category = ''): Promise<number> => {
+    const categoryClause = category ? ` AND ${evidenceCategoryColumn}=?` : '';
+    const countTable = async (table: 'preview_case_evidence' | 'preview_google_case_evidence'): Promise<number> => {
+      try {
+        const statement = env.DB?.prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE case_id=? AND organization_id=?${categoryClause}`);
+        const row = category
+          ? await statement?.bind(caseRow.id, PREVIEW_ORGANIZATION_ID, category).first<{ total: number }>()
+          : await statement?.bind(caseRow.id, PREVIEW_ORGANIZATION_ID).first<{ total: number }>();
+        return Number(row?.total ?? 0);
+      } catch { return 0; }
+    };
+    const [local, google] = await Promise.all([countTable('preview_case_evidence'), countTable('preview_google_case_evidence')]);
+    return local + google;
+  };
   const [proposalCount, kickoffCount, surveyCount, allocationCount, evidenceCount, takeoffCount, costCount, litigationCount] = await Promise.all([
     count("SELECT COUNT(*) AS total FROM preview_proposal_links WHERE case_id=? AND organization_id=? AND verification_status='VERIFIED'"),
     count("SELECT COUNT(*) AS total FROM preview_workflow_kickoffs WHERE case_id=? AND organization_id=? AND status IN ('COMPLETED','DRAFTED','CONFIRMED')"),
     count("SELECT COUNT(*) AS total FROM preview_site_surveys WHERE case_id=? AND organization_id=?"),
     count("SELECT COUNT(*) AS total FROM preview_workforce_allocations WHERE case_id=? AND organization_id=?"),
-    count('SELECT COUNT(*) AS total FROM preview_case_evidence WHERE case_id=? AND organization_id=?'),
-    count("SELECT COUNT(*) AS total FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND category='TAKEOFF_SOURCE'"),
-    count("SELECT COUNT(*) AS total FROM preview_case_evidence WHERE case_id=? AND organization_id=? AND category='COST_BREAKDOWN'"),
+    countEvidence(),
+    countEvidence('TAKEOFF_SOURCE'),
+    countEvidence('COST_BREAKDOWN'),
     count("SELECT COUNT(*) AS total FROM preview_litigation_cases WHERE case_id=? AND organization_id=? AND verification_status='VERIFIED'")
   ]);
   const status = (items: number, partial = false): 'READY' | 'PARTIAL' | 'EMPTY' => items > 0 ? (partial ? 'PARTIAL' : 'READY') : 'EMPTY';

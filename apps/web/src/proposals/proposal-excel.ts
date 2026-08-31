@@ -403,6 +403,50 @@ export async function readReportStudioWorkbook(file: File): Promise<ReportStudio
   return result;
 }
 
+const excelColumnNumber = (letters: string): number => [...letters.toUpperCase()].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0);
+
+const excelColumnLetters = (number: number): string => {
+  let value = number;
+  let result = '';
+  while (value > 0) {
+    value -= 1;
+    result = String.fromCharCode(65 + (value % 26)) + result;
+    value = Math.floor(value / 26);
+  }
+  return result;
+};
+
+export async function readSpreadsheetExcerpt(file: File, requestedRange = ''): Promise<{ markdown: string; range: string }> {
+  if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 15_000_000) throw new Error('15MB 이하의 XLSX 산출·내역자료만 첨부할 수 있습니다.');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sheetPath = await workbookFirstSheetPath(bytes);
+  const [sheetXml, sharedStrings] = await Promise.all([zipEntry(bytes, sheetPath), workbookSharedStrings(bytes)]);
+  const rows = worksheetRows(sheetXml, sharedStrings);
+  const populatedColumns = rows.flatMap((row) => [...row.keys()].map(excelColumnNumber));
+  if (!rows.length || !populatedColumns.length) throw new Error('XLSX 첫 번째 시트에서 첨부할 셀 내용을 찾지 못했습니다.');
+  const normalizedRange = requestedRange.trim().toUpperCase().replaceAll('$', '');
+  const match = normalizedRange.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/u);
+  if (normalizedRange && !match) throw new Error('발췌 범위는 A1:H40 형식으로 입력해 주세요.');
+  const firstColumn = match ? excelColumnNumber(match[1]) : Math.min(...populatedColumns);
+  const firstRow = match ? Number(match[2]) : 1;
+  const lastColumn = match ? excelColumnNumber(match[3]) : Math.max(...populatedColumns);
+  const lastRow = match ? Number(match[4]) : rows.length;
+  if (firstColumn > lastColumn || firstRow > lastRow || lastColumn - firstColumn > 49 || lastRow - firstRow > 299) throw new Error('한 번에 최대 50열·300행까지만 보고서에 발췌할 수 있습니다.');
+  const matrix: string[][] = [];
+  for (let rowNumber = firstRow; rowNumber <= Math.min(lastRow, rows.length); rowNumber += 1) {
+    const row = rows[rowNumber - 1] ?? new Map<string, string>();
+    matrix.push(Array.from({ length: lastColumn - firstColumn + 1 }, (_unused, index) => (row.get(excelColumnLetters(firstColumn + index)) ?? '').replace(/\s+/gu, ' ').trim()));
+  }
+  while (matrix.length && matrix[matrix.length - 1].every((value) => !value)) matrix.pop();
+  if (!matrix.length) throw new Error('선택한 발췌 범위에 값이 없습니다.');
+  const escapeMarkdown = (value: string) => value.replaceAll('|', '\\|').replaceAll('\n', ' ');
+  const width = matrix[0].length;
+  const header = matrix[0].map((value, index) => escapeMarkdown(value || `열 ${excelColumnLetters(firstColumn + index)}`));
+  const body = matrix.slice(1).map((row) => `| ${Array.from({ length: width }, (_unused, index) => escapeMarkdown(row[index] ?? '')).join(' | ')} |`);
+  const markdown = [`| ${header.join(' | ')} |`, `| ${header.map(() => '---').join(' | ')} |`, ...body].join('\n');
+  return { markdown, range: `${excelColumnLetters(firstColumn)}${firstRow}:${excelColumnLetters(lastColumn)}${firstRow + matrix.length - 1}` };
+}
+
 const proposalDocxChapterAliases: ReadonlyArray<ReadonlyArray<string>> = [
   ['제안의 목적','제안(용역)의 목적','용역의 목적'],
   ['핵심 쟁점','현장의 핵심 쟁점','쟁점 분석'],

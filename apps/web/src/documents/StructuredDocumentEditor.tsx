@@ -236,7 +236,7 @@ class DocumentTableView extends TableView {
 }
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-const markerPattern = /<!--\s*((?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END))\s*-->/gu;
+const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANUAL-WHOLE-DOCUMENT:(?:START|END)))\s*-->/gu;
 
 const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = markdown.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
