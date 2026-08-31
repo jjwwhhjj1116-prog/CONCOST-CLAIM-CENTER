@@ -8,6 +8,7 @@ import type { UserRole } from './Router';
 type ProviderKind = 'OPENAI' | 'ANTHROPIC' | 'GEMINI';
 type CredentialScope = 'USER' | 'ORGANIZATION';
 type SettingsSection = 'PERSONAL' | 'ADMIN';
+type TaskKind = 'OUTLINE_PLANNING' | 'CHAPTER_WRITING' | 'FACT_CHECK';
 
 interface CredentialState {
   configured: boolean;
@@ -18,6 +19,10 @@ interface CredentialState {
 }
 interface ProviderState { providerKind: ProviderKind; label: string; personal: CredentialState; organization: CredentialState }
 interface SettingsPayload { personalPriority: boolean; masterKeyReady: boolean; canManageOrganization: boolean; providers: ProviderState[] }
+interface AiModelOption { code: string; label: string }
+interface AiProvider { providerKind: ProviderKind; label: string; models: AiModelOption[] }
+interface AiRoute { taskKind: TaskKind; providerKind: ProviderKind; modelCode: string; reasoningEffort: string; version: number }
+interface AiConfig { providers: AiProvider[]; routes: AiRoute[] }
 interface WorkspacePolicy {
   organizationName: string;
   localAiMode: 'DISABLED' | 'PRIVATE_SERVER_BRIDGE';
@@ -69,6 +74,17 @@ const PROPOSAL_TEMPLATE_CATEGORY_LABELS:Record<ProposalTemplateCategory,string>=
   REDEVELOPMENT_FINANCE:'정비사업 금융·HUG',REDEVELOPMENT_COST:'정비사업 공사비',CLAIM_LITIGATION:'클레임·소송·감정',PRICE_ESCALATION:'물가변동·간접비',PUBLIC_SUPPORT:'공공지원·LH',GENERAL_CLAIM:'일반 건설클레임'
 };
 
+const MODEL_CHOICES: Record<ProviderKind, readonly string[]> = {
+  OPENAI: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+  ANTHROPIC: ['claude-sonnet-5', 'claude-opus-5'],
+  GEMINI: ['gemini-3.7-flash']
+};
+const PRIMARY_TASK: Record<ProviderKind, { task: TaskKind; label: string; effort: string }> = {
+  OPENAI: { task: 'OUTLINE_PLANNING', label: '목차·구조 기획', effort: 'high' },
+  ANTHROPIC: { task: 'CHAPTER_WRITING', label: '장문 보고서 본문 작성', effort: 'high' },
+  GEMINI: { task: 'FACT_CHECK', label: '사실·근거 확인과 문장 개선', effort: 'medium' }
+};
+
 const PROVIDER_COPY: Record<ProviderKind, {
   short: string; use: string; placeholder: string; issueUrl: string; guideUrl: string; issueSteps: readonly string[];
 }> = {
@@ -94,6 +110,8 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const requestedSection = new URLSearchParams(window.location.search).get('section');
   const [section, setSection] = useState<SettingsSection>(requestedSection === 'admin' && isAdmin ? 'ADMIN' : 'PERSONAL');
   const [payload, setPayload] = useState<SettingsPayload | null>(null);
+  const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
+  const [selectedModels, setSelectedModels] = useState<Partial<Record<ProviderKind, string>>>({});
   const [workspace, setWorkspace] = useState<WorkspacePolicy | null>(null);
   const [runtime, setRuntime] = useState<WorkspaceRuntime | null>(null);
   const [memoryCandidates, setMemoryCandidates] = useState<MemoryCandidate[]>([]);
@@ -118,12 +136,13 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     try {
       setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials'));
       if (isAdmin) {
-        const [admin, memory, governance, proposalConfig, bridgeConfig] = await Promise.all([
+        const [admin, memory, governance, proposalConfig, bridgeConfig, reportAi] = await Promise.all([
           apiRequest<{ settings: WorkspacePolicy; runtime: WorkspaceRuntime }>('/api/settings/admin-workspace'),
           apiRequest<{ candidates: MemoryCandidate[] }>('/api/admin/report-memory'),
           apiRequest<{ governance: AiGovernance }>('/api/settings/ai-governance').catch(() => null),
           apiRequest<{ promptProfiles: ProposalTemplatePromptProfile[] }>('/api/proposal-studio/config'),
-          apiRequest<{ bridge: HermesBridgeState }>('/api/settings/hermes-bridge')
+          apiRequest<{ bridge: HermesBridgeState }>('/api/settings/hermes-bridge'),
+          apiRequest<{ aiConfig: AiConfig }>('/api/admin/report-prompts')
         ]);
         setWorkspace(admin.settings);
         setRuntime(admin.runtime);
@@ -132,6 +151,12 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         setProposalPromptProfiles(proposalConfig.promptProfiles ?? []);
         setSelectedProposalPromptSourceId((current) => current || proposalConfig.promptProfiles?.[0]?.templateSourceId || '');
         setHermesBridge(bridgeConfig.bridge);
+        setAiConfig(reportAi.aiConfig);
+        setSelectedModels(Object.fromEntries(reportAi.aiConfig.providers.map((provider) => {
+          const available = provider.models.filter((model) => MODEL_CHOICES[provider.providerKind].includes(model.code));
+          const routed = reportAi.aiConfig.routes.find((route) => route.taskKind === PRIMARY_TASK[provider.providerKind].task && route.providerKind === provider.providerKind);
+          return [provider.providerKind, available.some((model) => model.code === routed?.modelCode) ? routed?.modelCode : available[0]?.code ?? ''];
+        })) as Partial<Record<ProviderKind, string>>);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -149,6 +174,22 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   };
   const stateFor = (provider: ProviderState, scope: CredentialScope) => scope === 'USER' ? provider.personal : provider.organization;
   const inputKey = (provider: ProviderKind, scope: CredentialScope) => `${scope}:${provider}`;
+  const modelOptions = (provider: ProviderKind): AiModelOption[] => {
+    const configured = aiConfig?.providers.find((item) => item.providerKind === provider)?.models ?? [];
+    return configured.filter((model) => MODEL_CHOICES[provider].includes(model.code));
+  };
+
+  const saveProviderModel = async (provider: ProviderKind): Promise<void> => {
+    if (!aiConfig) return;
+    const target = PRIMARY_TASK[provider];
+    const route = aiConfig.routes.find((item) => item.taskKind === target.task);
+    const modelCode = selectedModels[provider] ?? '';
+    if (!route || !modelOptions(provider).some((model) => model.code === modelCode)) throw new Error('선택한 AI 모델 정보를 다시 불러와 주세요.');
+    const result = await apiRequest<{ aiConfig: AiConfig }>('/api/admin/report-prompts/settings', {
+      method: 'PUT', body: JSON.stringify({ taskKind: target.task, providerKind: provider, modelCode, reasoningEffort: target.effort, expectedVersion: route.version })
+    });
+    setAiConfig(result.aiConfig);
+  };
 
   const saveKey = async (provider: ProviderState, scope: CredentialScope) => {
     const state = stateFor(provider, scope);
@@ -161,8 +202,9 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         method: 'PUT', body: JSON.stringify({ scope, apiKey: key, expectedVersion: state.version })
       });
       setPayload(next);
+      if (scope === 'ORGANIZATION') await saveProviderModel(provider.providerKind);
       setKeys((current) => ({ ...current, [field]: '' }));
-      setNotice(`${scope === 'USER' ? '개인' : '조직 공용'} ${PROVIDER_COPY[provider.providerKind].short} 키를 암호화해 저장했습니다.`);
+      setNotice(`${scope === 'USER' ? '개인' : '조직 공용'} ${PROVIDER_COPY[provider.providerKind].short} 키${scope === 'ORGANIZATION' ? '와 선택 모델' : ''}을 저장했습니다.`);
     } catch (reason) {
       setError(reason instanceof ApiError && reason.status === 409
         ? '다른 화면에서 설정이 변경되었습니다. 새로고침 후 다시 저장해 주세요.'
@@ -188,7 +230,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     setBusy(`test:${field}`); setError(''); setNotice('');
     try {
       const result = await apiRequest<{ source: string; checkedAt: string }>(`/api/settings/ai-credentials/${provider.providerKind}/test`, {
-        method: 'POST', body: JSON.stringify({ scope })
+        method: 'POST', body: JSON.stringify({ scope, modelCode: selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
       });
       setNotice(`${PROVIDER_COPY[provider.providerKind].short} 연결 확인 완료 · ${result.source} · ${new Date(result.checkedAt).toLocaleString('ko-KR')}`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -317,16 +359,26 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         const state = stateFor(provider, scope);
         const field = inputKey(provider.providerKind, scope);
         const copy = PROVIDER_COPY[provider.providerKind];
-        const isBusy = busy === field || busy === `test:${field}`;
+        const options = modelOptions(provider.providerKind);
+        const selectedModel = selectedModels[provider.providerKind] ?? options[0]?.code ?? '';
+        const modelRoute = aiConfig?.routes.find((route) => route.taskKind === PRIMARY_TASK[provider.providerKind].task);
+        const modelDirty = scope === 'ORGANIZATION' && Boolean(modelRoute) && (modelRoute?.providerKind !== provider.providerKind || modelRoute?.modelCode !== selectedModel);
+        const isBusy = busy === field || busy === `test:${field}` || busy === `model:${field}`;
         return <section key={provider.providerKind} data-provider={provider.providerKind} data-configured={state.configured}>
           <header><span>{copy.short.slice(0, 2).toUpperCase()}</span><div><h3>{provider.label}</h3><p>{copy.use}</p></div><strong>{state.configured ? '연결됨' : '키 필요'}</strong></header>
           <div className="credential-state"><span>{state.storage === 'ENCRYPTED_D1' ? 'AES-256-GCM 암호화 저장' : state.storage === 'CLOUDFLARE_SECRET' ? 'Cloudflare 서버 Secret' : '저장된 키 없음'}</span>{state.fingerprint && <small>키 지문 {state.fingerprint}… · v{state.version}</small>}</div>
+          <label htmlFor={`${field}-model`}>사용 모델</label>
+          <select id={`${field}-model`} value={selectedModel} onChange={(event) => setSelectedModels((current) => ({ ...current, [provider.providerKind]: event.target.value }))}>
+            {options.map((model) => <option key={model.code} value={model.code}>{model.label}</option>)}
+          </select>
+          <small className="credential-model-help">{scope === 'ORGANIZATION' ? `저장하면 ${PRIMARY_TASK[provider.providerKind].label} 기본 모델로 함께 적용됩니다.` : '개인 Gemini 키 연결 확인과 글쓰기 도우미에 사용합니다.'}</small>
           <label htmlFor={`${field}-key`}>{state.configured ? '새 키로 교체' : 'API Key 입력'}</label>
           <input id={`${field}-key`} type="password" value={keys[field] ?? ''} autoComplete="new-password" spellCheck={false} placeholder={copy.placeholder} onChange={(event) => setKeys((current) => ({ ...current, [field]: event.target.value }))} />
           {!keys[field]?.trim() && <small className="credential-input-help">키 원문은 저장 후 다시 표시되지 않습니다.</small>}
           <div className="credential-key-actions">
             <div className="action-row">
-              <Button onClick={() => void saveKey(provider, scope)} disabled={isBusy || !keys[field]?.trim()}>{isBusy ? '처리 중…' : state.configured ? '키 교체' : '암호화 저장'}</Button>
+              <Button onClick={() => void saveKey(provider, scope)} disabled={isBusy || !keys[field]?.trim() || !selectedModel}>{isBusy ? '처리 중…' : state.configured ? scope === 'ORGANIZATION' ? '키·모델 교체' : '키 교체' : scope === 'ORGANIZATION' ? '키·모델 저장' : '암호화 저장'}</Button>
+              {scope === 'ORGANIZATION' && state.configured && modelDirty && <Button variant="secondary" onClick={() => { setBusy(`model:${field}`); setError(''); setNotice(''); void saveProviderModel(provider.providerKind).then(() => setNotice(`${copy.short}의 ${PRIMARY_TASK[provider.providerKind].label} 모델을 저장했습니다.`)).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => setBusy('')); }} disabled={isBusy || busy === `model:${field}`}>모델만 적용</Button>}
               <a href={copy.issueUrl} target="_blank" rel="noreferrer">API KEY 발급 ↗</a>
               {state.configured && <Button variant="secondary" onClick={() => void testKey(provider, scope)} disabled={isBusy}>연결 확인</Button>}
               {state.storage === 'ENCRYPTED_D1' && <Button variant="ghost" onClick={() => void disableKey(provider, scope)} disabled={isBusy}>비활성화</Button>}

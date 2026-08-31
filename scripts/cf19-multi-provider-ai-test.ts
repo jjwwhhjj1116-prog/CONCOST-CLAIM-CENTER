@@ -35,7 +35,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; requests: A
   const now = new Date().toISOString();
   const insertUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
   insertUser(ADMIN_ID, 'admin', '["admin"]'); sql.exec(migration('0010_cf10_product_experience.sql')); insertUser(STAFF_ID, 'staff', '["staff"]');
-  for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql']) sql.exec(migration(name));
+  for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql','0049_cf75_ai_model_catalog.sql']) sql.exec(migration(name));
   sql.run('INSERT INTO preview_case_assignments VALUES (?, ?, ?, ?)', [CASE_ID, STAFF_ID, ADMIN_ID, now]);
   for (const [token, id] of [[ADMIN_TOKEN, ADMIN_ID],[STAFF_TOKEN, STAFF_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token), id, now, new Date(Date.now() + 3_600_000).toISOString()]);
   const requests: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
@@ -58,6 +58,7 @@ test('CF19 creates three independently versioned routes and exposes only secret 
   assert.equal(body.aiConfig.routes.find((route) => route.taskKind === 'OUTLINE_PLANNING')?.providerKind, 'OPENAI');
   assert.equal(body.aiConfig.routes.find((route) => route.taskKind === 'CHAPTER_WRITING')?.modelCode, 'gemini-3.6-flash');
   assert.equal(body.aiConfig.providers.find((item) => item.providerKind === 'GEMINI')?.connected, true);
+  assert.equal(body.aiConfig.providers.find((item) => item.providerKind === 'GEMINI')?.models.some((model) => model.code === 'gemini-3.7-flash'), true);
   assert.equal(body.aiConfig.providers.find((item) => item.providerKind === 'ANTHROPIC')?.connected, false);
   assert.throws(() => sql.run("INSERT INTO preview_report_ai_routes VALUES ('concost','BAD_TASK','GEMINI','gpt-5.6','medium','GEMINI_API_KEY',1,?,?)", [ADMIN_ID, new Date().toISOString()]), /CHECK/u);
   sql.close();
@@ -157,6 +158,8 @@ test('CF19 Admin can switch each role to an allowed provider/model with optimist
   assert.equal(update.status, 200); const body = await update.json() as { settings: { providerKind: string; modelCode: string; version: number; apiKeyConfigured: boolean } };
   assert.deepEqual([body.settings.providerKind, body.settings.modelCode, body.settings.version, body.settings.apiKeyConfigured], ['ANTHROPIC','claude-sonnet-5',2,false]);
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_ai_route_history')[0].values[0][0], 1);
+  const geminiUpdate = await worker.fetch(request('/api/admin/report-prompts/settings', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ taskKind: 'FACT_CHECK', providerKind: 'GEMINI', modelCode: 'gemini-3.7-flash', reasoningEffort: 'medium', expectedVersion: 1 }) }), env);
+  assert.equal(geminiUpdate.status, 200); assert.equal(sql.exec("SELECT model_code FROM preview_report_ai_routes WHERE task_kind='FACT_CHECK'")[0].values[0][0], 'gemini-3.7-flash');
   const stale = await worker.fetch(request('/api/admin/report-prompts/settings', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ taskKind: 'CHAPTER_WRITING', providerKind: 'GEMINI', modelCode: 'gemini-3.5-flash', reasoningEffort: 'high', expectedVersion: 1 }) }), env); assert.equal(stale.status, 409);
   const mismatch = await worker.fetch(request('/api/admin/report-prompts/settings', ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ taskKind: 'FACT_CHECK', providerKind: 'ANTHROPIC', modelCode: 'gemini-3.6-flash', reasoningEffort: 'medium', expectedVersion: 1 }) }), env); assert.equal(mismatch.status, 400);
   sql.close();

@@ -85,7 +85,7 @@ test('CF26 uses personal key before organization and environment, then falls bac
   const disabled=await worker.fetch(request('/api/settings/ai-credentials/GEMINI',STAFF_TOKEN,{method:'DELETE',body:JSON.stringify({scope:'USER',expectedVersion:1})}),env); assert.equal(disabled.status,200);
   configResponse=await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`,STAFF_TOKEN),env); config=await configResponse.json() as {credentialSource:string;assistantConnected:boolean;assistantCredentialSource:string;chapters:Array<{id:string}>}; assert.equal(config.credentialSource,'ORGANIZATION'); assert.equal(config.assistantConnected,true); assert.equal(config.assistantCredentialSource,'ORGANIZATION');
   const organizationImprove=await worker.fetch(request('/api/report-authoring/improve',STAFF_TOKEN,{method:'POST',body:JSON.stringify({caseId:CASE_ID,content:'개인 키가 없으면 관리자 공용 키로 개선합니다.',instruction:'문장을 더 명확하게 개선해 주세요.',expectedDraftVersion:0})}),env); assert.equal(organizationImprove.status,200); assert.equal((await organizationImprove.json() as {credentialSource:string}).credentialSource,'ORGANIZATION'); assert.equal(usedKeys.at(-1),ORGANIZATION_KEY);
-  const tested=await worker.fetch(request('/api/settings/ai-credentials/GEMINI/test',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({scope:'ORGANIZATION'})}),env); assert.equal(tested.status,200); assert.equal(usedKeys.at(-1),ORGANIZATION_KEY);
+  const tested=await worker.fetch(request('/api/settings/ai-credentials/GEMINI/test',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({scope:'ORGANIZATION',modelCode:'gemini-3.7-flash'})}),env); assert.equal(tested.status,200); assert.equal(usedKeys.at(-1),ORGANIZATION_KEY);
   const responseText=await tested.text(); assert.doesNotMatch(responseText,new RegExp(`${PERSONAL_KEY}|${ORGANIZATION_KEY}|${ENVIRONMENT_KEY}`,'u'));
   sql.close();
 });
@@ -95,4 +95,5 @@ test('CF26 UI exposes a settings route but never reads stored raw keys back', ()
   const shell=readFileSync(join(process.cwd(),'apps','web','src','layout','AppShell.tsx'),'utf8');
   const settings=readFileSync(join(process.cwd(),'apps','web','src','routes','PreviewSettings.tsx'),'utf8');
   assert.match(router,/path: '\/settings'/u); assert.match(shell,/label: '설정'/u); assert.doesNotMatch(shell,/내 설정|내 AI 및 연결 설정/u); assert.match(settings,/type="password"/u); assert.match(settings,/개인 Gemini 연결 설정/u); assert.match(settings,/scope === 'USER' \? payload\.providers\.filter\(\(provider\) => provider\.providerKind === 'GEMINI'\)/u); assert.doesNotMatch(settings,/setKeys\([^)]*apiKey/u);
+  assert.match(settings,/gpt-5\.6-sol/u); assert.match(settings,/gpt-5\.6-terra/u); assert.match(settings,/gpt-5\.6-luna/u); assert.match(settings,/claude-sonnet-5/u); assert.match(settings,/claude-opus-5/u); assert.match(settings,/gemini-3\.7-flash/u);
 });

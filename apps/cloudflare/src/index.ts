@@ -3841,7 +3841,7 @@ async function handlePreviewReportWorkspaces(request: Request, env: CloudflareEn
 // included in the writer-facing configuration response.
 const PREVIEW_OPENAI_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
 const PREVIEW_ANTHROPIC_MODELS = new Set(['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001']);
-const PREVIEW_GEMINI_MODELS = new Set(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite']);
+const PREVIEW_GEMINI_MODELS = new Set(['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite']);
 const PREVIEW_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const PREVIEW_AI_TASKS = new Set(['OUTLINE_PLANNING', 'CHAPTER_WRITING', 'FACT_CHECK']);
 type PreviewAiProvider = 'OPENAI' | 'ANTHROPIC' | 'GEMINI';
@@ -3861,6 +3861,7 @@ const PREVIEW_AI_MODELS: Record<PreviewAiProvider, Array<{ code: string; label: 
     { code: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 · 빠른 초안' }
   ],
   GEMINI: [
+    { code: 'gemini-3.7-flash', label: 'Gemini 3.7 Flash · 최신 고성능 Flash' },
     { code: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash · 최신 균형 모델' },
     { code: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash · 고품질 문서 작성' },
     { code: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite · 무료 검증/대량 처리' }
@@ -4181,8 +4182,8 @@ function previewPersonalGeminiAssistantRoute(routes: PreviewAiRouteRow[]): Previ
     ?? {
       taskKind: 'FACT_CHECK',
       providerKind: 'GEMINI',
-      modelCode: 'gemini-3.5-flash-lite',
-      reasoningEffort: 'minimal',
+      modelCode: 'gemini-3.7-flash',
+      reasoningEffort: 'medium',
       secretName: 'GEMINI_API_KEY',
       version: 0,
       updatedAt: '',
@@ -4197,7 +4198,7 @@ async function previewOrganizationGeminiAutomationRoute(env: CloudflareEnv): Pro
   return configured ?? {
     taskKind: 'CHAPTER_WRITING',
     providerKind: 'GEMINI',
-    modelCode: 'gemini-3.6-flash',
+    modelCode: 'gemini-3.7-flash',
     reasoningEffort: 'medium',
     secretName: 'GEMINI_API_KEY',
     version: 0,
@@ -4807,16 +4808,19 @@ async function handlePreviewAiCredentials(request: Request, env: CloudflareEnv, 
   const ownerId = ownerScope === 'USER' ? user.id : PREVIEW_ORGANIZATION_ID;
 
   if (isTest && request.method === 'POST') {
-    if (!exactObjectKeys(body, ['scope'])) return json({ error: 'Credential test payload is invalid', code: 'INVALID_CREDENTIAL_PAYLOAD' }, 400);
+    const hasModelCode = typeof body.modelCode === 'string';
+    if ((!exactObjectKeys(body, ['scope']) && !exactObjectKeys(body, ['scope', 'modelCode'])) || (hasModelCode && !previewModelAllowed(provider, String(body.modelCode)))) {
+      return json({ error: '연결 확인에 사용할 모델을 다시 선택해 주세요.', code: 'INVALID_CREDENTIAL_PAYLOAD' }, 400);
+    }
     let credential = await previewStoredAiCredential(env, provider, ownerScope, ownerId);
     if (!credential && ownerScope === 'ORGANIZATION') {
       const apiKey = previewEnvironmentApiKey(env, provider);
       if (apiKey) credential = { apiKey, source: 'ENVIRONMENT', fingerprint: await sha256Hex(apiKey) };
     }
     if (!credential) return json({ error: '저장된 API 키가 없습니다.', code: `${provider}_NOT_CONFIGURED` }, 409);
-    const modelCode = PREVIEW_AI_MODELS[provider][0]?.code ?? '';
+    const modelCode = hasModelCode ? String(body.modelCode) : PREVIEW_AI_MODELS[provider][0]?.code ?? '';
     const route = {
-      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: 'minimal',
+      taskKind: 'CHAPTER_WRITING', providerKind: provider, modelCode, reasoningEffort: provider === 'GEMINI' ? 'medium' : provider === 'OPENAI' ? 'low' : 'high',
       secretName: previewProviderSecretName(provider), version: 1, updatedAt: new Date().toISOString(), updatedByName: user.displayName
     } as PreviewAiRouteRow;
     const tested = await generatePreviewAiText(env, route, '연결 상태만 확인합니다. 비밀이나 사용자 데이터를 출력하지 마십시오.', '정확히 OK 두 글자만 출력하십시오.', user.id, credential);

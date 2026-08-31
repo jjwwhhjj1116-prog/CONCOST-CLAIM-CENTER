@@ -86,8 +86,9 @@
 .credential-state { min-height:48px; display:grid; align-content:center; margin:14px 0; padding:9px 11px; border-radius:10px; background:#f1f5f9; color:#475569; font-size:.72rem; }
 .credential-state small { color:#7c8ba1; }
 .credential-provider-grid label { display:block; margin-bottom:6px; color:#334155; font-weight:800; font-size:.72rem; }
-.credential-provider-grid input { width:100%; box-sizing:border-box; min-height:42px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#172033; }
+.credential-provider-grid input,.credential-provider-grid select { width:100%; box-sizing:border-box; min-height:42px; padding:0 12px; border:1px solid #cbd5e1; border-radius:10px; background:#fff; color:#172033; }
 .credential-input-help { display:block; margin-top:6px; color:#64748b; line-height:1.45; }
+.credential-model-help { display:block; min-height:34px; margin:6px 0 12px; color:#53647a; line-height:1.45; }
 .credential-provider-grid .action-row { margin-top:12px; }
 .credential-key-actions { display:grid; gap:10px; }
 .credential-key-actions .action-row { align-items:center; flex-wrap:wrap; }
@@ -148,7 +149,7 @@
 :root[data-theme='dark'] .proposal-template-profile-picker,:root[data-theme='dark'] .proposal-template-profile__common>header h3,:root[data-theme='dark'] .proposal-template-profile__common>label:not(.settings-check) { color:#f8fafc; }
 :root[data-theme='dark'] .proposal-template-profile__common { border-color:#0e7490; background:#122333; }
 :root[data-theme='dark'] .proposal-template-profile-picker select,:root[data-theme='dark'] .proposal-template-profile__common select,:root[data-theme='dark'] .proposal-template-profile__common textarea { border-color:#475569; background:#0f172a; color:#f8fafc; }
-:root[data-theme='dark'] .credential-provider-grid input { border-color:#475569; background:#0f172a; color:#f8fafc; }
+:root[data-theme='dark'] .credential-provider-grid input,:root[data-theme='dark'] .credential-provider-grid select { border-color:#475569; background:#0f172a; color:#f8fafc; }
 :root[data-theme='dark'] .credential-key-actions .action-row > a { border-color:#1d4ed8; background:#172554; color:#bfdbfe; }
 :root[data-theme='dark'] .credential-issue-guide { border-color:#334155; background:#1e293b; }
 :root[data-theme='dark'] .credential-issue-guide summary,:root[data-theme='dark'] .credential-issue-guide ol { color:#cbd5e1; }
