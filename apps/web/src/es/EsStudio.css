@@ -1,0 +1,57 @@
+.es-studio { color:var(--text-primary,#183049); max-width:1600px; margin:0 auto; padding:12px; font-size:14px; }
+.es-heading,.es-toolbar,.es-section-title,.es-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.es-heading { justify-content:space-between; margin-bottom:16px; border-bottom:1px solid #cfdce9; padding-bottom:16px; }
+.es-heading h1 { margin:0 0 6px; font-size:26px; }
+.es-heading p,.es-section-title h2 { margin:0; }
+.es-studio h2 { font-size:18px; margin:18px 0 12px; }
+.es-studio button { min-height:36px; padding:6px 12px; border:1px solid #becfe1; border-radius:6px; background:var(--surface,#fff); color:inherit; font:inherit; cursor:pointer; }
+.es-studio button:focus-visible,.es-studio input:focus-visible,.es-studio select:focus-visible,.es-studio textarea:focus-visible { outline:3px solid #70a9de; outline-offset:2px; }
+.es-studio button:disabled { opacity:.55; cursor:not-allowed; }
+.es-studio button.es-primary { background:#236c9a; color:white; border-color:#236c9a; }
+.es-toolbar { position:sticky; top:0; z-index:5; padding:12px; background:var(--surface,#fff); border:1px solid #c8d8e6; border-radius:8px; box-shadow:0 2px 8px #18304912; }
+.es-toolbar > span { margin-right:auto; }
+.es-tabs { display:flex; gap:8px; flex-wrap:wrap; margin:16px 0; }
+.es-tabs [aria-current=page] { background:#e3eff9; border-color:#447ba9; font-weight:700; }
+.es-workspace { margin:0; padding:16px; min-width:0; border:1px solid #cfdae5; border-radius:8px; background:var(--surface,#fff); }
+.es-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 18px; }
+.es-field { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; font-size:13px; font-weight:600; min-width:0; }
+.es-studio input:not([type=checkbox]),.es-studio select,.es-studio textarea { width:100%; min-width:0; min-height:36px; padding:7px 9px; font:inherit; border:1px solid #bfcee0; border-radius:5px; color:inherit; background:var(--input-bg,#fffced); }
+.es-studio textarea { min-height:80px; resize:vertical; }
+.es-cost-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; margin-bottom:20px; }
+.es-cost { display:grid; grid-template-columns:minmax(150px,1fr) 145px; align-items:center; gap:12px; padding:7px 0; border-bottom:1px solid #e0e8ef; }
+.es-cost > span { display:flex; gap:7px; align-items:center; flex-wrap:wrap; }
+.es-cost b { background:#e3edf7; color:#275d87; border-radius:4px; padding:4px; min-width:28px; text-align:center; }
+.es-cost small { width:100%; color:var(--text-secondary,#567); font-size:10px; }
+.es-cost input { text-align:right; font-variant-numeric:tabular-nums; }
+.es-table-wrap { overflow:auto; border:1px solid #cfdae5; border-radius:7px; margin:10px 0; }
+.es-studio .es-table-wrap table { width:100%; border-collapse:collapse; text-align:left; }
+.es-table-wrap th,.es-table-wrap td { padding:9px; border-bottom:1px solid #dde5ed; font-variant-numeric:tabular-nums; }
+.es-table-wrap th { background:var(--surface-muted,#eef4f9); white-space:nowrap; font-size:12px; }
+.es-table-wrap input { min-width:100px!important; }
+.es-periods { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px; }
+.es-periods > section { padding:12px; border:1px solid #cfdae5; border-radius:7px; }
+.es-access,.es-notice { padding:10px 12px; background:#edf7f9; color:#22566b; border-left:3px solid #3f98a8; }
+.es-warning { padding:9px 12px; background:#fff7e8; border-left:3px solid #c88932; color:#6d491c; line-height:1.6; }
+.es-error { padding:10px 12px; background:#fff0f0; border:1px solid #e8a0a0; color:#922e2e; line-height:1.6; overflow-wrap:anywhere; }
+.es-empty { padding:25px 15px; color:var(--text-secondary,#567); }
+.es-result-strip { display:flex; flex-wrap:wrap; gap:25px; padding:16px; border-block:1px solid #cfdce9; }
+.es-result-strip strong { display:block; font-size:22px; margin-top:5px; }
+.es-sheet-selection { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px 12px; }
+.es-sheet-selection label { display:flex; gap:8px; align-items:center; padding:9px; border:1px solid #cfdce9; border-radius:5px; }
+.es-sheet-selection b { min-width:30px; }
+.es-sheet-selection input { width:18px; height:18px; }
+.es-import-confirm { border:2px solid #357da8; background:var(--surface,#fff); padding:20px; margin-top:18px; border-radius:8px; }
+.es-import-confirm dd { margin-bottom:10px; overflow-wrap:anywhere; }
+.es-pages { max-height:750px; overflow:auto; border:1px solid #c2ceda; margin-top:15px; }
+.es-studio details { border-top:1px solid #d4dee8; padding-top:15px; }
+.es-studio summary { cursor:pointer; font-weight:700; margin-bottom:15px; }
+.es-modal-backdrop { position:fixed; inset:0; z-index:200; background:#172b465c; display:flex; align-items:center; justify-content:center; }
+.es-editor-workspace { width:94vw; height:92vh; max-width:1600px; display:flex; flex-direction:column; overflow:hidden; background:var(--surface-card,#f7fafc); border:1px solid #9bb6cf; border-radius:12px; box-shadow:0 20px 70px #12253c55; }
+.es-editor-workspace>.es-heading,.es-editor-workspace>.es-toolbar { flex:0 0 auto; }
+.es-editor-workspace>.es-heading { margin-bottom:8px; padding-bottom:8px; }
+.es-editor-scroll { flex:1 1 auto; min-height:0; overflow:auto; padding:0 5px; }
+.es-summary-footer { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:10px 24px; background:var(--surface,#fff); border-top:1px solid #b8cddd; padding:10px 12px; font-size:12px; }
+.es-summary-footer b { display:block; font-size:16px; font-variant-numeric:tabular-nums; }
+@media(max-width:1100px) { .es-cost-grid,.es-periods { grid-template-columns:1fr; } .es-sheet-selection { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px) { .es-grid,.es-sheet-selection { grid-template-columns:1fr; } .es-studio { padding:6px; } .es-workspace { padding:10px; } .es-cost { grid-template-columns:minmax(0,1fr) 120px; } }
+@media(max-width:800px) { .es-editor-workspace { width:100vw; height:100dvh; border-radius:0; } .es-editor-workspace .es-heading h1 { font-size:20px; } .es-summary-footer { gap:5px 12px; } .es-summary-footer b { font-size:13px; } }

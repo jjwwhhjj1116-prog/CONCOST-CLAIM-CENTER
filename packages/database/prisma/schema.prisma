@@ -2,6 +2,74 @@ generator client {
   provider = "prisma-client-js"
 }
 
+model EsDocument {
+  id             String @id
+  organizationId String
+  ownerId        String
+  caseId         String?
+  title          String
+  revision       Int @default(1)
+  createdAt      String
+  updatedAt      String
+  revisions      EsRevision[]
+  runs           EsRun[]
+  events         EsAuditEvent[]
+  @@index([organizationId, ownerId, updatedAt], map: "es_documents_owner")
+  @@map("es_documents")
+}
+
+model EsRevision {
+  id           String @id
+  documentId   String
+  revision     Int
+  inputJson    String
+  inputHash    String
+  actorId      String
+  createdAt    String
+  document     EsDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  runs         EsRun[]
+  @@unique([documentId, revision])
+  @@map("es_revisions")
+}
+
+model EsRun {
+  id            String @id
+  documentId    String
+  revisionId    String
+  engineVersion String
+  resultJson    String
+  actorId       String
+  createdAt     String
+  document      EsDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  revision      EsRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+  outputs       EsOutput[]
+  @@map("es_runs")
+}
+
+model EsOutput {
+  id            String @id
+  runId         String
+  selectionJson String
+  pageRange     String
+  format        String
+  status        String
+  actorId       String
+  createdAt     String
+  run           EsRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  @@map("es_outputs")
+}
+
+model EsAuditEvent {
+  id         String @id
+  documentId String
+  actorId    String
+  action     String
+  revision   Int
+  createdAt  String
+  document   EsDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  @@map("es_audit_events")
+}
+
 datasource db {
   provider = "sqlite"
   url      = "file:../.data/dev.db"

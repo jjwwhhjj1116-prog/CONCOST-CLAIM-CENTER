@@ -153,6 +153,11 @@ body { background: var(--page-bg); color: var(--text-primary); }
 .sidebar-resize-handle:focus-visible::before { background: #4a86c5; opacity: 1; }
 :root.is-resizing-sidebar { cursor: col-resize; user-select: none; }
 .navigation-list { gap: 20px; }
+.sidebar { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 8px; }
+.sidebar-menu-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 6px; }
+.sidebar-settings-footer { flex: 0 0 auto; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-color, #d9e2ef); }
+.drawer-content:has(> .sidebar-menu-scroll) { display:flex; flex-direction:column; overflow:hidden; }
+.navigation-group[data-nav-group='es'] { --group-accent: #386d90; --group-rgb: 56, 109, 144; }
 .sidebar-project-context { overflow: hidden; border: 1px solid rgba(74, 134, 197, .34); border-radius: 14px; background: linear-gradient(145deg, rgba(74, 134, 197, .15), rgba(118, 107, 181, .1)); box-shadow: var(--panel-shadow); }
 .sidebar-project-context > button { width: 100%; display: grid; gap: 4px; padding: 14px 14px 12px; border: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .sidebar-project-context__eyebrow { color: #5b93c9; font: 700 .68rem 'DM Mono', monospace; letter-spacing: .13em; }

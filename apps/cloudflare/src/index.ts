@@ -39,6 +39,7 @@ import { normalizeMinutesFields } from './company-minutes';
 import { parseWorkflowAiImport, localWorkflowAiImport, extractWorkflowImportSource, type WorkflowImportKind, type WorkflowImportDataClass, type WorkflowAiImportResult } from './workflow-import';
 import { joinReportPresentation, splitReportPresentation } from '../../../packages/document-engine/src/report-presentation';
 import { mergeGeneratedChapter, type ReportNode } from '../../../packages/document-engine/src/report-chapter';
+import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -8274,6 +8275,32 @@ const worker = {
 
     if (url.pathname === '/api/dashboard/kpi') {
       return handlePreviewDashboard(request, env);
+    }
+
+    if (url.pathname === '/api/es/documents' || url.pathname.startsWith('/api/es/documents/')) {
+      const user = await previewSessionUser(request, env);
+      if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
+      if (!user.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) return json({ error: 'ES 산출프로그램 접근 권한이 없습니다.' }, 403);
+      const database = env.DB;
+      if (!database?.batch) return json({ error: 'ES 저장소가 준비되지 않았습니다.' }, 503);
+      let body: unknown;
+      if (request.method !== 'GET') {
+        const origin = request.headers.get('Origin');
+        if ((origin && origin !== url.origin) || request.headers.get('Sec-Fetch-Site') === 'cross-site' || (request.headers.has('Cookie') && origin !== url.origin)) return json({ error: '현재 서버 화면에서 다시 요청하세요.' }, 403);
+        if (!/^application\/json(?:;|$)/i.test(request.headers.get('Content-Type') ?? '')) return json({ error: 'JSON 요청이 필요합니다.' }, 415);
+        const raw = await request.text();
+        if (raw.length > 500_000) return json({ error: '산출서 입력이 너무 큽니다.' }, 413);
+        try { body = JSON.parse(raw); } catch { return json({ error: '입력 형식을 확인하세요.' }, 400); }
+      }
+      const response = await handleEsRequest({ pathname: url.pathname, method: request.method, body,
+        actor: { id: user.id, organizationId: PREVIEW_ORGANIZATION_ID, admin: user.roles.includes('admin') },
+        canLink: async caseId => Boolean(await accessiblePreviewCase(env, user, caseId)),
+        store: {
+          all: async <T,>(sql: string, values: (string | number | null)[]) => (await database.prepare(sql).bind(...values).all<T>()).results,
+          batch: async statements => { await database.batch!(statements.map(statement => database.prepare(statement.sql).bind(...statement.values))); }
+        }
+      });
+      return json(response.body, response.status);
     }
 
     if (url.pathname === '/api/admin/users' || url.pathname.startsWith('/api/admin/users/') || url.pathname === '/api/admin/registration-requests' || url.pathname.startsWith('/api/admin/registration-requests/')) {

@@ -68,13 +68,15 @@ export const App: React.FC = () => {
     const restoreFromHistory = () => {
       const destination = currentBrowserLocation();
       const previous = currentLocationRef.current;
+      let proceeded = false;
       const proceed = () => {
+        proceeded = true;
         window.history.replaceState(null, '', destination);
         currentLocationRef.current = destination;
         setCurrentLocation(destination);
       };
       if (destination !== previous && requestNavigation(destination, proceed)) {
-        window.history.pushState(null, '', previous);
+        if (!proceeded) window.history.pushState(null, '', previous);
         return;
       }
       currentLocationRef.current = destination;

@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
 import {
   createPrismaClient, databaseUrlFor, getDatabaseUrl, hashToken, verifyPassword,
   type Prisma, type PrismaClient, type User
@@ -1361,6 +1362,23 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         ]);
         sendJson(res, 200, { message: 'Logged out' });
         return;
+      }
+
+      if (pathname === '/api/es/documents' || pathname.startsWith('/api/es/documents/')) {
+        if (!context.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) throw new HttpError(403, 'ES 산출프로그램 접근 권한이 없습니다.');
+        const body = req.method === 'GET' ? undefined : await readJson(req);
+        const result = await handleEsRequest({ pathname, method: req.method ?? 'GET', body,
+          actor: { id: context.user.id, organizationId: context.user.organizationId, admin: context.roles.includes('admin') },
+          canLink: async caseId => Boolean(await db.caseItem.findFirst({ where: { id: caseId, organizationId: context.user.organizationId, deletedAt: null } })) && await canAccessCase(db, context, caseId),
+          store: {
+            all: async <T,>(sql: string, values: (string | number | null)[]) => {
+              const rows = await db.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...values);
+              return rows.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? Number(value) : value]))) as T[];
+            },
+            batch: async statements => { await db.$transaction(async tx => { for (const statement of statements) await tx.$executeRawUnsafe(statement.sql, ...statement.values); }); }
+          }
+        });
+        sendJson(res, result.status, result.body); return;
       }
 
       if (pathname === '/auth/session' && req.method === 'GET') {

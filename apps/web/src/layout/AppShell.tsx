@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Dialog, Drawer, SkipLink } from '@claim-studio/ui';
 import { apiRequest } from '../api';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
@@ -10,7 +10,7 @@ import { ReleaseNotice, RELEASE_DATE_LABEL, hasSeenRelease, markReleaseSeen } fr
 const NAVIGATION_GROUPS: readonly {
   label: string;
   eyebrow: string;
-  icon: 'home' | 'proposal' | 'work' | 'library' | 'court' | 'quality' | 'settings' | 'admin';
+  icon: 'home' | 'proposal' | 'work' | 'es' | 'library' | 'court' | 'quality' | 'settings' | 'admin';
   routeIds: readonly string[];
   nestedGroups?: readonly { label: string; eyebrow: string; routeIds: readonly string[] }[];
   allowedRoles?: readonly UserRole[];
@@ -30,6 +30,7 @@ const NAVIGATION_GROUPS: readonly {
     routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
     nestedGroups: [{ label: '프로젝트 보고서', eyebrow: '보고서 관리', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
   },
+  { label: 'ES 산출프로그램', eyebrow: '독립 물가변동 산출', icon: 'es', routeIds: ['ES-01', 'ES-02'] },
   { label: '드라이브', eyebrow: '자료 관리', icon: 'library', routeIds: ['CASE-06', 'CASE-09', 'CONTACT-01', 'CONTACT-02', 'CONTACT-03'], nestedGroups: [{ label: '자료실 이용', eyebrow: '자료·양식', routeIds: ['CASE-06', 'CASE-09'] }, { label: '인맥관리', eyebrow: '명함·연락처', routeIds: ['CONTACT-01', 'CONTACT-02', 'CONTACT-03'] }] },
   { label: '법원 자료', eyebrow: '법원·소송', icon: 'court', routeIds: ['POST-01'] },
   { label: '검토·납품 관리', eyebrow: '검토·납품 관리', icon: 'quality', routeIds: ['APPR-01', 'REPO-01', 'OUTCOME-01'] },
@@ -45,6 +46,7 @@ const NavigationGroupIcon: React.FC<{ name: (typeof NAVIGATION_GROUPS)[number]['
     home: <><path d="M3 11.5 12 4l9 7.5" /><path d="M5.5 10v10h13V10M9 20v-6h6v6" /></>,
     proposal: <><path d="M5 3h10l4 4v14H5z" /><path d="M15 3v5h4M8 12h8M8 16h5" /><path d="m7 7 1 1 2-2" /></>,
     work: <><rect x="3" y="5" width="18" height="15" rx="2" /><path d="M8 5V3h8v2M3 11h18M9 11v2h6v-2" /></>,
+    es: <><rect x="5" y="2" width="14" height="20" rx="2" /><path d="M8 6h8M8 10h2m4 0h2m-8 4h2m4 0h2m-8 4h2m4 0h2" /></>,
     library: <><path d="M4 5.5 12 3l8 2.5V19l-8 2-8-2z" /><path d="M12 3v18M4 9l8 2 8-2M4 14l8 2 8-2" /></>,
     court: <><path d="M3 9h18M5 9v9m4-9v9m6-9v9m4-9v9M2 21h20M12 3l9 4H3z" /></>,
     quality: <><path d="M12 3 5 6v5c0 4.7 2.8 8.2 7 10 4.2-1.8 7-5.3 7-10V6z" /><path d="m8.5 12 2.2 2.2 4.8-5" /></>,
@@ -110,6 +112,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [isTablet, setIsTablet] = useState(() => window.innerWidth <= 1024);
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
+  const sidebarElement = useRef<HTMLElement>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => ({ [activeGroup?.icon ?? 'home']: true }));
   const [expandedSubgroups, setExpandedSubgroups] = useState<Record<string, boolean>>(() => activeSubgroup ? { [activeSubgroup.label]: true } : {});
   const [memberAlerts,setMemberAlerts]=useState<MemberAlertsPayload>({awards:[],todos:[],today:'',available:true});
@@ -136,6 +139,18 @@ export const AppShell: React.FC<AppShellProps> = ({
   useEffect(() => {
     window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(sidebarWidth));
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (isTablet) return;
+    const resize = () => {
+      const sidebar = sidebarElement.current;
+      if (sidebar) sidebar.style.height = `${Math.max(160, window.innerHeight - Math.max(0, sidebar.getBoundingClientRect().top))}px`;
+    };
+    const observer = new ResizeObserver(resize);
+    document.querySelectorAll('.topbar, .soft-launch-banner').forEach(element => observer.observe(element));
+    resize(); window.addEventListener('resize', resize); window.addEventListener('scroll', resize, true);
+    return () => { observer.disconnect(); window.removeEventListener('resize', resize); window.removeEventListener('scroll', resize, true); };
+  }, [isTablet]);
 
   useEffect(() => {
     if (!activeGroup) return;
@@ -174,7 +189,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   };
 
   const navigation = (
-    <nav className="navigation-list" aria-label="주요 화면">
+    <><div className="sidebar-menu-scroll"><nav className="navigation-list" aria-label="주요 화면">
       {selectedProject && <section className="sidebar-project-context" aria-label="현재 선택 프로젝트">
         <button type="button" onClick={() => go(`/projects/schedule?projectId=${encodeURIComponent(selectedProject.id)}`)}>
           <span className="sidebar-project-context__eyebrow">현재 선택 프로젝트</span>
@@ -189,14 +204,14 @@ export const AppShell: React.FC<AppShellProps> = ({
           <button type="button" onClick={() => go(`/projects/schedule?projectId=${encodeURIComponent(selectedProject.id)}`)}>상세 팝업</button>
         </div>
       </section>}
-      {NAVIGATION_GROUPS.filter((group) => !group.allowedRoles || group.allowedRoles.some((role) => roles.includes(role))).map((group) => {
+      {NAVIGATION_GROUPS.filter((group) => group.icon !== 'settings' && (!group.allowedRoles || group.allowedRoles.some((role) => roles.includes(role)))).map((group) => {
         const routes = navigationGroupRouteIds(group)
           .map((id) => ROUTES.find((route) => route.id === id))
           .filter((route) => route && canAccessRoute(route, roles));
         if (routes.length === 0) return null;
         const isCurrentGroup = group === activeGroup;
         const isExpanded = Boolean(expandedGroups[group.icon]);
-        if (group.icon === 'settings') {
+        if (group.icon === 'es') {
           const route = routes[0];
           if (!route) return null;
           return <section className={`navigation-group navigation-group--single${isCurrentGroup ? ' is-current' : ''}`} key={group.label} aria-label={group.label} data-nav-group={group.icon}>
@@ -267,7 +282,11 @@ export const AppShell: React.FC<AppShellProps> = ({
           </div>
         </section>;
       })}
-    </nav>
+    </nav></div><footer className="sidebar-settings-footer"><section className={`navigation-group navigation-group--single${currentPath === '/settings' ? ' is-current' : ''}`} data-nav-group="settings">
+      <button type="button" className="navigation-single-action" onClick={() => go('/settings')} aria-current={currentPath === '/settings' ? 'page' : undefined}>
+        <span className="navigation-group-icon"><NavigationGroupIcon name="settings" /></span><span><strong>설정</strong></span>
+      </button>
+    </section></footer></>
   );
 
   return (
@@ -318,7 +337,7 @@ export const AppShell: React.FC<AppShellProps> = ({
       <SoftLaunchNotice />
 
       <div className="shell-body">
-        {!isTablet && <aside className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
+        {!isTablet && <aside ref={sidebarElement} className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
           {navigation}
           <div
             className="sidebar-resize-handle"

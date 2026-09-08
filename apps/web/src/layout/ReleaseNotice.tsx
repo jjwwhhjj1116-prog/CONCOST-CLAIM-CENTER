@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-09-07';
-export const RELEASE_DATE_LABEL = '2026년 9월 7일';
+export const RELEASE_DATE = '2026-09-08';
+export const RELEASE_DATE_LABEL = '2026년 9월 8일';
 const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v4:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
@@ -13,6 +13,8 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  { title: '9월 8일 테스트 서버 · ES 산출프로그램', text: '프로젝트 워크 아래에 독립 메뉴를 추가했습니다. 사건 없이 산출서를 만들고 작성자·관리자 권한으로 저장·재진입할 수 있습니다. 원본 Excel 가져오기, 수동 입력, 원본 호환 계산과 작업용 Excel 왕복 편집을 연결했습니다.' },
+  { title: '9월 8일 테스트 서버 · ES 출력·복구', text: '17개 시트의 전체·선택 Excel과 페이지 지정 인쇄를 추가했습니다. 저장 결과 복원, 이동 전 미저장 안내, 인쇄 준비 시간초과·재시도를 검수했습니다. 현재 계산은 LEGACY_REPLAY 검토용이며 신규비목 다중 구간·복수 선금과 교정 규칙 승인은 아직 지원하지 않습니다.' },
   { title: '9월 7일 직접 검수 · 보고서 저장·단계 이동 복구', text: '시간별 백업의 날짜 검사식이 서버 DB 제한을 초과하여 보고서 저장과 다음 단계 이동을 막던 원인을 수정했습니다. 기존 자료와 백업은 보존하며, 저장 실패 시 입력 유지·재시도 원칙도 유지합니다.' },
   { title: '9월 7일 직접 검수 · 편집 내용 보존', text: '챕터 검수본을 반영하는 동안 입력·자동저장이 겹쳐 새 내용이 사라지는 경로를 차단했습니다. 다른 유형의 참고 템플릿이 현재 프로젝트 목차에 섞이지 않도록 수정했습니다.' },
   { title: '9월 7일 직접 검수 · Word·Excel 가져오기', text: 'Word 첫 본문이 제목으로 잘려 사라지는 문제와 Excel 줄바꿈·특수문자 해석을 수정했습니다. 지원하지 않는 Word 자동 번호·글머리표는 조용히 누락하는 대신 기존 내용을 유지하고 변환 안내를 표시합니다.' },
@@ -43,9 +45,9 @@ export function ReleaseNotice({ open, onClose }: { open: boolean; onClose: () =>
     };
   }, [open]);
   return <dialog ref={dialogRef} className="release-notice" aria-labelledby="release-notice-title" aria-describedby="release-notice-description" onCancel={(event) => { event.preventDefault(); onClose(); }}>
-    <header><div><time dateTime={RELEASE_DATE}>{RELEASE_DATE_LABEL}</time><h2 id="release-notice-title">가오픈 업데이트 안내</h2></div><button type="button" autoFocus aria-label="업데이트 안내 닫기" onClick={onClose}>×</button></header>
+    <header><div><time dateTime={RELEASE_DATE}>{RELEASE_DATE_LABEL}</time><h2 id="release-notice-title">테스트 서버 업데이트 안내</h2></div><button type="button" autoFocus aria-label="업데이트 안내 닫기" onClick={onClose}>×</button></header>
     <div className="release-notice__body">
-      <p id="release-notice-description">2026년 8월 31일 가오픈 이후 9월 7일까지의 누적 개선사항입니다.<br/>가오픈·테스트 서버에 동일한 수정 소스를 반영했습니다. 이번 배포에 포함된 최근 개선사항을 확인해 주세요.</p>
+      <p id="release-notice-description">9월 8일 변경은 테스트 서버에만 반영했습니다. 가오픈 서버는 이번 배포 대상이 아닙니다.<br/>아래에는 이번 ES 추가 사항과 8월 31일 이후의 기존 개선 이력을 함께 표시합니다.</p>
       <div className="release-notice__updates">{RELEASE_UPDATES.map((update) => <section key={update.title}><h3>{update.title}</h3><p>{update.text}</p></section>)}</div>
       <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
     </div>

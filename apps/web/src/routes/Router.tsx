@@ -29,6 +29,7 @@ import { PreviewOutcomeCenter } from './PreviewOutcomeCenter';
 import { PreviewSettings } from './PreviewSettings';
 import { PreviewDocumentTemplates } from './PreviewDocumentTemplates';
 import { BusinessCardContacts } from './BusinessCardContacts';
+import { EsStudio } from '../es/EsStudio';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -66,6 +67,8 @@ export const ROUTES: RouteConfig[] = [
   { id: 'CASE-06', path: '/cases/files', name: '드라이브' },
   { id: 'CASE-09', path: '/cases/files/templates', name: '문서 양식' },
   { id: 'CONTACT-01', path: '/contacts', name: '인맥관리' },
+  { id: 'ES-01', path: '/es', name: 'ES 산출서 목록', allowedRoles: CASE_CREATE_ROLES },
+  { id: 'ES-02', path: '/es/editor', name: '새 ES 산출서', allowedRoles: CASE_CREATE_ROLES },
   { id: 'CONTACT-02', path: '/contacts/cards/new', name: '명함등록' },
   { id: 'CONTACT-03', path: '/contacts/cards/database', name: '명함DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'MEET-01', path: '/meetings', name: '착수회의·회의록' },
@@ -194,6 +197,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     );
   }
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
+  if (currentRoute.id === 'ES-01' || currentRoute.id === 'ES-02') return <EsStudio key={currentPath + currentSearch} mode={currentRoute.id === 'ES-01' ? 'list' : 'editor'} search={currentSearch} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
   if (previewMode && ['WF-03', 'WF-04', 'WF-05'].includes(currentRoute.id)) {
     return <WorkflowOperations routeId={currentRoute.id as 'WF-03' | 'WF-04' | 'WF-05'} roles={roles} onNavigate={onNavigate} />;
