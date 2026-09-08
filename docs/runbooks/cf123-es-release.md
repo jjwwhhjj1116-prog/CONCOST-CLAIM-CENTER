@@ -14,6 +14,9 @@
 - 점검 해제 직후 첫 readiness503은 재확인에서200으로 전환됐다. 이후 실제 smoke PASS: health200/readiness200/Driveconnected, 비로그인ES401, /es200.
 - 실제 배포 JS/CSS4개 SHA256이 로컬 최종 dist와 일치했다. 기존 보고서 보호 endpoint도 비로그인401 유지.
 - 이 공개 smoke는 로그인 후 실제 사용자 문서 생성 검증이 아니다. 로그인된 브라우저 기능검수는 별도 구분한다.
+- 실제 브라우저 새 탭에서 테스트 /es 진입 후 시스템 로그인 화면을 확인했다. 인증된 ES 업무 화면 E2E는 NOT_RUN이며 세션·쿠키·토큰 우회는 하지 않았다.
+- 최종 실제 App 로컬 UI 16/16 PASS(API mock), pageerror/unmocked API 0. 실제 print iframe srcdoc 기반 PDF 재개봉: 전체41쪽 / 1,3,5–8 선택6쪽, 각 페이지 원본 푸터번호 정확히1개, 빈 페이지0. 실물 프린터 성공을 의미하지 않는다.
+- 수용60항목 판정: PASS21 / PARTIAL32 / BLOCKED3 / NOT_RUN4. 수용 기준 전체 완료는 아니며 미완료를 별도 CSV에 유지한다.
 
 ## 백업 검증 pin (비밀키 아님)
 
