@@ -62,6 +62,8 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
   for (const [address, field] of Object.entries(grid.fields)) {
     const [path, format] = field.split(':');
     let value = at(root, path);
+    // Original F19 is the narrow equals cell; G19 already contains the resulting index.
+    if (path.endsWith('.display.wageEquation')) value = '=';
     if (path.startsWith('output.dividerTitle.')) value = ['','물가변동 검토 요약','계약금액 조정 산출','비목별 지수조정률 산출','비목별 지수 산출근거','조정기준일 직전일 검토'][Number(path.split('.').at(-1))];
     if (path.startsWith('output.attachmentNumber.')) value = '붙임 ' + path.split('.').at(-1);
     if (value === undefined || value === '') { values[address] = '—'; continue; }
