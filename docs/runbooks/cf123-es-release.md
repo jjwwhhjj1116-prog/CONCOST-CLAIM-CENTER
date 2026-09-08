@@ -1,5 +1,7 @@
 # CF123 ES 테스트 서버 릴리스 — 2026-09-08
 
+후속 UI 배포·로그인 후 기본입력 저장/재진입 검수는 [CF124 기록](cf124-es-input-layout.md)을 참조한다. 아래 로그인 미실행 상태는 최초 CF123 배포 당시 기록이다.
+
 ## 대상 / 코드
 
 - 테스트 전용: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es
