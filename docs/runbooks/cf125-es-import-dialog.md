@@ -28,4 +28,10 @@
 
 ## 배포
 
-코드 빌드 후 `wrangler.development.jsonc` 대상으로만 배포하고, 배포 버전 및 공개 asset SHA 검증 결과를 이 문서에 후속 기록한다. migration 없음.
+- 코드 커밋: `7a45f24`.
+- `wrangler.development.jsonc` 배포 버전: `1cf211dc-637e-4e4e-8bac-fa50fbc86149`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es
+- `node scripts/cf114-live-smoke.mjs development`: 최초 실행 PASS. health/readiness 정상, 기존 Drive 연결 유지, 비인증 보호 경로 401, 공개 HTML 및 JS/CSS SHA가 현재 빌드와 일치.
+- 격리 브라우저 최종 6/6 PASS. 새 산출서 POST 1회/v1 반영 및 내보내기 탭 이동 포함. pageErrors 0, unmockedRequests 0. 기존 전체 브라우저 검수의 과거 apply-only locator는 이 변경에 맞게 갱신하지 않았으며, 과거 전체 검수 통과로 확대하지 않는다.
+- migration 없음. 가오픈·베트남 서버 및 사용자 저장 데이터 변경 없음.
+- 배포 후 로그인 브라우저 UI 검수: NOT_RUN. 기존 in-app 브라우저 연결이 `Browser is not available`로 끊겨 세션 조작을 확대하지 않았다. 공개 서버/asset 검증은 통과했으며 로그인된 실제 파일 저장 E2E로 표현하지 않는다.
