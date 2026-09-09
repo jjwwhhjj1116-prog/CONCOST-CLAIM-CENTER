@@ -16,7 +16,7 @@
 
 ## 실행 검증
 
-- CF128 신규 18개 포함 관련 8파일 단위·권한·저장·출력 회귀: 114 PASS, 0 FAIL, 0 SKIP.
+- CF128 신규 19개 포함 관련 8파일 단위·권한·저장·출력 회귀: 115 PASS, 0 FAIL, 0 SKIP.
 - 원본 파일 브라우저 메모리 파서/작업용 왕복/공식 캐시 비사용/공격 입력 거부: 34 PASS. 격리 저장 회귀: 16 PASS. 운영 데이터베이스에는 실행하지 않았다.
 - 구조 전용 원본 추출 메타로 17시트 인쇄영역·배율·여백·병합·글꼴·바닥글을 독립 비교했다. 메타 미제공 환경에서는 이 테스트가 명시적으로 SKIP되므로 원본 대조 PASS로 해석하면 안 된다.
 - 실제 App 로컬 합성 API 브라우저: A4 41페이지, 4/4. 각각 443행이 정확히 한 번 포함됨, 전체/발췌 PDF 생성. 사용자 로그인 서버 UI 및 물리 프린터 실행과는 별개 증거다.
@@ -36,4 +36,12 @@
 
 ## 최종 검증 및 테스트 서버 배포
 
-진행 중. 최종 결과와 version은 검증 후 기록한다.
+- 제품 커밋: `95522f6`, 최종 보정 `71fcc0a`.
+- Worker: `concost-claim-center-development`만 배포. 가오픈/실서비스 배포 없음.
+- Version: `6a7df207-7808-495d-849f-b23a21096b3a`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es
+- 최종 TypeScript/Vite 빌드 및 development dry-run PASS. 기존 대형 번들 경고는 유지한다.
+- 배포 후 `/health`, `/readiness` 정상, 익명 문서 접근 HTTP401. `cf114-live-smoke.mjs development` PASS.
+- 배포 assets: `index-B50aQsle.js`, `index.es-BVXGb-xk.js`, `index-DqJNflzv.js`, `index-PyN6GJWg.css`. 로컬 빌드와 원격 SHA-256 동일.
+- migration/기존 DB 변경/비밀키 교체 없음. 원본 및 고객 PDF/Excel은 커밋하지 않았다.
+- 합성 최종 PDF: 로컬 비커밋 `output/playwright/es-v2/cf128-closure-all.pdf` (41쪽). 원본 Excel 직접 출력과 1:1 동등성 검증은 위 보안 차단 사유로 미완료다.
