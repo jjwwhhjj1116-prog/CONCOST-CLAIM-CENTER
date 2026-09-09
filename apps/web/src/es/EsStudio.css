@@ -218,6 +218,20 @@
 .es-summary-footer span { font-size:11px; }
 .es-summary-footer b { font-size:15px; }
 .es-net-amount b { color:var(--es-accent); font-size:18px; }
+.es-list-toolbar,.es-list-toolbar > div,.es-list-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.es-list-toolbar { justify-content:space-between; margin:12px 0; }
+.es-document-list { --es-accent:#236c9a; }
+.es-document-list button { min-height:36px; }
+.es-list-toolbar button[aria-pressed=true] { background:var(--surface-muted); border-color:var(--es-accent); color:var(--es-accent); font-weight:700; }
+.es-list-actions { flex-wrap:nowrap; }
+.es-studio .es-delete-button { color:#b42318; border-color:#d98d88; background:var(--surface); }
+.es-studio .es-delete-button:hover:not(:disabled) { background:#fff1f0; border-color:#b42318; }
+.es-document-list .es-field input { background:var(--surface); --field-bg:var(--surface); }
+.es-document-list td:first-child { overflow-wrap:anywhere; }
+:root[data-theme='dark'] .es-document-list { --es-accent:#91c9f4; }
+:root[data-theme='dark'] .es-studio .es-delete-button { color:#ffb4ae; border-color:#d98d88; }
+:root[data-theme='dark'] .es-studio .es-delete-button:hover:not(:disabled) { color:#fff1f0; background:#6d2926; }
+@media(max-width:600px) { .es-document-list button { min-height:44px; } .es-document-list .es-heading { flex-wrap:wrap; gap:12px; } }
 .es-next-action { margin-left:auto; text-align:right; }
 .es-next-action small { display:block; font-size:11px; margin-bottom:4px; }
 .es-next-action button { font-size:12px; }

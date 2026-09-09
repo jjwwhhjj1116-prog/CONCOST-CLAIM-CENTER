@@ -176,7 +176,7 @@ test('CF130 saved status and output readiness distinguish pending, dirty, stale 
 });
 
 test('CF130 list action uses guarded navigation and the next-action status never presents incomplete data as output ready', () => {
-  const state = harness(); evaluate(expression(button('산출서 목록'), 'onClick'), state)();
+  const state = harness(); evaluate(expression(button('산출서 목록', byClass('es-editor-workspace')), 'onClick'), state)();
   assert.deepEqual(state.navigations, ['/es']); assert.deepEqual(state.requests, []);
   const next = byClass('es-next-action');
   const status = nodes(next).find(n => ts.isJsxElement(n) && n.openingElement.tagName.getText(tree) === 'small') as ts.JsxElement;

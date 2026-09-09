@@ -37,6 +37,8 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   const [input, setInput] = useState(newEsInput), [document, setDocument] = useState<EsDocument | null>(null);
   const [caseId, setCaseId] = useState(''), [projects, setProjects] = useState<Project[]>([]);
   const [documents, setDocuments] = useState<EsDocument[]>([]), [query, setQuery] = useState('');
+  const [showDeleted, setShowDeleted] = useState(false), [listRefresh, setListRefresh] = useState(0);
+  const listHeading = useRef<HTMLHeadingElement>(null);
   const [loading, setLoading] = useState(mode === 'list' || Boolean(id)), [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false), pending = useRef(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -87,7 +89,8 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   useEffect(() => {
     let active = true;
     if (mode === 'list') {
-      void apiRequest<{ documents: EsDocument[] }>('/api/es/documents').then(payload => { if (active) setDocuments(payload.documents); }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
+      setLoading(true); setLoadFailed(false); setError('');
+      void apiRequest<{ documents: EsDocument[] }>('/api/es/documents' + (showDeleted ? '/trash' : '')).then(payload => { if (active) setDocuments(payload.documents); }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); setDocuments([]); } }).finally(() => { if (active) setLoading(false); });
     } else {
       void apiRequest<{ cases: Project[] }>('/api/cases?limit=100&assignedOnly=true').then(payload => { if (active) setProjects(payload.cases); }).catch(() => { if (active) setNotice('프로젝트 목록을 불러오지 못했습니다. 연결 없이 작성할 수 있습니다.'); });
       if (id) void apiRequest<EsSaved>(`/api/es/documents/${encodeURIComponent(id)}`).then(payload => {
@@ -95,7 +98,22 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
     }
     return () => { active = false; };
-  }, [id, mode]);
+  }, [id, mode, showDeleted, listRefresh]);
+  const changeDeleted = async (item: EsDocument) => {
+    if (pending.current || loading || loadFailed) return;
+    const restore = showDeleted;
+    const prompt = restore
+      ? `“${item.title}” 산출서를 복구할까요?\n입력과 이력은 유지됩니다. 출력하려면 복구 후 저장·계산을 다시 실행하세요.`
+      : `“${item.title}” 산출서를 삭제할까요?\n목록에서 제외되며 ‘삭제한 산출서’에서 복구할 수 있습니다. 연결 프로젝트와 기존 계산·출력 이력은 삭제하지 않습니다.`;
+    if (!window.confirm(prompt)) return;
+    pending.current = true; setBusy(true); setError(''); setNotice('');
+    try {
+      await apiRequest(`/api/es/documents/${encodeURIComponent(item.id)}${restore ? '/restore' : ''}`, { method: restore ? 'POST' : 'DELETE', body: JSON.stringify({ expectedRevision: item.revision }) });
+      setDocuments(current => current.filter(d => d.id !== item.id));
+      setNotice(restore ? `“${item.title}” 복구 완료. 산출서 목록에서 열고 저장·계산하세요.` : `“${item.title}” 삭제 완료. ‘삭제한 산출서’에서 복구할 수 있습니다.`);
+      listHeading.current?.focus();
+    } catch (e) { setError(message(e)); } finally { pending.current = false; setBusy(false); }
+  };
   useEffect(() => {
     if (mode !== 'editor') return;
     const unregister = registerNavigationBlocker(navigation => {
@@ -186,11 +204,15 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       if (key === 'employmentGrade' || key === 'retirementTrade') for (const p of [n.base, n.current.period, n.previous.period]) p.rates[key === 'employmentGrade' ? 'employment' : 'retirement'] = '';
     }), type === 'date' ? 'date' : 'text', ES_YELLOW_CONTRACT_CELLS.has(coordinate) ? coordinate : '')}</div>;
   });
-  if (mode === 'list') return <section className="es-studio"><header className="es-heading"><div><h1>ES 산출프로그램</h1><p>사건 등록 없이 산출서를 만들고, 필요할 때 프로젝트와 연결하세요.</p></div><button className="es-primary" onClick={() => onNavigate('/es/editor')}>＋ 새 산출서</button></header>
+  if (mode === 'list') return <section className="es-studio es-document-list"><header className="es-heading"><div><h1 ref={listHeading} tabIndex={-1}>ES 산출프로그램</h1><p>사건 등록 없이 산출서를 만들고, 필요할 때 프로젝트와 연결하세요.</p></div><button disabled={busy} className="es-primary" onClick={() => onNavigate('/es/editor')}>＋ 새 산출서</button></header>
     <p className="es-access">작성자·관리자만 접근 · API 키 없이 수동 입력·Excel 가져오기</p>
     {error && <p role="alert" className="es-error">{error}</p>}
+    {notice && <p role="status" className="es-notice">{notice}</p>}
+    <div className="es-list-toolbar"><div role="group" aria-label="산출서 목록 구분"><button aria-pressed={!showDeleted} disabled={busy} onClick={() => { setShowDeleted(false); setQuery(''); setNotice(''); }}>산출서 목록</button><button aria-pressed={showDeleted} disabled={busy} onClick={() => { setShowDeleted(true); setQuery(''); setNotice(''); }}>삭제한 산출서</button></div><button disabled={busy || loading} onClick={() => setListRefresh(v => v + 1)}>목록 새로고침</button></div>
+    {showDeleted && <p className="es-access">삭제한 산출서는 복구할 수 있습니다. 연결 프로젝트와 입력·계산·출력 이력은 보존됩니다.</p>}
     <label className="es-field">산출서 검색<input value={query} onChange={e => setQuery(e.target.value)} placeholder="산출서 제목" /></label>
-    {loading ? <p role="status">산출서를 불러오는 중입니다.</p> : <div className="es-table-wrap"><table><thead><tr><th>산출서</th><th>프로젝트</th><th>버전</th><th>최근 저장</th><th>작업</th></tr></thead><tbody>{documents.filter(d => d.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(d => <tr key={d.id}><td>{d.title}</td><td>{d.caseId ? '연결됨' : '독립 산출서'}</td><td>v{d.revision}</td><td>{new Date(d.updatedAt).toLocaleString('ko-KR')}</td><td><button onClick={() => onNavigate('/es/editor?documentId=' + encodeURIComponent(d.id))}>열기</button></td></tr>)}</tbody></table>{!documents.length && !loadFailed && <p className="es-empty">저장한 산출서가 없습니다. 새 산출서에서 시작하세요.</p>}</div>}</section>;
+    {busy && <p role="status">{showDeleted ? '산출서를 복구하는 중입니다.' : '산출서를 삭제하는 중입니다.'}</p>}
+    {loading ? <p role="status">산출서를 불러오는 중입니다.</p> : <div className="es-table-wrap"><table><thead><tr><th>산출서</th><th>프로젝트</th><th>버전</th><th>{showDeleted ? '삭제일' : '최근 저장'}</th><th>작업</th></tr></thead><tbody>{documents.filter(d => d.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(d => <tr key={d.id}><td>{d.title}</td><td>{d.caseId ? '연결됨' : '독립 산출서'}</td><td>v{d.revision}</td><td>{new Date(d.updatedAt).toLocaleString('ko-KR')}</td><td><div className="es-list-actions">{!showDeleted && <button disabled={busy} onClick={() => onNavigate('/es/editor?documentId=' + encodeURIComponent(d.id))}>열기</button>}<button disabled={busy} className={showDeleted ? '' : 'es-delete-button'} aria-label={`${d.title} ${showDeleted ? '복구' : '삭제'}`} onClick={() => void changeDeleted(d)}>{showDeleted ? '복구' : '삭제'}</button></div></td></tr>)}</tbody></table>{!documents.length && !loadFailed && <p className="es-empty">{showDeleted ? '삭제한 산출서가 없습니다.' : '저장한 산출서가 없습니다. 새 산출서에서 시작하세요.'}</p>}{documents.length > 0 && !documents.some(d => d.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && <p className="es-empty">검색 결과가 없습니다. 검색어를 바꿔 보세요.</p>}</div>}</section>;
   const stepIndex = ES_STEPS.findIndex(step => step[0] === tab);
   const outputReady = Boolean(run && !dirty && run.revision === document?.revision);
   const selectedCost = ES_COSTS.find(([row]) => row === selectedRow)!;
