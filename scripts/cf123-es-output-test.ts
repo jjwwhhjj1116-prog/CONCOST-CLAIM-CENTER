@@ -48,13 +48,13 @@ test('CF123 real full/selected XLSX are values-only, exact scope, no support dat
   const input = fixture(), result = calculateEs(input), all = exportEsReport(input, result, ES_SHEETS.map(s => s[0]));
   const selected = exportEsReport(input, result, ['previous_day_index_details', 'cover', 'index_details']);
   const fullFiles = files(all), selectedFiles = files(selected);
-  assert.equal(Object.keys(fullFiles).filter(k => /^xl\/worksheets\//.test(k)).length, 17);
-  assert.equal(Object.keys(selectedFiles).filter(k => /^xl\/worksheets\//.test(k)).length, 3);
+  assert.equal(Object.keys(fullFiles).filter(k => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).length, 17);
+  assert.equal(Object.keys(selectedFiles).filter(k => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).length, 3);
   const names = [...selectedFiles['xl/workbook.xml'].matchAll(/<sheet name="([^"]+)"/g)].map(m => m[1]);
   assert.deepEqual(names, ['표지', '4', '4.']);
   assert.match(selectedFiles['xl/workbook.xml'], /'4\.'!\$A\$1:\$M\$443/);
   for (const [path, xml] of Object.entries(fullFiles)) { assert.doesNotMatch(path, /external|macro|metadata|ES_/i); assert.doesNotMatch(xml, /<f[ >]|api.?key|ownerId|organizationId|Bearer|http[^"]*\/externalLinks/i); }
-  for (const xml of Object.values(fullFiles).filter(v => v.includes('<worksheet'))) { assert.match(xml, /fitToHeight="0"/); assert.match(xml, /LEGACY_REPLAY/); }
+  for (const xml of Object.values(fullFiles).filter(v => v.includes('<worksheet'))) { assert.doesNotMatch(xml, /fitToHeight="0"/); assert.match(xml, /paperSize="9"/); }
   const out = resolve('outputs/cf123-es'); mkdirSync(out, { recursive: true }); writeFileSync(resolve(out, 'synthetic-full-17.xlsx'), all); writeFileSync(resolve(out, 'synthetic-selected-cover-4-4dot.xlsx'), selected);
   for (const [name, ids, expected] of [
     ['synthetic-selected-cover-3-4dot.xlsx', ['cover', 'rate_details', 'previous_day_index_details'], ['표지', '3', '4.']],
@@ -70,7 +70,7 @@ test('CF123 real full/selected XLSX are values-only, exact scope, no support dat
 });
 test('CF123 working XLSX contains editable input, guarded snapshot and supported Excel formulas; blank backup exports', async () => {
   const input = fixture(), bytes = await exportEsWorking(input), wb = files(bytes);
-  assert.equal(Object.keys(wb).filter(k => /^xl\/worksheets\//.test(k)).length, 20);
+  assert.equal(Object.keys(wb).filter(k => /^xl\/worksheets\/sheet\d+\.xml$/.test(k)).length, 20);
   assert.match(wb['xl/workbook.xml'], /name="ES_작업정보"[^>]*state="veryHidden"/);
   assert.match(wb['xl/worksheets/sheet2.xml'], /<f>SUM\(/);
   assert.match(wb['xl/worksheets/sheet2.xml'], /ROUND\(/);

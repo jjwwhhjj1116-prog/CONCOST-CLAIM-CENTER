@@ -1,20 +1,20 @@
 import { type EsInput, type EsResult, type EsContextResult } from './es-calculation';
-import { esTemplateGrids, esTemplateValues, type EsTemplateGrid } from './es-template';
+import { ES_ATTACHMENT_TITLES, esTemplateGrids, esTemplateValues, type EsTemplateGrid } from './es-template';
 
 export const ES_SHEETS = [
   ['cover', '표지', 'A1:A18', '물가변동 산출서'],
   ['contents', '목록', 'A1:D24', '출력 목록'],
-  ['divider_1', '붙1', 'A1:D47', '물가변동 검토 요약'],
+  ['divider_1', '붙1', 'A1:D47', ES_ATTACHMENT_TITLES[0]],
   ['review_summary', '1', 'A1:J42', '물가변동 검토 요약'],
-  ['divider_2', '붙2', 'A1:D47', '계약금액 조정'],
+  ['divider_2', '붙2', 'A1:D47', ES_ATTACHMENT_TITLES[1]],
   ['amount_adjustment', '2', 'A1:E32', '계약금액 조정 산출'],
   ['weighted_rate', '2.1', 'A1:E40', '가중평균 지수조정률'],
   ['advance_deduction', '2.2(선금)', 'A1:D32', '선금 공제'],
-  ['divider_3', '붙3', 'A1:D47', '비목별 지수조정률'],
+  ['divider_3', '붙3', 'A1:D47', ES_ATTACHMENT_TITLES[2]],
   ['rate_details', '3', 'A1:H51', '비목별 지수조정률 산출'],
-  ['divider_4', '붙4', 'A1:D47', '비목별 지수 산출근거'],
+  ['divider_4', '붙4', 'A1:D47', ES_ATTACHMENT_TITLES[3]],
   ['index_details', '4', 'A1:M443', '비목별 지수 산출근거'],
-  ['divider_5', '붙5', 'A1:D47', '조정기준일 직전일 검토'],
+  ['divider_5', '붙5', 'A1:D47', ES_ATTACHMENT_TITLES[4]],
   ['previous_day_eligibility', '2.', 'A1:E24', '직전일 조정 검토'],
   ['previous_day_weighted_rate', '2.1.', 'A1:E40', '직전일 가중평균 지수조정률'],
   ['previous_day_rate_details', '3.', 'A1:H51', '직전일 비목별 지수조정률'],
@@ -65,7 +65,13 @@ export function buildEsSheets(input: EsInput, result: EsResult, selected: readon
     else if (id.includes('weighted_rate') || id === 'previous_day_eligibility') rows = [['기준일', input.baseDate], ['비교일', context.date], ['비목 원가 합계', context.denominator], ['계수 합계', context.weightSum], ['조정계수 합계', context.adjustedSum], ['적용 K (합계−1)', context.k], ['표시 K (합계−계수합)', context.displayK], ['판정', '법적 요건·기간·원본 참조 오류 검토 필요']];
     else rows = [['공사명', input.title], ['계약금액', input.contractAmount], ['기성 제외액', input.paidWorkExclusion], ['직접 지급 추가 제외액', result.amount.directExtra], ['적용대가', result.amount.applicable], ['적용 K', context.k], ['조정금액', result.amount.gross], ['선금 공제', result.amount.advance], ['기타 공제', input.otherDeduction], ['순조정금액', result.amount.net]];
     const grid = esTemplateGrids.find(g => g.name === name);
-    // Contents is generated from the selected bundle, never copied from the complete source.
-    return { id, name, printArea, title, columns, rows, divider, ...(grid && id !== 'contents' ? { grid, values: esTemplateValues(input, result, grid) } : {}) };
+    const values = grid ? esTemplateValues(input, result, grid) : undefined;
+    if (id === 'contents' && values) {
+      values.B19 = ''; values.C19 = '';
+      // Retain the original five-group layout, but never list an omitted group.
+      const groups = [['divider_1','review_summary'],['divider_2','amount_adjustment','weighted_rate','advance_deduction'],['divider_3','rate_details'],['divider_4','index_details'],['divider_5','previous_day_eligibility','previous_day_weighted_rate','previous_day_rate_details','previous_day_index_details']];
+      groups.forEach((ids, i) => { if (!ids.some(key => selected.includes(key))) { values[`B${i+5}`] = ''; values[`C${i+5}`] = ''; } });
+    }
+    return { id, name, printArea, title, columns, rows, divider, ...(grid ? { grid, values } : {}) };
   });
 }

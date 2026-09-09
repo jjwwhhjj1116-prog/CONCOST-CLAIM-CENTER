@@ -7,6 +7,7 @@ import { esWorkingChain } from './es-working-formulas';
 import { ES_ORIGINAL_FORMULAS } from './es-original-formulas';
 import { esTemplateSheetXml, esTemplateStylesXml } from './es-template-xlsx';
 import { esTemplateGrids, esTemplateValues } from '../../../../packages/document-engine/src/es-template';
+import { ES_CONTENTS_DRAWING_XML } from '../../../../packages/document-engine/src/es-template-drawing';
 import type { EsSourceHistory } from '../../../../packages/document-engine/src/es-source-history';
 
 const esc = (value: unknown) => String(value).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]!));
@@ -247,13 +248,21 @@ function makeXlsx(sheets: SheetXml[]): Uint8Array {
   const files: Record<string, Uint8Array> = {}, put = (path: string, xml: string) => { files[path] = strToU8(xml); };
   const head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
   const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
-  put('[Content_Types].xml', head + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}</Types>`);
+  put('[Content_Types].xml', head + `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((sheet, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`+(sheet.name==='목록'&&sheet.templateXml?`<Override PartName="/xl/drawings/drawing${i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`:'')).join('')}</Types>`);
   put('_rels/.rels', head + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
   put('xl/_rels/workbook.xml.rels', head + `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`);
   put('xl/workbook.xml', head + `<workbook xmlns="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, i) => `<sheet name="${esc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"${s.hidden ? ' state="veryHidden"' : ''}/>`).join('')}</sheets><definedNames>${sheets.map((s, i) => `<definedName name="_xlnm.Print_Area" localSheetId="${i}">'${esc(s.name)}'!${s.area.replace(/([A-Z]+)(\d+)/g, '$$$1$$$2')}</definedName>`).join('')}</definedNames><calcPr calcId="191029" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>`);
   put('xl/styles.xml', head + `<styleSheet xmlns="${ns}"><fonts count="2"><font><sz val="10"/><name val="맑은 고딕"/></font><font><b/><sz val="12"/><name val="맑은 고딕"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>`);
   for (const [i, sheet] of sheets.entries()) {
-    if (sheet.templateXml) { put(`xl/worksheets/sheet${i + 1}.xml`, head + sheet.templateXml); continue; }
+    if (sheet.templateXml) {
+      let xml=sheet.templateXml;
+      if(sheet.name==='목록') {
+        xml=xml.replace('<worksheet ', '<worksheet xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ').replace('</worksheet>','<drawing r:id="contentsDrawing"/></worksheet>');
+        put(`xl/drawings/drawing${i+1}.xml`,ES_CONTENTS_DRAWING_XML);
+        put(`xl/worksheets/_rels/sheet${i+1}.xml.rels`,head+`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="contentsDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${i+1}.xml"/></Relationships>`);
+      }
+      put(`xl/worksheets/sheet${i + 1}.xml`, head + xml); continue;
+    }
     const cols = sheet.columns ?? Math.max(2, ...sheet.rows.map(r => r.length));
     let rows = sheet.rows.map((row, ri) => `<row r="${ri + 1}" ht="${ri < 2 ? 32 : 25}" customHeight="1">${row.map((value, ci) => {
       const address = String.fromCharCode(65 + ci) + (ri + 1), formula = sheet.formulas?.[address], style = ri < 2 ? 1 : 0;

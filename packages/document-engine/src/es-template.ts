@@ -5,9 +5,13 @@ import { esThemeColors, esIndexedColors } from './es-template-colors';
 import { esElapsedDays } from './es-source-history';
 
 export interface EsCellStyle { font: { name: string; size: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: unknown }; numberFormat: string; alignment?: Record<string, string>; borders?: Record<string, { style?: string; color?: unknown }>; fill?: unknown }
-export interface EsTemplateGrid { name: string; printArea: string; defaultRowHeight: number; rowHeights: Record<string, number>; rowStyles?: Record<string, number>; hiddenRows: number[]; columns: Record<string, { width: number; style?: number }>; merges: string[]; cellStyles: [string, number][]; margins: Record<string, string>; pageSetup: Record<string, string>; staticCells: Record<string, string>; fields: Record<string, string> }
+export interface EsTemplateGrid { name: string; printArea: string; defaultRowHeight: number; rowHeights: Record<string, number>; rowStyles?: Record<string, number>; hiddenRows: number[]; columns: Record<string, { width: number; style?: number }>; merges: string[]; cellStyles: [string, number][]; margins: Record<string, string>; pageSetup: Record<string, string>; horizontalCentered?: boolean; staticCells: Record<string, string>; fields: Record<string, string> }
 export const esTemplateStyles = template.styles as unknown as EsCellStyle[];
 export const esTemplateGrids = template.sheets as unknown as EsTemplateGrid[];
+// The original contents sheet is the single authority for attachment wording.
+export const ES_ATTACHMENT_TITLES = Object.freeze(Array.from({ length: 5 }, (_, i) => esTemplateGrids.find(g => g.name === '목록')!.staticCells[`C${i + 5}`]));
+// Source has no headers; only the numbered detail sheets have centered footers.
+export const esTemplateFooter = (grid: EsTemplateGrid) => /^\d/.test(grid.name) ? `&C&${grid.name === '3' || grid.name === '3.' ? 10 : 9}- &P -` : '';
 export function esTemplateColor(value: unknown): string {
   if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) return value;
   const v = value as { theme?: number; indexed?: number; tint?: number } | undefined;
@@ -51,7 +55,7 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
     const pairDisplay = (pair: typeof p.machinery) => ({ baseStatement: `${pair.baseLabel || input.baseDate} · 공통 ${pair.commonCount}개 · 평균 ${pair.baseAverage}`, comparisonStatement: `${pair.comparisonLabel || c.date} · 공통 ${pair.commonCount}개 · 평균 ${pair.comparisonAverage}`, equation: `${pair.comparisonAverage} ÷ ${pair.baseAverage} × 100` });
     contexts[name] = { ...p, ...c, costRows: rows, subtotals, rateDetails, safety: { ratios: safetyRatios, contributions, weightSum: sum(safeRows.map(r => rows[r].weight)), changedWeightSum: sum(Object.values(contributions)) }, other: { groups, baseSum: sum(groups.map(g => g.baseContribution)), comparisonSum: sum(groups.map(g => g.comparisonContribution)) },
       standards: p.standards.map(pair => ({ ...pair, display: pairDisplay(pair) })),
-      cohorts: [{ periodLabel: `${input.baseDate} ~ ${c.date}`, amount: c.denominator, amountWeight: '1', k: c.k, weightedK: c.k }], cohortAmountTotal: c.denominator, cohortWeightSum: '1', legacyThresholdStatus: '원본 호환 · 법적 요건 검토 필요',
+      cohorts: [{ periodLabel: `${input.baseDate} ~ ${c.date}`, amount: c.denominator, amountWeight: '1', k: c.k, weightedK: c.k }], cohortAmountTotal: c.denominator, cohortWeightSum: '1', legacyThresholdStatus: '검토 필요',
       display: { periodCaption: `기준일 ${input.baseDate} / 비교일 ${c.date}`, rateDetailsTitle: '비목별 지수조정률 산출', rateEquation: `${c.adjustedSum} − ${c.weightSum} = ${c.displayK}`, wageStatement: `${c.date} 적용 노임 ${p.period.wage}`, wageEquation: `${p.period.wage} ÷ ${input.base.wage} × 100 = ${rows[11].comparison}`, machineryBaseStatement: pairDisplay(p.machinery).baseStatement, machineryComparisonStatement: pairDisplay(p.machinery).comparisonStatement, machineryEquation: pairDisplay(p.machinery).equation,
         materialRatio: [17,18,19,20].map(r => rows[r].ratio), materialPeriod: p.period.materials.map(() => `${input.baseDate} / ${c.date}`), safetyEquation: `${c.safetyComparison} ÷ ${c.safetyBase} × 100 = ${rows[29].comparison}`, otherBaseEquation: `양수 계수 비목 평균 = ${c.zBase}`, otherComparisonEquation: `양수 계수 비목 평균 = ${c.zComparison}`, otherRatioEquation: `${c.zComparison} ÷ ${c.zBase} × 100 = ${c.zIndex}` }
     };
@@ -66,8 +70,8 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
     let value = at(root, path);
     // Original F19 is the narrow equals cell; G19 already contains the resulting index.
     if (path.endsWith('.display.wageEquation')) value = '=';
-    if (path.startsWith('output.dividerTitle.')) value = ['','물가변동 검토 요약','계약금액 조정 산출','비목별 지수조정률 산출','비목별 지수 산출근거','조정기준일 직전일 검토'][Number(path.split('.').at(-1))];
-    if (path.startsWith('output.attachmentNumber.')) value = '붙임 ' + path.split('.').at(-1);
+    if (path.startsWith('output.dividerTitle.')) value = ES_ATTACHMENT_TITLES[Number(path.split('.').at(-1)) - 1];
+    if (path.startsWith('output.attachmentNumber.')) value = path.split('.').at(-1);
     if (value === undefined || value === '') { values[address] = '—'; continue; }
     let text = String(value);
     if (format === 'percent') text = d(text).mul(d(100)).toString() + '%';
@@ -76,5 +80,6 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
     values[address] = text;
   }
   if (grid.name === '1') values.J6 = input.contract?.bidRate ? d(input.contract.bidRate).div(d(100)).toString() : '—';
+  if (grid.name === '목록') { values.B19 = ''; values.C19 = ''; }
   return values;
 }

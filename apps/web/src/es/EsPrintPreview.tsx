@@ -26,8 +26,10 @@ body { margin:0; background:#e9edf2; font-family:"Malgun Gothic","맑은 고딕"
 .es-paper footer { position:absolute; bottom:8mm; left:18mm; right:18mm; font-size:8pt; text-align:center; border-top:1px solid #aeb7c0; padding-top:2mm; }
 .es-paper .es-draft { color:#913900; font-size:9pt; font-weight:700; }
 .es-original td { border:0; }
+@media screen { body { zoom:var(--es-preview-scale,1); } }
 @media print { body { background:white; } .es-paper { margin:0; box-shadow:none; } }
 `;
+const printDocument = (html: string) => '<!doctype html><html lang="ko"><head><meta charset="UTF-8"><title>ES 산출서 · 검토용 초안</title><style>'+PRINT_CSS+'</style></head><body>'+html+'</body></html>';
 function tableHeader(sheet: EsOutputSheet) { return '<thead><tr>' + sheet.columns.map(c => '<th>' + escape(c) + '</th>').join('') + '</tr></thead>'; }
 function tableRow(row: string[]) { return '<tr>' + row.map(c => '<td>' + escape(c) + '</td>').join('') + '</tr>'; }
 function header(sheet: EsOutputSheet, title: string) { return `<header><p class="es-draft">초안 · LEGACY_REPLAY · 원본 출력배치 대조 미완료</p><h1>${escape(sheet.name)} · ${escape(sheet.title)}</h1><p>${escape(title)}</p></header>`; }
@@ -57,22 +59,36 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
   const [pages, setPages] = useState<string[]>([]), [range, setRange] = useState(''), [confirmed, setConfirmed] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [printing, setPrinting] = useState(false);
   const [notice, setNotice] = useState(''), [reload, setReload] = useState(0);
-  const measure = useRef<HTMLDivElement>(null), frame = useRef<HTMLIFrameElement | null>(null);
+  const measure = useRef<HTMLDivElement>(null), frame = useRef<HTMLIFrameElement | null>(null), preview = useRef<HTMLIFrameElement>(null);
   const printAttempt = useRef(0);
   const key = run.id + ':' + selection.join('|');
   useEffect(() => {
     let active = true; setPages([]); setRange(''); setConfirmed(''); setError(''); setBusy(true);
-    void readyWithin(document.fonts.ready, '글꼴').then(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve()))).then(() => {
-      if (!active || !measure.current) return;
-      const generated = paginate(buildEsSheets(run.input, run.result, selection), run.input.title, measure.current);
-      measure.current.innerHTML = ''; setPages(generated);
-    }).catch(e => { if (active) setError(e instanceof Error ? e.message : '미리보기를 만들지 못했습니다.'); }).finally(() => { if (active) setBusy(false); });
-    return () => { active = false; };
+    const measuringFrame = document.createElement('iframe');
+    measuringFrame.title = '인쇄 규격 측정';
+    measuringFrame.style.cssText = 'width:210mm;height:297mm;border:0';
+    const loaded = new Promise<void>(resolve => { measuringFrame.onload = () => resolve(); });
+    measuringFrame.srcdoc = printDocument(''); measure.current?.appendChild(measuringFrame);
+    void readyWithin(loaded, '인쇄 레이아웃').then(() => readyWithin(measuringFrame.contentDocument!.fonts.ready, '글꼴')).then(() => {
+      if (!active) return;
+      // Measure with exactly the print stylesheet, not the application form CSS.
+      const generated = paginate(buildEsSheets(run.input, run.result, selection), run.input.title, measuringFrame.contentDocument!.body);
+      measuringFrame.remove(); setPages(generated);
+    }).catch(e => { if (active) setError(e instanceof Error ? e.message : '미리보기를 만들지 못했습니다.'); }).finally(() => { measuringFrame.remove(); if (active) setBusy(false); });
+    return () => { active = false; measuringFrame.remove(); };
   }, [key, reload]);
   useEffect(() => () => { printAttempt.current++; frame.current?.remove(); }, []);
   let selectedPages: number[] = [];
   try { if (pages.length) selectedPages = parseEsPages(range, pages.length); } catch { /* Shown on confirmation; no implicit print fallback. */ }
-  const decorate = (html: string, index: number, partial = false) => html.replace('__ES_FOOTER__', `<footer>v${run.revision} · ${index + 1} / ${pages.length}${partial ? ' · 발췌본' : ''} · 검토용 초안</footer>`);
+  const decorate = (html: string, index: number, partial = false) => html.replace('__ES_PAGE_NUMBER__', String(index + 1)).replace('__ES_FOOTER__', `<footer>v${run.revision} · ${index + 1} / ${pages.length}${partial ? ' · 발췌본' : ''} · 검토용 초안</footer>`);
+  const fitPreview = () => {
+    const iframe = preview.current;
+    if (iframe) iframe.contentDocument?.documentElement?.style.setProperty('--es-preview-scale', String(Math.min(1, Math.max(.1,(iframe.clientWidth-24)/(210*96/25.4)))));
+  };
+  useEffect(() => {
+    if (!preview.current) return;
+    const observer = new ResizeObserver(fitPreview); observer.observe(preview.current); return () => observer.disconnect();
+  }, []);
   const print = async () => {
     if (printing || confirmed !== key + ':' + range || !selectedPages.length) return;
     setPrinting(true); setError(''); setNotice('');
@@ -85,7 +101,7 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
       checkActive();
       const iframe = document.createElement('iframe'); iframe.title = 'ES 인쇄 문서'; iframe.style.cssText = 'position:fixed;left:-12000px;top:0;width:210mm;height:297mm;border:0'; frame.current = iframe;
       const loaded = new Promise<void>((resolve, reject) => { iframe.onload = () => resolve(); iframe.onerror = () => reject(new Error('인쇄 문서를 열지 못했습니다.')); });
-      iframe.srcdoc = '<!doctype html><html lang="ko"><head><meta charset="UTF-8"><title>ES 초안 출력</title><style>' + PRINT_CSS + '</style></head><body>' + selectedPages.map(n => decorate(pages[n - 1], n - 1, selectedPages.length !== pages.length)).join('') + '</body></html>';
+      iframe.srcdoc = printDocument(selectedPages.map(n => decorate(pages[n - 1], n - 1, selectedPages.length !== pages.length)).join(''));
       document.body.appendChild(iframe); await readyWithin(loaded, '인쇄 문서'); checkActive();
       const win = iframe.contentWindow; if (!win) throw new Error('인쇄 창이 준비되지 않았습니다.');
       await readyWithin(iframe.contentDocument!.fonts.ready, '인쇄 글꼴'); checkActive();
@@ -100,7 +116,7 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
       if (outputId) void apiRequest(`/api/es/documents/${documentId}/outputs`, { method: 'PATCH', body: JSON.stringify({ outputId, status: 'FAILED' }) }).catch(() => undefined);
     }
   };
-  return <section className="es-print-preview"><h2>인쇄 미리보기</h2><p>실제 렌더링 후 페이지를 나눕니다. 시트 선택이 바뀌면 페이지 지정을 다시 확인해야 합니다.</p>
+  return <section className="es-print-preview"><h2>인쇄 미리보기</h2><p>A4 · 원본 Excel 여백·배율·서식 적용 · 검토용 초안(LEGACY_REPLAY). 화면은 폭에 맞춰 축소되며 인쇄는 A4 규격을 유지합니다.</p><p>인쇄창에서 용지 A4, 배율 100%, 여백 없음, 브라우저 머리글·바닥글 해제를 확인하세요. 시트 선택이 바뀌면 페이지 지정을 다시 확인해야 합니다.</p>
     <div ref={measure} style={{ position: 'absolute', left: '-12000px', top: 0, visibility: 'hidden', width: '210mm' }} aria-hidden="true" />
     {error && <p role="alert" className="es-error">{error}</p>}
     {busy ? <p role="status">글꼴·표 높이를 확인하는 중…</p> : <div className="es-actions"><label className="es-field">페이지 지정 · 총 {pages.length}페이지<input value={range} placeholder="전체: 빈칸 / 지정: 1,3,5-8" onChange={e => { setRange(e.target.value); setConfirmed(''); }} /></label>
@@ -110,6 +126,6 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
     </div>}
     {notice && <p role="status">{notice}</p>}
     {printing && <button onClick={() => { printAttempt.current++; frame.current?.remove(); frame.current = null; setPrinting(false); setNotice('인쇄 준비 상태를 해제했습니다. 문서는 변경되지 않았습니다.'); }}>대화상자 종료 후 상태 해제</button>}
-    <div className="es-pages"><style>{PRINT_CSS.replace(/body\s*\{/g, '.es-pages {').replace(/\*\s*\{/g, '.es-pages * {')}</style>{pages.map((html, i) => <div key={i} dangerouslySetInnerHTML={{ __html: decorate(html, i) }} />)}</div>
+    <iframe ref={preview} className="es-pages" title="ES A4 인쇄 미리보기" style={{ width:'100%', height:'min(750px,75vh)', display:'block' }} onLoad={fitPreview} srcDoc={printDocument(pages.map((html,i) => decorate(html,i)).join(''))} />
   </section>;
 }

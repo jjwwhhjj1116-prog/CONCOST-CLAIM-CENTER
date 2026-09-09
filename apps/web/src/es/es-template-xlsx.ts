@@ -1,4 +1,4 @@
-import { esCellAddress, esCellPosition, esTemplateColor, esTemplateStyles, type EsTemplateGrid } from '../../../../packages/document-engine/src/es-template';
+import { esCellAddress, esCellPosition, esTemplateColor, esTemplateStyles, esTemplateFooter, type EsTemplateGrid } from '../../../../packages/document-engine/src/es-template';
 const esc=(v:unknown)=>String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g,'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 const attrs=(o:Record<string,unknown>)=>Object.entries(o).map(([k,v])=>` ${k}="${esc(v)}"`).join('');
 const rgb=(v:unknown)=>'FF'+esTemplateColor(v).slice(1);
@@ -26,5 +26,7 @@ export function esTemplateSheetXml(grid:EsTemplateGrid,values:Record<string,stri
     }
     rows+=`<row r="${r}" ht="${grid.rowHeights[r]??grid.defaultRowHeight}" customHeight="1"${grid.hiddenRows.includes(r)?' hidden="1"':''}>${cells}</row>`;
   }
-  return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="${grid.printArea}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="${grid.defaultRowHeight}"/><cols>${Object.entries(grid.columns).map(([n,c])=>`<col min="${n}" max="${n}" width="${c.width}" customWidth="1" style="${(c.style??0)+2}"/>`).join('')}</cols><sheetData>${rows}</sheetData>${grid.merges.length?`<mergeCells count="${grid.merges.length}">${grid.merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>`:''}<printOptions horizontalCentered="1"/><pageMargins${attrs(grid.margins)}/><pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="0"/><headerFooter><oddHeader>&amp;C검토용 초안 · LEGACY_REPLAY</oddHeader><oddFooter>&amp;C&amp;P / &amp;N · 미확인 항목 —</oddFooter></headerFooter></worksheet>`;
+  const pageSetup = Object.fromEntries(Object.entries(grid.pageSetup).filter(([key]) => !key.includes(':') && key !== 'id'));
+  const footer = esTemplateFooter(grid);
+  return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${grid.printArea}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="${grid.defaultRowHeight}"/><cols>${Object.entries(grid.columns).map(([n,c])=>`<col min="${n}" max="${n}" width="${c.width}" customWidth="1" style="${(c.style??0)+2}"/>`).join('')}</cols><sheetData>${rows}</sheetData>${grid.merges.length?`<mergeCells count="${grid.merges.length}">${grid.merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>`:''}<printOptions horizontalCentered="${grid.horizontalCentered ? 1 : 0}"/><pageMargins${attrs(grid.margins)}/><pageSetup${attrs(pageSetup)}/><headerFooter alignWithMargins="0">${footer ? `<oddFooter>${esc(footer)}</oddFooter>` : ''}</headerFooter></worksheet>`;
 }
