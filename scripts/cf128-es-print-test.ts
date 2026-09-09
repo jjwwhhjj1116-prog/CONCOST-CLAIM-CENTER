@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { calculateEs, newEsInput } from '../packages/document-engine/src/es-calculation';
 import { buildEsSheets, ES_SHEETS } from '../packages/document-engine/src/es-output';
 import { esCellPosition, esTemplateFooter, esTemplateGrids, esTemplateStyles, esTemplateValues, type EsTemplateGrid } from '../packages/document-engine/src/es-template';
+import { esContentsDrawingSvg } from '../packages/document-engine/src/es-template-drawing';
 import { esPrintNumber } from '../apps/web/src/es/es-template-print';
 import { esTemplateSheetXml, esTemplateStylesXml } from '../apps/web/src/es/es-template-xlsx';
 import { exportEsReport, exportEsWorking } from '../apps/web/src/es/es-xlsx';
@@ -16,7 +17,7 @@ const metadataPath = process.env.CF128_ES_PRINT_METADATA ?? resolve('output/cf12
 const requireWeb = createRequire(resolve('apps/web/package.json'));
 const { unzipSync, strFromU8 } = requireWeb('fflate') as typeof import('../apps/web/node_modules/fflate');
 const xmlText = (text: string) => text.replace(/&(?:amp|lt|gt|quot|apos);/g, entity => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'" }[entity]!));
-const attributes = (tag: string) => Object.fromEntries([...tag.matchAll(/([\w:]+)="([^"]*)"/g)].map(m => [m[1], xmlText(m[2])]));
+const attributes = (tag: string) => Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)].map(m => [m[1], xmlText(m[2])]));
 const tagAttributes = (xml: string, name: string) => attributes(xml.match(new RegExp(`<${name}\\b[^>]*>`))?.[0] ?? '');
 const xmlFiles = (bytes: Uint8Array) => Object.fromEntries(Object.entries(unzipSync(bytes)).map(([path, bytes]) => [path, strFromU8(bytes)]));
 const gridFor = (name: string) => { const grid = esTemplateGrids.find(g => g.name === name); assert.ok(grid, name); return grid; };
@@ -271,4 +272,23 @@ test('CF128 contents drawing anchors retain the independently extracted source l
     const anchor = xml.match(new RegExp(`<(?:[\\w]+:)?${end}>([\\s\\S]*?)<\\/(?:[\\w]+:)?${end}>`))?.[1]; assert.ok(anchor, end);
     for (const key of ['col', 'colOff', 'row', 'rowOff']) assert.equal(anchor.match(new RegExp(`<(?:[\\w]+:)?${key}>(\\d+)<\\/(?:[\\w]+:)?${key}>`))?.[1], drawing[end][key], `${end}.${key}`);
   }
+});
+
+test('CF128 contents SVG converts all EMU geometry into CSS-pixel coordinates and preserves an unclamped 24px title', () => {
+  const svg = esContentsDrawingSvg([100, 200, 300, 40], () => 12), outer = tagAttributes(svg, 'svg'), text = tagAttributes(svg, 'text');
+  assert.equal(text['font-size'], '24', '18pt title must not enter browser layout as 228600px');
+  assert.deepEqual(outer.viewBox.split(' ').map(Number), [95250, 167204, 5943600, 7429263].map(emu => emu / 9525));
+  assert.ok(outer.viewBox.split(' ').map(Number).every(value => value >= 0 && value < 1000), 'viewBox uses pixels, not millions of EMU');
+  assert.match(outer.style, /left:8px;top:32px;width:614px;/);
+  const rects = [...svg.matchAll(/<rect\b[^>]*\/>/g)].map(m => attributes(m[0])); assert.equal(rects.length, 2);
+  for (const rect of rects) {
+    assert.equal(Number(rect['stroke-width']), 25400 / 9525);
+    for (const key of ['x', 'y', 'width', 'height', 'rx']) assert.ok(Number(rect[key]) > 0 && Number(rect[key]) < 1000, `pixel ${key}`);
+  }
+  assert.equal(Number(text.x), 3059225.5 / 9525); assert.equal(Number(text.y), 396928.5 / 9525);
+  assert.equal(Number(text.x), Number(rects[1].x) + Number(rects[1].width) / 2);
+  assert.equal(Number(text.y), Number(rects[1].y) + Number(rects[1].height) / 2);
+  assert.equal(text['text-anchor'], 'middle'); assert.equal(text['dominant-baseline'], 'central');
+  assert.match(svg, />붙임자료 목록<\/text>/);
+  assert.doesNotMatch(svg, /<script|foreignObject|(?:href|onload|onclick)=|font-size="228600"/i);
 });
