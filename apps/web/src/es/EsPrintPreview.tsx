@@ -59,6 +59,7 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
   const [pages, setPages] = useState<string[]>([]), [range, setRange] = useState(''), [confirmed, setConfirmed] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(true), [printing, setPrinting] = useState(false);
   const [notice, setNotice] = useState(''), [reload, setReload] = useState(0);
+  const [zoom, setZoom] = useState('fit');
   const measure = useRef<HTMLDivElement>(null), frame = useRef<HTMLIFrameElement | null>(null), preview = useRef<HTMLIFrameElement>(null);
   const printAttempt = useRef(0);
   const key = run.id + ':' + selection.join('|');
@@ -83,12 +84,12 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
   const decorate = (html: string, index: number, partial = false) => html.replace('__ES_PAGE_NUMBER__', String(index + 1)).replace('__ES_FOOTER__', `<footer>v${run.revision} · ${index + 1} / ${pages.length}${partial ? ' · 발췌본' : ''} · 검토용 초안</footer>`);
   const fitPreview = () => {
     const iframe = preview.current;
-    if (iframe) iframe.contentDocument?.documentElement?.style.setProperty('--es-preview-scale', String(Math.min(1, Math.max(.1,(iframe.clientWidth-24)/(210*96/25.4)))));
+    if (iframe) iframe.contentDocument?.documentElement?.style.setProperty('--es-preview-scale', zoom === 'fit' ? String(Math.max(.1,(iframe.clientWidth-24)/(210*96/25.4))) : String(Number(zoom)));
   };
   useEffect(() => {
     if (!preview.current) return;
     const observer = new ResizeObserver(fitPreview); observer.observe(preview.current); return () => observer.disconnect();
-  }, []);
+  }, [zoom]);
   const print = async () => {
     if (printing || confirmed !== key + ':' + range || !selectedPages.length) return;
     setPrinting(true); setError(''); setNotice('');
@@ -116,16 +117,23 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
       if (outputId) void apiRequest(`/api/es/documents/${documentId}/outputs`, { method: 'PATCH', body: JSON.stringify({ outputId, status: 'FAILED' }) }).catch(() => undefined);
     }
   };
-  return <section className="es-print-preview"><h2>인쇄 미리보기</h2><p>A4 · 원본 Excel 여백·배율·서식 적용 · 검토용 초안(LEGACY_REPLAY). 화면은 폭에 맞춰 축소되며 인쇄는 A4 규격을 유지합니다.</p><p>인쇄창에서 용지 A4, 배율 100%, 여백 없음, 브라우저 머리글·바닥글 해제를 확인하세요. 시트 선택이 바뀌면 페이지 지정을 다시 확인해야 합니다.</p>
+  return <section className="es-print-preview">
+    <div className="es-print-canvas"><h2>인쇄 미리보기 <small>A4 · 검토용 초안</small></h2>
+      {busy && <p role="status">글꼴·표 높이를 확인하는 중…</p>}
+      <iframe ref={preview} className="es-pages" title="ES A4 인쇄 미리보기" style={{ width:'100%', height:'min(750px,75vh)', display:'block' }} onLoad={fitPreview} srcDoc={printDocument(pages.map((html,i) => decorate(html,i)).join(''))} />
+    </div>
+    <aside className="es-print-settings" aria-label="인쇄 설정"><h2>인쇄 설정</h2>
+    <details><summary>A4 출력 안내</summary><p>A4 · 원본 표·제목·숫자 서식 유지 · 본문 여백 좌우·상단 12mm, 하단 16mm · 검토용 초안(LEGACY_REPLAY). 화면 확대율은 실제 인쇄 크기에 영향을 주지 않습니다.</p><p>인쇄창에서 용지 A4, 배율 100%, 여백 없음, 브라우저 머리글·바닥글 해제를 확인하세요. 시트 선택이 바뀌면 페이지 지정을 다시 확인해야 합니다.</p></details>
     <div ref={measure} style={{ position: 'absolute', left: '-12000px', top: 0, visibility: 'hidden', width: '210mm' }} aria-hidden="true" />
     {error && <p role="alert" className="es-error">{error}</p>}
     {busy ? <p role="status">글꼴·표 높이를 확인하는 중…</p> : <div className="es-actions"><label className="es-field">페이지 지정 · 총 {pages.length}페이지<input value={range} placeholder="전체: 빈칸 / 지정: 1,3,5-8" onChange={e => { setRange(e.target.value); setConfirmed(''); }} /></label>
       <button disabled={!pages.length} onClick={() => { try { parseEsPages(range, pages.length); setConfirmed(key + ':' + range); setError(''); } catch (e) { setError(e instanceof Error ? e.message : '페이지 확인 필요'); } }}>페이지 확인</button>
       <button className="es-primary" disabled={printing || confirmed !== key + ':' + range || !selectedPages.length} onClick={() => void print()}>프린터 인쇄 / PDF 저장</button>
       <button disabled={printing} onClick={() => setReload(v => v + 1)}>미리보기 다시 생성</button>
+      <label className="es-field">화면 확대<select aria-label="화면 확대" value={zoom} onChange={event => setZoom(event.target.value)}><option value="fit">화면 폭에 맞춤</option><option value="1">100% · 실제 크기</option><option value="1.25">125%</option><option value="1.5">150%</option></select></label>
     </div>}
     {notice && <p role="status">{notice}</p>}
     {printing && <button onClick={() => { printAttempt.current++; frame.current?.remove(); frame.current = null; setPrinting(false); setNotice('인쇄 준비 상태를 해제했습니다. 문서는 변경되지 않았습니다.'); }}>대화상자 종료 후 상태 해제</button>}
-    <iframe ref={preview} className="es-pages" title="ES A4 인쇄 미리보기" style={{ width:'100%', height:'min(750px,75vh)', display:'block' }} onLoad={fitPreview} srcDoc={printDocument(pages.map((html,i) => decorate(html,i)).join(''))} />
+    </aside>
   </section>;
 }

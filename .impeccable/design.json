@@ -1,0 +1,410 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-09T05:24:52.257Z",
+  "title": "Design System: Claim Center Studio — ES Workbench",
+  "extensions": {
+    "colorMeta": {
+      "es-accent": {
+        "role": "primary",
+        "displayName": "업무 청색",
+        "canonical": "#236c9a",
+        "tonalRamp": [
+          "oklch(15.00% 0.10133 241.01)",
+          "oklch(26.43% 0.10133 241.01)",
+          "oklch(37.86% 0.10133 241.01)",
+          "oklch(49.29% 0.10133 241.01)",
+          "oklch(60.71% 0.10133 241.01)",
+          "oklch(72.14% 0.10133 241.01)",
+          "oklch(83.57% 0.10133 241.01)",
+          "oklch(95.00% 0.10133 241.01)"
+        ]
+      },
+      "es-accent-hover": {
+        "role": "primary",
+        "displayName": "업무 청색 hover",
+        "canonical": "#1b567d",
+        "tonalRamp": [
+          "oklch(15.00% 0.08767 242.12)",
+          "oklch(26.43% 0.08767 242.12)",
+          "oklch(37.86% 0.08767 242.12)",
+          "oklch(49.29% 0.08767 242.12)",
+          "oklch(60.71% 0.08767 242.12)",
+          "oklch(72.14% 0.08767 242.12)",
+          "oklch(83.57% 0.08767 242.12)",
+          "oklch(95.00% 0.08767 242.12)"
+        ]
+      },
+      "selected-row": {
+        "role": "primary",
+        "displayName": "선택 청백색",
+        "canonical": "#e6f1fc",
+        "tonalRamp": [
+          "oklch(15.00% 0.01892 248.03)",
+          "oklch(26.43% 0.01892 248.03)",
+          "oklch(37.86% 0.01892 248.03)",
+          "oklch(49.29% 0.01892 248.03)",
+          "oklch(60.71% 0.01892 248.03)",
+          "oklch(72.14% 0.01892 248.03)",
+          "oklch(83.57% 0.01892 248.03)",
+          "oklch(95.00% 0.01892 248.03)"
+        ]
+      },
+      "selected-ink": {
+        "role": "primary",
+        "displayName": "선택 잉크",
+        "canonical": "#173c63",
+        "tonalRamp": [
+          "oklch(15.00% 0.08022 252.16)",
+          "oklch(26.43% 0.08022 252.16)",
+          "oklch(37.86% 0.08022 252.16)",
+          "oklch(49.29% 0.08022 252.16)",
+          "oklch(60.71% 0.08022 252.16)",
+          "oklch(72.14% 0.08022 252.16)",
+          "oklch(83.57% 0.08022 252.16)",
+          "oklch(95.00% 0.08022 252.16)"
+        ]
+      },
+      "manual-entry": {
+        "role": "secondary",
+        "displayName": "수동입력 연노랑",
+        "canonical": "#fff5cc",
+        "tonalRamp": [
+          "oklch(15.00% 0.05409 95.87)",
+          "oklch(26.43% 0.05409 95.87)",
+          "oklch(37.86% 0.05409 95.87)",
+          "oklch(49.29% 0.05409 95.87)",
+          "oklch(60.71% 0.05409 95.87)",
+          "oklch(72.14% 0.05409 95.87)",
+          "oklch(83.57% 0.05409 95.87)",
+          "oklch(95.00% 0.05409 95.87)"
+        ]
+      },
+      "manual-ink": {
+        "role": "neutral",
+        "displayName": "수동입력 잉크",
+        "canonical": "#183049",
+        "tonalRamp": [
+          "oklch(15.00% 0.05465 250.95)",
+          "oklch(26.43% 0.05465 250.95)",
+          "oklch(37.86% 0.05465 250.95)",
+          "oklch(49.29% 0.05465 250.95)",
+          "oklch(60.71% 0.05465 250.95)",
+          "oklch(72.14% 0.05465 250.95)",
+          "oklch(83.57% 0.05465 250.95)",
+          "oklch(95.00% 0.05465 250.95)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "종이 백색",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "oklch(15.00% 0.00000 0)",
+          "oklch(26.43% 0.00000 0)",
+          "oklch(37.86% 0.00000 0)",
+          "oklch(49.29% 0.00000 0)",
+          "oklch(60.71% 0.00000 0)",
+          "oklch(72.14% 0.00000 0)",
+          "oklch(83.57% 0.00000 0)",
+          "oklch(95.00% 0.00000 0)"
+        ]
+      },
+      "raised-light": {
+        "role": "neutral",
+        "displayName": "밝은 작업면",
+        "canonical": "#fafcfe",
+        "tonalRamp": [
+          "oklch(15.00% 0.00341 247.86)",
+          "oklch(26.43% 0.00341 247.86)",
+          "oklch(37.86% 0.00341 247.86)",
+          "oklch(49.29% 0.00341 247.86)",
+          "oklch(60.71% 0.00341 247.86)",
+          "oklch(72.14% 0.00341 247.86)",
+          "oklch(83.57% 0.00341 247.86)",
+          "oklch(95.00% 0.00341 247.86)"
+        ]
+      },
+      "muted-light": {
+        "role": "neutral",
+        "displayName": "밝은 보조면",
+        "canonical": "#f0f4f8",
+        "tonalRamp": [
+          "oklch(15.00% 0.00686 247.90)",
+          "oklch(26.43% 0.00686 247.90)",
+          "oklch(37.86% 0.00686 247.90)",
+          "oklch(49.29% 0.00686 247.90)",
+          "oklch(60.71% 0.00686 247.90)",
+          "oklch(72.14% 0.00686 247.90)",
+          "oklch(83.57% 0.00686 247.90)",
+          "oklch(95.00% 0.00686 247.90)"
+        ]
+      },
+      "raised-dark": {
+        "role": "neutral",
+        "displayName": "어두운 작업면",
+        "canonical": "#111a2e",
+        "tonalRamp": [
+          "oklch(15.00% 0.04158 264.83)",
+          "oklch(26.43% 0.04158 264.83)",
+          "oklch(37.86% 0.04158 264.83)",
+          "oklch(49.29% 0.04158 264.83)",
+          "oklch(60.71% 0.04158 264.83)",
+          "oklch(72.14% 0.04158 264.83)",
+          "oklch(83.57% 0.04158 264.83)",
+          "oklch(95.00% 0.04158 264.83)"
+        ]
+      },
+      "muted-dark": {
+        "role": "neutral",
+        "displayName": "어두운 보조면",
+        "canonical": "#0b1222",
+        "tonalRamp": [
+          "oklch(15.00% 0.03468 265.25)",
+          "oklch(26.43% 0.03468 265.25)",
+          "oklch(37.86% 0.03468 265.25)",
+          "oklch(49.29% 0.03468 265.25)",
+          "oklch(60.71% 0.03468 265.25)",
+          "oklch(72.14% 0.03468 265.25)",
+          "oklch(83.57% 0.03468 265.25)",
+          "oklch(95.00% 0.03468 265.25)"
+        ]
+      },
+      "workbench-line": {
+        "role": "neutral",
+        "displayName": "작업 구분선",
+        "canonical": "#c8d6e5",
+        "tonalRamp": [
+          "oklch(15.00% 0.02573 249.98)",
+          "oklch(26.43% 0.02573 249.98)",
+          "oklch(37.86% 0.02573 249.98)",
+          "oklch(49.29% 0.02573 249.98)",
+          "oklch(60.71% 0.02573 249.98)",
+          "oklch(72.14% 0.02573 249.98)",
+          "oklch(83.57% 0.02573 249.98)",
+          "oklch(95.00% 0.02573 249.98)"
+        ]
+      },
+      "focus-ring": {
+        "role": "primary",
+        "displayName": "포커스 청색",
+        "canonical": "#70a9de",
+        "tonalRamp": [
+          "oklch(15.00% 0.09817 247.60)",
+          "oklch(26.43% 0.09817 247.60)",
+          "oklch(37.86% 0.09817 247.60)",
+          "oklch(49.29% 0.09817 247.60)",
+          "oklch(60.71% 0.09817 247.60)",
+          "oklch(72.14% 0.09817 247.60)",
+          "oklch(83.57% 0.09817 247.60)",
+          "oklch(95.00% 0.09817 247.60)"
+        ]
+      },
+      "draft-surface": {
+        "role": "secondary",
+        "displayName": "초안 크림색",
+        "canonical": "#fff7e8",
+        "tonalRamp": [
+          "oklch(15.00% 0.02153 83.26)",
+          "oklch(26.43% 0.02153 83.26)",
+          "oklch(37.86% 0.02153 83.26)",
+          "oklch(49.29% 0.02153 83.26)",
+          "oklch(60.71% 0.02153 83.26)",
+          "oklch(72.14% 0.02153 83.26)",
+          "oklch(83.57% 0.02153 83.26)",
+          "oklch(95.00% 0.02153 83.26)"
+        ]
+      },
+      "draft-ink": {
+        "role": "secondary",
+        "displayName": "초안 갈색",
+        "canonical": "#80511d",
+        "tonalRamp": [
+          "oklch(15.00% 0.09108 64.75)",
+          "oklch(26.43% 0.09108 64.75)",
+          "oklch(37.86% 0.09108 64.75)",
+          "oklch(49.29% 0.09108 64.75)",
+          "oklch(60.71% 0.09108 64.75)",
+          "oklch(72.14% 0.09108 64.75)",
+          "oklch(83.57% 0.09108 64.75)",
+          "oklch(95.00% 0.09108 64.75)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "작업영역 제목",
+        "purpose": "데스크톱 ES 제목; 모바일 17px. 앱 글꼴을 상속한다."
+      },
+      "headline": {
+        "displayName": "단계 제목",
+        "purpose": "현재 작업 단계."
+      },
+      "body": {
+        "displayName": "작업 본문",
+        "purpose": "ES 기본 14px 본문."
+      },
+      "label": {
+        "displayName": "필드 레이블",
+        "purpose": "조밀한 기본입력 필드."
+      },
+      "caption": {
+        "displayName": "보조 정보",
+        "purpose": "정보 띠·단계 설명."
+      },
+      "print": {
+        "displayName": "A4 일반 표",
+        "purpose": "앱과 독립된 인쇄 iframe. 원본 템플릿 셀 서식의 대체 규칙이 아니다."
+      }
+    },
+    "shadows": [
+      {
+        "name": "confirmation-dialog",
+        "value": "0 18px 60px #12253c55",
+        "purpose": "가져오기·원자료 확인 native dialog만. 주 작업영역은 box-shadow:none."
+      }
+    ],
+    "motion": [
+      {
+        "name": "theme-state-transition",
+        "value": ".18s ease",
+        "purpose": "상위 테마의 background-color, border-color, color, box-shadow 전환. 사용자/시스템 reduced motion에서는 제거."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "step-compact",
+        "value": "1250px"
+      },
+      {
+        "name": "ledger-single-column",
+        "value": "1100px"
+      },
+      {
+        "name": "stack-workbench",
+        "value": "800px"
+      },
+      {
+        "name": "document-scroll-mobile",
+        "value": "600px"
+      },
+      {
+        "name": "field-container-two-columns",
+        "value": "1150px"
+      },
+      {
+        "name": "field-container-one-column",
+        "value": "650px"
+      },
+      {
+        "name": "field-container-label-stack",
+        "value": "380px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "저장·계산 버튼",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "실제 주요 도구 모음의 시각·상태 예제. 저장 핸들러는 포함하지 않는다.",
+      "html": "<button class=\"ds-save-calculate\" type=\"button\">저장·계산</button>",
+      "css": ".ds-save-calculate{min-height:36px;padding:6px 12px;border:1px solid #236c9a;border-radius:6px;background:#236c9a;color:#fff;font-family:inherit;font-size:12px;cursor:pointer;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease;}.ds-save-calculate:hover:not(:disabled){background:#1b567d;color:#fff;border-color:#236c9a;}.ds-save-calculate:disabled{opacity:.55;cursor:not-allowed;}.ds-save-calculate:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}@media(pointer:coarse){.ds-save-calculate{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-save-calculate{transition:none;}}"
+    },
+    {
+      "name": "보조 실행 버튼",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "도구 모음의 보조 실행 버튼. 테마 작업면을 상속한다.",
+      "html": "<button class=\"ds-secondary\" type=\"button\">Excel 가져오기</button>",
+      "css": ".ds-secondary{min-height:36px;padding:6px 12px;border:1px solid #becfe1;border-radius:6px;background:var(--surface-raised,#fafcfe);color:var(--text-primary,#17202e);font-family:inherit;font-size:12px;cursor:pointer;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease;}.ds-secondary:hover:not(:disabled){background:#e6f1fc;color:#173c63;border-color:#236c9a;}.ds-secondary:disabled{opacity:.55;cursor:not-allowed;}.ds-secondary:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}@media(pointer:coarse){.ds-secondary{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-secondary{transition:none;}}"
+    },
+    {
+      "name": "수동 금액 입력",
+      "kind": "input",
+      "refersTo": "input-manual",
+      "description": "연노랑 수동 입력과 원 단위 우측 정렬. 표시 예제이며 금액 포맷 이벤트는 앱의 EsMoneyInput 소유다.",
+      "html": "<label class=\"ds-manual-field\">총계약금액 (원)<input type=\"text\" value=\"100,000,000\" aria-label=\"총계약금액 (원)\"></label>",
+      "css": ".ds-manual-field{display:grid;gap:6px;font-family:inherit;font-size:12px;font-weight:600;color:var(--text-primary,#17202e);}.ds-manual-field input{min-width:0;min-height:36px;padding:7px 9px;border:1px solid var(--border-strong,#bfcee0);border-radius:5px;background:#fff5cc;color:#183049;font:inherit;text-align:right;font-variant-numeric:tabular-nums;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease;}.ds-manual-field input:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}.ds-manual-field input:disabled,.ds-manual-field input[readonly]{background:var(--surface-soft,#f0f4f8);}.ds-manual-field input::placeholder{color:#64748b;opacity:1;}@media(pointer:coarse){.ds-manual-field input{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-manual-field input{transition:none;}}:host-context([data-theme='light']) .ds-manual-field input{color:var(--text-primary,#17202e);}"
+    },
+    {
+      "name": "조회 입력",
+      "kind": "input",
+      "refersTo": "input-lookup",
+      "description": "검색·조회·인쇄 설정의 중립 입력면. 밝은 테마 흰 계열과 어두운 테마 작업면을 보존한다.",
+      "html": "<label class=\"ds-lookup-field\">비목 찾기<input type=\"text\" placeholder=\"비목명 또는 코드\"></label>",
+      "css": ".ds-lookup-field{display:grid;gap:6px;font-family:inherit;font-size:12px;font-weight:600;color:var(--text-primary,#17202e);}.ds-lookup-field input{min-width:0;min-height:36px;padding:7px 9px;border:1px solid var(--border-strong,#bfcee0);border-radius:5px;background:var(--surface-raised,#fafcfe);color:var(--text-primary,#17202e);font:inherit;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease;}.ds-lookup-field input:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}.ds-lookup-field input:disabled,.ds-lookup-field input[readonly]{background:var(--surface-soft,#f0f4f8);}.ds-lookup-field input::placeholder{color:#64748b;opacity:1;}@media(pointer:coarse){.ds-lookup-field input{min-height:44px;}}@media(prefers-reduced-motion:reduce){.ds-lookup-field input{transition:none;}}"
+    },
+    {
+      "name": "현재 작업 단계",
+      "kind": "nav",
+      "refersTo": "step-selected",
+      "description": "6단계 중 현재 단계의 외형. aria-current는 로컬 상태이며 경로 이동·완료 상태가 아니다.",
+      "html": "<nav aria-label=\"ES 작업 영역\"><button class=\"ds-step-current\" type=\"button\" aria-current=\"page\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 21h18M5 21V3h14v18M9 7h2m2 0h2M9 11h2m2 0h2M10 21v-5h4v5\"/></svg><span><b>1 기본입력</b><small>공사정보와 기준일</small></span></button></nav>",
+      "css": ".ds-step-current{display:flex;align-items:center;gap:8px;min-height:62px;padding:8px 10px;border:1px solid #236c9a;border-radius:6px;background:#236c9a;color:white;text-align:left;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease;}.ds-step-current svg{width:22px;height:22px;flex:none;}.ds-step-current span{display:grid;gap:3px;}.ds-step-current small{font-size:11px;font-weight:400;}.ds-step-current:hover{background:#1b567d;}.ds-step-current:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}@media(prefers-reduced-motion:reduce){.ds-step-current{transition:none;}}"
+    },
+    {
+      "name": "검토용 초안 레이블",
+      "kind": "chip",
+      "refersTo": "draft-label",
+      "description": "클릭하지 않는 검토용 초안 고지. 완료·승인 배지가 아니다.",
+      "html": "<span class=\"ds-draft-label\">검토용 초안 · 제출 전 검수 필요</span>",
+      "css": ".ds-draft-label{display:inline-block;font-family:inherit;font-size:11px;line-height:1.45;color:#80511d;background:#fff7e8;border:1px solid #e7d5b7;padding:5px 8px;}"
+    },
+    {
+      "name": "선택 비목 상세",
+      "kind": "card",
+      "refersTo": "inspector",
+      "description": "정적인 샘플 라벨로 현재 선택 비목의 우측 근거 패널을 표현한다. 실제 값은 앱 상태가 공급한다.",
+      "html": "<aside class=\"ds-inspector\" aria-label=\"선택 비목 상세\"><h2>선택 비목</h2><p>원본 셀 · 입력과 계산값</p><dl><div><dt>입력 금액 (원)</dt><dd>미입력</dd></div><div><dt>계수</dt><dd>계산 대기</dd></div></dl><button class=\"ds-inspector-action\" type=\"button\">금액 수정</button></aside>",
+      "css": ".ds-inspector{padding:14px;border:1px solid #c8d6e5;background:var(--surface-soft,#f0f4f8);color:var(--text-primary,#17202e);font-family:inherit;line-height:1.45;}.ds-inspector h2{margin:0 0 8px;font-size:15px;}.ds-inspector p{font-size:12px;overflow-wrap:anywhere;}.ds-inspector dl{margin:14px 0;}.ds-inspector dl>div{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid #c8d6e5;font-size:12px;}.ds-inspector dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums;}.ds-inspector-action{min-height:36px;padding:6px 12px;border:1px solid #becfe1;border-radius:6px;background:var(--surface-raised,#fafcfe);color:inherit;font-family:inherit;font-size:12px;cursor:pointer;}.ds-inspector-action:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}"
+    },
+    {
+      "name": "출력 시트 선택 행",
+      "kind": "custom",
+      "refersTo": "sheet-selected",
+      "description": "체크박스 기반 시트 선택이며 페이지 지정과 독립적이다.",
+      "html": "<label class=\"ds-sheet-choice\"><input type=\"checkbox\" checked><b>표지</b><span>물가변동 산출서</span></label>",
+      "css": ".ds-sheet-choice{display:flex;align-items:center;gap:8px;padding:7px;border:0;border-radius:0;background:var(--surface-raised,#fafcfe);color:var(--text-primary,#17202e);font-family:inherit;font-size:11px;line-height:1.45;}.ds-sheet-choice:has(input:checked){background:#e6f1fc;color:#173c63;}.ds-sheet-choice input{width:18px;height:18px;}.ds-sheet-choice b{min-width:30px;}.ds-sheet-choice input:focus-visible{outline:3px solid #70a9de;outline-offset:2px;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "desktop 업무 프로그램",
+    "overview": "이 문서는 CF130 ES 산출서 작업 화면과 그 출력 미리보기만 기록한다. 클레임센터 전체의 브랜드, 다른 편집기, 공용 디자인 토큰을 교체하는 문서가 아니다. 사용자가 승인한 desktop 업무 프로그램의 조밀한 표, 차분한 구분선, 노란 수동입력, 파란 선택·주요동작을 현재 구현에서 추출했다.\n\n작업표와 선택 비목의 근거를 같은 공간에서 읽고, 수정 중인 입력과 저장·계산본을 구분한다. 추가 장식이나 새 브랜드 자산 없이 기존 클레임센터 메뉴·테마·사용자 글꼴 설정 안에서 동작한다.",
+    "keyCharacteristics": [
+      "조밀한 작업표와 선택 비목 근거의 연동",
+      "노란 수동입력과 중립색 조회·선택 컨트롤의 구분",
+      "현재 입력·저장 revision·검토용 초안의 명시",
+      "기존 앱 메뉴와 밝은/어두운 테마의 보존"
+    ],
+    "rules": [
+      {
+        "name": "The Input Role Rule",
+        "body": "노란색은 수동 업무 데이터에 사용한다. 검색·기간 선택·인쇄 설정은 테마의 중립 작업면을 사용하며, 밝은 테마에서는 흰 계열로 보인다.",
+        "section": "colors"
+      },
+      {
+        "name": "The Number Meaning Rule",
+        "body": "금액은 원 단위 쉼표와 우측 정렬, 표 숫자는 tabular-nums를 사용한다. 자료 없음의 —를 숫자 0으로 바꾸지 않는다.",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Workbench Rule",
+        "body": "주 작업영역과 도구 모음은 그림자 없이 구분선·바탕색으로 나눈다. 확인용 native dialog의 부유 그림자를 주 작업영역에 복제하지 않는다.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do ES 전용 작업영역 안에서만 이 문서의 밀도·색·배치를 적용한다.",
+      "Do 원본 셀 좌표, 숫자 단위, 선택 상태, 저장 상태를 함께 읽을 수 있게 유지한다.",
+      "Do 조회·가져오기는 적용 전 확인과 취소 시 기존 입력 유지 동작을 보존한다.",
+      "Do 키보드 포커스, disabled 상태, 작은 화면의 내부 표 스크롤을 확인한다."
+    ],
+    "donts": [
+      "Don't 6단계 전환을 새 URL 이동이나 자동저장 완료 표시로 해석하지 않는다.",
+      "Don't 화면 계산값을 저장·계산본 또는 공식 제출 승인 결과로 표시하지 않는다.",
+      "Don't 기간 출처 메모를 각 비목의 검증된 공식 인용으로 격상하지 않는다.",
+      "Don't 건강보험 외 노임·재료 자동수집이나 미지원 차수·신규비목을 연결 완료로 표시하지 않는다.",
+      "Don't 미리보기 확대율을 실제 A4 인쇄 배율이나 인쇄 성공 확인으로 취급하지 않는다."
+    ]
+  }
+}

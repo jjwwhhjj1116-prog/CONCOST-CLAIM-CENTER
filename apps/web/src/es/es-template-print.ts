@@ -34,12 +34,20 @@ export function esPrintNumber(value: string, format: string): string {
 }
 /** Complete original print-area grid. Merged row groups cannot cross a page boundary. */
 export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,string>, measure: HTMLElement): string[] {
+  // Divider sheets are single presentation pages, not 47 rows of blank cells.
+  // Keep their actual wording; wrap the title inside a centered A4 content box.
+  if (/^붙[1-5]$/.test(grid.name)) {
+    const extra = Object.entries(values).filter(([cell, text]) => text.trim() && !['A1','B7','B8','D47'].includes(cell));
+    return [`<section class="es-paper es-original es-divider" data-sheet="${esc(grid.name)}" data-first-row="1" data-last-row="47" style="padding:12mm"><header data-cell="A1" style="font-size:9pt;border-bottom:1px solid #777;padding-bottom:3mm;overflow-wrap:anywhere">${esc(values.A1 ?? '')}</header><div style="margin-top:25mm;text-align:center"><div data-cell="B7" style="display:inline-block;padding:2mm 6mm;background:#222;color:white;font-size:14pt;font-weight:700">${esc(values.B7 ?? grid.name)}</div><h1 data-cell="B8" style="margin:6mm 0;font-size:18pt;line-height:1.5;white-space:normal;overflow-wrap:anywhere;text-align:center;border-bottom:1px solid #777;padding-bottom:5mm">${esc(values.B8 ?? '')}</h1></div><div style="margin:10mm 4mm;font-size:11pt;line-height:1.7">${extra.map(([cell,text])=>`<div data-cell="${esc(cell)}">${esc(text)}</div>`).join('')}</div><footer style="left:12mm;right:12mm;bottom:12mm;border:0">${esc(values.D47 ?? '')}</footer></section>`];
+  }
   const [lastRow,lastCol] = esCellPosition(grid.printArea.split(':').at(-1)!);
-  const rowHeight = (r: number) => grid.hiddenRows.includes(r) ? 0 : grid.rowHeights[r] ?? grid.defaultRowHeight;
+  const compactHeights = new Map<number, number>();
+  const rowHeight = (r: number) => grid.hiddenRows.includes(r) ? 0 : compactHeights.get(r) ?? grid.rowHeights[r] ?? grid.defaultRowHeight;
   const widths = Array.from({length:lastCol},(_,i) => (grid.columns[i+1]?.width ?? 8.43)*7+5);
-  const width = widths.reduce((a,b)=>a+b,0), margins = Object.fromEntries(['left','right','top','bottom'].map(k=>[k, Number(grid.margins[k] ?? .6)*25.4]));
-  const scale = Math.min(Number(grid.pageSetup.scale ?? 100)/100, (210-margins.left-margins.right)*96/25.4/width);
-  const left = margins.left + (grid.horizontalCentered ? ((210-margins.left-margins.right)-width*scale*25.4/96)/2 : 0);
+  const width = widths.reduce((a,b)=>a+b,0), margins = {left:12,right:12,top:12,bottom:16};
+  // Fill the printable width instead of applying the legacy reduction a second time.
+  const scale = (210-margins.left-margins.right)*96/25.4/width;
+  const left = margins.left;
   const capacity = (297-margins.top-margins.bottom)*72/25.4/scale;
   const styles = new Map(grid.cellStyles), mergeStarts = new Map<string,[number,number]>(), covered = new Set<string>();
   const cellStyle = (r: number, c: number) => esTemplateStyles[styles.get(esCellAddress(r,c))??grid.rowStyles?.[r]??grid.columns[c]?.style??0];
@@ -50,6 +58,7 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
     for(let r=r1;r<=r2;r++) { endAt[r]=Math.max(endAt[r],r2); for(let c=c1;c<=c2;c++) if(r!==r1||c!==c1) covered.add(esCellAddress(r,c)); }
   }
   const fitted = new Map<string, number>();
+  const wrapped = new Set<string>();
   const render = ([from,to]:[number,number]) => {
     let rows='';
     for(let r=from;r<=to;r++) {
@@ -67,12 +76,12 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
         }
         const text = esPrintNumber(values[address]??'',style.numberFormat);
         const numeric = /^-?\d+(\.\d+)?$/.test(values[address]??'');
-        cells+=`<td data-cell="${address}"${style.alignment?.shrinkToFit==='1'?' data-shrink="true"':''} rowspan="${rs}" colspan="${cs}" style="padding:0 2px;min-width:0;${esc(styleCss(style))}${numeric && (!style.alignment?.horizontal || style.alignment.horizontal==='general')?'text-align:right;':''}"><span style="${fitted.has(address)?`font-size:${fitted.get(address)}pt;`:''}">${esc(text)}</span></td>`;
+        cells+=`<td data-cell="${address}"${style.alignment?.shrinkToFit==='1'?' data-shrink="true"':''} rowspan="${rs}" colspan="${cs}" style="padding:0 2px;min-width:0;${esc(styleCss(style))}${wrapped.has(address)?'white-space:normal;overflow-wrap:anywhere;':''}${numeric && (!style.alignment?.horizontal || style.alignment.horizontal==='general')?'text-align:right;':''}"><span style="${fitted.has(address)?`font-size:${fitted.get(address)}pt;`:''}">${esc(text)}</span></td>`;
       }
       rows+=`<tr data-row="${r}" style="height:${rowHeight(r)}pt;${rowHeight(r)===0?'display:none':''}">${cells}</tr>`;
     }
-    const footer = esTemplateFooter(grid) ? `<footer style="bottom:${Number(grid.margins.footer)*25.4}mm;font-size:${grid.name==='3'||grid.name==='3.'?10:9}pt;border:0;padding:0">- __ES_PAGE_NUMBER__ -</footer>` : '';
-    return `<section class="es-paper es-original" data-sheet="${esc(grid.name)}" data-first-row="${from}" data-last-row="${to}" style="padding:0"><div style="position:absolute;top:${margins.top}mm;left:${left}mm;width:${width}px;transform:scale(${scale});transform-origin:top left"><table style="border-collapse:collapse;table-layout:fixed;width:${width}px;min-width:0;line-height:1.15"><colgroup>${widths.map(w=>`<col style="width:${w}px">`).join('')}</colgroup><tbody>${rows}</tbody></table>${grid.name==='목록' && from===1?esContentsDrawingSvg(widths,rowHeight):''}</div>${footer}</section>`;
+    const footer = esTemplateFooter(grid) ? `<footer style="bottom:7mm;font-size:9pt;border:0;padding:0">- __ES_PAGE_NUMBER__ -</footer>` : '';
+    return `<section class="es-paper es-original" data-sheet="${esc(grid.name)}" data-first-row="${from}" data-last-row="${to}" style="padding:0"><div style="position:absolute;top:${margins.top}mm;left:${left}mm"><div style="position:relative;width:${width}px;zoom:${scale}"><table style="border-collapse:collapse;table-layout:fixed;width:${width}px;min-width:0;line-height:1.15"><colgroup>${widths.map(w=>`<col style="width:${w}px">`).join('')}</colgroup><tbody>${rows}</tbody></table>${grid.name==='목록' && from===1?esContentsDrawingSvg(widths,rowHeight):''}</div></div>${footer}</section>`;
   };
   measure.innerHTML=render([1,lastRow]);
   for (const cell of measure.querySelectorAll<HTMLTableCellElement>('td[data-shrink]')) {
@@ -87,11 +96,31 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
       // multiplying by a width ratio (which can still spill into the next cell).
       let low=.5, high=parseFloat(css.fontSize)*72/96;
       for(let i=0;i<12;i++) { const size=(low+high)/2; span.style.fontSize=`${size}pt`; if(fits())low=size;else high=size; }
-      fitted.set(cell.dataset.cell!,low); span.style.fontSize=`${low}pt`;
+      const address = cell.dataset.cell!;
+      if (low * scale < 7.5 && !/^-?\d+(\.\d+)?$/.test(values[address] ?? '')) {
+        // Period names remain readable on paper: wrap instead of reducing to 5pt.
+        wrapped.add(address); fitted.set(address, Math.max(7.5 / scale, parseFloat(css.fontSize)*72/96));
+      } else fitted.set(address,low);
+      span.style.fontSize=`${fitted.get(address)}pt`;
     }
   }
   measure.innerHTML=render([1,lastRow]);
-  const measured=new Map([...measure.querySelectorAll<HTMLTableRowElement>('tr[data-row]')].map(row=>[Number(row.dataset.row),row.getBoundingClientRect().height*72/96/scale]));
+  const measureRows = () => new Map([...measure.querySelectorAll<HTMLTableRowElement>('tr[data-row]')].map(row=>[Number(row.dataset.row),row.getBoundingClientRect().height*72/96/scale]));
+  let measured = measureRows();
+  // Single-form sheets should not push a signature or footnote onto a nearly
+  // empty page. Compress only unused row space, never the font or real content.
+  if (lastRow < 100 && !['표지','목록'].includes(grid.name)) {
+    const fullHeight = [...measured.values()].reduce((a,b)=>a+b,0);
+    if (fullHeight > capacity - 3) {
+      for (const row of measure.querySelectorAll<HTMLTableRowElement>('tr[data-row]')) row.style.height = '0';
+      const minimum = measureRows(), minHeight = [...minimum.values()].reduce((a,b)=>a+b,0);
+      if (minHeight < capacity - 5) {
+        const ratio = Math.min(1,(capacity - 5 - minHeight)/(fullHeight - minHeight));
+        for (const [r,h] of measured) compactHeights.set(r,(minimum.get(r) ?? 0) + Math.max(0,h-(minimum.get(r) ?? 0))*ratio);
+      }
+      measure.innerHTML=render([1,lastRow]); measured=measureRows();
+    }
+  }
   const ranges: [number,number][]=[]; let start=1,used=0;
   for(let row=1;row<=lastRow;) {
     let end=endAt[row]; for(let r=row;r<=end;r++) end=Math.max(end,endAt[r]);
@@ -101,7 +130,9 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
     used+=height;row=end+1;
   }
   ranges.push([start,lastRow]);
-  const pages=ranges.map(render);
+  // Exclude only wholly empty fragments. Intentional blank rows inside populated
+  // pages and all meaningful template cells remain; cover/dividers are retained.
+  const pages=ranges.filter(([from,to]) => grid.name==='목록' && from===1 || Object.entries(values).some(([cell,text]) => { const [row] = esCellPosition(cell); return row>=from && row<=to && text.trim() !== ''; })).map(render);
   // Font fallback and wrapped input may make a fixed row taller. Reject clipping, never omit rows.
   for(const html of pages) {
     measure.innerHTML=html;

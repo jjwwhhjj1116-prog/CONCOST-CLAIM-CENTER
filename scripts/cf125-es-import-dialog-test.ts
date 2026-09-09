@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { newEsInput } from '../packages/document-engine/src/es-calculation';
+import { syncEsSourceDates } from '../packages/document-engine/src/es-source-history';
 
 // Execute the real component handler with synthetic state and a controlled API promise.
 // This checks transaction order, not React rendering/native dialog focus (covered by browser QA).
@@ -46,7 +47,7 @@ function fixture(existing = true) {
     pending: { current: false }, dirtyRef: { current: true }, busy: false, loading: false, loadFailed: false,
     history: { current: [newEsInput()] }, future: { current: [newEsInput()] }, run: { id: 'old-run' },
     savedSignature: 'old-signature', tab: 'output', error: '', notice: '', importError: '', importOpen: true,
-    structuredClone, JSON, Uint8Array, Error, encodeURIComponent,
+    structuredClone, JSON, Uint8Array, Error, encodeURIComponent, syncEsSourceDates,
     signature: (value: unknown, caseId: string) => JSON.stringify({ input: value, caseId }),
     message: (error: Error) => error.message,
     apiRequest: (path: string, init: RequestInit) => { requests.push({ path, method: init.method!, body: JSON.parse(String(init.body)) }); return response; },

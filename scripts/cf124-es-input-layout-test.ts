@@ -79,7 +79,10 @@ test('CF124/127 yellow stays ES-scoped while non-yellow source inputs use the ne
   const studio = css.match(/\.es-studio\s*\{([^}]+)\}/)?.[1] ?? '';
   assert.match(studio, /--surface:var\(--surface-raised,#fff\)/);
   assert.match(studio, /--surface-muted:var\(--surface-soft,#eef4f9\)/);
-  assert.match(css, /\.es-tabs \[aria-current=page\]\s*\{[^}]*color:#183049/);
+  const activeTab = css.match(/\.es-tabs \[aria-current=page\]\s*\{([^}]+)\}/)?.[1] ?? '';
+  assert.match(activeTab, /background:\s*#236c9a/);
+  assert.match(activeTab, /(?:^|;)\s*color:\s*white\s*;/);
+  assert.match(activeTab, /border-color:\s*#236c9a/);
   const optional = css.match(/\.es-studio \.es-basic-input :is\(input,select\):not\(\[data-es-manual\]\):not\(:disabled\):not\(\[readonly\]\)\s*\{([^}]+)\}/);
   assert.ok(optional, 'Only controls without the original yellow source coordinate override yellow');
   assert.match(optional[1], /--field-bg:var\(--surface,#fff\)/);

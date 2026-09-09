@@ -35,11 +35,41 @@ export function esElapsedDays(input: EsInput): string {
   if (!date || !input.adjustmentDate) return '';
   try { esMaterialMonth(date); esMaterialMonth(input.adjustmentDate); return String((Date.parse(input.adjustmentDate) - Date.parse(date)) / 86400000 - 1); } catch { return ''; }
 }
+/** Reconcile only changed source selectors. Ordinary saves keep reviewed manual values. */
+export function syncEsSourceDates(input: EsInput, previous?: EsInput): EsInput {
+  const days = esSourceDates(input);
+  const mismatch = input.base.date !== days[0] || input.current.period.date !== days[1] || input.previous.period.date !== days[2];
+  const changed = previous && (input.baseDate !== previous.baseDate || input.adjustmentDate !== previous.adjustmentDate || input.contract?.employmentGrade !== previous.contract?.employmentGrade || input.contract?.retirementTrade !== previous.contract?.retirementTrade);
+  if (!mismatch && !changed) return input;
+  if (input.sourceHistory && days.every(Boolean)) return resolveEsSources(input).input;
+  const next = structuredClone(input);
+  const baseChanged = next.base.date !== days[0] || Boolean(previous && input.baseDate !== previous.baseDate);
+  for (const [index, key] of (['base', 'current', 'previous'] as const).entries()) {
+    const p = key === 'base' ? next.base : next[key].period;
+    const dateChanged = p.date !== days[index];
+    if (dateChanged) {
+      p.date = days[index]; p.wage = ''; p.materials = ['', '', '', ''];
+      for (const rate of Object.keys(p.rates) as (keyof EsPeriod['rates'])[]) if (rate !== 'safety') p.rates[rate] = '';
+      p.source = '기준일 변경: 해당 기간 원자료 확인 필요';
+    }
+    if (previous && input.contract?.employmentGrade !== previous.contract?.employmentGrade) p.rates.employment = '';
+    if (previous && input.contract?.retirementTrade !== previous.contract?.retirementTrade) p.rates.retirement = '';
+    if (key !== 'base' && (baseChanged || dateChanged)) for (const pair of [next[key].machinery, ...next[key].standards]) {
+      for (const field of ['baseAverage', 'comparisonAverage', 'commonCount', 'baseSum', 'comparisonSum', 'baseLabel', 'comparisonLabel', 'source'] as const) pair[field] = '';
+    }
+  }
+  return next;
+}
+export function esSourceDates(input: EsInput): [string, string, string] {
+  const valid = (date: string) => { try { esMaterialMonth(date); return date; } catch { return ''; } };
+  const base = valid(input.baseDate), current = valid(input.adjustmentDate);
+  return [base, current, current ? new Date(Date.parse(current + 'T00:00:00Z') - 86400000).toISOString().slice(0,10) : ''];
+}
 /** Exact month and latest effective entry at/before date. No future/current-value substitution. */
 export function resolveEsSources(input: EsInput): { input: EsInput; warnings: string[] } {
   esMaterialMonth(input.baseDate); esMaterialMonth(input.adjustmentDate);
   const next = structuredClone(input), h = input.sourceHistory, warnings: string[] = [];
-  if (!h) return { input: next, warnings: ['보관된 월별·시행일 이력이 없습니다. 원본 Excel을 다시 가져오거나 지수·요율에서 원자료를 입력하세요.'] };
+  if (!h) return { input: syncEsSourceDates(next), warnings: ['보관된 월별·시행일 이력이 없습니다. 원본 Excel을 다시 가져오거나 지수·요율에서 원자료를 입력하세요.'] };
   const requireOne = <T>(rows: T[], description: string): T => { if (rows.length !== 1) throw new Error(description + ': 원자료 누락 또는 중복'); return rows[0]; };
   const grade = Number(input.contract?.employmentGrade.match(/^[1-7](?=등급|$)/)?.[0]), trade = input.contract?.retirementTrade;
   const get = (fn: () => string, label: string) => { try { return fn(); } catch { warnings.push(label + ' · 확인 가능한 원자료 없음'); return ''; } };

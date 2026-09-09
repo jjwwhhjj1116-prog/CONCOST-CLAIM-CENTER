@@ -299,7 +299,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           <div className="brand-copy"><h1>클레임센터 스튜디오</h1><small>CLAIM CENTER STUDIO</small></div>
         </div>
         <div className="session-tools">
-          {previewMode && <span className="preview-chip" aria-label="업무 기록 자동 저장 활성">업무공간 · 자동저장</span>}
+          {previewMode && <span className="preview-chip" aria-label={currentPath.startsWith('/es') ? 'ES 산출서는 저장 버튼으로 저장합니다' : '업무 기록 자동 저장 활성'}>{currentPath.startsWith('/es') ? 'ES · 직접 저장' : '업무공간 · 자동저장'}</span>}
           <button
             type="button"
             className="theme-toggle"

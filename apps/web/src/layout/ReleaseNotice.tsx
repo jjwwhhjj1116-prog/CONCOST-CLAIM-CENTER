@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-09-08';
-export const RELEASE_DATE_LABEL = '2026년 9월 8일';
+export const RELEASE_DATE = '2026-09-09';
+export const RELEASE_DATE_LABEL = '2026년 9월 9일';
 const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v4:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
@@ -13,6 +13,8 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  { title: '9월 9일 테스트 서버 · ES 작업 화면 리뉴얼', text: '큰 팝업을 전용 작업 화면으로 바꾸고, 아이콘이 있는 6단계 메뉴와 산출서·기준일·저장 상태를 고정했습니다. 작업영역 넓게 보기, 비목 검색·선택 상세, 기준·직전·현재 요율 비교, Ctrl+S 저장을 연결했습니다. 노란 입력과 흰색 조회 도구를 구분하고, 출력은 시트 목록·A4 미리보기·인쇄 설정으로 정리했습니다.' },
+  { title: '9월 9일 테스트 서버 · ES 기준일·출력 보완', text: '기준일 변경 시 보유 원자료 이력에서 적용값을 다시 선택하고, 자료가 없으면 기존 값이 최신 자료인 것처럼 남지 않도록 했습니다. A4 여백·붙임 제목 정렬·빈 페이지와 화면 확대를 보완했습니다. 외부 요율 전체 자동조회나 공식 제출용 계산 승인을 의미하지 않으며, 출력 내용 검토가 필요합니다.' },
   { title: '9월 8일 테스트 서버 · ES 산출프로그램', text: '프로젝트 워크 아래에 독립 메뉴를 추가했습니다. 사건 없이 산출서를 만들고 작성자·관리자 권한으로 저장·재진입할 수 있습니다. 원본 Excel 가져오기, 수동 입력, 원본 호환 계산과 작업용 Excel 왕복 편집을 연결했습니다.' },
   { title: '9월 8일 테스트 서버 · ES 출력·복구', text: '17개 시트의 전체·선택 Excel과 페이지 지정 인쇄를 추가했습니다. 저장 결과 복원, 이동 전 미저장 안내, 인쇄 준비 시간초과·재시도를 검수했습니다. 현재 계산은 LEGACY_REPLAY 검토용이며 신규비목 다중 구간·복수 선금과 교정 규칙 승인은 아직 지원하지 않습니다.' },
   { title: '9월 7일 직접 검수 · 보고서 저장·단계 이동 복구', text: '시간별 백업의 날짜 검사식이 서버 DB 제한을 초과하여 보고서 저장과 다음 단계 이동을 막던 원인을 수정했습니다. 기존 자료와 백업은 보존하며, 저장 실패 시 입력 유지·재시도 원칙도 유지합니다.' },
@@ -47,7 +49,7 @@ export function ReleaseNotice({ open, onClose }: { open: boolean; onClose: () =>
   return <dialog ref={dialogRef} className="release-notice" aria-labelledby="release-notice-title" aria-describedby="release-notice-description" onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <header><div><time dateTime={RELEASE_DATE}>{RELEASE_DATE_LABEL}</time><h2 id="release-notice-title">테스트 서버 업데이트 안내</h2></div><button type="button" autoFocus aria-label="업데이트 안내 닫기" onClick={onClose}>×</button></header>
     <div className="release-notice__body">
-      <p id="release-notice-description">9월 8일 변경은 테스트 서버에만 반영했습니다. 가오픈 서버는 이번 배포 대상이 아닙니다.<br/>아래에는 이번 ES 추가 사항과 8월 31일 이후의 기존 개선 이력을 함께 표시합니다.</p>
+      <p id="release-notice-description">9월 9일 변경은 테스트 서버에만 반영했습니다. 가오픈 서버는 이번 배포 대상이 아닙니다.<br/>아래에는 이번 ES 개선 사항과 8월 31일 이후의 기존 개선 이력을 함께 표시합니다.</p>
       <div className="release-notice__updates">{RELEASE_UPDATES.map((update) => <section key={update.title}><h3>{update.title}</h3><p>{update.text}</p></section>)}</div>
       <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
     </div>

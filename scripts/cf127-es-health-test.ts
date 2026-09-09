@@ -255,8 +255,9 @@ test('CF127 empty source values remain empty while explicit zero remains zero', 
   assert.deepEqual(result.input.current.period.materials, ['0', '', '103', '104']);
 });
 
-test('CF127 absent source history preserves existing inputs and returns an explicit warning', () => {
+test('CF127 absent source history preserves date-aligned existing inputs and returns an explicit warning', () => {
   const input = sourceInput(); delete input.sourceHistory; input.base.wage = 'preserve';
+  input.base.date = input.baseDate; input.current.period.date = input.adjustmentDate; input.previous.period.date = '2025-12-31';
   const result = resolveEsSources(input);
   assert.deepEqual(result.input, input); assert.notEqual(result.input, input); assert.ok(result.warnings.length);
 });

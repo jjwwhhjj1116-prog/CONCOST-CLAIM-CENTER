@@ -212,7 +212,7 @@ export async function importEsWorkbook(bytes: Uint8Array): Promise<EsImportPrevi
   input.sourceHistory = sourceHistory;
   if (Number(literal('기본입력', 'E22', true)) > 0 || Number(literal('기본입력', 'E3', true)) > 1) throw new Error('신규비목 또는 후속 차수 원본은 아직 매핑 검수가 필요합니다. 현재 입력은 변경하지 않았습니다.');
   return { input: validateEsInput(input), kind: 'ORIGINAL', sourceHash, warnings: [
-    '원본 금액·월별·시행일별 요율·공통 기간쌍 이력까지 보관합니다. 기본입력 변경 후 ES 요율정보 가져오기로 재선택할 수 있습니다. 수식과 최종 결과 캐시는 실행/채택하지 않습니다.',
+    '원본 금액·월별·시행일별 요율·공통 기간쌍 이력까지 보관합니다. 기본입력 날짜·등급·공종을 바꾸면 이력에서 다시 선택합니다. 수식과 최종 결과 캐시는 실행/채택하지 않습니다.',
     '이력 중 수식·오류로 채워진 원자료 칸은 빈 값으로 보관합니다. 해당 기간 선택 시 실제 공표 값을 확인해 입력하세요.',
     ...(skippedContract.length ? [`계약 정보 중 수식·오류 셀은 직접 확인해 입력하세요: ${skippedContract.join(', ')}`] : []),
     ...(changedFormulas.length ? [`기준 원본과 수식 구성이 다르거나 시트가 누락되었습니다: ${changedFormulas.join(', ')}. 재저장 표현 차이도 포함될 수 있습니다. 수정된 Excel 수식은 실행하지 않으며 웹 규칙으로만 재계산합니다.`] : ['기준 원본 27시트의 수식 구성 지문이 일치합니다. 입력값·업무 적합성의 승인을 의미하지 않습니다.']),
