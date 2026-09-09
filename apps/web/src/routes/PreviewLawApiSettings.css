@@ -1,14 +1,34 @@
-.law-api-settings { --section-accent: #0e7490; scroll-margin-top: 80px; }
-.law-api-settings p { line-height: 1.6; overflow-wrap: anywhere; }
-.law-api-settings form { display: grid; gap: 10px; max-width: 850px; }
-.law-api-settings label { font-weight: 700; }
-.law-api-settings input { width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; color: #172033; font-size: 16px; }
-.law-api-settings small { color: #475569; line-height: 1.5; }
-.law-api-settings .law-api-settings-status { font-weight: 700; }
-.law-api-settings .action-row { flex-wrap: wrap; }
-.law-api-settings button { min-height: 44px; white-space: normal; }
-.law-api-settings .notice-box,.law-api-settings .error-box { margin: 0; }
-:root[data-theme='dark'] .law-api-settings input { background: #0f172a; color: #e2e8f0; border-color: #64748b; }
-:root[data-theme='dark'] .law-api-settings { --section-accent: #67e8f9; }
-:root[data-theme='dark'] .law-api-settings small { color: #cbd5e1; }
-@media (max-width: 600px) { .law-api-settings .action-row { display: grid; grid-template-columns: 1fr; } }
+.external-api-settings { --section-accent: #0e7490; scroll-margin-top: 80px; }
+.external-api-settings > p { margin: 0 0 12px; color: #475569; line-height: 1.5; }
+.external-api-settings .api-provider { padding: 12px 0; min-width: 0; }
+.external-api-settings .api-provider + .api-provider { border-top: 1px solid #cbd5e1; }
+.external-api-settings .api-provider-form { display: grid; grid-template-columns: minmax(170px, .7fr) minmax(180px, 1.5fr) auto; align-items: center; gap: 8px 16px; }
+.external-api-settings label { display: grid; gap: 2px; min-width: 0; }
+.external-api-settings label strong { font-size: 15px; }
+.external-api-settings label span, .external-api-settings label small { font-size: 12px; color: #475569; line-height: 1.5; }
+.external-api-settings .api-provider-status { font-weight: 600; }
+.external-api-settings input { width: 100%; min-width: 0; box-sizing: border-box; min-height: 44px; padding: 10px 12px; border: 1px solid #94a3b8; border-radius: 8px; background: #fff; color: #172033; font-size: 16px; }
+.external-api-settings .api-provider-actions { display: flex; gap: 8px; }
+.external-api-settings button { min-height: 44px; white-space: nowrap; }
+.external-api-settings .api-provider-form > p { grid-column: 1 / -1; margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.external-api-settings .api-provider-help { margin-top: 6px; font-size: 13px; color: #475569; }
+.external-api-settings .api-provider-help summary { width: fit-content; max-width: 100%; min-height: 24px; line-height: 24px; cursor: pointer; }
+.external-api-settings .api-provider-help p, .external-api-settings .api-provider-help li { line-height: 1.6; overflow-wrap: anywhere; }
+.external-api-settings input:focus-visible, .external-api-settings summary:focus-visible { outline: 2px solid var(--section-accent); outline-offset: 2px; }
+:root[data-theme='dark'] .external-api-settings { --section-accent: #67e8f9; }
+:root[data-theme='dark'] .external-api-settings input { background: #0f172a; color: #e2e8f0; border-color: #64748b; }
+:root[data-theme='dark'] .external-api-settings > p,
+:root[data-theme='dark'] .external-api-settings label span,
+:root[data-theme='dark'] .external-api-settings label small,
+:root[data-theme='dark'] .external-api-settings .api-provider-help { color: #cbd5e1; }
+:root[data-theme='dark'] .external-api-settings .api-provider + .api-provider { border-color: #475569; }
+@media (max-width: 1100px) {
+  .external-api-settings .api-provider-form { grid-template-columns: minmax(150px, .7fr) minmax(0, 1.5fr); }
+  .external-api-settings .api-provider-actions { grid-column: 2; }
+}
+@media (max-width: 600px) {
+  .external-api-settings .api-provider-form { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .external-api-settings .api-provider-actions { grid-column: 1; }
+  .external-api-settings .api-provider-actions button { flex: 1; }
+  .external-api-settings .api-provider-help summary { min-height: 44px; line-height: 1.5; display: list-item; padding-block: 10px; box-sizing: border-box; }
+}

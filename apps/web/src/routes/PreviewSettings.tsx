@@ -447,8 +447,11 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     </>}
 
     {section === 'ADMIN' && isAdmin && workspace && <>
-      <PreviewLawApiSettings />
-      <PreviewEcosApiSettings />
+      <Card title="외부자료 API 연결" className="external-api-settings">
+        <p id="external-api-help">기관별 인증키를 저장하세요. 저장된 키는 다시 표시하지 않습니다.</p>
+        <PreviewLawApiSettings />
+        <PreviewEcosApiSettings />
+      </Card>
       <PreviewGoogleDriveSetup onNavigate={onNavigate} />
       {renderCredentials('ORGANIZATION', '조직 공용 AI 설정', '개인 키가 없는 직원에게 적용되는 회사 공용 암호화 키입니다.')}
       <Card title="문서 제작 플랫폼 연결 상태" className="document-platform-status-card">
