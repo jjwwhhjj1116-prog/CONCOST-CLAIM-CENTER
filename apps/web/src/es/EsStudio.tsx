@@ -31,6 +31,9 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   const [savedSignature, setSavedSignature] = useState(() => signature(newEsInput(), ''));
   const [tab, setTab] = useState<'input' | 'costs' | 'sources' | 'deductions' | 'result' | 'output'>('input');
   const [importPreview, setImportPreview] = useState<EsImportPreview | null>(null);
+  const [importOpen, setImportOpen] = useState(false), [importName, setImportName] = useState(''), [importError, setImportError] = useState('');
+  const importDialog = useRef<HTMLDialogElement>(null), importPicker = useRef<HTMLInputElement>(null), importButton = useRef<HTMLButtonElement>(null), editorScroll = useRef<HTMLDivElement>(null);
+  const importOpenRef = useRef(importOpen); importOpenRef.current = importOpen;
   const [run, setRun] = useState<EsRun | null>(null);
   const [selection, setSelection] = useState<string[]>(ES_SHEETS.map(s => s[0]));
   const currentSignature = signature(input, caseId), dirty = currentSignature !== savedSignature;
@@ -46,6 +49,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     if (root) root.inert = true; window.document.body.style.overflow = 'hidden';
     modal.current?.focus();
     const keydown = (event: KeyboardEvent) => {
+      if (importDialog.current?.open) return; // Native dialog owns focus and Escape while the editor is inert.
       if (event.key === 'Escape') { event.preventDefault(); onNavigate('/es'); }
       if (event.key === 'Tab' && modal.current) {
         const focusable = [...modal.current.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')].filter(e => e.getClientRects().length);
@@ -57,6 +61,12 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     window.document.addEventListener('keydown', keydown);
     return () => { if (root) root.inert = previousInert; window.document.body.style.overflow = overflow; window.document.removeEventListener('keydown', keydown); };
   }, [mode, onNavigate]);
+  useEffect(() => {
+    if (!importOpen) return;
+    const dialog = importDialog.current;
+    dialog?.showModal();
+    return () => { dialog?.close(); importButton.current?.focus(); };
+  }, [importOpen]);
   useEffect(() => {
     let active = true;
     if (mode === 'list') {
@@ -72,37 +82,42 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   useEffect(() => {
     if (mode !== 'editor') return;
     const unregister = registerNavigationBlocker(navigation => {
-      if (!dirtyRef.current && !pending.current) return false;
+      if (!dirtyRef.current && !pending.current && !importOpenRef.current) return false;
       if (!pending.current && window.confirm('아직 저장하지 않은 ES 입력이 있습니다. 변경 내용을 버리고 이동할까요?')) { dirtyRef.current = false; navigation.proceed(); }
       return true;
     });
-    const before = (event: BeforeUnloadEvent) => { if (dirtyRef.current || pending.current) { event.preventDefault(); event.returnValue = ''; } };
+    const before = (event: BeforeUnloadEvent) => { if (dirtyRef.current || pending.current || importOpenRef.current) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', before);
     return () => { unregister(); window.removeEventListener('beforeunload', before); };
   }, [mode]);
-  const save = async (calculate = false) => {
+  const save = async (calculate = false, imported?: EsInput) => {
     if (pending.current || loading || loadFailed) return;
-    pending.current = true; setBusy(true); setError(''); setNotice('');
+    pending.current = true; setBusy(true); setError(''); setNotice(''); setImportError('');
     try {
-      const snapshot = structuredClone(input), linked = caseId;
+      const snapshot = structuredClone(imported ?? input), linked = caseId;
       const saved = await apiRequest<EsSaved>(`/api/es/documents${document ? '/' + document.id : ''}`, { method: document ? 'PUT' : 'POST', body: JSON.stringify({ input: snapshot, caseId: linked || null, ...(document ? { expectedRevision: document.revision } : {}) }) });
-      setDocument(saved.document); setSavedSignature(signature(snapshot, linked)); dirtyRef.current = false;
+      setDocument(saved.document); setSavedSignature(signature(imported ? saved.input : snapshot, saved.document.caseId ?? '')); dirtyRef.current = false;
+      if (imported) {
+        history.current = [...history.current.slice(-49), input]; future.current = [];
+        setInput(saved.input); setCaseId(saved.document.caseId ?? ''); setRun(null);
+        setImportPreview(null); setImportOpen(false); setTab('input'); editorScroll.current?.scrollTo({ top: 0 });
+      }
       if (!document) window.history.replaceState(null, '', `/es/editor?documentId=${encodeURIComponent(saved.document.id)}`);
-      setNotice(`v${saved.document.revision} 저장 완료`);
+      setNotice(`${imported ? 'Excel 가져오기 완료 · ' : ''}v${saved.document.revision} 저장 완료`);
       if (calculate) {
         const payload = await apiRequest<{ run: EsRun }>(`/api/es/documents/${saved.document.id}/runs`, { method: 'POST', body: JSON.stringify({ expectedRevision: saved.document.revision }) });
         setRun(payload.run); setTab('result');
       }
-    } catch (e) { setError(message(e)); } finally { pending.current = false; setBusy(false); }
+    } catch (e) { if (imported) setImportError(message(e)); else setError(message(e)); } finally { pending.current = false; setBusy(false); }
   };
   const importFile = async (file?: File) => {
-    if (!file || pending.current) return;
-    pending.current = true; setBusy(true); setError('');
+    if (!file || pending.current || loading || loadFailed) return;
+    pending.current = true; setBusy(true); setError(''); setImportError(''); setImportPreview(null); setImportName(file.name); setImportOpen(true);
     try {
       if (!/\.xlsx$/i.test(file.name)) throw new Error('.xlsx 파일을 선택하세요.');
       if (file.size > 25_000_000) throw new Error('25MB 이하의 파일만 지원합니다.');
       setImportPreview(await importEsWorkbook(new Uint8Array(await file.arrayBuffer())));
-    } catch (e) { setError(message(e)); } finally { pending.current = false; setBusy(false); }
+    } catch (e) { setImportError(message(e)); } finally { pending.current = false; setBusy(false); }
   };
   const workingExport = async () => { try { download(await exportEsWorking(input), 'ES_작업용.xlsx'); } catch (e) { setError(message(e)); } };
   const reportExport = async (all: boolean) => {
@@ -132,8 +147,9 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     {loading ? <p role="status">산출서를 불러오는 중입니다.</p> : <div className="es-table-wrap"><table><thead><tr><th>산출서</th><th>프로젝트</th><th>버전</th><th>최근 저장</th><th>작업</th></tr></thead><tbody>{documents.filter(d => d.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map(d => <tr key={d.id}><td>{d.title}</td><td>{d.caseId ? '연결됨' : '독립 산출서'}</td><td>v{d.revision}</td><td>{new Date(d.updatedAt).toLocaleString('ko-KR')}</td><td><button onClick={() => onNavigate('/es/editor?documentId=' + encodeURIComponent(d.id))}>열기</button></td></tr>)}</tbody></table>{!documents.length && !loadFailed && <p className="es-empty">저장한 산출서가 없습니다. 새 산출서에서 시작하세요.</p>}</div>}</section>;
   return createPortal(<div className="es-modal-backdrop"><section ref={modal} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="es-editor-title" className="es-studio es-editor-workspace">
     <header className="es-heading"><div><h1 id="es-editor-title">ES 산출서 작성</h1><p>{input.title} · 초회 산출 · {caseId ? '프로젝트 연결' : '독립 산출서'}</p></div><button onClick={() => onNavigate('/es')} aria-label="작업창 닫기 · 산출서 목록">닫기 · 산출서 목록</button></header>
-    <div className="es-toolbar"><span role="status">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : document ? `저장됨 · v${document.revision}` : '새 산출서'}</span><button disabled={busy || !history.current.length} onClick={undo}>입력 취소</button><button disabled={busy || !future.current.length} onClick={redo}>재실행</button><button disabled={busy} onClick={() => setTab('output')}>Excel 가져오기·내보내기</button><button disabled={busy || loading || loadFailed} onClick={() => void save()}>저장</button><button className="es-primary" disabled={busy || loading || loadFailed} onClick={() => void save(true)}>저장·계산</button></div>
-    <div className="es-editor-scroll">
+    <div className="es-toolbar"><span role="status">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : document ? `저장됨 · v${document.revision}` : '새 산출서'}</span><button disabled={busy || !history.current.length} onClick={undo}>입력 취소</button><button disabled={busy || !future.current.length} onClick={redo}>재실행</button><button ref={importButton} disabled={busy || loading || loadFailed} onClick={() => importPicker.current?.click()}>Excel 가져오기</button><button disabled={busy} onClick={() => { setTab('output'); editorScroll.current?.scrollTo({ top: 0 }); }}>Excel 내보내기</button><button disabled={busy || loading || loadFailed} onClick={() => void save()}>저장</button><button className="es-primary" disabled={busy || loading || loadFailed} onClick={() => void save(true)}>저장·계산</button></div>
+    <input ref={importPicker} hidden type="file" accept=".xlsx" aria-label="가져올 Excel 파일" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; void importFile(file); }} />
+    <div ref={editorScroll} className="es-editor-scroll">
     {error && <p className="es-error" role="alert">{error} {document && <button onClick={() => { if (window.confirm('현재 입력을 버리고 저장본을 다시 불러올까요?')) window.location.reload(); }}>저장본 다시 확인</button>}</p>}
     {notice && <p role="status" className="es-notice">{notice}</p>}
     {loading ? <p role="status">저장본을 불러오는 중입니다.</p> : loadFailed ? <p>원본을 불러오지 못해 덮어쓰기를 차단했습니다.</p> : <>
@@ -181,8 +197,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       {tab === 'result' && <><h2>현재 입력 계산 검토</h2>{result.fatal.map(text => <p role="alert" className="es-error" key={text}>{text}</p>)}{result.warnings.map(text => <p className="es-warning" key={text}>{text}</p>)}
         {result.current && <><div className="es-result-strip"><span>현재 K <strong>{result.current.k}</strong></span><span>직전일 K <strong>{result.previous?.k ?? '계산 불가'}</strong></span><span>순조정금액 <strong>{result.amount?.net ?? '계산 불가'} 원</strong></span></div><div className="es-table-wrap"><table><thead><tr>{['비목', '금액', '계수', '기준지수', '비교지수', '등락비', '조정계수'].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{result.current.rows.map(r => <tr key={r.row}><th>{r.code} · {r.label}</th>{[r.amount, r.weight, r.base, r.comparison, r.ratio, r.adjusted].map((v, i) => <td key={i}>{v}</td>)}</tr>)}</tbody></table></div></>}
       </>}
-      {tab === 'output' && <><div className="es-section-title"><h2>가져오기·작업용 Excel</h2><button onClick={() => void workingExport()}>작업용 Excel 내보내기</button></div><p>작업용 파일은 입력·원자료·계산 수식과 17개 출력 시트를 포함합니다. 입력을 바꾸면 ES_계산 시트의 연결 수식이 계산됩니다. 17개 출력 시트는 내보낸 시점의 값이므로, Excel 수정 후 웹으로 다시 가져와 재계산·출력하세요. Excel 자체 재계산 및 실프린터 대조는 아직 미검수입니다.</p>
-        <label className="es-field">원본 / ES 작업용 .xlsx (25MB 이하)<input type="file" accept=".xlsx" onChange={e => { void importFile(e.target.files?.[0]); e.target.value = ''; }} /></label>
+      {tab === 'output' && <><div className="es-section-title"><h2>Excel 내보내기</h2><button onClick={() => void workingExport()}>작업용 Excel 내보내기</button></div><p>작업용 파일은 입력·원자료·계산 수식과 17개 출력 시트를 포함합니다. 입력을 바꾸면 ES_계산 시트의 연결 수식이 계산됩니다. 17개 출력 시트는 내보낸 시점의 값이므로, Excel 수정 후 웹으로 다시 가져와 재계산·출력하세요. Excel 자체 재계산 및 실프린터 대조는 아직 미검수입니다.</p>
         <div className="es-section-title"><h2>출력 시트 선택</h2><button onClick={() => setSelection(ES_SHEETS.map(s => s[0]))}>전체 선택</button><button onClick={() => setSelection([])}>선택 해제</button></div>
         <div className="es-sheet-selection">{ES_SHEETS.map(([id, name, , label]) => <label key={id}><input type="checkbox" checked={selection.includes(id)} onChange={e => setSelection(s => e.target.checked ? [...s, id] : s.filter(v => v !== id))} /><b>{name}</b><span>{label}</span></label>)}</div>
         <p>제출 형식 Excel은 값 고정·인쇄영역만 내보냅니다. 페이지 지정은 인쇄에만 적용되며 Excel은 선택 시트 전체를 내보냅니다. 현재 출력은 검수용 초안입니다.</p>
@@ -191,9 +206,35 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
         {run && !dirty && run.revision === document?.revision ? <EsPrintPreview documentId={document.id} run={run} selection={selection} /> : <p className="es-empty">현재 입력을 저장·계산한 뒤 미리보기와 출력이 열립니다.</p>}
       </>}
       </fieldset>
-      {importPreview && <section className="es-import-confirm" aria-label="가져오기 변경 확인"><h2>가져오기 내용 확인</h2><p>현재 입력을 아래 내용으로 교체합니다. 취소하면 현재 입력은 그대로 유지됩니다.</p><dl><dt>산출서</dt><dd>{input.title} → {importPreview.input.title}</dd><dt>기준일 / 조정일</dt><dd>{importPreview.input.baseDate} / {importPreview.input.adjustmentDate}</dd><dt>계약금액</dt><dd>{input.contractAmount || '미입력'} → {importPreview.input.contractAmount}</dd><dt>금액 변경 항목</dt><dd>{ES_COSTS.filter(([r]) => input.costs[r] !== importPreview.input.costs[r]).length} / 28</dd></dl>{importPreview.warnings.map(w => <p className="es-warning" key={w}>{w}</p>)}
-      <div className="es-actions"><button onClick={() => setImportPreview(null)}>취소 · 기존 입력 유지</button><button className="es-primary" onClick={() => { history.current.push(input); future.current = []; setInput(importPreview.input); setRun(null); setImportPreview(null); setTab('input'); setNotice('입력에 적용했습니다. 확인 후 저장하면 새 버전이 됩니다.'); }}>입력에 적용 · 저장 전 검토</button></div></section>}
     </>}
     </div><footer className="es-summary-footer"><span>현재 K <b>{result.current?.k ?? '—'}</b></span><span>직전일 K <b>{result.previous?.k ?? '—'}</b></span><span>적용대가 <b>{result.amount?.applicable ?? '—'}</b></span><span>선금 공제 <b>{result.amount?.advance ?? '—'}</b></span><span>최종 조정금액 <b>{result.status === 'INCOMPLETE' ? '계산 대기' : (result.amount?.net ?? '—')} 원</b></span></footer>
+    {importOpen && <dialog ref={importDialog} className="es-import-dialog" aria-labelledby="es-import-title" aria-describedby="es-import-description" onCancel={e => { e.preventDefault(); if (!pending.current) { setImportOpen(false); setImportPreview(null); } }} onKeyDown={e => {
+      if (e.key !== 'Tab') return;
+      const focusable = [...e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),summary')].filter(el => el.getClientRects().length);
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (!first) e.preventDefault();
+      else if (e.shiftKey && (window.document.activeElement === first || window.document.activeElement === e.currentTarget)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && window.document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }}>
+      <header><h2 id="es-import-title">가져오기 내용 확인</h2><p className="es-import-filename">{importName}</p></header>
+      <div className="es-import-body">
+        <p id="es-import-description">아래 내용으로 현재 산출서 입력을 교체해 저장할까요? 취소하면 기존 입력과 저장본은 그대로 유지됩니다.</p>
+        {busy && <p role="status">{importPreview ? '가져온 내용을 저장하고 있습니다…' : 'Excel 파일을 읽고 있습니다…'}</p>}
+        {importError && <div role="alert" className="es-error">{importError}<p>{importPreview ? '화면의 기존 입력은 유지했습니다. 연결 오류로 저장 여부가 불확실하면 목록에서 저장본을 확인한 뒤 다시 시도하세요.' : '가져오지 못했습니다. 원본 또는 ES 작업용 .xlsx 파일(25MB 이하)을 확인하고 다시 선택하세요.'}</p></div>}
+        {importPreview && <>
+          <div className="es-import-comparison"><table><thead><tr><th scope="col">항목</th><th scope="col">현재 입력</th><th scope="col">가져올 내용</th></tr></thead><tbody>
+            {([['title', '산출서'], ['client', '발주자'], ['contractor', '시공자'], ['baseDate', '입찰 기준일'], ['adjustmentDate', '조정기준일'], ['contractAmount', '계약금액 (원)']] as const).map(([key, label]) => <tr key={key}><th scope="row">{label}</th><td>{input[key] || '미입력'}</td><td>{importPreview.input[key] || '미입력'}</td></tr>)}
+          </tbody></table></div>
+          <p>비목 금액 변경: <strong>{ES_COSTS.filter(([r]) => input.costs[r] !== importPreview.input.costs[r]).length} / 28개</strong> · 프로젝트 연결은 유지합니다.</p>
+          <p>계약정보·비목·지수/요율·선금/공제도 파일 값으로 교체합니다. 파일의 빈 값은 빈 값으로 반영됩니다.</p>
+          <details><summary>세부 변경 내용 확인</summary><div className="es-import-comparison"><table><thead><tr><th scope="col">항목</th><th scope="col">현재 입력</th><th scope="col">가져올 내용</th></tr></thead><tbody>
+            {ES_CONTRACT_FIELDS.map(([key, label]) => <tr key={key}><th scope="row">{label}</th><td>{input.contract?.[key] || '미입력'}</td><td>{importPreview.input.contract?.[key] || '미입력'}</td></tr>)}
+            {ES_COSTS.map(([r, code, label]) => <tr key={r}><th scope="row">{code} · {label}</th><td>{input.costs[r] || '미입력'}</td><td>{importPreview.input.costs[r] || '미입력'}</td></tr>)}
+          </tbody></table></div></details>
+          <details><summary>가져오기 검수 안내 ({importPreview.warnings.length}건)</summary>{importPreview.warnings.map(w => <p className="es-warning" key={w}>{w}</p>)}</details>
+        </>}
+      </div>
+      <footer className="es-actions"><button autoFocus disabled={busy} onClick={() => { if (!pending.current) { setImportOpen(false); setImportPreview(null); } }}>취소 · 기존 입력 유지</button><button className="es-primary" disabled={busy || loading || loadFailed || !importPreview} onClick={() => { if (importPreview) void save(false, importPreview.input); }}>{busy && importPreview ? '저장 중…' : '가져온 내용으로 저장'}</button></footer>
+    </dialog>}
   </section></div>, window.document.body);
 }
