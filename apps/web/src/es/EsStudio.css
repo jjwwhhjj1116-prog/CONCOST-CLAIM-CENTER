@@ -15,6 +15,7 @@
 .es-workspace { margin:0; padding:16px; min-width:0; border:1px solid #cfdae5; border-radius:8px; background:var(--surface,#fff); }
 .es-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 18px; }
 .es-field { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; font-size:13px; font-weight:600; min-width:0; }
+.es-money-input,.es-calculation-table td { text-align:right; font-variant-numeric:tabular-nums; }
 .es-studio input:not([type=checkbox]),.es-studio select,.es-studio textarea { width:100%; min-width:0; min-height:36px; padding:7px 9px; font:inherit; border:1px solid #bfcee0; border-radius:5px; color:inherit; background:var(--input-bg,#fffced); }
 .es-studio textarea { min-height:80px; resize:vertical; }
 /* Theme inputs use --field-bg with !important; scope the editable color here,
@@ -23,8 +24,20 @@
 .es-studio :is(input,select,textarea):is(:disabled,[readonly]) { --field-bg:var(--surface-muted,#eef4f9); background-color:var(--field-bg); }
 .es-studio :is(input,textarea)::placeholder { color:#64748b; opacity:1; }
 .es-basic-input { container-type:inline-size; }
-.es-studio .es-basic-input :is(input,select):not([aria-required=true]):not(:disabled):not([readonly]) { --field-bg:var(--surface,#fff); background-color:var(--field-bg); color:var(--text-primary,#183049); color-scheme:normal; }
-:root[data-theme='dark'] .es-studio .es-basic-input :is(input,select):not([aria-required=true]):not(:disabled):not([readonly]) { color-scheme:dark; }
+.es-studio .es-basic-input :is(input,select):not([data-es-manual]):not(:disabled):not([readonly]) { --field-bg:var(--surface,#fff); background-color:var(--field-bg); color:var(--text-primary,#183049); color-scheme:normal; }
+:root[data-theme='dark'] .es-studio .es-basic-input :is(input,select):not([data-es-manual]):not(:disabled):not([readonly]) { color-scheme:dark; }
+.es-source-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+.es-source-actions strong { margin-right:auto; }
+.es-basic-ledger { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:24px; align-items:start; }
+.es-basic-ledger .es-basic-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.es-basic-ledger .es-basic-grid .es-field { grid-template-columns:minmax(90px,.8fr) minmax(0,1.2fr); }
+.es-derived-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding-bottom:12px; margin:0; }
+.es-derived-summary dt { font-size:12px; color:var(--text-secondary,#567); }
+.es-derived-summary dd { margin:4px 0 0; font-weight:600; font-variant-numeric:tabular-nums; }
+.es-derived-ledger .es-table-wrap td { text-align:right; font-size:12px; }
+.es-derived-ledger .es-table-wrap th { white-space:normal; }
+@media(max-width:1100px) { .es-basic-ledger { grid-template-columns:1fr; } }
+@media(max-width:600px) { .es-basic-ledger .es-basic-grid { grid-template-columns:1fr; } }
 .es-field-requirement { display:block; font-size:11px; color:var(--text-secondary,#567); }
 .es-field-help { margin:10px 0 0; color:var(--text-secondary,#567); font-size:12px; line-height:1.6; }
 .es-input-guide { margin:0 0 12px; font-size:12px; }
@@ -82,7 +95,7 @@
 .es-studio details { border-top:1px solid #d4dee8; padding-top:15px; }
 .es-studio summary { cursor:pointer; font-weight:700; margin-bottom:15px; }
 .es-modal-backdrop { position:fixed; inset:0; z-index:200; background:#172b465c; display:flex; align-items:center; justify-content:center; }
-.es-editor-workspace { width:94vw; height:92vh; max-width:1600px; display:flex; flex-direction:column; overflow:hidden; background:var(--surface-card,#f7fafc); border:1px solid #9bb6cf; border-radius:12px; box-shadow:0 20px 70px #12253c55; }
+.es-editor-workspace { width:94vw; height:92vh; max-width:1600px; display:flex; flex-direction:column; overflow:hidden; background:var(--surface,#f7fafc); border:1px solid #9bb6cf; border-radius:12px; box-shadow:0 20px 70px #12253c55; }
 .es-editor-workspace>.es-heading,.es-editor-workspace>.es-toolbar { flex:0 0 auto; }
 .es-editor-workspace>.es-heading { margin-bottom:8px; padding-bottom:8px; }
 .es-editor-scroll { flex:1 1 auto; min-height:0; overflow:auto; padding:0 5px; }

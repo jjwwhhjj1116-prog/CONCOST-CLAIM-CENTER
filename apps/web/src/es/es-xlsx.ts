@@ -7,6 +7,7 @@ import { esWorkingChain } from './es-working-formulas';
 import { ES_ORIGINAL_FORMULAS } from './es-original-formulas';
 import { esTemplateSheetXml, esTemplateStylesXml } from './es-template-xlsx';
 import { esTemplateGrids, esTemplateValues } from '../../../../packages/document-engine/src/es-template';
+import type { EsSourceHistory } from '../../../../packages/document-engine/src/es-source-history';
 
 const esc = (value: unknown) => String(value).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]!));
 const hash = async (value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))).map(v => v.toString(16).padStart(2, '0')).join('');
@@ -183,9 +184,35 @@ export async function importEsWorkbook(bytes: Uint8Array): Promise<EsImportPrevi
   input.advanceContract = literal('기본입력', 'E10', true); input.advancePaid = literal('기본입력', 'E11', true);
   input.priorCompletion = esSum([27, 28, 29, 30].map(r => d(literal('기본입력', 'C' + r, true)))).toString();
   input.otherDeduction = literal('2', 'C22', true);
+  // Preserve the bounded source tables, not only today's three lookup results.
+  const numberOrBlank = (sheet: string, address: string) => { const c = cell(sheet, address); return c?.formula !== undefined || c?.type === 'e' || !c?.value ? '' : literal(sheet, address); };
+  const sourceHistory: EsSourceHistory = { hash: sourceHash, months: [], rates: [], standards: [], machinery: [] };
+  for (let r = 5; r <= 88; r++) {
+    const m = text('기본입력', 'R' + r).match(/^(\d{4})년(\d{1,2})월$/);
+    if (m) sourceHistory.months.push({ month: `${m[1]}-${m[2].padStart(2, '0')}`, wage: numberOrBlank('기본입력', 'T' + r), materials: ['U', 'V', 'W', 'X'].map(c => numberOrBlank('기본입력', c + r)) as EsPeriod['materials'], injury: numberOrBlank('기본입력', 'Y' + r) });
+  }
+  for (const [kind, dc, columns, start, end] of [['health', 'J', ['K'], 35, 48], ['pension', 'L', ['M'], 35, 48], ['care', 'N', ['O'], 35, 48], ['employment', 'H', ['I', 'J', 'K', 'L', 'M', 'N', 'O'], 51, 61], ['retirement', 'H', ['I', 'J'], 64, 67]] as const) {
+    for (let r: number = start; r <= end; r++) if (text('기본입력', dc + r)) sourceHistory.rates.push({ kind, date: serialDate(literal('기본입력', dc + r)), values: columns.map(c => numberOrBlank('기본입력', c + r)) });
+  }
+  for (const label of ['토목표준', '건축표준', '기계표준', '전기표준', '통신표준']) {
+    const publications = Array.from({ length: 85 }, (_, i) => i + 25).filter(r => text(label, 'C' + r)).map(r => ({ date: serialDate(literal(label, 'C' + r)), label: text(label, 'D' + r) }));
+    const labelFor = (serial: string) => publications.filter(p => p.date <= serialDate(serial)).sort((a, b) => b.date.localeCompare(a.date))[0]?.label;
+    const pairs: EsPair[] = [];
+    for (const [address, c] of book.sheets.get(label)!) {
+      if (!/^O\d+$/.test(address) || Number(address.slice(1)) < 26 || Number(address.slice(1)) > 5000 || !c.value) continue;
+      const r = address.slice(1); if (!text(label, 'T' + r)) continue;
+      const baseLabel = labelFor(literal(label, address)), comparisonLabel = labelFor(literal(label, 'T' + r));
+      if (!baseLabel || !comparisonLabel || text(label, 'Q' + r) !== text(label, 'V' + r)) continue;
+      pairs.push({ label, baseLabel, comparisonLabel, commonCount: literal(label, 'Q' + r), baseAverage: literal(label, 'S' + r), comparisonAverage: literal(label, 'X' + r), baseSum: literal(label, 'R' + r), comparisonSum: literal(label, 'W' + r), source: `가져온 ${label}!${r} / ${baseLabel} → ${comparisonLabel}` });
+    }
+    sourceHistory.standards.push({ label, publications, pairs });
+  }
+  for (const [year, pc, dc] of [['2021', 'S', 'T'], ['2022', 'U', 'V'], ['2023', 'W', 'X'], ['2024', 'Y', 'Z'], ['2025', 'AA', 'AB']]) sourceHistory.machinery.push({ year, rows: Array.from({ length: 620 }, (_, i) => [numberOrBlank('K0', pc + (i + 34)), numberOrBlank('K0', dc + (i + 34))]) });
+  input.sourceHistory = sourceHistory;
   if (Number(literal('기본입력', 'E22', true)) > 0 || Number(literal('기본입력', 'E3', true)) > 1) throw new Error('신규비목 또는 후속 차수 원본은 아직 매핑 검수가 필요합니다. 현재 입력은 변경하지 않았습니다.');
   return { input: validateEsInput(input), kind: 'ORIGINAL', sourceHash, warnings: [
-    '원본 금액·월별·요율·공통 기간쌍에서 가져왔습니다. 수식과 최종 결과 캐시는 실행/채택하지 않습니다.',
+    '원본 금액·월별·시행일별 요율·공통 기간쌍 이력까지 보관합니다. 기본입력 변경 후 ES 요율정보 가져오기로 재선택할 수 있습니다. 수식과 최종 결과 캐시는 실행/채택하지 않습니다.',
+    '이력 중 수식·오류로 채워진 원자료 칸은 빈 값으로 보관합니다. 해당 기간 선택 시 실제 공표 값을 확인해 입력하세요.',
     ...(skippedContract.length ? [`계약 정보 중 수식·오류 셀은 직접 확인해 입력하세요: ${skippedContract.join(', ')}`] : []),
     ...(changedFormulas.length ? [`기준 원본과 수식 구성이 다르거나 시트가 누락되었습니다: ${changedFormulas.join(', ')}. 재저장 표현 차이도 포함될 수 있습니다. 수정된 Excel 수식은 실행하지 않으며 웹 규칙으로만 재계산합니다.`] : ['기준 원본 27시트의 수식 구성 지문이 일치합니다. 입력값·업무 적합성의 승인을 의미하지 않습니다.']),
     '월말은 실제 달력으로 판단합니다. 원본의 잘못된 월일수 표를 사용하지 않습니다.',

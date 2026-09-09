@@ -30,26 +30,29 @@ test('CF124 all 21 contract keys render exactly once across the basic groups', (
   assert.deepEqual([...keys].sort(), ES_CONTRACT_FIELDS.map(([key]) => key).sort());
 });
 
-test('CF124 six original main inputs and project selector preserve their write targets', () => {
-  const keys = direct.map(call => {
-    const value = call.arguments[1]; assert.ok(ts.isPropertyAccessExpression(value));
-    assert.equal(value.expression.getText(tree), 'input');
+test('CF124/127 original main inputs and project selector preserve their write targets', () => {
+  const original = ['title', 'client', 'contractor', 'baseDate', 'adjustmentDate', 'contractAmount'];
+  const keys = direct.filter(call => {
+    const value = call.arguments[1];
+    return ts.isPropertyAccessExpression(value) && value.expression.getText(tree) === 'input' && original.includes(value.name.text);
+  }).map(call => {
+    const value = call.arguments[1] as ts.PropertyAccessExpression;
     const key = value.name.text;
     assert.match(call.arguments[2].getText(tree), new RegExp(`mutate\\(n => \\{ n\\.${key} = v; \\}\\)`));
     return key;
   });
-  assert.deepEqual(keys.sort(), ['title', 'client', 'contractor', 'baseDate', 'adjustmentDate', 'contractAmount'].sort());
+  assert.deepEqual(keys.sort(), original.sort());
   const selects = nodes(basic).filter(node => ts.isJsxOpeningElement(node) && node.tagName.getText(tree) === 'select');
   assert.equal(selects.length, 1);
   assert.match(selects[0].getText(tree), /value=\{caseId\} onChange=\{e => setCaseId\(e\.target\.value\)\}/);
-  assert.equal(direct.length + ES_CONTRACT_FIELDS.length + selects.length, 28);
+  assert.equal(keys.length + ES_CONTRACT_FIELDS.length + selects.length, 28, 'The original 28 controls remain; new source inputs are additional controls');
 });
 
 test('CF124 native dates, empty strings and the existing contract mutation path are preserved', () => {
   const helper = nodes(tree).find(node => ts.isVariableDeclaration(node) && node.name.getText(tree) === 'contractFields');
   assert.ok(helper);
   assert.match(helper.getText(tree), /input\.contract\?\.\[key\] \?\? ''/);
-  assert.match(helper.getText(tree), /mutate\(n => \{ n\.contract \?\?= newEsContract\(\); n\.contract\[key\] = v; \}\)/);
+  assert.match(helper.getText(tree), /mutate\(n => \{ n\.contract \?\?= newEsContract\(\); n\.contract\[key\] = v;/);
   assert.match(helper.getText(tree), /type === 'date' \? 'date' : 'text'/);
   const dates = direct.filter(call => call.arguments[3] && ts.isStringLiteral(call.arguments[3]) && call.arguments[3].text === 'date');
   assert.deepEqual(dates.map(call => call.arguments[1].getText(tree)).sort(), ['input.adjustmentDate', 'input.baseDate']);
@@ -61,12 +64,12 @@ test('CF124 semantic groups retain unique headings and the existing busy fieldse
   const ids = [...basicText.matchAll(/<h2 id="([^"]+)"/g)].map(match => match[1]);
   assert.equal(ids.length, 5); assert.equal(new Set(ids).size, 5);
   for (const id of ids) assert.ok(basicText.includes(`<section aria-labelledby="${id}">`));
-  const headings = nodes(basic).filter(ts.isJsxElement).filter(node => node.openingElement.tagName.getText(tree) === 'h2');
+  const headings = nodes(basic).filter(ts.isJsxElement).filter(node => node.openingElement.tagName.getText(tree) === 'h2' && node.openingElement.attributes.properties.some(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'id'));
   assert.deepEqual(headings.map(node => node.children.map(child => child.getText(tree)).join('').trim().match(/^[1-5]\./)?.[0]), ['1.', '2.', '3.', '4.', '5.']);
   assert.match(source, /<fieldset disabled=\{busy\} className="es-workspace">/);
 });
 
-test('CF124/126 yellow stays ES-scoped while optional basic fields use the neutral theme surface', () => {
+test('CF124/127 yellow stays ES-scoped while non-yellow source inputs use the neutral theme surface', () => {
   const rule = css.replace(/\/\*[\s\S]*?\*\//g, '').match(/([^{}]+)\{[^{}]*--field-bg:\s*#fff5cc;[^{}]*\}/);
   assert.ok(rule, 'editable field token must be defined, not only a background fallback');
   assert.ok(rule[1].trim().startsWith('.es-studio '));
@@ -77,8 +80,8 @@ test('CF124/126 yellow stays ES-scoped while optional basic fields use the neutr
   assert.match(studio, /--surface:var\(--surface-raised,#fff\)/);
   assert.match(studio, /--surface-muted:var\(--surface-soft,#eef4f9\)/);
   assert.match(css, /\.es-tabs \[aria-current=page\]\s*\{[^}]*color:#183049/);
-  const optional = css.match(/\.es-studio \.es-basic-input :is\(input,select\):not\(\[aria-required=true\]\):not\(:disabled\):not\(\[readonly\]\)\s*\{([^}]+)\}/);
-  assert.ok(optional, 'Only optional basic inputs/selects override yellow, not all ES fields');
+  const optional = css.match(/\.es-studio \.es-basic-input :is\(input,select\):not\(\[data-es-manual\]\):not\(:disabled\):not\(\[readonly\]\)\s*\{([^}]+)\}/);
+  assert.ok(optional, 'Only controls without the original yellow source coordinate override yellow');
   assert.match(optional[1], /--field-bg:var\(--surface,#fff\)/);
   assert.match(optional[1], /background-color:var\(--field-bg\)/);
   assert.match(optional[1], /color:var\(--text-primary,#183049\)/);
@@ -94,27 +97,56 @@ test('CF124 compact columns are scoped to basic input, leaving the deductions gr
   assert.match(css, /@container\(max-width:380px\)/);
 });
 
-test('CF126 exactly four basic fields are marked by save/calculation purpose; 24 remain optional', () => {
-  const required = direct.filter(call => call.arguments[4]).map(call => {
-    const value = call.arguments[1], requirement = call.arguments[4];
-    assert.ok(ts.isPropertyAccessExpression(value)); assert.ok(ts.isStringLiteral(requirement));
-    return [value.name.text, requirement.text];
-  });
-  assert.deepEqual(required, [['title', '저장 필수'], ['baseDate', '계산 필수'], ['adjustmentDate', '계산 필수'], ['contractAmount', '계산 필수']]);
-  assert.equal(28 - required.length, 24);
+test('CF127 exactly 19 manual source anchors are marked, excluding merged children and non-yellow inputs', () => {
+  const manual = direct.filter(call => call.arguments[4]).map(call => {
+    const coordinate = call.arguments[4]; assert.ok(ts.isStringLiteral(coordinate));
+    return [call.arguments[1].getText(tree), coordinate.text];
+  }).filter(([, coordinate]) => coordinate);
+  assert.deepEqual(manual.map(([, coordinate]) => coordinate).sort(), ['C7', 'C8', 'C9', 'C10', 'C12', 'C16', 'C22', 'E10', 'E11'].sort());
+  for (const [value, coordinate] of [['input.title', 'C8'], ['input.client', 'C7'], ['input.contractor', 'C9'], ['input.baseDate', 'C10'], ['input.adjustmentDate', 'C12'], ['input.contractAmount', 'C16'], ['input.advanceContract', 'E10'], ['input.advancePaid', 'E11']]) {
+    assert.ok(manual.some(([actualValue, actualCell]) => actualValue === value && actualCell === coordinate), `${coordinate} must edit ${value}`);
+  }
+  const coordinates = nodes(tree).find(node => ts.isVariableDeclaration(node) && node.name.getText(tree) === 'ES_YELLOW_CONTRACT_CELLS') as ts.VariableDeclaration;
+  assert.ok(coordinates?.initializer && ts.isNewExpression(coordinates.initializer));
+  const list = coordinates.initializer.arguments?.[0]; assert.ok(list && ts.isArrayLiteralExpression(list));
+  const yellowContract = list.elements.map(node => { assert.ok(ts.isStringLiteral(node)); return node.text; });
+  assert.deepEqual(yellowContract.sort(), ['E9', 'C11', 'E12', 'C17', 'C18', 'C19', 'C20', 'C23', 'C24', 'C25'].sort());
+  const all = [...manual.map(([, coordinate]) => coordinate), ...ES_CONTRACT_FIELDS.filter(([, , , coordinate]) => yellowContract.includes(coordinate)).map(([, , , coordinate]) => coordinate)];
+  assert.equal(all.length, 19); assert.equal(new Set(all).size, 19);
+  assert.deepEqual(all.sort(), ['C7', 'C8', 'C9', 'E9', 'C10', 'E10', 'C11', 'E11', 'C12', 'E12', 'C16', 'C17', 'C18', 'C19', 'C20', 'C22', 'C23', 'C24', 'C25'].sort());
+  assert.ok(!all.some(coordinate => ['D8', 'E8', 'C13', 'E16', 'E17', 'E18', 'E19'].includes(coordinate)), 'Merge children and non-yellow manual cells must not be marked as yellow');
+});
+
+test('CF127 manual source markers do not become required fields or alter save gating', () => {
   const field = nodes(tree).find(node => ts.isVariableDeclaration(node) && node.name.getText(tree) === 'field') as ts.VariableDeclaration;
   assert.ok(field.initializer && ts.isArrowFunction(field.initializer));
-  assert.equal(field.initializer.parameters[4].name.getText(tree), 'requirement');
+  assert.equal(field.initializer.parameters[4].name.getText(tree), 'manualCell');
   assert.equal(field.initializer.parameters[4].initializer?.getText(tree), "''");
-  assert.match(field.getText(tree), /aria-required=\{requirement \? true : undefined\}/);
+  assert.match(field.getText(tree), /data-es-manual=\{manualCell \|\| undefined\}/);
+  assert.equal(field.getText(tree).includes('aria-required'), false, 'Source fill is not proof of a required field');
   const control = nodes(field).find(node => ts.isJsxSelfClosingElement(node) && node.tagName.getText(tree) === 'input') as ts.JsxSelfClosingElement;
   assert.ok(control);
   assert.equal(control.attributes.properties.some(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'required'), false, 'ARIA hints must not introduce native form gating for incomplete draft saves');
   const contract = nodes(tree).find(node => ts.isVariableDeclaration(node) && node.name.getText(tree) === 'contractFields');
   assert.ok(contract);
-  for (const call of nodes(contract).filter(ts.isCallExpression).filter(call => call.expression.getText(tree) === 'field')) assert.equal(call.arguments.length, 4);
+  assert.match(contract.getText(tree), /ES_YELLOW_CONTRACT_CELLS\.has\(coordinate\) \? coordinate : ''/);
   const project = nodes(basic).find(node => ts.isJsxOpeningElement(node) && node.tagName.getText(tree) === 'select')!;
-  assert.equal(project.getText(tree).includes('aria-required'), false);
+  assert.equal(project.getText(tree).includes('data-es-manual'), false);
+  assert.match(source, /disabled=\{busy \|\| loading \|\| loadFailed\} onClick=\{\(\) => void save\(\)\}/);
+  assert.match(source, /disabled=\{busy \|\| loading \|\| loadFailed\} onClick=\{\(\) => void save\(true\)\}/);
+});
+
+test('CF127 safety source anchor updates all three periods and the derived ledger stays read-only', () => {
+  const safety = direct.find(call => call.arguments[4] && ts.isStringLiteral(call.arguments[4]) && call.arguments[4].text === 'C22');
+  assert.ok(safety);
+  assert.equal(safety.arguments[1].getText(tree), 'input.base.rates.safety');
+  const writes = nodes(safety.arguments[2]).filter(ts.isBinaryExpression).filter(node => node.operatorToken.kind === ts.SyntaxKind.EqualsToken);
+  assert.deepEqual(writes.map(node => [node.left.getText(tree), node.right.getText(tree)]).sort(), [
+    ['n.base.rates.safety', 'v'], ['n.current.period.rates.safety', 'v'], ['n.previous.period.rates.safety', 'v']
+  ].sort());
+  const derived = nodes(basic).find(node => ts.isJsxElement(node) && node.openingElement.tagName.getText(tree) === 'aside' && node.openingElement.getText(tree).includes('es-derived-ledger'));
+  assert.ok(derived);
+  assert.equal(nodes(derived).filter(node => (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && ['input', 'select', 'textarea'].includes(node.tagName.getText(tree))).length, 0, 'Auto results must not introduce an editable copy of source state');
 });
 
 test('CF126 project link remains optional, describes save semantics, and requests assigned projects', () => {

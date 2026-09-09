@@ -31,6 +31,8 @@ async function browserChecks(sourceBase64: string) {
     return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap(key => diffPaths(a[key], b[key], `${prefix}.${key}`)).slice(0, 40);
   };
   const equal = (a: unknown, b: unknown) => { const paths = diffPaths(a, b); if (paths.length) throw new Error(`QA_SAFE: differing schema paths only: ${paths.join(', ')}`); };
+  // Binary rewrites change provenance hash, not selected data. Compare every other input field.
+  const equalRewrittenInput = (a: any, b: any) => { const left = structuredClone(a), right = structuredClone(b); if (left.sourceHistory && right.sourceHistory) { ok(/^[a-f0-9]{64}$/.test(left.sourceHistory.hash)); ok(/^[a-f0-9]{64}$/.test(right.sourceHistory.hash)); delete left.sourceHistory.hash; delete right.sourceHistory.hash; } equal(left, right); };
   const ok = (condition: unknown) => { if (!condition) throw new Error('Expectation failed'); };
   const rejected = async (bytes: Uint8Array) => { let failed = false; try { await importEsWorkbook(bytes); } catch { failed = true; } ok(failed); };
   const parse = (text: string) => new DOMParser().parseFromString(text, 'application/xml');
@@ -81,7 +83,7 @@ async function browserChecks(sourceBase64: string) {
   });
   let baseline: any;
   await check('original_exact_27_formula_fingerprints', async () => {
-    baseline = await importEsWorkbook(original); equal(baseline.kind, 'ORIGINAL');
+    try { baseline = await importEsWorkbook(original); } catch (error) { const msg = error instanceof Error ? error.message : ''; throw new Error('QA_SAFE: import classification: ' + (msg.startsWith('ES ') ? msg : msg.includes('원자료') ? 'source values/history' : msg.includes('입력 위치의 수식') ? 'formula in literal source' : msg.includes('형식') ? 'shape' : 'other') + ' address=' + (msg.match(/^[^:]{1,30}!\w+/)?.[0] ?? 'none')); } equal(baseline.kind, 'ORIGINAL');
     ok(baseline.warnings.some((warning: string) => /27시트.*지문이 일치/.test(warning)));
   });
   await check('original_one_formula_change_warns_without_execution', async () => {
@@ -90,7 +92,7 @@ async function browserChecks(sourceBase64: string) {
       const key = sheetPath(files, '2.1'), doc = xml(files, key), f = tags(doc, 'f').find(f => Boolean(f.textContent))!;
       ok(f); f.textContent = '1+987654321'; save(files, key, doc);
     });
-    const imported = await importEsWorkbook(altered); equal(imported.input, baseline.input);
+    const imported = await importEsWorkbook(altered); equalRewrittenInput(imported.input, baseline.input);
     ok(imported.warnings.some((warning: string) => /수식 구성이 다르/.test(warning)));
     equal(calculateEs(imported.input), calculateEs(baseline.input));
   });
@@ -102,14 +104,14 @@ async function browserChecks(sourceBase64: string) {
     });
     const imported = await importEsWorkbook(changed);
     equal({ title: imported.input.title, client: imported.input.client, contractor: imported.input.contractor }, { title: 'Synthetic construction', client: 'Synthetic client', contractor: 'Synthetic contractor' });
-    const withoutCaches = await importEsWorkbook(await changeCaches(changed, true)); equal(withoutCaches.input, imported.input);
+    const withoutCaches = await importEsWorkbook(await changeCaches(changed, true)); equalRewrittenInput(withoutCaches.input, imported.input);
   });
   for (const remove of [false, true]) await check(remove ? 'original_absent_formula_caches_not_used' : 'original_stale_formula_caches_not_used', async () => {
-    ok(baseline); const imported = await importEsWorkbook(await changeCaches(original, remove)); equal(imported.input, baseline.input); equal(calculateEs(imported.input), calculateEs(baseline.input));
+    ok(baseline); const imported = await importEsWorkbook(await changeCaches(original, remove)); equalRewrittenInput(imported.input, baseline.input); equal(calculateEs(imported.input), calculateEs(baseline.input));
   });
   await check('original_sheet_order_is_not_mapping_identity', async () => {
     ok(baseline); const changed = await modify(original, files => { const doc = xml(files, 'xl/workbook.xml'), sheets = tags(doc, 'sheets')[0]; sheets.replaceChildren(...Array.from(sheets.children).reverse()); save(files, 'xl/workbook.xml', doc); });
-    const imported = await importEsWorkbook(changed); equal(imported.input, baseline.input); ok(imported.warnings.some((s: string) => /27시트.*지문이 일치/.test(s)));
+    const imported = await importEsWorkbook(changed); equalRewrittenInput(imported.input, baseline.input); ok(imported.warnings.some((s: string) => /27시트.*지문이 일치/.test(s)));
   });
   await check('original_1904_epoch_preserves_calendar_dates_and_results', async () => {
     ok(baseline);
@@ -126,7 +128,28 @@ async function browserChecks(sourceBase64: string) {
         adjust(name, [...list('C', 25, 109), ...pairDates]);
       }
     });
-    const imported = await importEsWorkbook(changed); equal(imported.input, baseline.input); equal(calculateEs(imported.input), calculateEs(baseline.input));
+    const imported = await importEsWorkbook(changed); equalRewrittenInput(imported.input, baseline.input); equal(calculateEs(imported.input), calculateEs(baseline.input));
+  });
+  await check('CF127_original_history_reselection_matches_original_snapshot_calculation', async () => {
+    ok(baseline.input.sourceHistory); ok(JSON.stringify(baseline.input).length < 500_000);
+    const selected = api.resolveEsSources(baseline.input);
+    equal(selected.warnings, []); equal(calculateEs(selected.input), calculateEs(baseline.input));
+  });
+  await check('CF127_original_history_survives_working_excel_round_trip', async () => {
+    const saved = await importEsWorkbook(await exportEsWorking(baseline.input));
+    equal(saved.input, baseline.input); equal(calculateEs(saved.input), calculateEs(baseline.input));
+  });
+  await check('CF127_calculated_K_matches_original_cached_reference_only_for_comparison', async () => {
+    const basic = xml(originalStructure, sheetPath(originalStructure, '기본입력')), result = calculateEs(baseline.input);
+    ok(result.current && result.previous); equal(Number(result.current.k), Number(stringValue(cell(basic, 'C3')))); equal(Number(result.previous.k), Number(stringValue(cell(basic, 'C4'))));
+    const report = exportEsReport(baseline.input, result, ['cover', 'contents', 'divider_1', 'review_summary', 'divider_2', 'amount_adjustment', 'weighted_rate', 'advance_deduction', 'divider_3', 'rate_details', 'divider_4', 'index_details', 'divider_5', 'previous_day_eligibility', 'previous_day_weighted_rate', 'previous_day_rate_details', 'previous_day_index_details']);
+    equal(tags(xml(unzipSync(report), 'xl/workbook.xml'), 'sheet').length, 17);
+  });
+  await check('CF127_changed_base_date_reselection_matches_fresh_original_import', async () => {
+    const date = '2023-12-01', edited = structuredClone(baseline.input); edited.baseDate = date;
+    const workbook = await modify(original, files => { const key = sheetPath(files, '기본입력'), doc = xml(files, key), c = cell(doc, 'C10'); setString(doc, c, String((Date.parse(date) - Date.UTC(1899, 11, 30)) / 86400000)); save(files, key, doc); });
+    const reimport = await importEsWorkbook(workbook), selected = api.resolveEsSources(edited);
+    equal(selected.warnings, []); equal(calculateEs(selected.input), calculateEs(reimport.input));
   });
   const sample = synthetic(), working = await exportEsWorking(sample), roundTrip = await importEsWorkbook(working);
   await check('working_chain_1_exact_round_trip', async () => { equal(roundTrip.kind, 'WORKING'); equal(roundTrip.input, sample); equal(calculateEs(roundTrip.input), calculateEs(sample)); const files = unzipSync(working); ok(text(files, sheetPath(files, 'ES_작업정보')).includes('CHAIN_1')); });
@@ -164,7 +187,7 @@ async function browserChecks(sourceBase64: string) {
 test('CF123 isolated browser executes real DOMParser import guards without retaining original data', async () => {
   assert.ok(existsSync(sourcePath), 'Set CF123_ES_SOURCE to the approved, read-only original workbook');
   const source = readFileSync(sourcePath), sourceHashBefore = sha(source);
-  const bundle = await build({ stdin: { contents: `import { importEsWorkbook, exportEsWorking, exportEsReport } from './apps/web/src/es/es-xlsx';\nimport { calculateEs,newEsInput } from './packages/document-engine/src/es-calculation';\nimport { unzipSync,zipSync,strFromU8,strToU8 } from './apps/web/node_modules/fflate';\nconst __name=(fn)=>fn;\nwindow.__esImport={importEsWorkbook,exportEsWorking,exportEsReport,calculateEs,newEsInput,unzipSync,zipSync,strFromU8,strToU8};\nwindow.__esParserChecks=${browserChecks.toString()};`, resolveDir: root, sourcefile: 'parser-qa-inline.ts', loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'chrome120', logLevel: 'silent' });
+  const bundle = await build({ stdin: { contents: `import { importEsWorkbook, exportEsWorking, exportEsReport } from './apps/web/src/es/es-xlsx';\nimport { calculateEs,newEsInput } from './packages/document-engine/src/es-calculation';\nimport { resolveEsSources } from './packages/document-engine/src/es-source-history';\nimport { unzipSync,zipSync,strFromU8,strToU8 } from './apps/web/node_modules/fflate';\nconst __name=(fn)=>fn;\nwindow.__esImport={importEsWorkbook,exportEsWorking,exportEsReport,calculateEs,newEsInput,resolveEsSources,unzipSync,zipSync,strFromU8,strToU8};\nwindow.__esParserChecks=${browserChecks.toString()};`, resolveDir: root, sourcefile: 'parser-qa-inline.ts', loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'chrome120', logLevel: 'silent' });
   const script = bundle.outputFiles[0].text;
   const server = createServer((request, response) => {
     if (request.method !== 'GET') { response.writeHead(405); response.end(); return; }

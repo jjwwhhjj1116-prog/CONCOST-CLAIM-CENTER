@@ -2,6 +2,7 @@ import template from './es-template-layout';
 import type { EsInput, EsResult, EsContextResult } from './es-calculation';
 import { esDecimal as d, esSum } from './es-decimal';
 import { esThemeColors, esIndexedColors } from './es-template-colors';
+import { esElapsedDays } from './es-source-history';
 
 export interface EsCellStyle { font: { name: string; size: number; bold?: boolean; italic?: boolean; underline?: boolean; color?: unknown }; numberFormat: string; alignment?: Record<string, string>; borders?: Record<string, { style?: string; color?: unknown }>; fill?: unknown }
 export interface EsTemplateGrid { name: string; printArea: string; defaultRowHeight: number; rowHeights: Record<string, number>; rowStyles?: Record<string, number>; hiddenRows: number[]; columns: Record<string, { width: number; style?: number }>; merges: string[]; cellStyles: [string, number][]; margins: Record<string, string>; pageSetup: Record<string, string>; staticCells: Record<string, string>; fields: Record<string, string> }
@@ -57,6 +58,7 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
   }
   const advanceRemaining = result.amount ? d(input.advanceContract).sub(d(excluded).sub(d(input.priorCompletion))).toString() : '';
   const display = { ...Object.fromEntries(['currentContractDate','currentContractAmount','currentStartDate','currentEndDate'].map(k => [k, at(metadata,k)])), technicalContacts: [at(metadata,'technicalDepartment'),at(metadata,'technicalManager')].filter(Boolean).join(' · '), elapsedDays: input.baseDate && input.adjustmentDate ? String(Math.round((Date.parse(input.adjustmentDate)-Date.parse(input.baseDate))/86400000)) : '', baseDate: input.baseDate, baseDateCaption: '입찰 기준일', totalExcluded: excluded, directPaidExclusionCaption: '직접 지급액 (중복 제외 후)', directPaidEvidence: input.directPaid.join(' + '), advanceEvidence: '단일 선금 원본 호환 산식', advanceDateEvidence: at(metadata,'advanceDate'), advancePaidEvidence: input.advancePaid, advancePaidRatio: input.advancePaid !== '' && input.advanceContract && d(input.advanceContract).compare(d(0)) > 0 ? d(input.advancePaid).div(d(input.advanceContract)).toString() : '0', advanceRuleDescription: '선금 잔여 적용대가 × 적용 K × 선금 지급액 / 선금 계약금액 (원 단위 반올림)', advanceContractNetOfPriorCompletion: input.advanceContract ? d(input.advanceContract).sub(d(input.priorCompletion || '0')).toString() : '', priorCompletionNote: input.priorCompletion, advanceApplicable: advanceRemaining, currentContractCaption: '선금 지급 계약', advanceEquation: `${advanceRemaining} × ${result.current?.k ?? '—'} × ${input.advancePaid} / ${input.advanceContract}` };
+  display.elapsedDays = esElapsedDays(input);
   const root = { input, metadata, ...contexts, amount: result.amount, display, base: { display: { wageStatement: `${input.baseDate} 적용 노임 ${input.base.wage}` } } };
   const values: Record<string,string> = { ...grid.staticCells };
   for (const [address, field] of Object.entries(grid.fields)) {
@@ -73,5 +75,6 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
     else if (format === 'longDate' && /^\d{4}-\d{2}-\d{2}$/.test(text)) text = text.replace(/^(\d+)-(\d+)-(\d+)$/, '$1년 $2월 $3일');
     values[address] = text;
   }
+  if (grid.name === '1') values.J6 = input.contract?.bidRate ? d(input.contract.bidRate).div(d(100)).toString() : '—';
   return values;
 }

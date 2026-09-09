@@ -40,6 +40,7 @@ import { parseWorkflowAiImport, localWorkflowAiImport, extractWorkflowImportSour
 import { joinReportPresentation, splitReportPresentation } from '../../../packages/document-engine/src/report-presentation';
 import { mergeGeneratedChapter, type ReportNode } from '../../../packages/document-engine/src/report-chapter';
 import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
+import { fetchEsHealthSources } from './es-health-source';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -8277,6 +8278,13 @@ const worker = {
       return handlePreviewDashboard(request, env);
     }
 
+    if (url.pathname === '/api/es/sources/health' && request.method === 'GET') {
+      const user = await previewSessionUser(request, env);
+      if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
+      if (!user.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) return json({ error: 'ES 접근 권한이 없습니다.' }, 403);
+      try { return json(await fetchEsHealthSources(await previewLawApiOc(env), url.searchParams.getAll('date'))); }
+      catch (reason) { const code = reason instanceof Error ? reason.message : ''; return json({ error: code === 'LAW_API_OC_REQUIRED' ? '관리자 설정의 국가법령정보 OC 인증값을 먼저 저장하세요.' : code === 'ES_SOURCE_INVALID_DATE' ? '조회 기준일을 확인하세요.' : '해당 날짜의 건강보험 법령·사업주 부담률을 검증하지 못했습니다. 기존 값을 유지하며 수동 입력할 수 있습니다.', code: /^ES_(SOURCE|LAW)_[A-Z_]+$/.test(code) || code === 'LAW_API_OC_REQUIRED' ? code : 'ES_LAW_SOURCE_UNAVAILABLE' }, code === 'ES_SOURCE_INVALID_DATE' ? 400 : 503); }
+    }
     if (url.pathname === '/api/es/documents' || url.pathname.startsWith('/api/es/documents/')) {
       const user = await previewSessionUser(request, env);
       if (!user) return json({ error: '로그인이 필요합니다.' }, 401);

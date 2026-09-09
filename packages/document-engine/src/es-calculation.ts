@@ -1,4 +1,5 @@
 import { EsDecimal, esDecimal as d, esSum } from './es-decimal';
+import { validateEsSourceHistory, type EsSourceHistory } from './es-source-history';
 
 export const ES_ENGINE_VERSION = 'es-v2-legacy-1';
 export const ES_COSTS = [
@@ -17,7 +18,7 @@ export type EsRateKey = typeof ES_RATE_KEYS[number];
 export const ES_CONTRACT_FIELDS = [
   ['contractDate', '계약일', 'date', 'C11'], ['priorAdjustmentDate', '직전 조정기준일', 'date', 'C13'],
   ['firstContractDate', '1차 계약일', 'date', 'C17'], ['startDate', '착공일', 'date', 'C18'], ['endDate', '준공일', 'date', 'C19'],
-  ['contractKind', '계약 방식 (계속비·장기계속 등)', 'text', 'C20'], ['bidRate', '낙찰률 (원본 소수값)', 'number', 'E9'],
+  ['contractKind', '계약 방식 (계속비·장기계속공사)', 'text', 'C20'], ['bidRate', '낙찰률 (%)', 'number', 'E9'],
   ['currentContractAmount', '금차 계약금액 (원)', 'number', 'E16'], ['currentContractDate', '금차 계약일', 'date', 'E17'],
   ['currentStartDate', '금차 착공일', 'date', 'E18'], ['currentEndDate', '금차 준공일', 'date', 'E19'],
   ['advanceDate', '선금 지급일', 'date', 'E12'], ['employmentGrade', '고용보험 적용 등급', 'text', 'C23'],
@@ -72,6 +73,7 @@ export interface EsInput {
   otherDeduction: string;
   note: string;
   contract?: Record<EsContractKey, string>;
+  sourceHistory?: EsSourceHistory;
 }
 const blankPeriod = (): EsPeriod => ({ date: '', wage: '', materials: ['', '', '', ''], rates: Object.fromEntries(ES_RATE_KEYS.map(key => [key, ''])) as EsPeriod['rates'], source: '' });
 const blankPair = (label: string): EsPair => ({ label, baseAverage: '', comparisonAverage: '', commonCount: '', source: '', baseSum: '', comparisonSum: '', baseLabel: '', comparisonLabel: '' });
@@ -108,6 +110,7 @@ export function validateEsInput(value: unknown): EsInput {
   return { schemaVersion: 2, title: text(v.title), client: text(v.client), contractor: text(v.contractor), baseDate: text(v.baseDate, 10), adjustmentDate: text(v.adjustmentDate, 10), contractAmount: num(v.contractAmount),
     costs: Object.fromEntries(ES_COSTS.map(([row]) => [row, num(costs[String(row)])])), base: period(v.base), current: comparison(v.current), previous: comparison(v.previous),
     paidWorkExclusion: num(v.paidWorkExclusion), directPaid: v.directPaid.map(num), alreadyExcludedDirect: num(v.alreadyExcludedDirect), advanceContract: num(v.advanceContract), advancePaid: num(v.advancePaid), priorCompletion: num(v.priorCompletion), otherDeduction: num(v.otherDeduction), note: text(v.note, 10000),
+    ...(v.sourceHistory === undefined ? {} : { sourceHistory: validateEsSourceHistory(v.sourceHistory) }),
     ...(v.contract === undefined ? {} : { contract: Object.fromEntries(ES_CONTRACT_FIELDS.map(([key, , type]) => { const item = object(v.contract)[key] ?? ''; const val = type === 'number' ? num(item) : text(item, type === 'date' ? 10 : 300); if (type === 'date' && val) previousEsDay(val); return [key, val]; })) as Record<EsContractKey, string> }) };
 }
 
