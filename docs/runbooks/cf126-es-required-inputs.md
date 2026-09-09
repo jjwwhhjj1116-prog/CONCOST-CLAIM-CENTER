@@ -19,4 +19,10 @@
 
 ## 검증과 배포
 
-빌드(타입 검사 포함) 및 development Wrangler dry-run 통과. 최종 회귀·브라우저·배포 결과는 후속 기록한다. 현재 in-app 로그인 브라우저 연결을 사용할 수 없어 사용자 산출서 변경을 통한 라이브 E2E는 수행하지 않는다.
+- 빌드(타입 검사 포함), development Wrangler dry-run 통과. 기존 대형 chunk 경고는 유지된다.
+- 계산 24 + 저장/ACL 16 + CF124/126 UI 계약 9 + CF125 가져오기 모달 11 = 60/60 PASS. dark 후속 CSS 포함 UI 계약 9/9 재실행 PASS.
+- 실제 App 격리 브라우저(API mock) 2/2 PASS: 1440/390 light/dark의 필수4/선택24, 5개 번호, 합성 프로젝트 선택·PUT 1회·재열기·다른 입력 전체 보존. 결과 `output/playwright/es-v2/cf126-results.json`. 고객 데이터 변경 없음.
+- 코드 커밋 `b04a3b5`. development 배포 버전 `7fd8cdaf-268c-45ce-9789-22f1dcbb4888`.
+- `node scripts/cf114-live-smoke.mjs development`: 최초 실행 PASS. health/readiness 정상, 기존 Drive 연결 유지, 보호 경로 비인증 401, 공개 HTML/JS/CSS가 최신 빌드 SHA와 일치.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es
+- 현재 in-app 로그인 브라우저 연결을 사용할 수 없어 사용자 산출서 변경을 통한 라이브 E2E는 NOT_RUN. 격리 브라우저 검수와 공개 배포 확인을 실제 사용자 저장 검수로 표현하지 않는다. 가오픈·베트남 서버 및 DB 변경 없음.
