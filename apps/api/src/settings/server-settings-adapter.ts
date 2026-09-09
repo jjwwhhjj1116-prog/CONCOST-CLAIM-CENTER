@@ -266,7 +266,7 @@ async function handle(options: ServerSettingsAdapterOptions): Promise<boolean> {
       try { result = await fetchEsEcosSources(decryptSecret(masterKey, aad, current), source ? new URL(request.url ?? pathname, 'http://localhost').searchParams.getAll('date') : ['2024-06-15'], options.fetcher ?? fetch); }
       catch (error) { throw new AdapterError(error instanceof Error && error.message === 'ES_SOURCE_INVALID_DATE' ? 400 : 503, 'ECOS 인증 설정과 조회 기준일을 확인하세요. 기존값은 유지됩니다.'); }
       if (source) { json(response, 200, result); return true; }
-      if (result.items.length !== 1) throw new AdapterError(502, '공식 ECOS 응답을 확인하지 못했습니다. 인증키·이용 승인·호출 제한을 확인하세요.');
+      if (result.items.length !== 1) throw new AdapterError(502, `한국은행 연결 확인 실패. ${result.warnings.join(' ')} 저장된 인증키와 입력값은 유지됩니다.`);
       const latest = await setting(db, context.user.organizationId, organizationOwner, settingKey);
       if (latest?.version !== body.expectedVersion) throw new AdapterError(409, '연결 확인 중 설정이 변경되었습니다. 다시 불러오세요.');
       json(response, 200, { settings: projection(latest), checkedAt: result.items[0].checkedAt, month: result.items[0].month, count: 4 }); return true;

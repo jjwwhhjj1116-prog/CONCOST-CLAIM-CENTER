@@ -6501,7 +6501,7 @@ async function handlePreviewEcosSettings(request: Request, env: CloudflareEnv, u
       const key = await previewEcosKey(env);
       if (!key) return json({ error: 'ECOS 인증키를 먼저 저장하세요.' }, 503);
       const result = await fetchEsEcosSources(key, ['2024-06-15'], env.ECOS_API_TEST_FETCH ?? fetch);
-      if (result.items.length !== 1) return json({ error: '한국은행 공식 응답을 확인하지 못했습니다. 인증키·이용 승인·호출 제한을 확인하세요. 저장된 값은 유지됩니다.' }, 502);
+      if (result.items.length !== 1) return json({ error: `한국은행 연결 확인 실패. ${result.warnings.join(' ')} 저장된 인증키와 입력값은 유지됩니다.` }, 502);
       const latest = await previewEcosSettingsRow(env);
       if (latest?.version !== body.expectedVersion) return json({ error: '연결 확인 중 설정이 변경되었습니다. 다시 불러오세요.' }, 409);
       return json({ settings: previewEcosPublic(latest, env), checkedAt: result.items[0].checkedAt, count: 4, month: result.items[0].month });

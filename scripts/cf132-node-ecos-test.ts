@@ -44,7 +44,7 @@ test('CF132 actual Node save/get/test/source enforces ACL/CAS, encrypts ECOS ind
   const calls: URL[] = []; let failure = false; let server: ManagedApiServer | undefined;
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input)); calls.push(url);
-    assert.equal(url.origin, 'https://ecos.bok.or.kr'); assert.equal(init?.redirect, 'error'); assert.ok(init?.signal);
+    assert.equal(url.origin, 'https://ecos.bok.or.kr'); assert.equal(init?.redirect, 'manual'); assert.ok(init?.signal);
     if (failure) throw new Error('synthetic provider URL contains ' + key);
     const parts = url.pathname.split('/').filter(Boolean), code = parts[11];
     const names: Record<string, string> = { '201AA': '광산품', '3AA': '공산품', '4AA': '전력,가스,수도및폐기물', '101AA': '농림수산품' }; assert.ok(names[code]);

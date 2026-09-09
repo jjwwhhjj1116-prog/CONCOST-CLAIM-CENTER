@@ -28,33 +28,63 @@ test('CF30 promotes the named yjw account to Admin and seeds six finished report
   db.close();
 });
 
-test('CF30 creates deterministic project/category/month and uploader-dated Drive folders with server-owned provenance', async () => {
+test('CF30 creates and reuses company/department/project/category/month and uploader-dated Drive folders with server-owned provenance', async () => {
   const calls: Array<{ url: string; method: string; body?: Record<string, unknown> }> = [];
-  let ordinal = 0;
+  const folders: Array<{ id: string; name: string; mimeType: string; trashed: boolean; parents: string[]; appProperties: Record<string, string> }> = [];
   const fetcher = async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     const method = init.method ?? 'GET';
-    if (method === 'GET') { calls.push({ url, method }); return new Response(JSON.stringify({ files: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }); }
+    assert.equal(new URL(url).origin, 'https://www.googleapis.com');
+    if (method === 'GET') {
+      calls.push({ url, method });
+      const query = new URL(url).searchParams.get('q') ?? '';
+      const properties = [...query.matchAll(/appProperties has \{ key='([^']+)' and value='([^']*)' \}/g)];
+      const parent = query.match(/'([^']+)' in parents/)?.[1];
+      assert.ok(properties.length, 'folder lookup must use server-owned provenance');
+      assert.match(query, /trashed = false/);
+      return Response.json({ files: folders.filter(folder => !folder.trashed && properties.every(([, key, value]) => folder.appProperties[key] === value) && (!parent || folder.parents.includes(parent))) });
+    }
+    assert.equal(method, 'POST', 'fresh/reused folders must not move or delete existing files');
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     calls.push({ url, method, body });
-    ordinal += 1;
-    return new Response(JSON.stringify({ id: `folder-id-${ordinal}000`, name: body.name, mimeType: 'application/vnd.google-apps.folder', trashed: false, parents: body.parents, appProperties: body.appProperties }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    const folder = { id: `folder-id-${folders.length + 1}000`, name: String(body.name), mimeType: String(body.mimeType), trashed: false, parents: (body.parents ?? []) as string[], appProperties: body.appProperties as Record<string, string> };
+    folders.push(folder);
+    return Response.json(folder);
   };
   const caseId = '40000000-0000-4000-8000-000000000010';
   const root = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'PROJECT_ROOT', period: '', name: 'CC-2026-001 Sample' });
   const category = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'TAKEOFF_SOURCE', period: '', name: '산출자료', parentId: root.id });
   const month = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'MONTH', period: '2026-08', name: '2026-08', parentId: category.id });
   const attributed = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind: 'MEETING_MINUTES', period: '2026-08-24_00000000-0000-4000-8000-000000000042', name: '회의록(유종욱_2026.08.24)', parentId: root.id });
-  assert.equal(month.id, 'folder-id-3000');
-  assert.equal(attributed.id, 'folder-id-4000');
-  assert.equal(calls.filter((call) => call.method === 'POST').length, 4);
+  const organization = folders.find(folder => folder.appProperties.concostFolderKind === 'ORGANIZATION_ROOT');
+  const department = folders.find(folder => folder.appProperties.concostFolderKind === 'DEPARTMENT_ROOT');
+  assert.ok(organization && department);
+  assert.equal(organization.name, 'CONCOST 자료실');
+  assert.deepEqual(organization.parents, []);
+  assert.equal(department.name, '20_클레임센터');
+  assert.deepEqual(department.parents, [organization.id]);
+  assert.deepEqual(folders.find(folder => folder.id === root.id)?.parents, [department.id]);
+  assert.deepEqual(folders.find(folder => folder.id === category.id)?.parents, [root.id]);
+  assert.equal(new Set([organization.id, department.id, root.id, category.id, month.id, attributed.id]).size, 6);
+  assert.equal(calls.filter((call) => call.method === 'POST').length, 6);
   const monthBody = calls.find((call) => call.body?.name === '2026-08')?.body as { parents?: string[]; appProperties?: Record<string, string> };
   assert.deepEqual(monthBody.parents, [category.id]);
-  assert.deepEqual(monthBody.appProperties, { claimCenterCaseId: caseId, claimCenterFolderKind: 'MONTH', claimCenterPeriod: '2026-08' });
+  assert.deepEqual(monthBody.appProperties, { claimCenterCaseId: caseId, claimCenterFolderKind: 'MONTH', claimCenterPeriod: '2026-08', concostDepartment: 'CLAIM_CENTER' });
   const attributedBody = calls.at(-1)?.body as { name?: string; parents?: string[]; appProperties?: Record<string, string> };
   assert.equal(attributedBody.name, '회의록(유종욱_2026.08.24)');
   assert.deepEqual(attributedBody.parents, [root.id]);
   assert.equal(attributedBody.appProperties?.claimCenterPeriod, '2026-08-24_00000000-0000-4000-8000-000000000042');
+  for (const [expected, kind, period, name, parentId] of [
+    [root, 'PROJECT_ROOT', '', 'CC-2026-001 Sample', undefined],
+    [category, 'TAKEOFF_SOURCE', '', '산출자료', root.id],
+    [month, 'MONTH', '2026-08', '2026-08', category.id],
+    [attributed, 'MEETING_MINUTES', '2026-08-24_00000000-0000-4000-8000-000000000042', '회의록(유종욱_2026.08.24)', root.id]
+  ] as const) {
+    const reused = await ensureClaimCenterFolder(fetcher, { accessToken: 'server-access-token', caseId, kind, period, name, parentId });
+    assert.equal(reused.id, expected.id);
+    assert.equal(reused.created, false);
+  }
+  assert.equal(calls.filter(call => call.method === 'POST').length, 6, 'retry must reuse all six folders');
   assert.ok(calls.every((call) => call.url.startsWith('https://www.googleapis.com/drive/v3/files')));
 });
 
@@ -81,9 +111,11 @@ test('CF30 report studio opens a finished type template before writing and durin
   const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
   assert.match(worker, /preview_report_template_previews/u);
   assert.match(worker, /finished_example_markdown AS finishedExample/u);
-  assert.match(studio, /보고서 템플릿 선택·열람/u);
-  assert.match(studio, /선택 템플릿 완제품 보기/u);
-  assert.match(studio, /템플릿 다시 보기/u);
+  assert.match(studio, /onClick=\{\(\) => setShowTemplatePreview\(true\)\}>완제품 템플릿 열람/u);
+  assert.match(studio, /disabled=\{!selectedTemplateCategory\} onClick=\{\(\)=>setShowTemplatePreview\(true\)\}>원본 템플릿/u);
+  assert.match(studio, /<Dialog isOpen=\{showTemplatePreview && Boolean\(selectedTemplateCategory\)\}[^\n]*onClose=\{\(\) => setShowTemplatePreview\(false\)\}/u);
+  assert.match(studio, /onClick=\{\(\) => void openTemplateSource\(file\)\}/u);
+  assert.match(studio, /selectedTemplatePreview\.finishedExample/u);
   assert.match(studio, /FINISHED REPORT REFERENCE/u);
   assert.match(studio, /참고 열람 전용/u);
 });

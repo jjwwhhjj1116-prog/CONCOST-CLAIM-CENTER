@@ -49,12 +49,14 @@ async function fixture(apply = true) {
   const adapter = new D1(db), calls: URL[] = [], control: { mode: string; beforeFetch?: () => Promise<void> } = { mode: '' };
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input)); calls.push(url);
-    assert.equal(url.origin, 'https://ecos.bok.or.kr'); assert.equal(init?.redirect, 'error');
+    assert.equal(url.origin, 'https://ecos.bok.or.kr'); assert.equal(init?.redirect, 'manual');
     const hook = control.beforeFetch; control.beforeFetch = undefined; if (hook) await hook();
     if (control.mode === 'HTTP') return new Response('private error ' + KEY, { status: 403 });
     if (control.mode === 'NETWORK') throw new Error('private upstream https://ecos.bok.or.kr/' + KEY);
     if (control.mode === 'JSON') return new Response('not JSON ' + KEY);
     if (control.mode === 'NO_DATA') return Response.json({ RESULT: { CODE: 'INFO-200', MESSAGE: 'no data ' + KEY } });
+    if (control.mode === 'AUTH') return Response.json({ RESULT: { CODE: 'INFO-100', MESSAGE: 'private ' + KEY } });
+    if (control.mode === 'RATE') return Response.json({ RESULT: { CODE: 'ERROR-602', MESSAGE: 'private ' + KEY } });
     const p = url.pathname.split('/').filter(Boolean), code = p[11];
     const name: Record<string, string> = { '201AA': '광산품', '3AA': '공산품', '4AA': '전력,가스,수도및폐기물', '101AA': '농림수산품' };
     assert.ok(name[code]);
@@ -139,9 +141,10 @@ test('CF132 ECOS provider and decryption failures fail closed without fallback, 
   const { db, call, save, env, control, calls } = await fixture();
   try {
     await result(await save()); const before = snapshot(db);
-    for (const mode of ['HTTP', 'NETWORK', 'JSON', 'NO_DATA']) {
+    for (const [mode, diagnostic] of [['HTTP', 'HTTP 403'], ['NETWORK', 'NETWORK'], ['JSON', 'INVALID_JSON'], ['NO_DATA', 'INFO-200'], ['AUTH', 'INFO-100'], ['RATE', 'ERROR-602']]) {
       control.mode = mode; const response = await call(endpoint + '/test', 'POST', { expectedVersion: 1 });
       assert.equal(response.status, 502); const text = await response.text(); assert.ok(!text.includes(KEY)); assert.ok(!text.includes(ENV_KEY)); assert.deepEqual(snapshot(db), before);
+      assert.ok(text.includes(diagnostic), 'connection endpoint must preserve safe provider diagnosis');
     }
     control.mode = ''; env.AI_CREDENTIAL_MASTER_KEY = '2'.repeat(64); const count = calls.length;
     for (const [path, method, body] of [[endpoint + '/test', 'POST', { expectedVersion: 1 }], ['/api/es/sources/ecos?date=2026-04-30', 'GET', undefined]] as const) {

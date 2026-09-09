@@ -16,7 +16,7 @@ function fixture(change?: (body: Json, url: URL) => Json | Response) {
     const parts = url.pathname.split('/').filter(Boolean);
     assert.equal(url.origin, 'https://ecos.bok.or.kr'); assert.equal(parts[0], 'api'); assert.equal(parts[1], 'StatisticSearch');
     assert.equal(parts[2], KEY); assert.deepEqual(parts.slice(3, 9), ['json', 'kr', '1', '1', '404Y014', 'M']);
-    assert.equal(parts[9], parts[10]); assert.match(parts[9], /^\d{6}$/); assert.equal(init?.redirect, 'error'); assert.ok(init?.signal);
+    assert.equal(parts[9], parts[10]); assert.match(parts[9], /^\d{6}$/); assert.equal(init?.redirect, 'manual'); assert.ok(init?.signal);
     const position = expectedItems.findIndex(([code]) => code === parts[11]); assert.ok(position >= 0, 'only the four verified top-level series may be queried');
     const [code, name] = expectedItems[position];
     let payload: Json = { StatisticSearch: { list_total_count: 1, row: [{ STAT_CODE: '404Y014', STAT_NAME: '생산자물가지수(기본분류)', ITEM_CODE1: code, ITEM_NAME1: name, ITEM_CODE2: null, ITEM_CODE3: null, ITEM_CODE4: null, UNIT_NAME: '2020=100', TIME: parts[9], DATA_VALUE: values[parts[9]]?.[position] ?? '121.01' }] } };
