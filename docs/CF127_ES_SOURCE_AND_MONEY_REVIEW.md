@@ -48,3 +48,14 @@
 - https://ecos.bok.or.kr/api/
 
 가오픈 서버·원본 Excel·고객정보·비밀키·기존 저장 DB는 수정/커밋하지 않는다. 배포 결과는 아래 별도 기록한다.
+
+## 테스트 서버 배포 결과
+
+- 제품 커밋: `4fc7f5a`.
+- Worker: `concost-claim-center-development`.
+- 배포 version: `eb1ce867-9721-4402-b0ea-275f4dcca8fb`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es
+- `/health`, `/readiness`, `/es`: HTTP200. 익명 ES 문서·건강조회: HTTP401.
+- 배포된 JS/CSS 4개 파일 SHA-256이 로컬 빌드와 모두 일치. 가오픈 배포 없음, migration/DB 변경 명령 없음.
+- 최종 빌드 assets: `index-3aRU0s4l.js`, `index-PyN6GJWg.css`, `index.es-Btvg4uAw.js`, `index-DqJNflzv.js`.
+- `wrangler.development.jsonc` 명시 및 `RELEASE_MAINTENANCE:0`으로 개발 Worker만 배포했다. 기존 비밀키는 읽기/교체하지 않았다.
