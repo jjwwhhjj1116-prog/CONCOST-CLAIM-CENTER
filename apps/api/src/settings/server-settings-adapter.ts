@@ -1,6 +1,7 @@
 import * as crypto from 'node:crypto';
 import type * as http from 'node:http';
 import { hashPassword, verifyPassword, type PrismaClient } from '@claim-studio/database';
+import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../../packages/document-engine/src/es-ecos';
 
 export interface ServerSettingsContext {
   user: { id: string; email: string; name: string; organizationId: string };
@@ -235,6 +236,44 @@ function workspaceProjection(row: SettingRow | null): { settings: Record<string,
 async function handle(options: ServerSettingsAdapterOptions): Promise<boolean> {
   const { pathname, method, request, response, db, context, masterKey } = options;
   const organizationOwner = `ORGANIZATION:${context.user.organizationId}`;
+
+  if (pathname === '/api/settings/ecos' || pathname === '/api/settings/ecos/test' || pathname === '/api/es/sources/ecos') {
+    response.setHeader('Cache-Control', 'no-store');
+    const source = pathname === '/api/es/sources/ecos';
+    if (source) {
+      if (!context.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) throw new AdapterError(403, 'ES 접근 권한이 없습니다.');
+    } else requireAdmin(context);
+    const settingKey = 'ECOS_API_KEY', aad = `${context.user.organizationId}\u0000${organizationOwner}\u0000${settingKey}`;
+    const current = await setting(db, context.user.organizationId, organizationOwner, settingKey);
+    const projection = (row: SettingRow | null) => ({ configured: Boolean(masterKey && row?.secretCiphertext), storage: row ? 'ENCRYPTED_SERVER' : 'NONE', version: row?.version ?? 0, updatedAt: row?.updatedAt ?? null, masterKeyReady: Boolean(masterKey?.length === 32) });
+    if (!source && pathname === '/api/settings/ecos' && method === 'GET') { json(response, 200, { settings: projection(current) }); return true; }
+    if (source && method !== 'GET') throw new AdapterError(405, '지원하지 않는 요청입니다.');
+    const testing = pathname === '/api/settings/ecos/test' && method === 'POST';
+    if (!source && !testing && !(pathname === '/api/settings/ecos' && method === 'PUT')) throw new AdapterError(405, '지원하지 않는 요청입니다.');
+    let body: Record<string, unknown> = {};
+    if (!source) {
+      // server.ts enforces configured trusted origins and cookie CSRF before this adapter.
+      // Do not compare the browser host with the API host: Node supports a separate trusted web origin.
+      if (!/^application\/json(?:;|$)/i.test(request.headers['content-type'] ?? '')) throw new AdapterError(415, 'JSON 요청이 필요합니다.');
+      body = await readBody(request);
+      const keys = testing ? ['expectedVersion'] : ['apiKey', 'expectedVersion'];
+      if (Object.keys(body).some(key => !keys.includes(key)) || !Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 0 || (!testing && (typeof body.apiKey !== 'string' || !ES_ECOS_KEY.test(body.apiKey.trim())))) throw new AdapterError(400, 'ECOS 인증키와 최신 설정 버전을 확인하세요.');
+      if (body.expectedVersion !== (current?.version ?? 0)) throw new AdapterError(409, '설정이 변경되었습니다. 다시 불러오세요.');
+    }
+    if (source || testing) {
+      if (!current) throw new AdapterError(503, '관리자 설정 → 한국은행 ECOS에서 인증키를 먼저 저장하세요.');
+      let result;
+      try { result = await fetchEsEcosSources(decryptSecret(masterKey, aad, current), source ? new URL(request.url ?? pathname, 'http://localhost').searchParams.getAll('date') : ['2024-06-15'], options.fetcher ?? fetch); }
+      catch (error) { throw new AdapterError(error instanceof Error && error.message === 'ES_SOURCE_INVALID_DATE' ? 400 : 503, 'ECOS 인증 설정과 조회 기준일을 확인하세요. 기존값은 유지됩니다.'); }
+      if (source) { json(response, 200, result); return true; }
+      if (result.items.length !== 1) throw new AdapterError(502, '공식 ECOS 응답을 확인하지 못했습니다. 인증키·이용 승인·호출 제한을 확인하세요.');
+      const latest = await setting(db, context.user.organizationId, organizationOwner, settingKey);
+      if (latest?.version !== body.expectedVersion) throw new AdapterError(409, '연결 확인 중 설정이 변경되었습니다. 다시 불러오세요.');
+      json(response, 200, { settings: projection(latest), checkedAt: result.items[0].checkedAt, month: result.items[0].month, count: 4 }); return true;
+    }
+    const saved = await saveSetting({ db, context, ownerId: organizationOwner, settingKey, value: {}, expectedVersion: Number(body.expectedVersion), secret: encryptSecret(masterKey, aad, (body.apiKey as string).trim()) });
+    json(response, 200, { settings: projection(saved) }); return true;
+  }
 
   if (pathname === '/api/settings/ai-credentials' && method === 'GET') {
     json(response, 200, await credentialsPayload(db, context, masterKey)); return true;

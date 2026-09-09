@@ -41,7 +41,19 @@ export function syncEsSourceDates(input: EsInput, previous?: EsInput): EsInput {
   const mismatch = input.base.date !== days[0] || input.current.period.date !== days[1] || input.previous.period.date !== days[2];
   const changed = previous && (input.baseDate !== previous.baseDate || input.adjustmentDate !== previous.adjustmentDate || input.contract?.employmentGrade !== previous.contract?.employmentGrade || input.contract?.retirementTrade !== previous.contract?.retirementTrade);
   if (!mismatch && !changed) return input;
-  if (input.sourceHistory && days.every(Boolean)) return resolveEsSources(input).input;
+  if (input.sourceHistory && days.every(Boolean)) {
+    const resolved = resolveEsSources(input).input;
+    if (!mismatch && previous && input.baseDate === previous.baseDate && input.adjustmentDate === previous.adjustmentDate) {
+      const next = structuredClone(input);
+      for (const key of ['base', 'current', 'previous'] as const) {
+        const period = key === 'base' ? next.base : next[key].period, candidate = key === 'base' ? resolved.base : resolved[key].period;
+        if (input.contract?.employmentGrade !== previous.contract?.employmentGrade) period.rates.employment = candidate.rates.employment;
+        if (input.contract?.retirementTrade !== previous.contract?.retirementTrade) period.rates.retirement = candidate.rates.retirement;
+      }
+      return next;
+    }
+    return resolved;
+  }
   const next = structuredClone(input);
   const baseChanged = next.base.date !== days[0] || Boolean(previous && input.baseDate !== previous.baseDate);
   for (const [index, key] of (['base', 'current', 'previous'] as const).entries()) {

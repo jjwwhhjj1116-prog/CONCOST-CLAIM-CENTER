@@ -41,6 +41,7 @@ import { joinReportPresentation, splitReportPresentation } from '../../../packag
 import { mergeGeneratedChapter, type ReportNode } from '../../../packages/document-engine/src/report-chapter';
 import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
 import { fetchEsHealthSources } from './es-health-source';
+import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../packages/document-engine/src/es-ecos';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -88,6 +89,7 @@ export interface CloudflareEnv {
   ERP_TEST_FETCH?: typeof fetch;
   LAW_API_OC?: string;
   LAW_API_TEST_FETCH?: typeof fetch;
+  ECOS_API_TEST_FETCH?: typeof fetch;
 }
 
 const json = (payload: Record<string, unknown>, status = 200): Response => new Response(JSON.stringify(payload), {
@@ -6464,6 +6466,57 @@ function previewLawCandidate(row: Record<string, unknown>): PreviewCaseLawCandid
   };
 }
 
+const previewEcosAad = () => `claim-center:ecos:v1:${PREVIEW_ORGANIZATION_ID}`;
+async function previewEcosSettingsRow(env: CloudflareEnv): Promise<PreviewLawApiSettingsRow | null> {
+  if (!env.DB) throw new Error('ECOS_SETTINGS_UNAVAILABLE');
+  return env.DB.prepare('SELECT ciphertext_hex AS ciphertextHex,iv_hex AS ivHex,version,updated_at AS updatedAt FROM preview_ecos_api_settings WHERE organization_id=?').bind(PREVIEW_ORGANIZATION_ID).first<PreviewLawApiSettingsRow>();
+}
+async function previewEcosKey(env: CloudflareEnv): Promise<string> {
+  const row = await previewEcosSettingsRow(env), masterKey = previewAiMasterKey(env);
+  if (!row) return '';
+  if (!masterKey) throw new Error('ECOS_CREDENTIAL_UNAVAILABLE');
+  const key = await decryptSecret(row.ciphertextHex, row.ivHex, masterKey, previewEcosAad());
+  if (!key || !ES_ECOS_KEY.test(key)) throw new Error('ECOS_CREDENTIAL_UNAVAILABLE');
+  return key;
+}
+function previewEcosPublic(row: PreviewLawApiSettingsRow | null, env: CloudflareEnv) {
+  return { configured: Boolean(row && previewAiMasterKey(env)), storage: row ? 'ENCRYPTED_D1' : 'NONE', version: Number(row?.version ?? 0), updatedAt: row?.updatedAt ?? null, masterKeyReady: Boolean(previewAiMasterKey(env)) };
+}
+async function handlePreviewEcosSettings(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+  const user = await previewSessionUser(request, env);
+  if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
+  if (!user.roles.includes('admin')) return json({ error: '관리자만 ECOS 연결을 설정할 수 있습니다.' }, 403);
+  try {
+    const current = await previewEcosSettingsRow(env);
+    if (url.pathname === '/api/settings/ecos' && request.method === 'GET') return json({ settings: previewEcosPublic(current, env) });
+    const testing = url.pathname === '/api/settings/ecos/test' && request.method === 'POST';
+    if (!testing && !(url.pathname === '/api/settings/ecos' && request.method === 'PUT')) return json({ error: '지원하지 않는 요청입니다.' }, 405);
+    const origin = request.headers.get('Origin');
+    if ((origin && origin !== url.origin) || request.headers.get('Sec-Fetch-Site') === 'cross-site' || (request.headers.has('Cookie') && origin !== url.origin)) return json({ error: '현재 서버의 관리자 설정 화면에서 요청하세요.' }, 403);
+    if (!/^application\/json(?:;|$)/i.test(request.headers.get('Content-Type') ?? '')) return json({ error: 'JSON 요청이 필요합니다.' }, 415);
+    const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body || !exactObjectKeys(body, testing ? ['expectedVersion'] : ['apiKey', 'expectedVersion']) || !Number.isSafeInteger(body.expectedVersion) || Number(body.expectedVersion) < 0 || (!testing && (typeof body.apiKey !== 'string' || !ES_ECOS_KEY.test(body.apiKey.trim())))) return json({ error: 'ECOS 인증키와 최신 설정 버전을 확인하세요.' }, 400);
+    if (body.expectedVersion !== Number(current?.version ?? 0)) return json({ error: '설정이 변경되었습니다. 다시 불러온 뒤 저장하세요.' }, 409);
+    if (testing) {
+      const key = await previewEcosKey(env);
+      if (!key) return json({ error: 'ECOS 인증키를 먼저 저장하세요.' }, 503);
+      const result = await fetchEsEcosSources(key, ['2024-06-15'], env.ECOS_API_TEST_FETCH ?? fetch);
+      if (result.items.length !== 1) return json({ error: '한국은행 공식 응답을 확인하지 못했습니다. 인증키·이용 승인·호출 제한을 확인하세요. 저장된 값은 유지됩니다.' }, 502);
+      const latest = await previewEcosSettingsRow(env);
+      if (latest?.version !== body.expectedVersion) return json({ error: '연결 확인 중 설정이 변경되었습니다. 다시 불러오세요.' }, 409);
+      return json({ settings: previewEcosPublic(latest, env), checkedAt: result.items[0].checkedAt, count: 4, month: result.items[0].month });
+    }
+    const masterKey = previewAiMasterKey(env);
+    if (!masterKey) return json({ error: '서버 암호화 설정이 준비되지 않았습니다.' }, 503);
+    const encrypted = await encryptSecret((body.apiKey as string).trim(), masterKey, previewEcosAad());
+    const now = new Date(Math.max(Date.now(), Date.parse(current?.updatedAt ?? '1970-01-01') + 1)).toISOString();
+    const write = current ? env.DB!.prepare('UPDATE preview_ecos_api_settings SET ciphertext_hex=?,iv_hex=?,version=version+1,updated_by=?,updated_at=? WHERE organization_id=? AND version=?').bind(encrypted.ciphertextHex, encrypted.ivHex, user.id, now, PREVIEW_ORGANIZATION_ID, body.expectedVersion)
+      : env.DB!.prepare('INSERT OR IGNORE INTO preview_ecos_api_settings (organization_id,ciphertext_hex,iv_hex,version,updated_by,created_at,updated_at) VALUES (?,?,?,1,?,?,?)').bind(PREVIEW_ORGANIZATION_ID, encrypted.ciphertextHex, encrypted.ivHex, user.id, now, now);
+    if ((await write.run()).meta?.changes !== 1) return json({ error: '설정이 변경되었습니다. 다시 불러오세요.' }, 409);
+    return json({ settings: previewEcosPublic(await previewEcosSettingsRow(env), env) });
+  } catch { return json({ error: 'ECOS 설정 저장소 또는 암호화 설정을 확인하세요. 인증키는 변경하지 않았을 수 있으므로 설정을 다시 불러오세요.' }, 503); }
+}
+
 const PREVIEW_LAW_OC = /^[A-Za-z0-9._@+-]{2,120}$/u;
 const previewLawApiAad = () => `claim-center:law-api-oc:v1:${PREVIEW_ORGANIZATION_ID}`;
 interface PreviewLawApiSettingsRow { ciphertextHex: string; ivHex: string; version: number; updatedAt: string }
@@ -8285,6 +8338,16 @@ const worker = {
       try { return json(await fetchEsHealthSources(await previewLawApiOc(env), url.searchParams.getAll('date'))); }
       catch (reason) { const code = reason instanceof Error ? reason.message : ''; return json({ error: code === 'LAW_API_OC_REQUIRED' ? '관리자 설정의 국가법령정보 OC 인증값을 먼저 저장하세요.' : code === 'ES_SOURCE_INVALID_DATE' ? '조회 기준일을 확인하세요.' : '해당 날짜의 건강보험 법령·사업주 부담률을 검증하지 못했습니다. 기존 값을 유지하며 수동 입력할 수 있습니다.', code: /^ES_(SOURCE|LAW)_[A-Z_]+$/.test(code) || code === 'LAW_API_OC_REQUIRED' ? code : 'ES_LAW_SOURCE_UNAVAILABLE' }, code === 'ES_SOURCE_INVALID_DATE' ? 400 : 503); }
     }
+    if (url.pathname === '/api/es/sources/ecos' && request.method === 'GET') {
+      const user = await previewSessionUser(request, env);
+      if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
+      if (!user.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) return json({ error: 'ES 접근 권한이 없습니다.' }, 403);
+      try {
+        const key = await previewEcosKey(env);
+        if (!key) return json({ error: '관리자 설정 → 한국은행 ECOS에서 인증키를 먼저 저장하세요.', code: 'ECOS_KEY_REQUIRED' }, 503);
+        return json(await fetchEsEcosSources(key, url.searchParams.getAll('date'), env.ECOS_API_TEST_FETCH ?? fetch));
+      } catch (error) { const invalid = error instanceof Error && error.message === 'ES_SOURCE_INVALID_DATE'; return json({ error: invalid ? '조회 기준일을 확인하세요.' : 'ECOS 연결을 확인하지 못했습니다. 기존 재료지수는 유지됩니다.' }, invalid ? 400 : 503); }
+    }
     if (url.pathname === '/api/es/documents' || url.pathname.startsWith('/api/es/documents/')) {
       const user = await previewSessionUser(request, env);
       if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
@@ -8330,6 +8393,7 @@ const worker = {
     if (url.pathname === '/api/settings/law-api' || url.pathname === '/api/settings/law-api/test') {
       return handlePreviewLawApiSettings(request, env, url);
     }
+    if (url.pathname === '/api/settings/ecos' || url.pathname === '/api/settings/ecos/test') return handlePreviewEcosSettings(request, env, url);
 
     if (url.pathname === '/api/settings/ai-governance') {
       return handlePreviewAiGovernance(request, env);

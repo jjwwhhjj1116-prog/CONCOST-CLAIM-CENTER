@@ -6,6 +6,7 @@ import { ES_SHEETS } from '../../../../packages/document-engine/src/es-output';
 import { exportEsReport, exportEsWorking, importEsWorkbook, type EsImportPreview } from './es-xlsx';
 import { EsPrintPreview } from './EsPrintPreview';
 import { resolveEsSources, syncEsSourceDates, esElapsedDays } from '../../../../packages/document-engine/src/es-source-history';
+import { applyEsEcosSources, mergeEsSourceCandidates, type EsEcosItem } from '../../../../packages/document-engine/src/es-ecos';
 import { EsMoneyInput, esFormatNumber } from './EsMoneyInput';
 import './EsStudio.css';
 
@@ -160,12 +161,13 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     if (pending.current || loading || loadFailed) return;
     setError('');
     let candidate: ReturnType<typeof resolveEsSources>;
-    try { candidate = resolveEsSources(input); } catch (e) { setError(message(e)); return; }
+    try { candidate = resolveEsSources(input); candidate.input = mergeEsSourceCandidates(input, candidate.input); } catch (e) { setError(message(e)); return; }
     pending.current = true; setBusy(true); setSourcePreview(null); setSourceOpen(true);
     try {
       const before = new Date(input.adjustmentDate + 'T00:00:00Z'); before.setUTCDate(before.getUTCDate() - 1);
       const dates = [input.baseDate, input.adjustmentDate, before.toISOString().slice(0, 10)];
       const query = new URLSearchParams(); dates.forEach(date => query.append('date', date));
+      const ecos = apiRequest<{ items: EsEcosItem[]; warnings: string[] }>('/api/es/sources/ecos?' + query.toString(), { timeoutMs: 30_000 }).then(response => ({ response }), error => ({ error }));
       try {
         const response = await apiRequest<{ items: { date: string; value: string; source: string; effectiveDate: string }[]; warnings: string[] }>('/api/es/sources/health?' + query.toString());
         for (const [index, key] of (['base', 'current', 'previous'] as const).entries()) {
@@ -178,7 +180,15 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
         }
         candidate.warnings.push(...response.warnings);
       } catch (e) { candidate.warnings.push('공식 건강보험 조회 미반영: ' + message(e)); }
-      candidate.warnings.push('노임·재료지수: 가져온 Excel 이력에서 선택합니다. ECOS·건설협회 자동 수집은 아직 연결되지 않았습니다.', '요양은 건강보험료 대비 비율입니다. 법령의 보수 기준 요율을 그대로 입력하지 마세요.');
+      const ecosystem = await ecos;
+      if ('response' in ecosystem) {
+        try {
+          candidate.input = applyEsEcosSources(candidate.input, ecosystem.response.items);
+          candidate.warnings.push(...ecosystem.response.warnings);
+          if (ecosystem.response.items.length) candidate.warnings.unshift(`ECOS 재료지수 조회 완료 · ${[...new Set(ecosystem.response.items.map(item => item.month))].join(', ')} · 월별 4종 · 2020=100. 과거 월 값도 현재 공표된 개정 수치입니다.`);
+        } catch { candidate.warnings.push('ECOS 응답의 항목·자료월 검증에 실패했습니다. 기존 재료지수를 유지합니다.'); }
+      } else candidate.warnings.push('ECOS 재료지수 미반영: ' + message(ecosystem.error));
+      candidate.warnings.push('노임·기계경비·기타 요율은 Excel 이력·수동 입력을 사용합니다. 조회 실패 시 같은 적용일의 기존 입력은 유지합니다.', '요양은 건강보험료 대비 비율입니다. 법령의 보수 기준 요율을 그대로 입력하지 마세요.');
       setSourcePreview(candidate);
     } finally { pending.current = false; setBusy(false); }
   };
@@ -266,7 +276,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
             {['광산품', '공산품', '전력·수도·가스', '농림수산품'].map((label, i) => <tr key={label}><th>{label}</th>{[input.base, input.previous.period, input.current.period].map((p, j) => <td key={j}>{p.materials[i] || '—'}</td>)}</tr>)}
             {ES_RATE_KEYS.map((key, i) => <tr key={key}><th>{RATE_LABELS[i]} (%)</th>{[input.base, input.previous.period, input.current.period].map((p, j) => <td key={j}>{p.rates[key] || '—'}</td>)}</tr>)}
           </tbody></table></div>
-          <p className="es-source-status" role="status">{input.sourceHistory ? '날짜·등급·공종 변경 시 가져온 이력에서 즉시 다시 선택합니다. 이력에 없는 값은 —로 표시합니다.' : '월별 원자료 이력이 없습니다. 날짜가 바뀌면 이전 자료를 재사용하지 않습니다. 원본 Excel을 다시 가져오거나 지수·요율에 해당 기간 값을 입력하세요.'} <b>ES 요율정보 가져오기</b>는 현재 입력한 날짜로 건강보험 법령을 조회합니다.</p>
+          <p className="es-source-status" role="status">{input.sourceHistory ? '날짜·등급·공종 변경 시 가져온 이력에서 즉시 다시 선택합니다. 이력에 없는 값은 —로 표시합니다.' : '월별 원자료 이력이 없습니다. 날짜가 바뀌면 이전 자료를 재사용하지 않습니다. 원본 Excel을 다시 가져오거나 지수·요율에 해당 기간 값을 입력하세요.'} <b>ES 요율정보 가져오기</b>는 현재 입력한 날짜로 ECOS 재료지수와 건강보험 법령을 조회합니다.</p>
           <p className="es-field-help">노임은 해당 월, 재료는 월말이면 해당 월·그 외에는 전월로 선택합니다. —는 0이 아니라 원자료 확인이 필요한 값입니다.</p>
           <p className="es-field-help">비목 금액과 기성 내역은 계약별 원자료입니다. 원본 Excel에서 가져오거나 비목·적용대가 / 선금·공제에 입력해야 합니다. 자료가 부족하면 자동 계산·출력을 완료로 처리하지 않습니다.</p>
         </aside></div>
@@ -280,7 +290,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       }} /></td><td>3!B{r}</td></tr>)}</tbody></table>{!ES_COSTS.some(([, code, label]) => `${code} ${label}`.toLocaleLowerCase().includes(costQuery.toLocaleLowerCase())) && <p className="es-empty">일치하는 비목이 없습니다. 검색어를 지우면 전체 비목을 볼 수 있습니다.</p>}</div>{costDetail}</div></>}
       {tab === 'deductions' && <><h2>기성·직접지급·선금 공제</h2><div className="es-grid">{([['paidWorkExclusion', '기성 제외액'], ['alreadyExcludedDirect', '이미 기성에 포함한 직접지급액'], ['advanceContract', '선금 대상 계약금액'], ['advancePaid', '선금 지급액'], ['priorCompletion', '선금 대상 이전 기성액'], ['otherDeduction', '기타 공제액']] as const).map(([k, label]) => <div key={k}>{field(label + ' (원)', input[k], v => mutate(n => { n[k] = v; }))}</div>)}
       <label className="es-field">월별 직접지급액 (원 · 한 줄에 한 금액)<textarea value={input.directPaid.map(esFormatNumber).join('\n')} onChange={e => mutate(n => { n.directPaid = e.target.value === '' ? [] : e.target.value.replaceAll(',', '').split('\n'); })} /></label></div></>}
-      {tab === 'sources' && <><div className="es-source-actions"><button className="es-primary" onClick={() => void fetchSources()}>ES 요율정보 가져오기</button><span>국가법령: 건강보험 시행본 조회 · 노임·재료 등: 가져온 Excel 이력</span></div><p className="es-access">각 기간의 원자료를 직접 수정할 수도 있습니다. 자동 가져오기는 확인창에서 적용하기 전까지 기존 입력을 바꾸지 않습니다. 건강·연금은 사업주 부담률, 요양은 건강보험료 대비 비율입니다.</p>
+      {tab === 'sources' && <><div className="es-source-actions"><button className="es-primary" onClick={() => void fetchSources()}>ES 요율정보 가져오기</button><span>ECOS: 재료지수 4종 · 국가법령: 건강보험 · 노임 등: Excel·수동</span></div><p className="es-access">각 기간의 원자료를 직접 수정할 수도 있습니다. 자동 가져오기는 확인창에서 적용하기 전까지 기존 입력을 바꾸지 않습니다. 건강·연금은 사업주 부담률, 요양은 건강보험료 대비 비율입니다.</p>
         <div className="es-table-wrap es-source-matrix"><table><caption>기간별 원자료 · 같은 항목을 가로로 비교하고 수정하세요.</caption><thead><tr><th>항목 / 단위</th><th>입찰 기준일</th><th>직전일</th><th>현재 조정일</th></tr></thead><tbody>{['적용일', '노임 (원)', '광산품', '공산품', '전력·수도·가스·폐기물', '농림수산품', ...RATE_LABELS.map(label => label + ' 요율 (%)'), '출처·자료월·확인 메모'].map((label, row) => <tr key={label}><th scope="row">{label}</th>{(['base', 'previous', 'current'] as const).map(key => {
           const p = key === 'base' ? input.base : input[key].period;
           const value = row === 0 ? p.date : row === 1 ? p.wage : row < 6 ? p.materials[row - 2] : row < 13 ? p.rates[ES_RATE_KEYS[row - 6]] : p.source;
@@ -334,14 +344,14 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     </dialog>}
     {sourceOpen && <dialog ref={sourceDialog} className="es-import-dialog" aria-labelledby="es-source-title" onCancel={e => { e.preventDefault(); if (!pending.current) setSourceOpen(false); }}>
       <header><h2 id="es-source-title">ES 요율정보 가져오기 · 적용 전 확인</h2><p>날짜·등급·공종에 맞춰 선택한 자료입니다. 확인 전에는 입력을 바꾸지 않습니다.</p></header>
-      <div className="es-import-body">{busy ? <p role="status">Excel 이력과 국가법령 시행본을 조회하고 있습니다…</p> : sourcePreview && <>
+      <div className="es-import-body">{busy ? <p role="status">ECOS 재료지수·국가법령 시행본·Excel 이력을 조회하고 있습니다…</p> : sourcePreview && <>
+        {sourcePreview.warnings.map((warning, i) => <p className="es-warning" key={i}>{warning}</p>)}
         <div className="es-import-comparison"><table><thead><tr><th>기간 · 항목</th><th>현재 입력</th><th>조회 결과</th></tr></thead><tbody>{(['base', 'current', 'previous'] as const).flatMap((key, index) => {
           const current = key === 'base' ? input.base : input[key].period, proposed = key === 'base' ? sourcePreview.input.base : sourcePreview.input[key].period, label = ['기준', '현재', '직전'][index];
           return [['적용일', current.date, proposed.date], ['노임 (원)', current.wage, proposed.wage], ...['광산품', '공산품', '전력·수도·가스', '농림수산품'].map((name, i) => [name, current.materials[i], proposed.materials[i]]), ...ES_RATE_KEYS.map((k, i) => [RATE_LABELS[i] + ' %', current.rates[k], proposed.rates[k]])].map(([name, before, after]) => <tr key={key + name}><th>{label} · {name}</th><td>{esFormatNumber(before) || '미입력'}</td><td>{esFormatNumber(after) || '자료 없음'}</td></tr>);
         })}</tbody></table></div>
-        {sourcePreview.warnings.map((warning, i) => <p className="es-warning" key={i}>{warning}</p>)}
         <details><summary>적용 근거·기계·표준시장단가 확인</summary>{[sourcePreview.input.base, sourcePreview.input.current.period, sourcePreview.input.previous.period].map((p, i) => <p key={i}>{p.date} · {p.source || '출처 없음'}</p>)}{[sourcePreview.input.current, sourcePreview.input.previous].flatMap((c, j) => [c.machinery, ...c.standards].map((p, i) => <p key={j + '-' + i}>{c.period.date} · {p.label}: {p.baseAverage || '자료 없음'} → {p.comparisonAverage || '자료 없음'} / 공통 {p.commonCount || '—'}품목 · {p.source}</p>))}</details>
-        <p>자료가 없는 칸은 빈 값으로 반영되어 계산을 차단합니다. 원자료를 확인하고 저장·계산해 주세요.</p>
+        <p>동일 적용일의 기존 값은 조회 실패 시 유지합니다. 날짜가 바뀐 자료는 재사용하지 않으며 자료 없음 항목은 원자료를 확인한 뒤 저장·계산하세요.</p>
       </>}</div>
       <footer className="es-actions"><button autoFocus disabled={busy} onClick={() => setSourceOpen(false)}>취소 · 기존 유지</button><button className="es-primary" disabled={busy || !sourcePreview} onClick={() => { if (!sourcePreview || pending.current) return; mutate(n => Object.assign(n, sourcePreview.input)); setSourceOpen(false); setSourcePreview(null); setNotice('조회 결과를 입력에 적용했습니다. 검토 후 저장·계산하세요.'); }}>확인 · 입력에 적용</button></footer>
     </dialog>}
