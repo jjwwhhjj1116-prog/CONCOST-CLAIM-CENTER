@@ -23,6 +23,10 @@
 .es-studio :is(input,select,textarea):is(:disabled,[readonly]) { --field-bg:var(--surface-muted,#eef4f9); background-color:var(--field-bg); }
 .es-studio :is(input,textarea)::placeholder { color:#64748b; opacity:1; }
 .es-basic-input { container-type:inline-size; }
+.es-studio .es-basic-input :is(input,select):not([aria-required=true]):not(:disabled):not([readonly]) { --field-bg:var(--surface,#fff); background-color:var(--field-bg); color:var(--text-primary,#183049); color-scheme:normal; }
+:root[data-theme='dark'] .es-studio .es-basic-input :is(input,select):not([aria-required=true]):not(:disabled):not([readonly]) { color-scheme:dark; }
+.es-field-requirement { display:block; font-size:11px; color:var(--text-secondary,#567); }
+.es-field-help { margin:10px 0 0; color:var(--text-secondary,#567); font-size:12px; line-height:1.6; }
 .es-input-guide { margin:0 0 12px; font-size:12px; }
 .es-basic-input section + section { margin-top:16px; }
 .es-basic-input h2 { margin:0 0 8px; padding-bottom:6px; border-bottom:1px solid #cfdae5; font-size:14px; }

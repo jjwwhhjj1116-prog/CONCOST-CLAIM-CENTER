@@ -72,7 +72,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     if (mode === 'list') {
       void apiRequest<{ documents: EsDocument[] }>('/api/es/documents').then(payload => { if (active) setDocuments(payload.documents); }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
     } else {
-      void apiRequest<{ cases: Project[] }>('/api/cases?limit=100').then(payload => { if (active) setProjects(payload.cases); }).catch(() => { if (active) setNotice('프로젝트 목록을 불러오지 못했습니다. 연결 없이 작성할 수 있습니다.'); });
+      void apiRequest<{ cases: Project[] }>('/api/cases?limit=100&assignedOnly=true').then(payload => { if (active) setProjects(payload.cases); }).catch(() => { if (active) setNotice('프로젝트 목록을 불러오지 못했습니다. 연결 없이 작성할 수 있습니다.'); });
       if (id) void apiRequest<EsSaved>(`/api/es/documents/${encodeURIComponent(id)}`).then(payload => {
         if (!active) return; setDocument(payload.document); setInput(payload.input); setCaseId(payload.document.caseId ?? ''); setSavedSignature(signature(payload.input, payload.document.caseId ?? '')); setRun(payload.run ?? null);
       }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
@@ -135,7 +135,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       if (outputId && document) void apiRequest(`/api/es/documents/${document.id}/outputs`, { method: 'PATCH', body: JSON.stringify({ outputId, status: 'FAILED' }) }).catch(() => undefined);
     } finally { pending.current = false; setBusy(false); }
   };
-  const field = (label: string, value: string, change: (value: string) => void, type = 'text') => <label className="es-field">{label}<input type={type} value={value} onChange={e => change(e.target.value)} /></label>;
+  const field = (label: string, value: string, change: (value: string) => void, type = 'text', requirement: '' | '저장 필수' | '계산 필수' = '') => <label className="es-field"><span>{label}{requirement && <small className="es-field-requirement">{requirement}</small>}</span><input type={type} aria-required={requirement ? true : undefined} value={value} onChange={e => change(e.target.value)} /></label>;
   const contractFields = (keys: readonly (typeof ES_CONTRACT_FIELDS[number][0])[]) => keys.map(key => {
     const [, label, type] = ES_CONTRACT_FIELDS.find(([fieldKey]) => fieldKey === key)!;
     return <div key={key}>{field(label, input.contract?.[key] ?? '', v => mutate(n => { n.contract ??= newEsContract(); n.contract[key] = v; }), type === 'date' ? 'date' : 'text')}</div>;
@@ -157,26 +157,27 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       <nav className="es-tabs" aria-label="ES 작업 영역">{([['input', '기본입력'], ['costs', '비목·적용대가'], ['sources', '지수·요율'], ['deductions', '선금·공제'], ['result', '계산검토'], ['output', '출력물']] as const).map(([key, label]) => <button aria-current={tab === key ? 'page' : undefined} key={key} onClick={() => setTab(key)}>{label}</button>)}</nav>
       <fieldset disabled={busy} className="es-workspace">
       {tab === 'input' && <div className="es-basic-input">
-        <p className="es-input-guide">연한 노란색 칸에 입력하세요. 날짜·계약·적용조건을 구분해 확인할 수 있습니다.</p>
-        <section aria-labelledby="es-project-heading"><h2 id="es-project-heading">공사 정보</h2><div className="es-basic-grid es-basic-grid--wide">
-          {field('산출서 제목', input.title, v => mutate(n => { n.title = v; }))}
-          <label className="es-field">프로젝트 연결 (선택)<select value={caseId} onChange={e => setCaseId(e.target.value)}><option value="">연결 없이 독립 산출서</option>{caseId && !projects.some(p => p.id === caseId) && <option value={caseId}>현재 연결 프로젝트 (목록 확인 필요)</option>}{projects.map(p => <option key={p.id} value={p.id}>{p.caseNumber} · {p.title}</option>)}</select></label>
+        <p className="es-input-guide">기본입력의 연한 노란색은 필수 항목입니다. 제목은 저장에, 기준일·조정일·계약금액은 계산에 필요합니다. 나머지는 해당되는 계약·출력 정보를 선택 입력하세요.</p>
+        <section aria-labelledby="es-project-heading"><h2 id="es-project-heading">1. 공사정보</h2><div className="es-basic-grid es-basic-grid--wide">
+          {field('산출서 제목', input.title, v => mutate(n => { n.title = v; }), 'text', '저장 필수')}
+          <label className="es-field">프로젝트 연결 (선택)<select value={caseId} onChange={e => setCaseId(e.target.value)} aria-describedby="es-project-help"><option value="">연결 없이 독립 산출서</option>{caseId && !projects.some(p => p.id === caseId) && <option value={caseId}>현재 연결 프로젝트 (목록 확인 필요)</option>}{projects.map(p => <option key={p.id} value={p.id}>{p.caseNumber} · {p.title}</option>)}</select></label>
           {field('발주자', input.client, v => mutate(n => { n.client = v; }))}{field('시공자', input.contractor, v => mutate(n => { n.contractor = v; }))}
-        </div></section>
-        <section aria-labelledby="es-dates-heading"><h2 id="es-dates-heading">산출 기준일</h2><div className="es-basic-grid">
-          {field('입찰 기준일 (초회)', input.baseDate, v => mutate(n => { n.baseDate = v; }), 'date')}{field('조정기준일', input.adjustmentDate, v => mutate(n => { n.adjustmentDate = v; }), 'date')}
+        </div><p id="es-project-help" className="es-field-help">프로젝트 연결은 선택 사항입니다. 목록에서 선택한 뒤 저장하면 연결됩니다. 연결만으로 계약정보가 자동 입력되지는 않으며, 기존 입력은 유지됩니다.</p></section>
+        <section aria-labelledby="es-dates-heading"><h2 id="es-dates-heading">2. 산출기준일</h2><div className="es-basic-grid">
+          {field('입찰 기준일 (초회)', input.baseDate, v => mutate(n => { n.baseDate = v; }), 'date', '계산 필수')}{field('조정기준일', input.adjustmentDate, v => mutate(n => { n.adjustmentDate = v; }), 'date', '계산 필수')}
           {contractFields(['priorAdjustmentDate', 'reportDate'])}
         </div></section>
-        <section aria-labelledby="es-contract-heading"><h2 id="es-contract-heading">전체 계약 · 공사기간</h2><div className="es-basic-grid">
-          {field('계약금액 (원) · 비목 원가 합계와 구분', input.contractAmount, v => mutate(n => { n.contractAmount = v; }))}
+        <section aria-labelledby="es-contract-heading"><h2 id="es-contract-heading">3. 전체계약 · 공사기간</h2><div className="es-basic-grid">
+          {field('계약금액 (원) · 비목 원가 합계와 구분', input.contractAmount, v => mutate(n => { n.contractAmount = v; }), 'text', '계산 필수')}
           {contractFields(['contractDate', 'startDate', 'endDate', 'firstContractDate', 'contractKind', 'bidRate', 'vatMode'])}
         </div></section>
-        <section aria-labelledby="es-current-heading"><h2 id="es-current-heading">금차 계약 · 공사기간</h2><div className="es-basic-grid">
+        <section aria-labelledby="es-current-heading"><h2 id="es-current-heading">4. 금차계약 · 공사기간</h2><div className="es-basic-grid">
           {contractFields(['currentContractAmount', 'currentContractDate', 'currentStartDate', 'currentEndDate'])}
         </div></section>
-        <section aria-labelledby="es-conditions-heading"><h2 id="es-conditions-heading">적용조건 · 공정</h2><div className="es-basic-grid">
+        <section aria-labelledby="es-conditions-heading"><h2 id="es-conditions-heading">5. 적용조건 · 공정</h2><div className="es-basic-grid">
           {contractFields(['legalSystem', 'employmentGrade', 'retirementTrade', 'advanceDate', 'plannedProgress', 'actualProgress', 'technicalDepartment', 'technicalManager'])}
         </div></section>
+        <p className="es-field-help">계수·등락비·조정금액은 입력한 자료로 자동 계산됩니다. 기본입력만으로 비목 금액·지수·요율이 채워지지는 않습니다. 해당 탭에서 입력하거나 Excel로 가져오세요. 자동조회 API는 현재 미연결입니다.</p>
       </div>}
       {tab === 'costs' && <><div className="es-section-title"><h2>비목 금액</h2><span>빈 값은 미입력, 0은 금액 없음 · 한 열의 금액을 여러 행에 붙여넣을 수 있습니다.</span></div>
       <div className="es-cost-grid">{ES_COSTS.map(([r, code, label], index) => <label className="es-cost" key={r}><span><b>{code}</b>{label}<small>원본 3!B{r}</small></span><input aria-label={label + ' 금액'} inputMode="decimal" value={input.costs[r]} onChange={e => mutate(n => { n.costs[r] = e.target.value; })} onPaste={e => {
