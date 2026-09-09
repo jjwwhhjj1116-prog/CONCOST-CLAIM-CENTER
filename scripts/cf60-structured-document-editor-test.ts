@@ -74,10 +74,11 @@ test('CF60 keeps the collaboration bridge disabled until the private server runt
 test('CF60 exposes an honest admin status and preserves the future server handoff contract', () => {
   const settings = read('apps/web/src/routes/PreviewSettings.tsx');
   const runbook = read('docs/runbooks/document-authoring-platform.md');
-  for (const marker of ['문서 제작 플랫폼 연결 상태', 'Tiptap 구조화 편집기', 'D1 문서 원본 저장', 'HWP/HWPX · DOCX · PDF', 'Gotenberg PDF 변환', 'Yjs · Hocuspocus 협업', 'Mem0 · LangGraph Memory']) {
+  for (const marker of ['문서 제작 플랫폼 연결 상태', 'Tiptap 구조화 편집기', 'D1 문서 원본 저장', 'HWP/HWPX · DOCX · PDF', 'Gotenberg PDF 변환', 'Yjs · Hocuspocus 협업']) {
     assert.ok(settings.includes(marker), `missing admin platform status: ${marker}`);
   }
   assert.match(settings, /준비 중인 기능을 작동하는 것처럼 표시하지 않습니다/u);
+  assert.doesNotMatch(settings, /Mem0|Hermes/u);
   assert.match(runbook, /Tiptap JSON을 문서의 정본으로 유지/u);
   assert.match(runbook, /Bridge 장애가 문서 편집·D1 저장을 막아서는 안 됩니다/u);
   assert.match(runbook, /organizationId:caseId:documentKind:documentId/u);

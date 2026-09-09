@@ -22,7 +22,7 @@ const TASK_LABELS: Record<TaskKind, { title: string; detail: string }> = {
   FACT_CHECK: { title: '사실·근거 확인', detail: '수치·날짜·출처의 누락과 충돌을 점검합니다.' }
 };
 
-export function PreviewAiAdmin(): React.ReactElement {
+export function PreviewAiAdmin({ embedded = false }: { embedded?: boolean } = {}): React.ReactElement {
   const [payload, setPayload] = useState<AdminPromptPayload | null>(null);
   const [routeDrafts, setRouteDrafts] = useState<Record<string, AiRoute>>({});
   const [selectedType, setSelectedType] = useState('TYPE-01');
@@ -143,7 +143,7 @@ export function PreviewAiAdmin(): React.ReactElement {
   const connectedCount = payload.aiConfig.providers.filter((item) => item.connected).length;
 
   return <div className="content-stack report-ai-admin" aria-label="관리자 전용 보고서 AI 설정">
-    <Card title="REPORT AI · MULTI-MODEL ROUTER">
+    {!embedded && <Card title="REPORT AI · MULTI-MODEL ROUTER">
       <div className="report-ai-admin__header"><div><p className="eyebrow">ADMIN CONTROL PLANE</p><h2>업무별 AI 모델 라우팅</h2><p className="muted">목차 기획·본문 작성·사실확인을 각각 다른 공급자와 모델로 운영합니다. 공용 키는 내 설정에서 AES-256-GCM 암호화 저장하며 원문은 다시 표시되지 않습니다.</p></div><StatusBadge status={connectedCount ? 'approved' : 'review'} /></div>
       <div className="report-ai-admin__providers">{payload.aiConfig.providers.map((item) => <div key={item.providerKind} data-connected={item.connected}><strong>{item.label}</strong><span>{item.connected ? 'CONNECTED' : 'SECRET REQUIRED'}</span><small>{item.secretName} · 키 값 비공개</small></div>)}</div>
       <div className="report-ai-admin__routes">{(['OUTLINE_PLANNING','CHAPTER_WRITING','FACT_CHECK'] as TaskKind[]).map((task) => {
@@ -154,7 +154,7 @@ export function PreviewAiAdmin(): React.ReactElement {
         return <section key={task}><header><div><h3>{TASK_LABELS[task].title}</h3><p>{TASK_LABELS[task].detail}</p></div><span data-connected={Boolean(selectedProvider?.connected)}>{selectedProvider?.connected ? '사용 가능' : '키 연결 필요'}</span></header><div className="report-ai-admin__settings"><Select label="AI 공급자" value={route.providerKind} onChange={(event) => changeRoute(task, { providerKind: event.target.value as ProviderKind })} options={payload.aiConfig.providers.map((item) => ({ value: item.providerKind, label: item.label }))} /><Select label="모델" value={route.modelCode} onChange={(event) => changeRoute(task, { modelCode: event.target.value })} options={(selectedProvider?.models ?? []).map((item) => ({ value: item.code, label: item.label }))} /><Select label="추론 강도" value={route.reasoningEffort} onChange={(event) => changeRoute(task, { reasoningEffort: event.target.value })} options={['minimal','low','medium','high','xhigh','max'].map((value) => ({ value, label: value.toUpperCase() }))} /><Button onClick={() => void saveRoute(task)} disabled={saving || !dirty}>{saving ? '저장 중…' : '이 역할 저장'}</Button></div><small>v{route.version} · {route.updatedByName} · {new Date(route.updatedAt).toLocaleString('ko-KR')}</small></section>;
       })}</div>
       <div className="notice-box">현재 권장 구성: 목차는 ChatGPT, 본문은 Gemini로 먼저 검증하고 Claude API Key 연결 후 Claude Sonnet/Opus로 교체, 사실확인은 Gemini.</div>
-    </Card>
+    </Card>}
     <Card title="보고서 유형별 작성 지침 · 관리자 전용">
       {payload.guidelinePackage && <div className="notice-box" role="status"><strong>{payload.guidelinePackage.packageName} · v{payload.guidelinePackage.schemaVersion} 적용 완료</strong><br />주유형 {payload.guidelinePackage.typeCount}개 · 챕터 {payload.guidelinePackage.chapterCount}개 · 쟁점 모듈 {payload.guidelinePackage.moduleCount}개 · 출력 프로필 {payload.guidelinePackage.outputProfileCount}개 · SHA-256 {payload.guidelinePackage.sourceZipSha256.slice(0, 16)}…</div>}
       <div className="report-ai-admin__settings"><Select label="보고서 유형" value={selectedType} onChange={(event) => changeType(event.target.value)} options={payload.promptSets.map((entry) => ({ value: entry.claimType, label: `${entry.claimType} · ${entry.name}` }))} /></div>
@@ -172,10 +172,10 @@ export function PreviewAiAdmin(): React.ReactElement {
       {chapter ? <div className="form-stack report-ai-admin__editor"><div className="notice-box"><strong>{chapter.agentCode} · {chapter.chapterCode} {chapter.title}</strong><br />프롬프트 v{chapter.version} · {chapter.updatedBy}</div><div className="report-ai-admin__source-basis"><strong>원본 분석 근거 · 관리자 지침 연계 · v{chapter.sourceAnalysisVersion || 1}</strong><span>{chapter.sourceCategoryCodes.length ? chapter.sourceCategoryCodes.join(' · ') : `${typeGuideline?.sourceFileName ?? '관리자 지침'} 기반`}</span><p>{chapter.sourceAnalysisNote || '관리자가 승인한 유형별 작성 지침과 현재 프로젝트 근거만 사용합니다.'}</p></div><label htmlFor="chapter-role-prompt">챕터 작성자 역할</label><textarea id="chapter-role-prompt" value={rolePrompt} maxLength={5000} onChange={(event) => setRolePrompt(event.target.value)} /><label htmlFor="chapter-instruction-prompt">챕터 작성 지시</label><textarea id="chapter-instruction-prompt" value={instructionPrompt} maxLength={10000} onChange={(event) => setInstructionPrompt(event.target.value)} /><div className="action-row"><Button onClick={() => void savePrompt()} disabled={saving || rolePrompt.trim().length < 20 || instructionPrompt.trim().length < 20}>{saving ? '저장 중…' : '챕터 지침 새 버전 저장'}</Button><span className="muted">변경 이력은 D1에 append-only로 보존됩니다.</span></div></div> : <p className="empty-box">편집할 챕터가 없습니다.</p>}
       {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error}</p>}
     </Card>
-    <Card title="원본 보고서 템플릿 라이브러리 · 회사 Google Drive">
+    {!embedded && <Card title="원본 보고서 템플릿 라이브러리 · 회사 Google Drive">
       <div className="template-library-admin__intro"><div><p className="eyebrow">PRIVATE SOURCE LIBRARY · 32 ORIGINAL FILES</p><h2>원본 폴더를 그대로 등록하고, 분석 근거와 함께 관리합니다.</h2><p className="muted">원본은 공개 Git·정적 웹 자산에 포함하지 않습니다. 관리자만 등록하며 로그인 사용자는 보고서 작성 화면에서 PDF를 열람하고 HWP·HWPX·XLSX를 내려받을 수 있습니다.</p></div><strong>{payload.templateLibrary.reduce((sum, category) => sum + category.uploadedSourceCount, 0)}/{payload.templateLibrary.reduce((sum, category) => sum + category.expectedSourceCount, 0)}<small>GOOGLE DRIVE REGISTERED</small></strong></div>
       <div className="template-library-admin__actions"><Select label="단일 파일 기본 분류" value={templateCategoryCode} onChange={(event) => setTemplateCategoryCode(event.target.value)} options={payload.templateLibrary.map((category) => ({ value: category.categoryCode, label: `${category.categoryCode} · ${category.displayName}` }))} /><input ref={(node) => { templateFolderInput.current = node; if (node) node.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden accept=".pdf,.hwp,.hwpx,.xlsx" onChange={(event) => void importTemplateFolder(event.target.files)} /><Button onClick={() => templateFolderInput.current?.click()} disabled={templateImporting}>{templateImporting ? templateImportProgress || '원본 등록 중…' : '원본 32개 폴더 선택·등록'}</Button></div>
       <div className="template-library-admin__grid">{payload.templateLibrary.map((category) => <article key={category.id} data-complete={category.uploadedSourceCount >= category.expectedSourceCount}><header><span>{category.categoryCode} · {category.primaryClaimType}</span><strong>{category.displayName}</strong><em>{category.uploadedSourceCount}/{category.expectedSourceCount}</em></header><p>{category.analysisSummary}</p><ol>{category.outline.map((item) => <li key={item}>{item}</li>)}</ol>{category.files.length ? <details><summary>등록 원본 {category.files.length}개 보기</summary><ul>{category.files.map((file) => <li key={file.id}><a href={file.contentUrl} target={file.viewMode === 'INLINE' ? '_blank' : undefined} rel="noreferrer">{file.originalName}</a><small>{(file.byteSize / 1024 / 1024).toFixed(1)} MB · SHA {file.sha256.slice(0, 12)}…</small></li>)}</ul></details> : <small className="template-library-admin__empty">아직 Drive 원본 미등록 · 구조 분석과 프롬프트는 적용됨</small>}</article>)}</div>
-    </Card>
+    </Card>}
   </div>;
 }
