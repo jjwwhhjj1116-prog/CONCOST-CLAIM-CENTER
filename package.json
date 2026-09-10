@@ -105,6 +105,10 @@
     "test:cf95": "tsx --test scripts/cf95-proposal-pagination-hwp-test.ts",
     "test:cf96": "tsx --test scripts/cf96-document-spacing-test.ts"
   },
+  "dependencies": {
+    "unpdf": "1.8.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
   "devDependencies": {
     "@types/node": "^20.17.0",
     "@types/sql.js": "1.4.9",

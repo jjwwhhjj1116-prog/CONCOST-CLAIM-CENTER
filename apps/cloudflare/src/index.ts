@@ -42,6 +42,7 @@ import { mergeGeneratedChapter, type ReportNode } from '../../../packages/docume
 import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
 import { fetchEsHealthSources } from './es-health-source';
 import { fetchEsPublicSources } from './es-public-sources';
+import { fetchEsPairSources } from './es-pair-sources';
 import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../packages/document-engine/src/es-ecos';
 
 interface D1StatementLike {
@@ -8332,6 +8333,14 @@ const worker = {
       return handlePreviewDashboard(request, env);
     }
 
+    if (url.pathname === '/api/es/sources/pairs') {
+      const user = await previewSessionUser(request, env);
+      if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
+      if (!user.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) return json({ error: 'ES 접근 권한이 없습니다.' }, 403);
+      if (request.method !== 'GET') return json({ error: '지원하지 않는 요청입니다.' }, 405);
+      try { return json(await fetchEsPairSources(url.searchParams.getAll('date'))); }
+      catch { return json({ error: '조회 기준일·조정일 순서를 확인하세요. 기존 입력은 유지됩니다.' }, 400); }
+    }
     if (url.pathname === '/api/es/sources/public' && request.method === 'GET') {
       const user = await previewSessionUser(request, env);
       if (!user) return json({ error: '로그인이 필요합니다.' }, 401);

@@ -91,7 +91,7 @@ export function parseCakWages(tables: string[][][]) {
   return rows.sort((a, b) => b.date.localeCompare(a.date));
 }
 
-async function readPublicFile(url: string, fetcher: typeof fetch, noticeUrl: string): Promise<Uint8Array> {
+export async function readPublicFile(url: string, fetcher: typeof fetch, noticeUrl: string): Promise<Uint8Array> {
   // URL is selected exclusively from this module's public catalog. No user URLs or secrets.
   const original = new URL(url), signal = AbortSignal.timeout(15_000); let target = original, response: Response;
   for (let hops = 0; ; hops++) {
