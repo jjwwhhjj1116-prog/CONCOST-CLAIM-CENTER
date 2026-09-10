@@ -55,10 +55,10 @@ test('CF139 Chromium: all 17 sheets retain cells without text spill; actual cost
     await page.goto(origin+'/cf139-print'); const input=fixture();
     const grids=esTemplateGrids.map(g=>({grid:g,values:esTemplateValues(input,calculateEs(input),g)}));
     const measured=await page.evaluate(async(grids)=>{
-      const rp='/src/es/es-template-print.ts',pp='/src/es/EsPrintPreview.tsx'; const {paginateEsTemplate}=await import(rp),{PRINT_CSS}=await import(pp);
+      const rp='/src/es/es-template-print.ts',pp='/src/es/EsPrintPreview.tsx'; const {paginateEsTemplate}=await import(rp),{PRINT_CSS,decorateEsPrintPage}=await import(pp);
       const css=document.createElement('style');css.textContent=PRINT_CSS;document.head.append(css);await document.fonts.ready;
       const m=document.createElement('div');document.body.append(m);const counts:Record<string,number>={};
-      const pages=grids.flatMap(({grid,values})=>{const p=paginateEsTemplate(grid,values,m);counts[grid.name]=p.length;return p;});m.remove();document.body.innerHTML=pages.join('');
+      const pages=grids.flatMap(({grid,values})=>{const p=paginateEsTemplate(grid,values,m);counts[grid.name]=p.length;return p;});m.remove();document.body.innerHTML=pages.map((html,i)=>decorateEsPrintPage(html,i,pages.length,1)).join('');
       const spills:string[]=[];const cells:string[]=[];
       for(const paper of document.querySelectorAll<HTMLElement>('.es-paper'))for(const td of paper.querySelectorAll<HTMLTableCellElement>('td[data-cell]')){
         cells.push(`${paper.dataset.sheet}!${td.dataset.cell}`);const span=td.firstElementChild!; if(!span.textContent?.trim())continue;

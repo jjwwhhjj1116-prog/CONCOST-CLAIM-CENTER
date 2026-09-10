@@ -34,5 +34,9 @@
 
 ## 배포 및 다음 시작
 
-- 배포 대상은 `wrangler.development.jsonc` 하나만. 최종 결과는 이 절에 기록한다.
+- 개발 배포 완료. 제품 `197847b`, 명시적 소수0 표기 경계 보정 `5d283c9`. 최종 Worker `4a83df74-3870-4afb-87bb-ca87943803b2`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es . `wrangler.development.jsonc`만 사용.
+- 최종 배포 후 `node scripts/cf114-live-smoke.mjs development` PASS: health/readiness 정상, Drive 연결 유지, 익명 접근401, HTML/JS/CSS4개 원격 SHA와 로컬 배포 산출물 일치. 빌드 중 먼저 실행한 smoke는 이전 파일명과 새 dist 불일치로 종료되어, 배포 완료 후 재검증한 결과만 사용했다.
+- 실제 브라우저에서 기존 사용자 문서가 v9/변경된 제목임을 확인하고 읽기만 수행했다. 새 합성 문서 생성0, 사용자 문서 입력·저장·재조회 버튼·출력 실행0. 비목 합계/적용대가 분리, 금액 있음13/0원15 표시, K퍼센트 단위1회, 산재3.70%/3.56%, 미리보기42쪽 생성 확인.
+- 전체243회귀 후 커서·미입력 경계 수정에 대해 영향13개 회귀 및 최종CF139 3개 독립 재실행 PASS. 최종 빌드 PASS. 실제 운영 데이터로 저장하거나 실제 종이 인쇄는 하지 않았다.
 - 기존 사용자 데이터나 이전 검수 문서를 수정해 증명하지 않는다. 배포 후 확인은 읽기 검수 또는 새 CF139 합성 문서만 사용한다.
