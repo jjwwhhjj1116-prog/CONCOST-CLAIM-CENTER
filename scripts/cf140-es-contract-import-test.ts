@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index';
-import { ES_CONTRACT_MAX_BYTES, validateEsContractImport } from '../packages/document-engine/src/es-contract-import';
+import { ES_CONTRACT_MAX_BYTES, validateEsContractImport, normalizeEsContractModelResult } from '../packages/document-engine/src/es-contract-import';
 
 const valid = () => ({
   contractAmount: { value: '123456789', page: 1, quote: '당초 총계약금액 123,456,789원 (부가세 포함)', vat: 'INCLUDED', basis: 'ORIGINAL' },
@@ -47,7 +47,7 @@ test('CF140 validation is idempotent across server and browser trust boundaries'
 });
 
 const origin = 'https://cf140.example.invalid';
-function fixture(options: { paid?: boolean; key?: boolean; roles?: string[]; output?: unknown; finishReason?: string; status?: number } = {}) {
+function fixture(options: { paid?: boolean; key?: boolean; roles?: string[]; output?: unknown; rawText?: string; finishReason?: string; status?: number } = {}) {
   const calls: unknown[] = []; const sqls: string[] = [];
   const db = { prepare(sql: string) {
     sqls.push(sql); assert.match(sql, /^SELECT /u, 'read-only import must not write DB');
@@ -64,7 +64,7 @@ function fixture(options: { paid?: boolean; key?: boolean; roles?: string[]; out
     assert.match(payload.system_instruction.parts[0].text, /계약일.*입찰일/u);
     assert.equal(payload.contents[0].parts[1].inline_data.mime_type, 'application/pdf');
     if (options.status) return Response.json({ error: { message: 'PRIVATE_PROVIDER_RESPONSE_AND_SYNTHETIC_KEY', status: 'PERMISSION_DENIED' } }, { status: options.status });
-    return Response.json({ candidates: [{ finishReason: options.finishReason ?? 'STOP', content: { parts: [{ text: JSON.stringify(options.output ?? valid()) }] } }] });
+    return Response.json({ candidates: [{ finishReason: options.finishReason ?? 'STOP', content: { parts: [{ text: options.rawText ?? JSON.stringify(options.output ?? valid()) }] } }] });
   } };
   const call = (request: Request) => worker.fetch(request, env);
   return { calls, sqls, call };
@@ -98,10 +98,71 @@ test('CF140 synthetic PDF returns validated preview, no DB write, key or raw PDF
   assert.equal(response.status, 200); assert.equal(body.provider, 'GEMINI'); assert.equal(body.preview.contractAmount.value, '123456789'); assert.equal(f.calls.length, 1);
   assert.ok(!JSON.stringify(body).includes('SYNTHETIC_CF140')); assert.ok(!JSON.stringify(body).includes('%PDF'));
 });
-test('CF140 truncated or malformed model output cannot be applied', async () => {
-  for (const options of [{ finishReason: 'MAX_TOKENS' }, { output: { ...valid(), baseDate: { value: '2023-11-15', page: 1, quote: '계약일 2023.11.15' } } }]) {
-    const response = await fixture(options).call(post()); assert.equal(response.status, 502); assert.equal((await response.json() as any).code, 'ES_CONTRACT_INVALID_RESULT');
+test('CF141 incomplete, blocked, malformed JSON and shape errors remain non-applicable and distinguishable', async () => {
+  for (const [options, code] of [[{ finishReason: 'MAX_TOKENS' }, 'ES_CONTRACT_INCOMPLETE_RESULT'], [{ finishReason: 'SAFETY' }, 'ES_CONTRACT_BLOCKED_RESULT'], [{ rawText: '{broken' }, 'ES_CONTRACT_INVALID_JSON'], [{ output: {} }, 'ES_CONTRACT_INVALID_RESULT']] as const) {
+    const response = await fixture(options).call(post()); assert.equal(response.status, 502); assert.equal((await response.json() as any).code, code);
   }
+});
+
+test('CF141 API preserves valid fields when only bid evidence fails; fenced JSON also works', async () => {
+  const output = { ...valid(), baseDate: { value: '2023-11-15', page: 1, quote: '계약일 2023.11.15' } };
+  for (const options of [{ output }, { rawText: '```json\n' + JSON.stringify(output) + '\n```' }]) {
+    const response = await fixture(options).call(post()), body = await response.json() as any;
+    assert.equal(response.status, 200); assert.equal(body.preview.contractAmount.value, '123456789'); assert.equal(body.preview.baseDate, null);
+    assert.equal(body.preview.contractDate.value, '2023-11-30'); assert.ok(body.preview.warnings.some((w: string) => w.startsWith('입찰 기준일:')));
+    assert.deepEqual(validateEsContractImport(body.preview), body.preview);
+  }
+});
+
+test('CF141 normal notation and unconfirmed classification retain grounded money without inference', () => {
+  for (const quote of ['공사도급 금액 ₩123,456,789 (부가가치세를 포함)', '계약금액 ￦123,456,789 (부가세: 포함)', '계약금액 123,456,789원 VAT는 포함']) {
+    const input = valid(); input.contractAmount.quote = quote; input.contractAmount.value = '123,456,789';
+    input.contractDate.value = '2023.11.30.'; input.contractDate.quote = '계약체결년월일 2023.11.30.';
+    const preview = normalizeEsContractModelResult(input);
+    assert.equal(preview.contractAmount?.value, '123456789'); assert.equal(preview.contractAmount?.basis, 'UNSPECIFIED'); assert.equal(preview.contractAmount?.vat, 'INCLUDED');
+    assert.equal(preview.contractDate?.value, '2023-11-30'); assert.equal(preview.contractDate?.basis, 'UNSPECIFIED');
+    assert.deepEqual(validateEsContractImport(preview), preview); assert.equal(input.contractAmount.basis, 'ORIGINAL');
+  }
+  const input = valid(); input.contractAmount.vat = 'EXCLUDED';
+  assert.equal(normalizeEsContractModelResult(input).contractAmount?.vat, 'UNSPECIFIED');
+});
+
+for (const quote of ['계약금액 123,456,789천원 부가세 포함', '계약금액 ₩123,456,789 (단위: 백만원)', '계약금액 ₩123,456,789 (단위: 만원)', '계약금액 USD 123,456,789 원 환산액 미정', '계약금액 123456789.50원', '계약금액 - 123456789원', '계약금액 - ₩123,456,789', '계약금액 − KRW 123,456,789', '계약금액 ₩123456789e3', '계약금액 123456789 미정 / 다른 금액 99원', '계약금액 12,3456,789원', '공사도급금액은 3.3058제곱미터(m²)당 123,456,789원을 승한 금액']) test(`CF141 excludes unsafe money units or notation: ${quote}`, () => {
+  const input = valid(); input.contractAmount.quote = quote;
+  assert.throws(() => validateEsContractImport(input));
+  const result = normalizeEsContractModelResult(input); assert.equal(result.contractAmount, null); assert.deepEqual(result.baseDate, input.baseDate);
+  assert.ok(result.warnings.some(w => w.startsWith('총계약금액:')));
+});
+
+test('CF141 written Korean amount does not invalidate an adjacent explicit KRW total', () => {
+  for (const [amount, quote] of [['5000', '계약금액 금오천원정(₩5,000)'], ['100000000', '계약금액 금일억원정(₩100,000,000)']]) {
+    const input = valid(); Object.assign(input.contractAmount, { value: amount, quote, vat: 'UNSPECIFIED', basis: 'UNSPECIFIED' });
+    assert.equal(validateEsContractImport(input).contractAmount?.value, amount);
+  }
+});
+
+for (const unit of ['원/평', '원/㎡']) test(`CF141 per-area ${unit} is not a total contract amount`, () => {
+  const input = valid(); input.contractAmount.quote = '공사도급금액 123,456,789' + unit;
+  assert.throws(() => validateEsContractImport(input));
+  const result = normalizeEsContractModelResult(input);
+  assert.equal(result.contractAmount, null); assert.ok(result.warnings.some(w => w.includes('단가 또는 면적')));
+});
+
+test('CF141 negated, uncertain or contradictory VAT is not confirmed by a substring', () => {
+  for (const suffix of ['VAT를 포함하지 않은 금액', '부가세 포함 여부 미확인', '부가세 포함 VAT 별도']) {
+    const input = valid(); input.contractAmount.quote = '당초 계약금액 123,456,789원 ' + suffix;
+    assert.throws(() => validateEsContractImport(input));
+    assert.equal(normalizeEsContractModelResult(input).contractAmount?.vat, 'UNSPECIFIED');
+  }
+});
+
+test('CF141 every failed field is excluded with persistent reasons, never returned as raw candidates', () => {
+  const input = valid(); input.contractAmount.value = '123,45'; input.baseDate.page = 0; input.contractDate.basis = 'UNKNOWN';
+  input.warnings = Array.from({ length: 12 }, (_, i) => '모델 안내 ' + i);
+  const result = normalizeEsContractModelResult(input);
+  assert.equal(result.contractAmount, null); assert.equal(result.baseDate, null); assert.equal(result.contractDate, null);
+  for (const label of ['총계약금액:', '입찰 기준일:', '계약일:']) assert.ok(result.warnings.some(w => w.startsWith(label)));
+  assert.equal(result.warnings.length, 12); assert.deepEqual(validateEsContractImport(result), result); assert.ok(!JSON.stringify(result).includes('123,45'));
 });
 test('CF140 provider errors are sanitized and existing inputs are never part of the request', async () => {
   const response = await fixture({ status: 403 }).call(post()), body = await response.text();

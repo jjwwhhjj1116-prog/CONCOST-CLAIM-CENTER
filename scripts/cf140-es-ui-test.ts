@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import { newEsInput, calculateEs, validateEsInput, type EsInput } from '../packages/document-engine/src/es-calculation';
 import { fillMissingEsSources } from '../apps/web/src/es/es-auto-sources';
 import { esPercent } from '../apps/web/src/es/es-display';
+import { normalizeEsContractModelResult } from '../packages/document-engine/src/es-contract-import';
 
 const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(existsSync);
 function fixture(): EsInput {
@@ -56,7 +57,7 @@ async function withStudio(run: (context: Context) => Promise<void>) {
         if (request.method() === 'GET') return reply({ configured: true, externalAiAllowed: true });
         pdfCalls.push(request.method()); assert.equal(request.method(), 'POST');
         assert.match(request.postData() ?? '', /name="consent"[\s\S]*true/);
-        return reply({ preview: { contractAmount: { value: '4500000', page: 2, quote: '합성 변경 계약금액 4,500,000원 VAT 포함', vat: 'INCLUDED', basis: 'AMENDED' }, baseDate: null, contractDate: { value: '2024-01-03', page: 1, quote: '합성 당초 계약일 2024년 1월 3일', basis: 'ORIGINAL' }, warnings: ['합성 응답: 실제 AI 호출 없음'] } });
+        return reply({ preview: normalizeEsContractModelResult({ contractAmount: { value: '4,500,000', page: 2, quote: '합성 변경 계약금액 ₩4,500,000 VAT를 포함', vat: 'INCLUDED', basis: 'AMENDED' }, baseDate: { value: '2024-01-03', page: 1, quote: '계약일 2024년 1월 3일' }, contractDate: { value: '2024-01-03', page: 1, quote: '합성 당초 계약일 2024년 1월 3일', basis: 'ORIGINAL' }, warnings: ['합성 응답: 실제 AI 호출 없음'] }) });
       }
       if (url.pathname.startsWith('/api/es/sources/')) {
         sources.push(url.pathname + url.search); assert.equal(request.method(), 'GET');
@@ -127,6 +128,7 @@ test('CF140 React: XLSX exclusive choice, checked-only application, PDF consent 
   const read = dialog.getByRole('button', { name: '파일 읽기 · 적용 전 확인' }); assert.equal(await read.isEnabled(), false); assert.deepEqual(pdfCalls, []);
   await dialog.getByLabel(/계약 PDF를 조직 공용 Gemini로 전송/).check(); await read.click(); await dialog.getByText('합성 응답: 실제 AI 호출 없음', { exact: true }).waitFor();
   assert.deepEqual(pdfCalls, ['POST']); assert.equal(await dialog.getByLabel('입찰 기준일 적용', { exact: true }).isEnabled(), false);
+  await dialog.getByText(/^입찰 기준일:.*이 항목만 제외/).waitFor();
   mkdirSync('output/playwright/cf140', { recursive: true });
   await page.screenshot({ path: resolve('output/playwright/cf140/import-review-desktop.png') });
   await page.setViewportSize({ width: 390, height: 844 }); await page.screenshot({ path: resolve('output/playwright/cf140/import-review-mobile.png') });
