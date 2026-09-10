@@ -24,8 +24,8 @@ export const ES_CONTRACT_FIELDS = [
   ['currentStartDate', '금차 착공일', 'date', 'E18'], ['currentEndDate', '금차 준공일', 'date', 'E19'],
   ['advanceDate', '선금 지급일', 'date', 'E12'], ['employmentGrade', '고용보험 적용 등급', 'text', 'C23'],
   ['retirementTrade', '퇴직공제 적용 공종', 'text', 'C24'], ['legalSystem', '국가·지방·민간 적용체계', 'text', 'C25'],
-  ['vatMode', '계약금액 VAT 구분', 'text', ''], ['plannedProgress', '예정 공정률 (원본 소수값)', 'number', ''],
-  ['actualProgress', '실행 공정률 (원본 소수값)', 'number', ''],
+  ['vatMode', '계약금액 VAT 구분', 'text', ''], ['plannedProgress', '예정 공정률 (%)', 'number', ''],
+  ['actualProgress', '실행 공정률 (%)', 'number', ''],
   ['technicalDepartment', '담당 부서', 'text', 'C32'], ['technicalManager', '담당자', 'text', 'C33'], ['reportDate', '보고서 작성일', 'date', '']
 ] as const;
 export type EsContractKey = typeof ES_CONTRACT_FIELDS[number][0];

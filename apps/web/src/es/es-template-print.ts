@@ -67,7 +67,19 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
       let cells='';
       for(let c=1;c<=lastCol;c++) {
         const address=esCellAddress(r,c);if(covered.has(address))continue;
-        const [rs,cs]=mergeStarts.get(address)??[1,1], original=cellStyle(r,c);
+        const [rs,sourceCs]=mergeStarts.get(address)??[1,1], original=cellStyle(r,c);
+        let cs=sourceCs;
+        // Borderless source notes intentionally flow into empty neighbours in
+        // Excel. Give them that same available width without crossing any data,
+        // border, fill or original merge; the workbook grid itself stays intact.
+        const borderless = (s: EsCellStyle) => !Object.values(s.borders ?? {}).some(b=>b.style) && !s.fill;
+        if (rs===1 && cs===1 && values[address]?.trim() && !/^-?\d+(\.\d+)?$/.test(values[address]) && borderless(original) && !['center','right'].includes(original.alignment?.horizontal ?? '')) {
+          while(c+cs<=lastCol) {
+            const next=esCellAddress(r,c+cs);
+            if(values[next]?.trim() || mergeStarts.has(next) || covered.has(next) || !borderless(cellStyle(r,c+cs))) break;
+            cs++;
+          }
+        }
         const style = { ...original, borders: { ...original.borders } };
         // OOXML stores merged-cell perimeter borders on covered edge cells too.
         if (rs > 1 || cs > 1) for (const side of ['top','bottom','left','right'] as const) {
@@ -78,7 +90,8 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
         }
         const text = esPrintNumber(values[address]??'',style.numberFormat);
         const numeric = /^-?\d+(\.\d+)?$/.test(values[address]??'');
-        cells+=`<td data-cell="${address}"${style.alignment?.shrinkToFit==='1'?' data-shrink="true"':''} rowspan="${rs}" colspan="${cs}" style="padding:0 2px;min-width:0;${esc(styleCss(style))}${wrapped.has(address)?'white-space:normal;overflow-wrap:anywhere;':''}${numeric && (!style.alignment?.horizontal || style.alignment.horizontal==='general')?'text-align:right;':''}"><span style="${fitted.has(address)?`font-size:${fitted.get(address)}pt;`:''}">${esc(text)}</span></td>`;
+        cells+=`<td data-cell="${address}"${style.alignment?.shrinkToFit==='1'?' data-shrink="true"':''} rowspan="${rs}" colspan="${cs}" style="padding:0 2px;min-width:0;${esc(styleCss(style))}${wrapped.has(address)?'white-space:normal;line-height:normal;':''}word-break:keep-all;overflow-wrap:break-word;${numeric && (!style.alignment?.horizontal || style.alignment.horizontal==='general')?'text-align:right;':''}"><span style="${fitted.has(address)?`font-size:${fitted.get(address)}pt;`:''}">${esc(text)}</span></td>`;
+        if(cs!==sourceCs)c+=cs-1;
       }
       rows+=`<tr data-row="${r}" style="height:${rowHeight(r)}pt;${rowHeight(r)===0?'display:none':''}">${cells}</tr>`;
     }
@@ -86,7 +99,7 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
     return `<section class="es-paper es-original" data-sheet="${esc(grid.name)}" data-first-row="${from}" data-last-row="${to}" style="padding:0"><div style="position:absolute;top:${margins.top}mm;left:${left}mm"><div style="position:relative;width:${width}px;zoom:${scale}"><table style="border-collapse:collapse;table-layout:fixed;width:${width}px;min-width:0;line-height:1.15"><colgroup>${widths.map(w=>`<col style="width:${w}px">`).join('')}</colgroup><tbody>${rows}</tbody></table>${grid.name==='목록' && from===1?esContentsDrawingSvg(widths,rowHeight):''}</div></div>${footer}</section>`;
   };
   measure.innerHTML=render([1,lastRow]);
-  for (const cell of measure.querySelectorAll<HTMLTableCellElement>('td[data-shrink]')) {
+  for (const cell of measure.querySelectorAll<HTMLTableCellElement>('td')) {
     const span = cell.firstElementChild as HTMLElement;
     const css = measure.ownerDocument.defaultView!.getComputedStyle(cell);
     const available = cell.getBoundingClientRect().width - (parseFloat(css.paddingLeft)+parseFloat(css.paddingRight)+2)*scale;
@@ -94,11 +107,17 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
     const height = Array.from({length:cell.rowSpan},(_,i)=>rowHeight(row+i)).reduce((a,b)=>a+b,0)*96/72*scale;
     const fits = () => { const rect=span.getBoundingClientRect(); return rect.width<=available && rect.height<=height; };
     if (!fits() && available > 0 && height > 0) {
+      const address = cell.dataset.cell!;
+      if (!cell.dataset.shrink && !/^-?\d+(\.\d+)?$/.test(values[address] ?? '')) {
+        // Excel lets text spill into empty neighbours. A printed report cannot:
+        // wrap labels within their own (possibly merged) cell and measure rows again.
+        wrapped.add(address);
+        continue;
+      }
       // Font hinting is not linear: measure candidate sizes instead of merely
       // multiplying by a width ratio (which can still spill into the next cell).
       let low=.5, high=parseFloat(css.fontSize)*72/96;
       for(let i=0;i<12;i++) { const size=(low+high)/2; span.style.fontSize=`${size}pt`; if(fits())low=size;else high=size; }
-      const address = cell.dataset.cell!;
       if (low * scale < 7.5 && !/^-?\d+(\.\d+)?$/.test(values[address] ?? '')) {
         // Period names remain readable on paper: wrap instead of reducing to 5pt.
         wrapped.add(address); fitted.set(address, Math.max(7.5 / scale, parseFloat(css.fontSize)*72/96));

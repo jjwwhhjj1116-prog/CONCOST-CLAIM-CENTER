@@ -63,8 +63,16 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
   const advanceRemaining = result.amount ? d(input.advanceContract).sub(d(excluded).sub(d(input.priorCompletion))).toString() : '';
   const display = { ...Object.fromEntries(['currentContractDate','currentContractAmount','currentStartDate','currentEndDate'].map(k => [k, at(metadata,k)])), technicalContacts: [at(metadata,'technicalDepartment'),at(metadata,'technicalManager')].filter(Boolean).join(' · '), elapsedDays: input.baseDate && input.adjustmentDate ? String(Math.round((Date.parse(input.adjustmentDate)-Date.parse(input.baseDate))/86400000)) : '', baseDate: input.baseDate, baseDateCaption: '입찰 기준일', totalExcluded: excluded, directPaidExclusionCaption: '직접 지급액 (중복 제외 후)', directPaidEvidence: input.directPaid.join(' + '), advanceEvidence: '단일 선금 원본 호환 산식', advanceDateEvidence: at(metadata,'advanceDate'), advancePaidEvidence: input.advancePaid, advancePaidRatio: input.advancePaid !== '' && input.advanceContract && d(input.advanceContract).compare(d(0)) > 0 ? d(input.advancePaid).div(d(input.advanceContract)).toString() : '0', advanceRuleDescription: '선금 잔여 적용대가 × 적용 K × 선금 지급액 / 선금 계약금액 (원 단위 반올림)', advanceContractNetOfPriorCompletion: input.advanceContract ? d(input.advanceContract).sub(d(input.priorCompletion || '0')).toString() : '', priorCompletionNote: input.priorCompletion, advanceApplicable: advanceRemaining, currentContractCaption: '선금 지급 계약', advanceEquation: `${advanceRemaining} × ${result.current?.k ?? '—'} × ${input.advancePaid} / ${input.advanceContract}` };
   display.elapsedDays = esElapsedDays(input);
+  const won = (value: string) => /^-?\d+(\.\d+)?$/.test(value) ? value.replace(/^(-?\d+)/, integer => integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')) + ' 원' : '—';
+  display.advancePaidEvidence = won(input.advancePaid);
+  display.priorCompletionNote = won(input.priorCompletion);
+  display.directPaidEvidence = input.directPaid.map(won).join(' + ') || '—';
+  display.advanceEquation = input.advanceContract && d(input.advanceContract).compare(d(0)) > 0
+    ? `${won(advanceRemaining)} × ${result.current?.k ?? '—'} × ${won(input.advancePaid)} ÷ ${won(input.advanceContract)}`
+    : input.advanceContract === '0' ? '선금 대상금액 0 원 · 선금 공제액 0 원' : '선금 대상금액 미입력 · 선금 공제액 미확정';
   const root = { input, metadata, ...contexts, amount: result.amount, display, base: { display: { wageStatement: `${input.baseDate} 적용 노임 ${input.base.wage}` } } };
   const values: Record<string,string> = { ...grid.staticCells };
+  const cellStyles = new Map(grid.cellStyles);
   for (const [address, field] of Object.entries(grid.fields)) {
     const [path, format] = field.split(':');
     let value = at(root, path);
@@ -74,9 +82,24 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
     if (path.startsWith('output.attachmentNumber.')) value = path.split('.').at(-1);
     if (value === undefined || value === '') { values[address] = '—'; continue; }
     let text = String(value);
-    if (format === 'percent') text = d(text).mul(d(100)).toString() + '%';
+    const [row, col] = esCellPosition(address);
+    const style = esTemplateStyles[cellStyles.get(address) ?? grid.rowStyles?.[row] ?? grid.columns[col]?.style ?? 0];
+    const percentFormat = /%/.test(style.numberFormat.replace(/"[^"]*"|\\./g, ''));
+    // K/advance ratios are fractions, but rates are entered as percentage points.
+    // Leave the unit to the original numeric format or its separate '%' cell.
+    if (format === 'percent') text = percentFormat ? text : d(text).mul(d(100)).toString();
+    else if (percentFormat && (path.includes('.rates.') || path === 'metadata.plannedProgress' || path === 'metadata.actualProgress')) text = d(text).div(d(100)).toString();
     else if (format === 'yearMonth' && /^\d{4}-\d{2}/.test(text)) text = text.slice(0,4) + '년 ' + text.slice(5,7) + '월';
     else if (format === 'longDate' && /^\d{4}-\d{2}-\d{2}$/.test(text)) text = text.replace(/^(\d+)-(\d+)-(\d+)$/, '$1년 $2월 $3일');
+    // Presentation-only rounding keeps recurring fractions numeric in Excel
+    // (which otherwise exports >15 digits as text and bypasses the % format).
+    if (percentFormat && /^-?\d+(\.\d+)?$/.test(text)) {
+      const places = style.numberFormat.match(/0\.([0#]+)%/)?.[1].length ?? 0;
+      text = d(text).round(places + 2, 'ROUND').toString();
+    } else if (format === 'percent') {
+      const places = style.numberFormat.match(/0\.([0#]+)/)?.[1].length;
+      if (places !== undefined) text = d(text).round(places, 'ROUND').toString();
+    }
     values[address] = text;
   }
   if (grid.name === '1') values.J6 = input.contract?.bidRate ? d(input.contract.bidRate).div(d(100)).toString() : '—';
