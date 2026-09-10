@@ -4,6 +4,7 @@ import { esSourceDates, esMaterialMonth } from './es-source-history';
 export type EsSourceField = 'wage' | keyof EsPeriod['rates'];
 export interface EsPublicSourceItem {
   date: string; field: EsSourceField; value: string; source: string; effectiveDate: string; condition: string;
+  basis?: 'PPS_CONSTRUCTION_DIRECT_LABOR';
 }
 export interface EsPublicSourceResult {
   items: EsPublicSourceItem[];
@@ -20,6 +21,7 @@ export function applyEsPublicSources(input: EsInput, items: EsPublicSourceItem[]
   const fields = ['wage', 'injury', 'employment', 'retirement', 'health', 'pension', 'care'];
   const seen = new Set<string>();
   for (const item of items) {
+    if (item.basis !== undefined && (item.basis !== 'PPS_CONSTRUCTION_DIRECT_LABOR' || item.field !== 'health' || item.date < '2011-01-01' || item.date >= '2018-08-01')) throw new Error('자동조회 건강보험 산정기준 검증에 실패했습니다.');
     esMaterialMonth(item.effectiveDate);
     const id = item.date + ':' + item.field;
     if (!fields.includes(item.field) || !dates.includes(item.date) || seen.has(id) || !/^\d+(?:\.\d+)?$/.test(item.value) || !Number.isFinite(Number(item.value)) || Number(item.value) <= 0 || Number(item.value) > (item.field === 'wage' ? 1_000_000 : 100) || !/^\d{4}-\d{2}-\d{2}$/.test(item.effectiveDate) || item.effectiveDate > item.date || typeof item.source !== 'string' || item.source.length > 600 || typeof item.condition !== 'string' || item.condition.length > 500) throw new Error('자동조회 응답의 항목·단위·적용일 검증에 실패했습니다.');

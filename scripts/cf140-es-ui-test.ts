@@ -34,7 +34,7 @@ type Context = {
   page: Page; writes: string[]; sources: string[]; external: string[]; pdfCalls: string[];
   saved: () => EsInput; holdPublic: () => { started: Promise<void>; release: () => void };
 };
-async function withStudio(run: (context: Context) => Promise<void>) {
+async function withStudio(run: (context: Context) => Promise<void>, initial?: EsInput) {
   const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
   const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
     name: 'cf140-ui-harness', enforce: 'pre', resolveId(id: string) { if (id === '/cf140-ui.js') return '\0cf140-ui'; },
@@ -45,7 +45,7 @@ async function withStudio(run: (context: Context) => Promise<void>) {
     await server.listen(); const address = server.httpServer!.address(); assert.ok(address && typeof address === 'object'); const origin = `http://127.0.0.1:${address.port}`;
     browser = await chromium.launch({ executablePath, headless: true }); const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } }); page.setDefaultTimeout(8000);
     const errors: string[] = [], writes: string[] = [], sources: string[] = [], external: string[] = [], pdfCalls: string[] = [];
-    let stored = fixture(), revision = 1, held: { started: () => void; wait: Promise<void> } | undefined;
+    let stored = initial ?? fixture(), revision = 1, held: { started: () => void; wait: Promise<void> } | undefined;
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*', async (route: Route) => {
       const request = route.request(), url = new URL(request.url());
@@ -145,6 +145,32 @@ test('CF140 React: XLSX exclusive choice, checked-only application, PDF consent 
   await page.getByRole('button', { name: '저장', exact: true }).click(); await page.getByText('저장됨 · v2', { exact: true }).waitFor();
   assert.deepEqual(writes, ['save']); assert.equal(saved().costs[11], '20000'); assert.equal(saved().costs[18], '97500'); assert.equal(saved().contractAmount, '4500000'); assert.equal(saved().contract!.vatMode, 'VAT 포함');
 }));
+
+for (const published of [true, false]) test('CF143 React: historical construction health ' + (published ? 'keeps its different denominator' : 'does not fall back to remuneration rate'), { skip: !executablePath, timeout: 45000 }, async () => {
+  const initial = fixture(); initial.baseDate = initial.base.date = '2017-06-01'; initial.base.rates.health = '';
+  await withStudio(async ({ page, writes, saved }) => {
+    const before = saved();
+    await page.route('**/api/es/sources/public?*', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      items: published ? [{ date: '2017-06-01', field: 'health', value: '1.7', effectiveDate: '2017-02-15', source: '합성 조달청 공사원가 원문 / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=0001211838&key=00038', condition: '직접노무비 대비 %', basis: 'PPS_CONSTRUCTION_DIRECT_LABOR' }] : [],
+      issues: published ? [] : [{ date: '2017-06-01', field: 'health', reason: '원문 미확인' }]
+    }) }));
+    await page.route('**/api/es/sources/health?*', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+      items: [{ date: '2017-06-01', value: '3.06', effectiveDate: '2017-01-01', source: '합성 보수 기준 법정률 / https://www.law.go.kr/법령/국민건강보험법' }], warnings: []
+    }) }));
+    await page.getByRole('button', { name: 'ES 요율정보 가져오기', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'ES 요율정보 가져오기 · 적용 전 확인' });
+    const value = dialog.getByLabel('기준 건강 (%) 적용할 값', { exact: true }); await value.waitFor();
+    assert.equal(await value.inputValue(), published ? '1.7' : '');
+    const row = dialog.getByRole('row').filter({ has: page.getByRole('rowheader', { name: '기준 · 건강 (%)', exact: true }) });
+    await row.locator('summary').click();
+    assert.match(await row.innerText(), published ? /법정 사업주 부담률 3.06%.*대체하지 않음/ : /기존\/Excel 값 유지.*참고만 가능/);
+    if (published) assert.match(await row.innerText(), /자동조회/);
+    mkdirSync('output/playwright/cf143', { recursive: true });
+    await page.screenshot({ path: resolve('output/playwright/cf143/health-' + (published ? 'verified' : 'missing') + '.png') });
+    await dialog.getByRole('button', { name: '취소 · 기존 유지', exact: true }).click();
+    assert.deepEqual(writes, []); assert.deepEqual(saved(), before);
+  }, initial);
+});
 
 test('CF140 React: date debounce fills only verified blanks and preserves manual changes made before lookup', { skip: !executablePath, timeout: 45000 }, () => withStudio(async ({ page, writes, sources, saved }) => {
   const before = saved(), response = page.waitForResponse(r => r.url().includes('/api/es/sources/public?'));

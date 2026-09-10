@@ -209,10 +209,12 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       const mark = (item: EsPublicSourceItem) => {
         const id = item.date + ':' + item.field; candidate.automatic.push(id); candidate.details[id] = `${item.source} · 공표/시행 ${item.effectiveDate} · ${item.condition}`;
       };
+      const constructionHealthDates = new Set<string>();
       const published = await publicSources;
       if ('response' in published) {
         try {
           candidate.input = applyEsPublicSources(candidate.input, published.response.items);
+          published.response.items.filter(i => i.basis === 'PPS_CONSTRUCTION_DIRECT_LABOR').forEach(i => constructionHealthDates.add(i.date));
           published.response.issues.forEach(i => { candidate.details[i.date + ':' + i.field] = i.reason; });
           published.response.items.forEach(mark);
         } catch { candidate.warnings.push('공식 공표자료 응답 검증 실패 · 기존 값과 Excel 이력을 유지합니다.'); }
@@ -226,8 +228,11 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
         for (const item of items) {
           const id = item.date + ':health', existing = [candidate.input.base, candidate.input.current.period, candidate.input.previous.period].find(p => p.date === item.date)!;
           if (candidate.automatic.includes(id)) {
-            if (esDecimal(existing.rates.health).compare(esDecimal(item.value)) === 0) candidate.details[id] += ' · 국가법령 시행본 교차확인 일치';
+            if (constructionHealthDates.has(item.date)) candidate.details[id] += ` · 비교 참고: 보수 기준 법정 사업주 부담률 ${item.value}%는 직접노무비 기준 공사원가 산정률과 달라 대체하지 않음 / ${item.source}`;
+            else if (esDecimal(existing.rates.health).compare(esDecimal(item.value)) === 0) candidate.details[id] += ' · 국가법령 시행본 교차확인 일치';
             else { for (const p of [candidate.input.base, candidate.input.current.period, candidate.input.previous.period]) if (p.date === item.date) { p.rates.health = fallbackHealth.get(item.date) ?? ''; p.source = `${p.source} / 조달청·법령 불일치: 위 health 자동조회값 미적용, 기존/Excel health=${p.rates.health || '미입력'} 유지`.slice(-2000); } candidate.automatic = candidate.automatic.filter(key => key !== id); candidate.details[id] = '조달청·법령 요율 불일치 · 기존/Excel 값 유지 · 적용조건 확인 후 수동 입력'; }
+          } else if (item.date >= '2011-01-01' && item.date < '2018-08-01') {
+            candidate.details[id] = (candidate.details[id] ?? '') + ` · 과거 직접노무비 기준 공사원가 산정률 미확인: 기존/Excel 값 유지. 보수 기준 법정 사업주 부담률 ${item.value}%는 참고만 가능 / ${item.source}`;
           } else { for (const p of [candidate.input.base, candidate.input.current.period, candidate.input.previous.period]) if (p.date === item.date) { p.rates.health = item.value; p.source = [checked.base, checked.current.period, checked.previous.period].find(v => v.date === item.date)!.source; } mark(item); }
         }
         candidate.warnings.push(...response.warnings);
@@ -383,7 +388,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       }} /></td><td>3!B{r}</td></tr>)}</tbody></table>{!ES_COSTS.some(([, code, label]) => `${code} ${label}`.toLocaleLowerCase().includes(costQuery.toLocaleLowerCase())) && <p className="es-empty">일치하는 비목이 없습니다. 검색어를 지우면 전체 비목을 볼 수 있습니다.</p>}</div>{costDetail}</div></>}
       {tab === 'deductions' && <><h2>기성·직접지급·선금 공제</h2><div className="es-grid">{([['paidWorkExclusion', '기성 제외액'], ['alreadyExcludedDirect', '이미 기성에 포함한 직접지급액'], ['advanceContract', '선금 대상 계약금액'], ['advancePaid', '선금 지급액'], ['priorCompletion', '선금 대상 이전 기성액'], ['otherDeduction', '기타 공제액']] as const).map(([k, label]) => <div key={k}>{field(label + ' (원)', input[k], v => mutate(n => { n[k] = v; }))}</div>)}
       <label className="es-field">월별 직접지급액 (원 · 한 줄에 한 금액)<textarea value={input.directPaid.map(esFormatNumber).join('\n')} onChange={e => mutate(n => { n.directPaid = e.target.value === '' ? [] : e.target.value.replaceAll(',', '').split('\n'); })} /></label></div></>}
-      {tab === 'sources' && <><div className="es-source-actions"><button className="es-primary" onClick={() => void fetchSources()}>ES 요율정보 가져오기</button><span>조달청: 보험·부금 요율 · 대한건설협회: 노임 · ECOS: 재료지수 · 국가법령: 건강보험 대조</span></div><p className="es-access">자동조회 후 값을 직접 수정하거나 기존값을 유지할 수 있습니다. 조달청·대한건설협회 자료에는 추가 인증키가 필요 없습니다. 건강·연금은 사업주 부담률, 요양은 건강보험료 대비 비율입니다.</p>
+      {tab === 'sources' && <><div className="es-source-actions"><button className="es-primary" onClick={() => void fetchSources()}>ES 요율정보 가져오기</button><span>조달청: 보험·부금 요율 · 대한건설협회: 노임 · ECOS: 재료지수 · 국가법령: 건강보험 대조</span></div><p className="es-access">자동조회 후 값을 직접 수정하거나 기존값을 유지할 수 있습니다. 조달청·대한건설협회 자료에는 추가 인증키가 필요 없습니다. 건강·연금은 해당 공표의 직접노무비 기준률, 요양은 건강보험료 대비 비율입니다. 과거 공사원가 산정률과 보수 기준 법정률은 분모가 달라 구분합니다.</p>
         <div className="es-table-wrap es-source-matrix"><table><caption>기간별 원자료 · 같은 항목을 가로로 비교하고 수정하세요.</caption><thead><tr><th>항목 / 단위</th><th>입찰 기준일</th><th>직전일</th><th>현재 조정일</th></tr></thead><tbody>{['적용일', '노임 (원)', '광산품', '공산품', '전력·수도·가스·폐기물', '농림수산품', ...RATE_LABELS.map(label => label + ' 요율 (%)'), '출처·자료월·확인 메모'].map((label, row) => <tr key={label}><th scope="row">{label}</th>{(['base', 'previous', 'current'] as const).map(key => {
           const p = key === 'base' ? input.base : input[key].period;
           const value = row === 0 ? p.date : row === 1 ? p.wage : row < 6 ? p.materials[row - 2] : row < 13 ? p.rates[ES_RATE_KEYS[row - 6]] : p.source;
