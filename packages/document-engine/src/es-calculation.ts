@@ -1,5 +1,6 @@
 import { EsDecimal, esDecimal as d, esSum } from './es-decimal';
 import { validateEsSourceHistory, type EsSourceHistory } from './es-source-history';
+import { validateEsPrintSettings, type EsPrintSettings } from './es-print-settings';
 
 export const ES_ENGINE_VERSION = 'es-v2-legacy-1';
 export const ES_COSTS = [
@@ -74,6 +75,7 @@ export interface EsInput {
   note: string;
   contract?: Record<EsContractKey, string>;
   sourceHistory?: EsSourceHistory;
+  printSettings?: EsPrintSettings;
 }
 const blankPeriod = (): EsPeriod => ({ date: '', wage: '', materials: ['', '', '', ''], rates: Object.fromEntries(ES_RATE_KEYS.map(key => [key, ''])) as EsPeriod['rates'], source: '' });
 const blankPair = (label: string): EsPair => ({ label, baseAverage: '', comparisonAverage: '', commonCount: '', source: '', baseSum: '', comparisonSum: '', baseLabel: '', comparisonLabel: '' });
@@ -111,6 +113,7 @@ export function validateEsInput(value: unknown): EsInput {
     costs: Object.fromEntries(ES_COSTS.map(([row]) => [row, num(costs[String(row)])])), base: period(v.base), current: comparison(v.current), previous: comparison(v.previous),
     paidWorkExclusion: num(v.paidWorkExclusion), directPaid: v.directPaid.map(num), alreadyExcludedDirect: num(v.alreadyExcludedDirect), advanceContract: num(v.advanceContract), advancePaid: num(v.advancePaid), priorCompletion: num(v.priorCompletion), otherDeduction: num(v.otherDeduction), note: text(v.note, 10000),
     ...(v.sourceHistory === undefined ? {} : { sourceHistory: validateEsSourceHistory(v.sourceHistory) }),
+    ...(v.printSettings === undefined ? {} : { printSettings: validateEsPrintSettings(v.printSettings) }),
     ...(v.contract === undefined ? {} : { contract: Object.fromEntries(ES_CONTRACT_FIELDS.map(([key, , type]) => { const item = object(v.contract)[key] ?? ''; const val = type === 'number' ? num(item) : text(item, type === 'date' ? 10 : 300); if (type === 'date' && val) previousEsDay(val); return [key, val]; })) as Record<EsContractKey, string> }) };
 }
 

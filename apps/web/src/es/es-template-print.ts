@@ -1,6 +1,7 @@
 import { esCellAddress, esCellPosition, esTemplateColor, esTemplateStyles, esTemplateFooter, type EsTemplateGrid, type EsCellStyle } from '../../../../packages/document-engine/src/es-template';
 import { esDecimal as d } from '../../../../packages/document-engine/src/es-decimal';
 import { esContentsDrawingSvg } from '../../../../packages/document-engine/src/es-template-drawing';
+import { esPrintMargins, type EsPrintSettings } from '../../../../packages/document-engine/src/es-print-settings';
 
 const esc = (v: unknown) => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 const color = esTemplateColor;
@@ -33,18 +34,19 @@ export function esPrintNumber(value: string, format: string): string {
   return restore(pattern.replace(numeric[0], number));
 }
 /** Complete original print-area grid. Merged row groups cannot cross a page boundary. */
-export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,string>, measure: HTMLElement): string[] {
+export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,string>, measure: HTMLElement, settings?: EsPrintSettings): string[] {
+  const margins = esPrintMargins(settings);
   // Divider sheets are single presentation pages, not 47 rows of blank cells.
   // Keep their actual wording; wrap the title inside a centered A4 content box.
   if (/^붙[1-5]$/.test(grid.name)) {
     const extra = Object.entries(values).filter(([cell, text]) => text.trim() && !['A1','B7','B8','D47'].includes(cell));
-    return [`<section class="es-paper es-original es-divider" data-sheet="${esc(grid.name)}" data-first-row="1" data-last-row="47" style="padding:12mm"><header data-cell="A1" style="font-size:9pt;border-bottom:1px solid #777;padding-bottom:3mm;overflow-wrap:anywhere">${esc(values.A1 ?? '')}</header><div style="margin-top:25mm;text-align:center"><div data-cell="B7" style="display:inline-block;padding:2mm 6mm;background:#222;color:white;font-size:14pt;font-weight:700">${esc(values.B7 ?? grid.name)}</div><h1 data-cell="B8" style="margin:6mm 0;font-size:18pt;line-height:1.5;white-space:normal;overflow-wrap:anywhere;text-align:center;border-bottom:1px solid #777;padding-bottom:5mm">${esc(values.B8 ?? '')}</h1></div><div style="margin:10mm 4mm;font-size:11pt;line-height:1.7">${extra.map(([cell,text])=>`<div data-cell="${esc(cell)}">${esc(text)}</div>`).join('')}</div><footer style="left:12mm;right:12mm;bottom:12mm;border:0">${esc(values.D47 ?? '')}</footer></section>`];
+    return [`<section class="es-paper es-original es-divider" data-sheet="${esc(grid.name)}" data-first-row="1" data-last-row="47" style="padding:${margins.top}mm 12mm ${margins.bottom}mm"><header data-cell="A1" style="font-size:9pt;border-bottom:1px solid #777;padding-bottom:3mm;overflow-wrap:anywhere">${esc(values.A1 ?? '')}</header><div style="margin-top:25mm;text-align:center"><div data-cell="B7" style="display:inline-block;padding:2mm 6mm;background:#222;color:white;font-size:14pt;font-weight:700">${esc(values.B7 ?? grid.name)}</div><h1 data-cell="B8" style="margin:6mm 0;font-size:18pt;line-height:1.5;white-space:normal;overflow-wrap:anywhere;text-align:center;border-bottom:1px solid #777;padding-bottom:5mm">${esc(values.B8 ?? '')}</h1></div><div style="margin:10mm 4mm;font-size:11pt;line-height:1.7">${extra.map(([cell,text])=>`<div data-cell="${esc(cell)}">${esc(text)}</div>`).join('')}</div><footer style="left:12mm;right:12mm;bottom:${settings?.footer.mode === 'custom' ? 24 : 12}mm;border:0">${esc(values.D47 ?? '')}</footer></section>`];
   }
   const [lastRow,lastCol] = esCellPosition(grid.printArea.split(':').at(-1)!);
   const compactHeights = new Map<number, number>();
   const rowHeight = (r: number) => grid.hiddenRows.includes(r) ? 0 : compactHeights.get(r) ?? grid.rowHeights[r] ?? grid.defaultRowHeight;
   const widths = Array.from({length:lastCol},(_,i) => (grid.columns[i+1]?.width ?? 8.43)*7+5);
-  const width = widths.reduce((a,b)=>a+b,0), margins = {left:12,right:12,top:12,bottom:16};
+  const width = widths.reduce((a,b)=>a+b,0);
   // Fill the printable width instead of applying the legacy reduction a second time.
   const scale = (210-margins.left-margins.right)*96/25.4/width;
   const left = margins.left;
@@ -80,7 +82,7 @@ export function paginateEsTemplate(grid: EsTemplateGrid, values: Record<string,s
       }
       rows+=`<tr data-row="${r}" style="height:${rowHeight(r)}pt;${rowHeight(r)===0?'display:none':''}">${cells}</tr>`;
     }
-    const footer = esTemplateFooter(grid) ? `<footer style="bottom:7mm;font-size:9pt;border:0;padding:0">- __ES_PAGE_NUMBER__ -</footer>` : '';
+    const footer = (!settings || settings.footer.mode === 'original') && esTemplateFooter(grid) ? `<footer style="bottom:7mm;font-size:9pt;border:0;padding:0">- __ES_PAGE_NUMBER__ -</footer>` : '';
     return `<section class="es-paper es-original" data-sheet="${esc(grid.name)}" data-first-row="${from}" data-last-row="${to}" style="padding:0"><div style="position:absolute;top:${margins.top}mm;left:${left}mm"><div style="position:relative;width:${width}px;zoom:${scale}"><table style="border-collapse:collapse;table-layout:fixed;width:${width}px;min-width:0;line-height:1.15"><colgroup>${widths.map(w=>`<col style="width:${w}px">`).join('')}</colgroup><tbody>${rows}</tbody></table>${grid.name==='목록' && from===1?esContentsDrawingSvg(widths,rowHeight):''}</div></div>${footer}</section>`;
   };
   measure.innerHTML=render([1,lastRow]);

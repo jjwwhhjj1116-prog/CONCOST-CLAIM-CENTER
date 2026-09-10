@@ -3,6 +3,7 @@ import { buildEsSheets, parseEsPages, type EsOutputSheet } from '../../../../pac
 import type { EsInput, EsResult } from '../../../../packages/document-engine/src/es-calculation';
 import { apiRequest } from '../api';
 import { paginateEsTemplate } from './es-template-print';
+import { esBandText, type EsPrintSettings } from '../../../../packages/document-engine/src/es-print-settings';
 
 const escape = (value: unknown) => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 function readyWithin<T>(promise: Promise<T>, label: string): Promise<T> {
@@ -33,10 +34,10 @@ const printDocument = (html: string) => '<!doctype html><html lang="ko"><head><m
 function tableHeader(sheet: EsOutputSheet) { return '<thead><tr>' + sheet.columns.map(c => '<th>' + escape(c) + '</th>').join('') + '</tr></thead>'; }
 function tableRow(row: string[]) { return '<tr>' + row.map(c => '<td>' + escape(c) + '</td>').join('') + '</tr>'; }
 function header(sheet: EsOutputSheet, title: string) { return `<header><p class="es-draft">초안 · LEGACY_REPLAY · 원본 출력배치 대조 미완료</p><h1>${escape(sheet.name)} · ${escape(sheet.title)}</h1><p>${escape(title)}</p></header>`; }
-function paginate(sheets: EsOutputSheet[], title: string, measure: HTMLElement): string[] {
+function paginate(sheets: EsOutputSheet[], title: string, measure: HTMLElement, settings?: EsPrintSettings): string[] {
   const output: string[] = [];
   for (const sheet of sheets) {
-    if (sheet.grid && sheet.values) { output.push(...paginateEsTemplate(sheet.grid, sheet.values, measure)); continue; }
+    if (sheet.grid && sheet.values) { output.push(...paginateEsTemplate(sheet.grid, sheet.values, measure, settings)); continue; }
     measure.innerHTML = '<style>' + PRINT_CSS.replace(/body\s*\{/g, '.es-measure {').replace(/\*\s*\{/g, '.es-paper * {') + '</style><section class="es-paper" style="margin:0;height:auto">' + header(sheet, title) + '<table>' + tableHeader(sheet) + '<tbody>' + sheet.rows.map(tableRow).join('') + '</tbody></table></section>';
     const page = measure.querySelector<HTMLElement>('.es-paper')!;
     // A4 body is 261mm; reserve 8mm below the table for the original bundle footer.
@@ -54,6 +55,15 @@ function paginate(sheets: EsOutputSheet[], title: string, measure: HTMLElement):
     if (chunk.length || !sheet.rows.length) flush();
   }
   return output;
+}
+export function decorateEsPrintPage(html: string, index: number, total: number, revision: number, settings?: EsPrintSettings, partial = false): string {
+  const bands = (['header','footer'] as const).map(key => {
+    const band = settings?.[key];
+    if (band?.mode !== 'custom') return '';
+    return `<div data-es-print-band="${key}" style="position:absolute;${key === 'header' ? 'top' : 'bottom'}:5mm;left:12mm;right:12mm;max-height:12mm;font:9pt/1.4 'Malgun Gothic',sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;text-align:${band.align};color:#111">${escape(esBandText(band.text, index + 1, total))}</div>`;
+  }).join('');
+  const footer = !settings || settings.footer.mode === 'original' ? `<footer>v${revision} · ${index + 1} / ${total}${partial ? ' · 발췌본' : ''} · 검토용 초안</footer>` : '';
+  return html.replace('__ES_PAGE_NUMBER__', String(index + 1)).replace('__ES_FOOTER__', footer).replace(/<\/section>$/, bands + '</section>');
 }
 export function EsPrintPreview({ documentId, run, selection }: { documentId: string; run: { id: string; revision: number; input: EsInput; result: EsResult }; selection: string[] }) {
   const [pages, setPages] = useState<string[]>([]), [range, setRange] = useState(''), [confirmed, setConfirmed] = useState('');
@@ -73,7 +83,7 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
     void readyWithin(loaded, '인쇄 레이아웃').then(() => readyWithin(measuringFrame.contentDocument!.fonts.ready, '글꼴')).then(() => {
       if (!active) return;
       // Measure with exactly the print stylesheet, not the application form CSS.
-      const generated = paginate(buildEsSheets(run.input, run.result, selection), run.input.title, measuringFrame.contentDocument!.body);
+      const generated = paginate(buildEsSheets(run.input, run.result, selection), run.input.title, measuringFrame.contentDocument!.body, run.input.printSettings);
       measuringFrame.remove(); setPages(generated);
     }).catch(e => { if (active) setError(e instanceof Error ? e.message : '미리보기를 만들지 못했습니다.'); }).finally(() => { measuringFrame.remove(); if (active) setBusy(false); });
     return () => { active = false; measuringFrame.remove(); };
@@ -81,7 +91,7 @@ export function EsPrintPreview({ documentId, run, selection }: { documentId: str
   useEffect(() => () => { printAttempt.current++; frame.current?.remove(); }, []);
   let selectedPages: number[] = [];
   try { if (pages.length) selectedPages = parseEsPages(range, pages.length); } catch { /* Shown on confirmation; no implicit print fallback. */ }
-  const decorate = (html: string, index: number, partial = false) => html.replace('__ES_PAGE_NUMBER__', String(index + 1)).replace('__ES_FOOTER__', `<footer>v${run.revision} · ${index + 1} / ${pages.length}${partial ? ' · 발췌본' : ''} · 검토용 초안</footer>`);
+  const decorate = (html: string, index: number, partial = false) => decorateEsPrintPage(html, index, pages.length, run.revision, run.input.printSettings, partial);
   const fitPreview = () => {
     const iframe = preview.current;
     if (iframe) iframe.contentDocument?.documentElement?.style.setProperty('--es-preview-scale', zoom === 'fit' ? String(Math.max(.1,(iframe.clientWidth-24)/(210*96/25.4))) : String(Number(zoom)));

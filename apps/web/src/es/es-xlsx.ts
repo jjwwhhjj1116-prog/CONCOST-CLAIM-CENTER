@@ -284,11 +284,11 @@ export async function exportEsWorking(input: EsInput): Promise<Uint8Array> {
     { name: 'ES_입력', area: `A1:B${bindings.length + 1}`, rows: [['입력 항목', '값 (이 열만 수정)'], ...bindings.map(b => [b.label, b.value])] },
     { name: 'ES_계산', area: 'A1:J72', ...chain },
     { name: 'ES_작업정보', area: `A1:C${chunks.length + 3}`, hidden: true, rows: [['CLAIM_ES_WORKING_V2', await hash(snapshot), 'CHAIN_1'], ['', String(chunks.length)], ['', ''], ...chunks.map(chunk => [chunk])] },
-    ...esTemplateGrids.map(grid => ({name:grid.name,area:grid.printArea,rows:[],templateXml:esTemplateSheetXml(grid,esTemplateValues(normalized,calculateEs(normalized),grid))})),
+    ...esTemplateGrids.map(grid => ({name:grid.name,area:grid.printArea,rows:[],templateXml:esTemplateSheetXml(grid,esTemplateValues(normalized,calculateEs(normalized),grid),{},normalized.printSettings)})),
   ]);
 }
-function reportSheet(sheet: EsOutputSheet): SheetXml {
-  if(sheet.grid && sheet.values) return {name:sheet.name,area:sheet.printArea,rows:[],templateXml:esTemplateSheetXml(sheet.grid,sheet.values)};
+function reportSheet(sheet: EsOutputSheet, settings?: EsInput['printSettings']): SheetXml {
+  if(sheet.grid && sheet.values) return {name:sheet.name,area:sheet.printArea,rows:[],templateXml:esTemplateSheetXml(sheet.grid,sheet.values,{},settings)};
   const [end] = sheet.printArea.split(':').slice(-1), maxRows = Number(end.match(/\d+/)![0]), cols = end.match(/^[A-Z]+/)![0].charCodeAt(0) - 64;
   const rows = [[sheet.title], ['초안 · LEGACY_REPLAY · 원본 출력배치 대조 미완료'], sheet.columns, ...sheet.rows];
   if (rows.length > maxRows) throw new Error(`${sheet.name}: 인쇄영역보다 내용이 많습니다. 출력 배치 검토가 필요합니다.`);
@@ -296,5 +296,5 @@ function reportSheet(sheet: EsOutputSheet): SheetXml {
   return { name: sheet.name, area: sheet.printArea, columns: cols, rows: rows.map(row => cols === 1 ? [row.join(' : ')] : row.length > cols ? [...row.slice(0, cols - 1), row.slice(cols - 1).join(' / ')] : row) };
 }
 export function exportEsReport(input: EsInput, result: EsResult, selection: readonly string[]): Uint8Array {
-  return makeXlsx(buildEsSheets(input, result, selection).map(reportSheet));
+  return makeXlsx(buildEsSheets(input, result, selection).map(sheet => reportSheet(sheet, input.printSettings)));
 }

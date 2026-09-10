@@ -5,6 +5,8 @@ import { ES_COSTS, ES_RATE_KEYS, ES_CONTRACT_FIELDS, newEsContract, calculateEs,
 import { ES_SHEETS } from '../../../../packages/document-engine/src/es-output';
 import { exportEsReport, exportEsWorking, importEsWorkbook, type EsImportPreview } from './es-xlsx';
 import { EsPrintPreview } from './EsPrintPreview';
+import { EsTutorial } from './EsTutorial';
+import { EsPrintSettingsEditor } from './EsPrintSettingsEditor';
 import { resolveEsSources, syncEsSourceDates, esElapsedDays } from '../../../../packages/document-engine/src/es-source-history';
 import { applyEsEcosSources, mergeEsSourceCandidates, type EsEcosItem } from '../../../../packages/document-engine/src/es-ecos';
 import { applyEsPublicSources, esSourceValue, setEsSourceValue, type EsPublicSourceResult, type EsPublicSourceItem, type EsSourceField } from '../../../../packages/document-engine/src/es-source-candidates';
@@ -54,6 +56,8 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   const [savedSignature, setSavedSignature] = useState(() => signature(newEsInput(), ''));
   const [tab, setTab] = useState<EsTab>('input');
   const [guideOpen, setGuideOpen] = useState(false), [costQuery, setCostQuery] = useState('');
+  const [welcomeOpen, setWelcomeOpen] = useState(() => { try { return localStorage.getItem('es-tutorial-v1-dismissed') !== 'yes'; } catch { return true; } });
+  const dismissWelcome = () => { setWelcomeOpen(false); try { localStorage.setItem('es-tutorial-v1-dismissed', 'yes'); } catch { /* Storage can be disabled. */ } };
   const [wideMode, setWideMode] = useState(false);
   const [selectedRow, setSelectedRow] = useState<number>(11), [reviewPeriod, setReviewPeriod] = useState<'current' | 'previous'>('current');
   const [importPreview, setImportPreview] = useState<EsImportPreview | null>(null);
@@ -70,6 +74,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   useEffect(() => { if (error) editorScroll.current?.scrollTo({ top: 0 }); }, [error]);
   const history = useRef<EsInput[]>([]), future = useRef<EsInput[]>([]), workbench = useRef<HTMLElement>(null);
   const goTab = (next: EsTab) => { setTab(next); editorScroll.current?.scrollTo({ top: 0 }); };
+  useEffect(() => { if (mode === 'editor' && new URLSearchParams(search).get('tutorial') === '1') setGuideOpen(true); }, [mode, search]);
   const revealMissingSource = () => {
     goTab('sources');
     window.requestAnimationFrame(() => {
@@ -274,6 +279,8 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   });
   if (mode === 'list') return <section className="es-studio es-document-list"><header className="es-heading"><div><h1 ref={listHeading} tabIndex={-1}>ES 산출프로그램</h1><p>사건 등록 없이 산출서를 만들고, 필요할 때 프로젝트와 연결하세요.</p></div><button disabled={busy} className="es-primary" onClick={() => onNavigate('/es/editor')}>＋ 새 산출서</button></header>
     <p className="es-access">작성자·관리자만 접근 · API 키 없이 수동 입력·Excel 가져오기</p>
+    <div className="es-tutorial-entry"><div><h2>처음 사용하는 ES 산출프로그램</h2><p>기본입력부터 계산 근거 확인, A4 출력까지 6단계를 따라가세요.</p></div><button className="es-primary" onClick={() => { dismissWelcome(); onNavigate('/es/editor?tutorial=1'); }}>단계별 튜토리얼 시작</button></div>
+    {welcomeOpen && <aside className="es-tutorial-intro"><p>기존 산출서는 목록에서 열고 <b>작업 안내</b>를 누르세요. 새 산출서에서는 Excel 가져오기 또는 직접 입력으로 시작합니다. 안내만 보는 동안 문서는 저장되지 않습니다.</p><button onClick={dismissWelcome}>알겠습니다 · 설명 접기</button></aside>}
     {error && <p role="alert" className="es-error">{error}</p>}
     {notice && <p role="status" className="es-notice">{notice}</p>}
     <div className="es-list-toolbar"><div role="group" aria-label="산출서 목록 구분"><button aria-pressed={!showDeleted} disabled={busy} onClick={() => { setShowDeleted(false); setQuery(''); setNotice(''); }}>산출서 목록</button><button aria-pressed={showDeleted} disabled={busy} onClick={() => { setShowDeleted(true); setQuery(''); setNotice(''); }}>삭제한 산출서</button></div><button disabled={busy || loading} onClick={() => setListRefresh(v => v + 1)}>목록 새로고침</button></div>
@@ -297,30 +304,30 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     {error && <p className="es-error" role="alert">{error} {document && <button onClick={() => { if (window.confirm('현재 입력을 버리고 저장본을 다시 불러올까요?')) window.location.reload(); }}>저장본 다시 확인</button>}</p>}
     {notice && <p role="status" className="es-notice">{notice}</p>}
     {loading ? <p role="status">저장본을 불러오는 중입니다.</p> : loadFailed ? <p>원본을 불러오지 못해 덮어쓰기를 차단했습니다.</p> : <>
-      {guideOpen && <aside className="es-work-guide" aria-label="ES 작업 안내"><strong>원본에서 시작해, 계산 근거까지 확인하세요.</strong><ol><li>기존 Excel이 있으면 <button onClick={() => importPicker.current?.click()}>Excel 가져오기</button>로 입력과 이력을 함께 불러옵니다.</li><li><button onClick={() => goTab('input')}>기본입력</button>에서 공사·기준일을 확인하고, <button onClick={() => goTab('sources')}>지수·요율</button>에서 해당 기간 자료를 비교합니다.</li><li><button onClick={() => goTab('result')}>계산검토</button>에서 비목을 누르면 계산값을 확인할 수 있습니다. 저장·계산 후 출력합니다.</li></ol><p>노란색: 원본 수동 입력 · 흰색: 선택 입력 · —: 자료 없음(0과 다름)</p><p>신규비목·후속 차수·복수 선금은 미지원입니다. 현재 계산·출력은 공식 제출용으로 승인되지 않은 검토용 초안입니다.</p></aside>}
+      {guideOpen && <EsTutorial step={stepIndex} onStep={index => goTab(ES_STEPS[index][0])} onClose={() => setGuideOpen(false)} />}
       <div className="es-stage-heading"><div><h2>{ES_STEPS[stepIndex][1]}</h2><p>{ES_STEPS[stepIndex][2]} · 입력값을 바꾸면 화면 계산에 즉시 반영됩니다.</p></div><span className="es-draft-label">검토용 초안 · 제출 전 검수 필요</span></div>
       <fieldset disabled={busy} className="es-workspace">
       {tab === 'input' && <div className="es-basic-input">
         <p className="es-input-guide">원본 기본입력과 같은 노란 19칸은 수동 입력입니다. 선금처럼 해당하지 않는 항목은 0 또는 빈 값으로 둘 수 있습니다. 흰색은 추가 계약정보, 오른쪽 표는 입력·원자료에서 계산하거나 선택한 값입니다.</p>
         <div className="es-source-actions"><strong>계약현황 기본입력</strong><button className="es-primary" onClick={() => void fetchSources()}>ES 요율정보 가져오기</button><button onClick={() => setTab('sources')}>원자료 직접 입력·확인</button></div>
         <div className="es-basic-ledger"><div>
-        <section aria-labelledby="es-project-heading"><h2 id="es-project-heading">1. 공사정보</h2><div className="es-basic-grid es-basic-grid--wide">
+        <section aria-labelledby="es-project-heading"><h2 id="es-project-heading" className="es-input-section-title"><span>1</span> 공사정보</h2><div className="es-basic-grid es-basic-grid--wide">
           {field('공사명 · 산출서 제목', input.title, v => mutate(n => { n.title = v; }), 'text', 'C8')}
           <label className="es-field">프로젝트 연결 (선택)<select value={caseId} onChange={e => setCaseId(e.target.value)} aria-describedby="es-project-help"><option value="">연결 없이 독립 산출서</option>{caseId && !projects.some(p => p.id === caseId) && <option value={caseId}>현재 연결 프로젝트 (목록 확인 필요)</option>}{projects.map(p => <option key={p.id} value={p.id}>{p.caseNumber} · {p.title}</option>)}</select></label>
           {field('수요기관 · 발주자', input.client, v => mutate(n => { n.client = v; }), 'text', 'C7')}{field('시공사', input.contractor, v => mutate(n => { n.contractor = v; }), 'text', 'C9')}
         </div><p id="es-project-help" className="es-field-help">프로젝트 연결은 선택 사항입니다. 목록에서 선택한 뒤 저장하면 연결됩니다. 연결만으로 계약정보가 자동 입력되지는 않으며, 기존 입력은 유지됩니다.</p></section>
-        <section aria-labelledby="es-dates-heading"><h2 id="es-dates-heading">2. 산출기준일</h2><div className="es-basic-grid">
+        <section aria-labelledby="es-dates-heading"><h2 id="es-dates-heading" className="es-input-section-title"><span>2</span> 산출기준일</h2><div className="es-basic-grid">
           {field('입찰 기준일 (초회)', input.baseDate, v => mutate(n => { n.baseDate = v; }), 'date', 'C10')}{field('조정기준일', input.adjustmentDate, v => mutate(n => { n.adjustmentDate = v; }), 'date', 'C12')}
           {contractFields(['priorAdjustmentDate', 'reportDate'])}
         </div></section>
-        <section aria-labelledby="es-contract-heading"><h2 id="es-contract-heading">3. 전체계약 · 공사기간</h2><div className="es-basic-grid">
+        <section aria-labelledby="es-contract-heading"><h2 id="es-contract-heading" className="es-input-section-title"><span>3</span> 전체계약 · 공사기간</h2><div className="es-basic-grid">
           {field('총계약금액 (원)', input.contractAmount, v => mutate(n => { n.contractAmount = v; }), 'text', 'C16')}
           {contractFields(['contractDate', 'startDate', 'endDate', 'firstContractDate', 'contractKind', 'bidRate', 'vatMode'])}
         </div></section>
-        <section aria-labelledby="es-current-heading"><h2 id="es-current-heading">4. 금차계약 · 공사기간</h2><div className="es-basic-grid">
+        <section aria-labelledby="es-current-heading"><h2 id="es-current-heading" className="es-input-section-title"><span>4</span> 금차계약 · 공사기간</h2><div className="es-basic-grid">
           {contractFields(['currentContractAmount', 'currentContractDate', 'currentStartDate', 'currentEndDate'])}
         </div></section>
-        <section aria-labelledby="es-conditions-heading"><h2 id="es-conditions-heading">5. 적용조건 · 공정</h2><div className="es-basic-grid">
+        <section aria-labelledby="es-conditions-heading"><h2 id="es-conditions-heading" className="es-input-section-title"><span>5</span> 적용조건 · 공정</h2><div className="es-basic-grid">
           {contractFields(['legalSystem', 'employmentGrade', 'retirementTrade', 'advanceDate', 'plannedProgress', 'actualProgress', 'technicalDepartment', 'technicalManager'])}
           {field('산업안전 요율 (%)', input.base.rates.safety, v => mutate(n => { n.base.rates.safety = v; n.current.period.rates.safety = v; n.previous.period.rates.safety = v; }), 'text', 'C22')}
           {field('선금 대상금액 (원)', input.advanceContract, v => mutate(n => { n.advanceContract = v; }), 'text', 'E10')}
@@ -367,7 +374,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
         <p className="es-field-help">제출 형식 Excel은 값 고정·선택 시트 전체를 내보냅니다. 페이지 지정은 인쇄에만 적용됩니다. 현재 출력은 검수용 초안입니다.</p>
         {!selection.length && <p className="es-warning">선택한 시트가 없습니다. 출력할 시트를 선택하세요.</p>}
         <div className="es-actions"><button disabled={!run || dirty || !selection.length || run.revision !== document?.revision} onClick={() => reportExport(true)}>전체 17시트 Excel</button><button disabled={!run || dirty || !selection.length || run.revision !== document?.revision} onClick={() => reportExport(false)}>선택 시트 Excel</button></div>
-        </aside><div className="es-output-preview">{run && !dirty && run.revision === document?.revision ? <EsPrintPreview documentId={document.id} run={run} selection={selection} /> : <div className="es-output-empty"><EsIcon path={ES_STEPS[5][3]} /><h2>출력할 저장·계산본이 필요합니다.</h2><p>현재 입력을 저장·계산한 뒤 미리보기와 출력이 열립니다.</p><button className="es-primary" disabled={busy || loading || loadFailed} onClick={() => void save(true)}>저장·계산</button><button onClick={() => goTab('result')}>부족한 입력 확인</button></div>}</div>
+        </aside><div className="es-output-preview"><EsPrintSettingsEditor value={input.printSettings} onChange={value => mutate(n => { if (value) n.printSettings = value; else delete n.printSettings; })} />{run && !dirty && run.revision === document?.revision ? <EsPrintPreview documentId={document.id} run={run} selection={selection} /> : <div className="es-output-empty"><EsIcon path={ES_STEPS[5][3]} /><h2>출력할 저장·계산본이 필요합니다.</h2><p>현재 입력을 저장·계산한 뒤 미리보기와 출력이 열립니다.</p><button className="es-primary" disabled={busy || loading || loadFailed} onClick={() => void save(true)}>저장·계산</button><button onClick={() => goTab('result')}>부족한 입력 확인</button></div>}</div>
       </div>}
       </fieldset>
     </>}

@@ -1,4 +1,5 @@
 import { esCellAddress, esCellPosition, esTemplateColor, esTemplateStyles, esTemplateFooter, type EsTemplateGrid } from '../../../../packages/document-engine/src/es-template';
+import { esBandExcel, type EsPrintSettings } from '../../../../packages/document-engine/src/es-print-settings';
 const esc=(v:unknown)=>String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g,'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 const attrs=(o:Record<string,unknown>)=>Object.entries(o).map(([k,v])=>` ${k}="${esc(v)}"`).join('');
 const rgb=(v:unknown)=>'FF'+esTemplateColor(v).slice(1);
@@ -12,7 +13,7 @@ export function esTemplateStylesXml(): string {
   const xfs=esTemplateStyles.map((s,i)=>`<xf numFmtId="${164+i}" fontId="${i+2}" fillId="${i+2}" borderId="${i+1}" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment${attrs(s.alignment??{})}/></xf>`).join('');
   return `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="${esTemplateStyles.length}">${formats}</numFmts><fonts count="${esTemplateStyles.length+2}">${baseFonts}${fonts}</fonts><fills count="${esTemplateStyles.length+2}"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>${fills}</fills><borders count="${esTemplateStyles.length+1}"><border><left/><right/><top/><bottom/><diagonal/></border>${borders}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${esTemplateStyles.length+2}">${baseXfs}${xfs}</cellXfs></styleSheet>`;
 }
-export function esTemplateSheetXml(grid:EsTemplateGrid,values:Record<string,string>,formulas:Record<string,string>={}):string {
+export function esTemplateSheetXml(grid:EsTemplateGrid,values:Record<string,string>,formulas:Record<string,string>={},settings?:EsPrintSettings):string {
   const [lastRow,lastCol]=esCellPosition(grid.printArea.split(':').at(-1)!); const styles=new Map(grid.cellStyles);
   let rows='';
   for(let r=1;r<=lastRow;r++) {
@@ -27,6 +28,10 @@ export function esTemplateSheetXml(grid:EsTemplateGrid,values:Record<string,stri
     rows+=`<row r="${r}" ht="${grid.rowHeights[r]??grid.defaultRowHeight}" customHeight="1"${grid.hiddenRows.includes(r)?' hidden="1"':''}>${cells}</row>`;
   }
   const pageSetup = Object.fromEntries(Object.entries(grid.pageSetup).filter(([key]) => !key.includes(':') && key !== 'id'));
-  const footer = esTemplateFooter(grid);
-  return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${grid.printArea}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="${grid.defaultRowHeight}"/><cols>${Object.entries(grid.columns).map(([n,c])=>`<col min="${n}" max="${n}" width="${c.width}" customWidth="1" style="${(c.style??0)+2}"/>`).join('')}</cols><sheetData>${rows}</sheetData>${grid.merges.length?`<mergeCells count="${grid.merges.length}">${grid.merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>`:''}<printOptions horizontalCentered="${grid.horizontalCentered ? 1 : 0}"/><pageMargins${attrs(grid.margins)}/><pageSetup${attrs(pageSetup)}/><headerFooter alignWithMargins="0">${footer ? `<oddFooter>${esc(footer)}</oddFooter>` : ''}</headerFooter></worksheet>`;
+  const footer = !settings || settings.footer.mode === 'original' ? esTemplateFooter(grid) : settings.footer.mode === 'custom' ? esBandExcel(settings.footer) : '';
+  const header = settings?.header.mode === 'custom' ? esBandExcel(settings.header) : '';
+  const margins: Record<string,string | number> = {...grid.margins};
+  if (settings?.header.mode === 'custom') { margins.top = Math.max(Number(margins.top), 24/25.4); margins.header = 5/25.4; }
+  if (settings?.footer.mode === 'custom') { margins.bottom = Math.max(Number(margins.bottom), 24/25.4); margins.footer = 5/25.4; }
+  return `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="${grid.printArea}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="${grid.defaultRowHeight}"/><cols>${Object.entries(grid.columns).map(([n,c])=>`<col min="${n}" max="${n}" width="${c.width}" customWidth="1" style="${(c.style??0)+2}"/>`).join('')}</cols><sheetData>${rows}</sheetData>${grid.merges.length?`<mergeCells count="${grid.merges.length}">${grid.merges.map(m=>`<mergeCell ref="${m}"/>`).join('')}</mergeCells>`:''}<printOptions horizontalCentered="${grid.horizontalCentered ? 1 : 0}"/><pageMargins${attrs(margins)}/><pageSetup${attrs(pageSetup)}/><headerFooter alignWithMargins="0">${header ? `<oddHeader>${esc(header)}</oddHeader>` : ''}${footer ? `<oddFooter>${esc(footer)}</oddFooter>` : ''}</headerFooter></worksheet>`;
 }

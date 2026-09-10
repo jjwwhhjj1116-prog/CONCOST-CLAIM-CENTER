@@ -65,7 +65,8 @@ test('CF124 semantic groups retain unique headings and the existing busy fieldse
   assert.equal(ids.length, 5); assert.equal(new Set(ids).size, 5);
   for (const id of ids) assert.ok(basicText.includes(`<section aria-labelledby="${id}">`));
   const headings = nodes(basic).filter(ts.isJsxElement).filter(node => node.openingElement.tagName.getText(tree) === 'h2' && node.openingElement.attributes.properties.some(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'id'));
-  assert.deepEqual(headings.map(node => node.children.map(child => child.getText(tree)).join('').trim().match(/^[1-5]\./)?.[0]), ['1.', '2.', '3.', '4.', '5.']);
+  // CF138 numbers are inside visual title blocks; assert the accessible text sequence.
+  assert.deepEqual(headings.map(node => nodes(node).filter(ts.isJsxText).map(child => child.text).join('').trim().match(/^[1-5]/)?.[0]), ['1', '2', '3', '4', '5']);
   assert.match(source, /<fieldset disabled=\{busy\} className="es-workspace">/);
 });
 

@@ -245,6 +245,28 @@
 :root[data-theme='dark'] .es-studio .es-delete-button:hover:not(:disabled) { color:#fff1f0; background:#6d2926; }
 @media(max-width:600px) { .es-document-list button { min-height:44px; } .es-document-list .es-heading { flex-wrap:wrap; gap:12px; } }
 .es-next-action { margin-left:auto; text-align:right; }
+.es-basic-input .es-input-section-title { display:flex; align-items:center; gap:10px; padding:9px 12px; margin:0 0 12px; background:var(--surface-muted); border:1px solid #bacddb; border-radius:4px; font-size:16px; font-weight:750; color:var(--text-primary); }
+.es-input-section-title > span { display:inline-grid; place-items:center; min-width:26px; height:26px; background:#23688f; color:white; border-radius:3px; font-size:14px; }
+.es-tutorial-entry,.es-tutorial-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.es-tutorial-entry { margin:16px 0 8px; padding:16px; border:1px solid #bacddb; background:var(--surface); }
+.es-tutorial-entry h2,.es-tutorial-heading h2 { margin:0; font-size:17px; line-height:1.5; color:var(--text-primary); }
+.es-tutorial-entry p { margin:6px 0 0; color:var(--text-secondary); }
+.es-tutorial,.es-tutorial-intro { padding:16px; margin:12px 0; background:var(--surface-muted); border:1px solid #bacddb; border-radius:4px; }
+.es-tutorial ul { padding-left:22px; margin:12px 0; max-width:95ch; }
+.es-tutorial li { margin:7px 0; line-height:1.65; font-size:14px; }
+.es-tutorial .es-actions small { color:var(--text-secondary); }
+.es-tutorial-heading h2:focus { outline:2px solid var(--es-accent); outline-offset:4px; }
+.es-tutorial button { min-height:38px; }
+.es-print-edit { margin-bottom:16px; padding:14px; border:1px solid #bacddb; background:var(--surface); }
+.es-print-edit > summary { font-size:16px; font-weight:700; cursor:pointer; }
+.es-print-edit p { font-size:12px; line-height:1.6; }
+.es-print-band-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:12px 0; }
+.es-print-band-grid fieldset { min-width:0; margin:0; padding:12px; border:1px solid #bacddb; }
+.es-print-band-grid legend { font-size:14px; font-weight:700; padding:0 5px; }
+.es-print-band-grid .es-field { display:flex; flex-direction:column; align-items:stretch; gap:5px; margin:0 0 10px; }
+.es-studio .es-print-edit input:not([type=checkbox]):not([type=file]):not(:disabled):not([readonly]),.es-studio .es-print-edit select:not(:disabled) { --field-bg:var(--surface); background:var(--surface); }
+.es-print-edit small { color:var(--text-secondary); font-size:12px; }
+@media(max-width:800px) { .es-tutorial-entry,.es-tutorial-heading { align-items:flex-start; flex-wrap:wrap; } .es-print-band-grid { grid-template-columns:1fr; } .es-tutorial button,.es-tutorial-entry button { min-height:44px; } }
 .es-next-action small { display:block; font-size:11px; margin-bottom:4px; }
 .es-next-action button { font-size:12px; }
 .es-editor-workspace .es-warning,.es-editor-workspace .es-access,.es-editor-workspace .es-notice { border:1px solid #c7dae5; font-size:12px; }
