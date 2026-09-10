@@ -51,3 +51,6 @@
 - 응답 잘림(MAX_TOKENS), 분석 중단, JSON 형식, 필수 구조 오류를 고정된 안전한 코드/안내로 구분했다. 전체 JSON fence만 제거하며 불완전 결과를 복구 추정하지 않는다. 단가 산식/타 조항 참조에 대한 Gemini 프롬프트를 보강했다. 새 의존성, DB/키 변경, 자동 저장, 고객 파일 재전송 없음.
 - 검증: ES 전체 회귀 316/316 PASS 후 원/평·원/㎡ 방어 2개를 추가했다. 최종 계약55+React4 재검증 및 최종 build 결과는 아래 배포 확인에 기록한다. React에서 부분 후보·제외 체크 비활성·선택 항목만 반영·저장 전 기존 DB 불변 확인. Ponytail 원칙으로 공통 검증/API와 기존 테스트만 수정했다.
 - 브라우저 사전 확인: 새 검수 탭에서 PM/ADMIN 로그인·목록 정상. 사용자 산출서는 v10으로 이미 바뀌었으므로 과거 v9나 합성 자료로 간주하지 않는다. 문서 입력·저장·PDF 재전송 없음. 실제 고객 PDF의 수정 후 Gemini OCR 결과는 미검증이며, 단가뿐인 계약서에서 총액을 자동 생성한다고 안내하지 않는다.
+- 최종 계약55+React4 = 59/59 PASS, TypeScript/Vite build PASS, diff-check PASS. 제품 커밋 `9b885a1`. 기존 bundle 크기 경고 유지. 최종 로컬 React PNG에서 후보/제외 사유/체크 비활성 및 모달 잘림 없음 확인.
+- 개발 배포 exit0: Worker `250c7675-b5b4-405f-88fb-59065bf15175`, https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es . 운영/DB/키 변경 없음. `cf114-live-smoke.mjs development` PASS(health/readiness/Drive/익명401/JS·CSS 5개 SHA 동일), 계약 API 익명 GET401·no-store.
+- 배포 후 실제 브라우저: `index-DRFRXz9N.js` 반영, ES 목록 및 사용자 문서 `저장됨 · v10` 유지. 가져오기 모달 열기/취소 및 파일 없는 읽기/적용 비활성 확인. 파일 첨부·AI 호출·적용·저장 0회, 검수 탭만 닫았다. 다음 시작: 저장하지 않은 변경을 보존 후 새로고침하여 사용자가 원문 대조 하에 재인식. 확정 총액은 원가계산서 또는 변경 계약서에서 확인하며 입찰 기준일은 추정하지 않는다.
