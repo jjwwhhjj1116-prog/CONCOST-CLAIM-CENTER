@@ -37,5 +37,7 @@
 
 - 기존 사용자 승인 범위의 `wrangler.development.jsonc` 개발 서버에만 배포. 운영/키/DB 변경 없음.
 - 배포 URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es
-- 배포 결과/최종 원격 확인은 아래에 추가한다.
+- 제품 커밋 `1bc9dfc`, 개발 Worker 버전 `2bc2df23-bfb2-40a5-8d85-c9207e6713b5`. 배포 exit0.
+- `node scripts/cf114-live-smoke.mjs development` PASS: health/readiness, 기존 Drive 연결 유지, 익명 문서401. 실제 JS/CSS 5개 SHA가 최종 로컬 빌드와 동일. 신규 `/api/es/import/contract` 익명 GET도401/no-store 확인.
+- 실제 개발 브라우저 읽기 PASS: 기존 v9 저장 상태 유지, 노임/산재 값 존재 확인 후 모달 열기/취소·파일 미선택 읽기/적용 비활성, 현재K3.11%/직전K2.49%/계수50.73%/조정계수52.921536%/0% 확인. 모달 잘림·겹침 없음. 사용자 파일 업로드·AI호출·저장·기준일 변경0회. 원래 탭 보존, 별도 검수 탭만 닫는다.
 - 다음: 사용자가 PDF 전송 동의 후 실제 OCR 후보와 원문을 대조한다. 미분류 재료비는 상세 원가내역으로 확정한다. Node PDF API는 독립 연동이 필요하다.
