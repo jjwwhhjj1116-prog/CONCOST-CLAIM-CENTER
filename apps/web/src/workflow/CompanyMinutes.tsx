@@ -2,18 +2,17 @@ import React from 'react';
 import type { MinutesFields } from '../../../cloudflare/src/company-minutes';
 import { meetingMinutesWorkbook, type MeetingMinutesExcelValues } from '../proposals/proposal-excel';
 
-export function MinutesFieldsEditor({ value, onChange, disabled, survey = false }: { value: MinutesFields; onChange: (next: MinutesFields) => void; disabled: boolean; survey?: boolean }) {
-  const fields: Array<[keyof MinutesFields, string, string?]> = [
-    ['authorDepartment', '작성자 소속'], ['authorPosition', '작성자 직급'], ['author', '작성자 성명'],
-    ...(survey ? [['meetingStartTime', '시작 시간', 'time']] as Array<[keyof MinutesFields, string, string]> : []),
-    ['meetingEndTime', '종료 시간', 'time'], ['clientName', '거래처명'],
-    ['reportingDepartment', '보고부서'], ['referenceDepartments', '참조부서'],
-    ...(survey ? [['participants', '참석자 (컨코스트)']] as Array<[keyof MinutesFields, string]> : []),
-    ['clientParticipants', '참석자 (거래처)'],
-    ...(survey ? [['meetingTitle', '회의명']] as Array<[keyof MinutesFields, string]> : []),
-    ['attachmentName', '첨부파일명']
-  ];
-  return <fieldset className="minutes-fields"><legend>회사 회의록 양식 정보</legend><div className="workflow-form-grid">{fields.map(([key, label, type]) => <label key={key}>{label}<input type={type || 'text'} value={value[key]} disabled={disabled} maxLength={2000} placeholder={key === 'referenceDepartments' ? '미입력 시 모든 부서' : undefined} onChange={event => onChange({ ...value, [key]: event.target.value })}/></label>)}</div></fieldset>;
+export function MinutesFieldsEditor({ value, onChange, disabled, survey = false, dateField, locationField, participantsField }: { value: MinutesFields; onChange: (next: MinutesFields) => void; disabled: boolean; survey?: boolean; dateField?: React.ReactNode; locationField?: React.ReactNode; participantsField?: React.ReactNode }) {
+  const field = (key: keyof MinutesFields, label: string, type = 'text') => <label key={key}>{label}<input type={type} value={value[key]} disabled={disabled} maxLength={2000} placeholder={key === 'referenceDepartments' ? '미입력 시 모든 부서' : undefined} onChange={event => onChange({ ...value, [key]: event.target.value })}/></label>;
+  return <fieldset className="minutes-fields"><legend>회의 기본정보</legend>
+    <div className={`workflow-form-grid minutes-row ${survey ? 'minutes-row--three' : 'minutes-row--time'}`} aria-label="회의 일시와 시간">{dateField}{survey && field('meetingStartTime', '시작 시간', 'time')}{field('meetingEndTime', '종료 시간', 'time')}</div>
+    <div className="workflow-form-grid minutes-row minutes-row--one">{locationField}</div>
+    <div className="workflow-form-grid minutes-row minutes-row--three" aria-label="작성자 정보">{field('authorDepartment', '작성자 소속')}{field('authorPosition', '작성자 직급')}{field('author', '작성자 성명')}</div>
+    <div className="workflow-form-grid minutes-row minutes-row--three" aria-label="거래처와 보고부서">{field('clientName', '거래처명')}{field('reportingDepartment', '보고부서')}{field('referenceDepartments', '참조부서')}</div>
+    <div className="workflow-form-grid minutes-row minutes-row--two" aria-label="회의 참석자">{participantsField ?? field('participants', '참석자 (컨코스트)')}{field('clientParticipants', '참석자 (거래처)')}</div>
+    {survey && <div className="workflow-form-grid minutes-row minutes-row--one">{field('meetingTitle', '회의명')}</div>}
+    <div className="workflow-form-grid minutes-row minutes-row--one">{field('attachmentName', '첨부파일명')}</div>
+  </fieldset>;
 }
 
 export function downloadMinutes(values: MeetingMinutesExcelValues, filename: string) {

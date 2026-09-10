@@ -13,11 +13,21 @@ test('CF102 detailed print covers every saved month, gaps and year boundaries',(
   assert.deepEqual(projectScheduleMonths({...project,stages:[{...project.stages[0],startDate:'2026-02-30',endDate:'2026-03-01'}]},'2026-09'),['2026-09']);
   assert.deepEqual(schedulePrintPages(qaProjects,'missing','2026-09'),[{month:'2026-09',projects:[]}]);
 });
-test('CF102 overview preserves eight-project pagination and selected month',()=>{
+test('CF145 overview defaults to all scheduled months and preserves explicit single-month pagination',()=>{
   const rows=Array.from({length:9},(_,i)=>({...qaProjects[0],id:String(i)}));
-  const pages=schedulePrintPages(rows,'','2026-10');
+  assert.deepEqual(schedulePrintPages(rows,'','2026-10').map(p=>[p.month,p.projects.length]),[['2026-09',8],['2026-09',1],['2026-10',8],['2026-10',1]]);
+  const pages=schedulePrintPages(rows,'','2026-10','month');
   assert.deepEqual(pages.map(p=>p.projects.length),[8,1]);
   assert.ok(pages.every(p=>p.month==='2026-10'));
+});
+
+test('CF145 overview includes last project end month, year boundary, leap day and rejects invalid schedules',()=>{
+  const project=qaProjects[0], stage=project.stages[0];
+  const rows=[project,{...project,id:'later',stages:[{...stage,scheduleExplicit:true,startDate:'2026-11-15',endDate:'2027-02-28'}]}];
+  assert.deepEqual(schedulePrintPages(rows,'','2026-09').map(p=>p.month),['2026-09','2026-10','2026-11','2026-12','2027-01','2027-02']);
+  assert.deepEqual(schedulePrintPages([],'','2026-09'),[{month:'2026-09',projects:[]}]);
+  for(const dates of [['2026-02-30','2027-11-01'],['2026-11-01','2026-09-01']])assert.deepEqual(projectScheduleMonths({stages:[{...stage,scheduleExplicit:true,startDate:dates[0],endDate:dates[1]}]},'2026-09'),['2026-09']);
+  assert.deepEqual(projectScheduleMonths({stages:[{...stage,scheduleExplicit:true,startDate:'2028-02-29',endDate:'2028-03-01'}]},'2026-09'),['2028-02','2028-03']);
 });
 test('CF102 menus, exact reception navigation and optional email preserve workflow gates',()=>{
   const read=(path:string)=>readFileSync(`apps/web/src/${path}`,'utf8');

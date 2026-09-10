@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
@@ -20,11 +20,14 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
       import { WorkflowOperations } from '/src/workflow/WorkflowOperations.tsx';
       import { minutesFieldDefaults } from '/@fs/${fileURLToPath(new URL('../apps/cloudflare/src/company-minutes.ts', import.meta.url)).replaceAll('\\', '/')}';
       import '/src/workflow/WorkflowOperations.css';
+      import '/src/preview-theme.css';
+      import '/src/theme-system.css';
       const params=new URLSearchParams(location.search), kind=params.get('kind')||'WF-03';
       const state={scheduleFailure:params.has('schedule-failure'),workflowGets:0,scheduleGets:0,saveAttempts:0,uploads:0,ai:0,release:null};
       window.cf117=state;
       const project={id:'11700000-0000-4000-8000-000000000001',caseNumber:'CF117-LOCAL',title:'일정 장애 합성 프로젝트',claimType:'TYPE-01',status:'CONTRACT',version:1};
       const record={minutesFields:{...minutesFieldDefaults},meetingAt:'2026-09-07T01:00:00.000Z',surveyDate:'2026-09-07',location:'기존 장소',agenda:'기존 안건',scopeText:'기존 조사',leadUnit:'기존 팀',participantUnits:[],rawNotes:'기존 저장 원문',summaryText:'기존 요약',timeline:[],status:'DRAFTED',version:1,outputVersion:1,outputStatus:'DRAFTED',id:'survey-1',folderPath:'test',photoCount:0,audioCount:0,documentCount:0,updatedAt:'2026-09-07',updatedByName:'합성 검수자'};
+      if(kind==='WF-04')record.status='IN_PROGRESS';
       const empty=params.has('empty'), payload={case:project,kickoff:empty?null:record,siteSurveys:empty?[]:[record],allocations:[],events:[],googleDrive:{connected:true,deferredByUser:false,uploadEnabled:true}};
       const schedule={id:'project-'+project.id,caseId:project.id,responsiblePm:{id:'pm-1',name:'합성 PM'},canManageSchedule:true,stages:['KICKOFF','SITE_SURVEY'].map(stageCode=>({stageCode,startDate:'2026-09-08',endDate:'2026-09-10',scheduleStatus:'PLANNED',scheduleNote:'새로 조회된 일정',scheduleVersion:1,scheduleExplicit:true}))};
       const originalFetch=window.fetch.bind(window), json=(body,status=200)=>Response.json(body,{status});
@@ -34,7 +37,7 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
         if(path==='/api/cases')return json({cases:[project]});
         if(path==='/api/project-workflow/schedule'){state.scheduleGets++;return state.scheduleFailure?json({error:'합성 기준 일정 조회 실패'},503):json({projects:[schedule]});}
         if(path.endsWith('/workflow')){state.workflowGets++;return json(payload);}
-        if(method==='PUT'&&(path.endsWith('/workflow/kickoff')||path.endsWith('/workflow/site-survey'))){state.saveAttempts++;return json({error:'합성 업무 기록 저장 실패'},503);}
+        if(method==='PUT'&&(path.endsWith('/workflow/kickoff')||path.endsWith('/workflow/site-survey'))){state.saveAttempts++;state.lastSave=JSON.parse(init.body);return json({error:'합성 업무 기록 저장 실패'},503);}
         if(path.endsWith('/evidence')){
           if(method==='POST'){state.uploads++;return json({file:{id:'source-1',originalName:'cf117.txt',storageProvider:'GOOGLE_DRIVE'}});}
           return json({files:[],googleDriveConnected:true,storagePolicy:'GOOGLE_DRIVE_REQUIRED'});
@@ -52,6 +55,39 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     for (const kind of ['WF-03', 'WF-04']) {
+      await t.test(`${kind}: CF145 grouped fields preserve status, attendees, dates, preview and responsive order`, async () => {
+        const page=await browser.newPage({viewport:{width:1920,height:1080},timezoneId:'UTC'});
+        try {
+          await page.route('**/*', route => new URL(route.request().url()).origin===origin?route.continue():route.abort());
+          await page.goto(`${origin}/cf117-workflow-schedule.html?kind=${kind}`);
+          const date=page.getByLabel(kind==='WF-03'?'회의 일시':'조사 일자',{exact:true});await date.waitFor();
+          const timeRow=page.locator('.minutes-row').first();
+          assert.equal(await timeRow.locator('input').count(),kind==='WF-03'?2:3);
+          assert.equal(await page.getByLabel('회의 상태',{exact:true}).count(),0);assert.equal(await page.getByLabel('진행 상태',{exact:true}).count(),0);
+          await page.getByLabel('종료 시간',{exact:true}).fill('11:45');
+          if(kind==='WF-04')await page.getByLabel('시작 시간',{exact:true}).fill('10:15');
+          await page.getByLabel('참석자 (컨코스트)',{exact:true}).fill('내부 참석자');
+          await page.getByLabel('참석자 (거래처)',{exact:true}).fill('거래처 참석자');
+          assert.equal(await page.locator('.minutes-row--two input').count(),2);
+          const preview=await page.locator('.company-minutes-table').innerText();
+          for(const value of ['11:45','내부 참석자','거래처 참석자'])assert.ok(preview.includes(value));
+          const positions=await page.locator('[aria-label="작성자 정보"] input').evaluateAll(inputs=>inputs.map(i=>({x:i.getBoundingClientRect().x,y:i.getBoundingClientRect().y,right:i.getBoundingClientRect().right})));
+          assert.equal(new Set(positions.map(p=>p.y)).size,1);assert.equal(new Set(positions.map(p=>p.x)).size,3);
+          assert.ok(positions[0].right<positions[1].x&&positions[1].right<positions[2].x,'adjacent fields never overlap');
+          await page.getByRole('button',{name:'기록 저장',exact:true}).click();await page.getByText('합성 업무 기록 저장 실패',{exact:true}).waitFor();
+          const saved=await page.evaluate(()=>(window as any).cf117.lastSave);
+          assert.equal(saved.status,kind==='WF-03'?'DRAFTED':'IN_PROGRESS');assert.equal(saved.minutesFields.meetingEndTime,'11:45');assert.equal(saved.minutesFields.clientParticipants,'거래처 참석자');
+          if(kind==='WF-03')assert.deepEqual(saved.participantUnits,['내부 참석자']);else {assert.equal(saved.minutesFields.participants,'내부 참석자');assert.equal(saved.minutesFields.meetingStartTime,'10:15');}
+          mkdirSync('output/playwright',{recursive:true});
+          await page.locator('.minutes-fields').screenshot({path:`output/playwright/cf145-${kind}-desktop.png`});
+          await page.setViewportSize({width:390,height:844});
+          const boxes=await page.locator('.minutes-fields input').evaluateAll(inputs=>inputs.map(i=>({left:i.getBoundingClientRect().left,right:i.getBoundingClientRect().right,width:i.getBoundingClientRect().width})));
+          assert.ok(boxes.every(b=>b.width>0&&b.left>=0&&b.right<=390),'minutes fields fit mobile viewport');
+          const mobile=await page.locator('[aria-label="작성자 정보"] input').evaluateAll(inputs=>inputs.map(i=>i.getBoundingClientRect().x));assert.equal(new Set(mobile).size,1);
+          await page.locator('.minutes-fields').screenshot({path:`output/playwright/cf145-${kind}-mobile.png`});
+          assert.equal(await page.getByLabel('종료 시간',{exact:true}).inputValue(),'11:45');
+        } finally {await page.close();}
+      });
       await t.test(`${kind}: initial schedule failure leaves the form/importer usable and schedule-only retry preserves a new record`, async () => {
         const page = await browser.newPage({ timezoneId: 'UTC' });
         try {

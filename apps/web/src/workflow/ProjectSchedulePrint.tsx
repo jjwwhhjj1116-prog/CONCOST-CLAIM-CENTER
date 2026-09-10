@@ -49,7 +49,7 @@ const scheduledRange = (project: WorkflowProject): { start?: string; end?: strin
   };
 };
 
-export function projectScheduleMonths(project: WorkflowProject | undefined, fallbackMonth: string): string[] {
+export function projectScheduleMonths(project: Pick<WorkflowProject, 'stages'> | undefined, fallbackMonth: string): string[] {
   const validDate = (value: string | null | undefined): value is string => Boolean(value && /^\d{4}-\d{2}-\d{2}$/u.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value);
   const stages = project?.stages.filter((stage) => stage.scheduleExplicit && validDate(stage.startDate) && validDate(stage.endDate) && stage.endDate >= stage.startDate) ?? [];
   const dates = stages.flatMap((stage) => [stage.startDate!, stage.endDate!]).sort();
@@ -64,16 +64,17 @@ export function projectScheduleMonths(project: WorkflowProject | undefined, fall
   });
 }
 
-export function schedulePrintPages(projects: WorkflowProject[], selectedProjectId: string, month: string): Array<{ month: string; projects: WorkflowProject[] }> {
+export function schedulePrintPages(projects: WorkflowProject[], selectedProjectId: string, month: string, scope: 'all' | 'month' = 'all'): Array<{ month: string; projects: WorkflowProject[] }> {
   if (selectedProjectId) {
     const project = projects.find((item) => item.id === selectedProjectId);
     return projectScheduleMonths(project, month).map((pageMonth) => ({ month: pageMonth, projects: project ? [project] : [] }));
   }
-  return Array.from({ length: Math.max(1, Math.ceil(projects.length / ROWS_PER_PAGE)) }, (_, index) => ({ month, projects: projects.slice(index * ROWS_PER_PAGE, (index + 1) * ROWS_PER_PAGE) }));
+  const months = scope === 'month' ? [month] : projectScheduleMonths({ stages: projects.flatMap(project => project.stages) }, month);
+  return months.flatMap(month => Array.from({ length: Math.max(1, Math.ceil(projects.length / ROWS_PER_PAGE)) }, (_, index) => ({ month, projects: projects.slice(index * ROWS_PER_PAGE, (index + 1) * ROWS_PER_PAGE) })));
 }
 
-const replacePrintQuery = (month: string, lang: PrintLanguage, colorMode: PrintColorMode, projectId: string) => {
-  const query = new URLSearchParams({ month, lang, colorMode });
+const replacePrintQuery = (month: string, lang: PrintLanguage, colorMode: PrintColorMode, projectId: string, scope: 'all' | 'month') => {
+  const query = new URLSearchParams({ month, lang, colorMode, scope });
   if (projectId) query.set('projectId', projectId);
   window.history.replaceState(null, '', `/print/projects/month-a4?${query.toString()}`);
 };
@@ -82,6 +83,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
   const initialQuery = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
   const selectedProjectId = initialQuery.get('projectId') ?? '';
   const [month, setMonth] = useState(() => validMonth(initialQuery.get('month')));
+  const [scope, setScope] = useState<'all' | 'month'>(() => initialQuery.get('scope') === 'month' ? 'month' : 'all');
   const [language, setLanguage] = useState<PrintLanguage>(() => initialQuery.get('lang') === 'vi' ? 'vi' : 'ko');
   const [colorMode, setColorMode] = useState<PrintColorMode>(() => initialQuery.get('colorMode') === 'mono' ? 'mono' : 'color');
   const [projects, setProjects] = useState<WorkflowProject[]>([]);
@@ -91,7 +93,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
 
   const [year, monthNumber] = month.split('-').map(Number);
   const monthIndex = monthNumber - 1;
-  const pages = useMemo(() => schedulePrintPages(projects, selectedProjectId, month), [projects, selectedProjectId, month]);
+  const pages = useMemo(() => schedulePrintPages(projects, selectedProjectId, month, scope), [projects, selectedProjectId, month, scope]);
 
   useEffect(() => {
     let active = true;
@@ -113,17 +115,17 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
   const updateMonth = (nextMonth: string) => {
     const safeMonth = validMonth(nextMonth);
     setMonth(safeMonth);
-    replacePrintQuery(safeMonth, language, colorMode, selectedProjectId);
+    replacePrintQuery(safeMonth, language, colorMode, selectedProjectId, scope);
   };
 
   const updateLanguage = (nextLanguage: PrintLanguage) => {
     setLanguage(nextLanguage);
-    replacePrintQuery(month, nextLanguage, colorMode, selectedProjectId);
+    replacePrintQuery(month, nextLanguage, colorMode, selectedProjectId, scope);
   };
 
   const updateColorMode = (nextMode: PrintColorMode) => {
     setColorMode(nextMode);
-    replacePrintQuery(month, language, nextMode, selectedProjectId);
+    replacePrintQuery(month, language, nextMode, selectedProjectId, scope);
   };
 
   const moveMonth = (offset: number) => {
@@ -146,10 +148,11 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
         <div><strong>프로젝트 일정표 출력</strong><small>A4 가로 · 현재 저장 일정 기준</small></div>
       </div>
       <div className="schedule-print-toolbar__controls">
-        {!selectedProjectId && <><button type="button" onClick={() => moveMonth(-1)}>‹ 이전</button>
+        {!selectedProjectId && <div className="schedule-print-toggle" aria-label="출력 범위">{(['all', 'month'] as const).map(value => <button key={value} type="button" aria-pressed={scope === value} className={scope === value ? 'is-active' : ''} onClick={() => { setScope(value); replacePrintQuery(month, language, colorMode, selectedProjectId, value); }}>{value === 'all' ? '전체 일정' : '한 달'}</button>)}</div>}
+        {!selectedProjectId && scope === 'month' && <><button type="button" onClick={() => moveMonth(-1)}>‹ 이전</button>
         <label>출력 월<input type="month" value={month} onChange={(event) => updateMonth(event.target.value)} /></label>
         <button type="button" onClick={() => moveMonth(1)}>다음 ›</button></>}
-        {selectedProjectId && <span>전체 저장 기간 · 월별 1페이지</span>}
+        {(selectedProjectId || scope === 'all') && !loading && !error && <span className="schedule-print-period">{pages[0]?.month} ~ {pages.at(-1)?.month} · 전체 {pages.length}페이지</span>}
         <div className="schedule-print-toggle" aria-label="언어 선택">
           <button type="button" className={language === 'ko' ? 'is-active' : ''} onClick={() => updateLanguage('ko')}>한국어</button>
           <button type="button" className={language === 'vi' ? 'is-active' : ''} onClick={() => updateLanguage('vi')}>Tiếng Việt</button>
@@ -171,7 +174,7 @@ export function ProjectSchedulePrint({ currentSearch, userName, onClose }: Proje
     {loading && <p className="schedule-print-status">프로젝트 일정을 불러오는 중입니다…</p>}
     {error && <p className="schedule-print-status is-error" role="alert">{error}</p>}
 
-    <section className="schedule-print-pages" aria-label={selectedProjectId ? '프로젝트 전체 기간 월별 상세 일정표' : `${year}년 ${monthNumber}월 프로젝트 일정표`}>
+    <section className="schedule-print-pages" aria-label={selectedProjectId ? '프로젝트 전체 기간 월별 상세 일정표' : scope === 'all' ? '프로젝트 전체 기간 통합 일정표' : `${year}년 ${monthNumber}월 프로젝트 일정표`}>
       {!loading && !error && pages.map(({ month: pageMonth, projects: pageProjects }, pageIndex) => {
         const [year, monthNumber] = pageMonth.split('-').map(Number);
         const monthIndex = monthNumber - 1;

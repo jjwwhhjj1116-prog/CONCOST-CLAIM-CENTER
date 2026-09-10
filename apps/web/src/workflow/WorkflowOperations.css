@@ -160,7 +160,7 @@
 }
 .company-minutes-scroll:focus-visible { outline: 4px solid rgb(37 99 235 / 32%); outline-offset: 3px; }
 .company-minutes-table { width: 100%; min-width: 760px; table-layout: fixed; border-spacing: 0; border-collapse: collapse; background: #fff; color: #111827; font-size: .75rem; line-height: 1.55; }
-.minutes-fields { min-width:0; margin:0 0 24px; padding:16px; border:1px solid var(--border-soft); border-radius:8px; }
+.minutes-fields { min-width:0; margin:0 0 24px; padding:16px; border:1px solid var(--border-soft); border-radius:8px; container-type:inline-size; }
 .minutes-fields legend { padding:0 8px; font-weight:750; }
 .minutes-followups { white-space:pre-wrap; margin:0; }
 .company-minutes-table col { width: 12.5%; }
@@ -232,6 +232,20 @@
 }
 .workflow-form-grid textarea { min-height: 124px; padding: 14px 15px; }
 .workflow-form-grid textarea.is-tall { min-height: 200px; }
+.minutes-fields .minutes-row { gap:12px; margin:0 0 16px; }
+.minutes-fields .minutes-row:last-child { margin-bottom:0; }
+.minutes-fields .minutes-row--three { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.minutes-fields .minutes-row--two { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.minutes-fields .minutes-row--time { grid-template-columns:minmax(0,2fr) minmax(0,1fr); }
+.minutes-fields .minutes-row--one,.workflow-form-grid.minutes-body { grid-template-columns:minmax(0,1fr); }
+.minutes-fields label,.minutes-fields input { min-width:0; }
+.minutes-fields input { box-sizing:border-box; }
+@container (max-width:560px) {
+  .minutes-fields .minutes-row--three { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@container (max-width:400px) {
+  .minutes-fields .minutes-row--three,.minutes-fields .minutes-row--two,.minutes-fields .minutes-row--time { grid-template-columns:minmax(0,1fr); }
+}
 .shared-schedule-save-button,
 .workflow-record-save-button,
 .workflow-form-save-button {

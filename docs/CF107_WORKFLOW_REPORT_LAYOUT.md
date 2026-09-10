@@ -46,3 +46,21 @@ git diff --check
 - `/health` 200 `ok`, `/readiness` 200 `ready`, Google Drive 연결 유지.
 - `/reports/studio`의 HTML에서 새 `index-DqsWzJJ6.js` 참조를 확인했다. 해당 JS, `index.es-CIKpov5t.js`, `index-Bjn473Uk.css`의 배포 SHA-256이 검증한 로컬 빌드와 일치한다.
 - 개발 환경만 반영. DB migration·실제 회사 데이터 수정 없음. 로그인된 실제 업무 경로와 최종 시각 캡처는 앞서 명시한 검수 한계로 남긴다.
+
+## CF145 · 2026-09-10 전체 일정 출력·회의록 입력 배치
+
+- 시작 `feat/CF123-es-v2` / `0a3f175`, 추적 파일 변경 없음 확인 후 시작. 이전 CF144 ES 기능은 변경하지 않았다.
+- 전체 일정 출력은 조회된 프로젝트의 유효한 명시 일정 시작월부터 마지막 종료월까지 기본으로 출력한다. 11월까지 일정이 있으면 11월을 포함하고 중간 월도 생략하지 않는다. 월별 A4 가로·프로젝트 8행 분할, 기존 상세 일정 출력/휴일/담당 PM/권한 필터는 유지한다.
+- 기본 `scope=all`, 필요한 경우 ‘한 달’ 선택. 월·언어·색상 변경 시 scope를 URL에 보존한다. PDF 저장과 인쇄는 동일한 전체 페이지 DOM을 사용한다. API의 기존 최대 100프로젝트 제한은 확장하지 않았다.
+- 착수·현장조사 공통 입력: 일시/시작·종료를 한 그룹, 작성자 3열, 거래처·보고·참조 3열, 양측 참석자 2열, 장소·안건·메모는 1열. 입력 컨테이너가 좁아지면 2열/1열로 전환한다. 기존 화면 정체성과 출력 테이블을 유지하는 Impeccable layout/Ponytail 최소 변경을 적용했다.
+- 회의/조사 상태 선택만 제거했다. status 저장·가져오기·확정 처리와 기존 값은 보존. 착수 시작은 meetingAt, 참석자는 participantUnits, 현장 시작은 surveyDate+minutesFields.meetingStartTime, 참석자는 minutesFields.participants 경로 유지. 종료/작성자/거래처/첨부 필드는 동일 minutesFields로 저장한다. 조사일별 기존 기록/버전 로딩도 유지한다.
+- 회의록 최종 표 및 XLSX 생성기, 입력 취소/저장·권한·자동정리·확정 조건은 변경하지 않았다. 사용자 기록/DB/키/migration 변경 없음.
+- 최종 관련 검사 **32/32 PASS**, 실패/skip 0. CF102/58 일정 범위, CF73/80/103/106 저장·출력, CF115 실제 React 가져오기·저장 요청, CF117 실제 Chromium 회의/조사 배치·PUT 값·status 보존·저장 실패시 입력 유지·일정 재조회 보호, CF145 출력 UI/단월 전환/색상·언어/range 유지 포함.
+- 1920px 작성자 3열·참석자 2열 실측, 390px 1열·가로 넘침 없음, 입력 겹침 방지 확인. 인쇄 CSS의 297×210mm와 2페이지 모두 높이 넘침 없음 확인. PDF/인쇄 버튼은 테스트에서 window.print를 대체하여 동일 2페이지 전달을 확인했으며 실제 프린터 및 OS PDF 저장은 실행하지 않았다.
+- 웹 TypeScript+Vite build PASS, 새 CF145 출력 UI 테스트 TypeScript PASS, 정적 layout 검사 0건, diff check PASS. 기존 대형 번들 경고 유지. 별도 기존 테스트의 CF107 보고서 문구 기대값 실패는 이번 범위 밖으로 보존했다. 기존 CF102 fixture stageCode 문자열 타입과 CF117 Vite plugin 타입 때문에 보조 전체 테스트 TypeScript 명령은 실패하며, 제품 웹 타입검사 및 실제 테스트 성공과 구분한다.
+- 로컬 Vite 테스트들을 동시에 시작했을 때 첫 화면 로딩 timeout 1회가 있었고, 저장소의 기존 `--test-concurrency=1` 방식으로 최종 32개를 순차 실행해 모두 통과했다. 시각 캡처는 `output/playwright/cf145-*`, 개발 이전 화면은 `output/cf145-before-*`이며 Git에 고객 화면은 포함하지 않는다.
+
+검증 명령:
+`node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 scripts/cf102-workflow-usability-test.ts scripts/cf117-workflow-schedule-test.ts scripts/cf145-schedule-print-ui-test.ts scripts/cf58-schedule-print-hwp-test.ts scripts/cf73-workflow-minutes-parity-test.ts scripts/cf80-company-minutes-accessible-type-test.ts scripts/cf103-minutes-export-test.ts scripts/cf106-minutes-layout-test.ts scripts/cf115-workflow-ui-test.ts`
+
+다음 시작점: 개발 배포 결과 확인 → 미저장 작업 보존 후 새로고침 → 전체일정표 출력의 월 범위와 착수/현장조사 입력 그룹 확인. 롤백은 `0a3f175` 소스를 development에 재배포하며 DB 복구는 필요 없다.
