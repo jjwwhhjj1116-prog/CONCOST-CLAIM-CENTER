@@ -2,6 +2,7 @@ import { extractHwpxTables, extractPublicXlsxText, IntakeSourceError } from './i
 import { esMaterialMonth } from '../../../packages/document-engine/src/es-source-history';
 import type { EsPublicSourceResult, EsSourceField } from '../../../packages/document-engine/src/es-source-candidates';
 import { fetchPpsHistory } from './es-pps-history';
+import { latestPpsNotices, latestCakReports, checkedToday, getPpsNotice, ppsEffective } from './es-public-discovery';
 
 // Public document identifiers, not copied rates. Re-read the official file for every lookup.
 // Publication cutoffs are explicit: an unverified future version must not inherit today's rates.
@@ -51,7 +52,7 @@ export function parsePpsRates(text: string, trade: string, grade: string, effect
     ['pension', '연금보험료', '직노', '직접노무비 기준 · 공사기간 30일 이상 여부 확인'],
     ['care', '노인장기요양보험료', '건강보험료', '건강보험료 대비 비율 · 공사기간 30일 이상 여부 확인'],
     ['injury', '산재보험료', '노', '노무비 기준 · 건설공사 적용'],
-    ['retirement', '퇴직공제부금비', '직노', '직접노무비 기준 · 추정금액 1억 원 이상 여부 확인']
+    ['retirement', '퇴직공제부금비', '직노', '직접노무비 기준 · 당시 공표 원문의 추정금액·적용대상 확인']
   ] as const) {
     const headers = cells.filter(c => compact(c.text) === `[${label}]`);
     if (headers.length !== 1) continue;
@@ -120,17 +121,49 @@ export async function readPublicFile(url: string, fetcher: typeof fetch, noticeU
 export async function fetchEsPublicSources(dates: string[], trade: string, grade: string, fetcher: typeof fetch = fetch): Promise<EsPublicSourceResult> {
   if (!Array.isArray(dates) || !dates.length || dates.length > 3) throw new Error('ES_SOURCE_INVALID_DATE');
   try { dates.forEach(esMaterialMonth); } catch { throw new Error('ES_SOURCE_INVALID_DATE'); }
-  const result: EsPublicSourceResult = { items: [], issues: [] }, cache = new Map<string, Promise<string>>();
+  const result: EsPublicSourceResult = { items: [], issues: [], warnings: [] }, cache = new Map<string, Promise<string>>();
+  let ppsMetadataFound=false;
+  const dynamicPps = (async () => {
+    const found: {date:string;trade:string;url:string;notice:string;text:string;basis:string}[]=[];
+    const notices=await latestPpsNotices('rates',fetcher);ppsMetadataFound=true;
+    for (const n of notices) {
+      const files=n.attachments.filter(a=>/건축|토목/.test(a.title));
+      if(!files.length) { if(/안내서|국가유산|문화재|일정/.test(n.title))continue; throw new Error('PPS_NEW_PUBLICATION_UNVERIFIED'); }
+      for(const a of files) {
+        const text=await extractPublicXlsxText(await readPublicFile(a.url,fetcher,n.url));
+        cache.set(a.url,Promise.resolve(text));
+        const trade=/건축/.test(a.title)?'건축':'토목';
+        const m=text.match(/^[A-Z]+[1-5]:[^\n]*적용시기[^\n]*?(20\d{2})[.\-]\s*(\d{1,2})[.\-]\s*(\d{1,2})/m);
+        if(!m)throw new Error('PPS_NEW_PUBLICATION_UNVERIFIED');
+        const date=m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0'); esMaterialMonth(date);
+        const basis=ppsEffective(n.body,date);
+        parsePpsRates(text,trade,'7',date);
+        found.push({date,trade,url:a.url,notice:n.url,text,basis});
+      }
+    }
+    result.warnings!.push('조달청 최신 공표 자동확인 · '+checkedToday()+' · 공종별 첨부 '+found.length+'개 확인(목록 최대 1시간 캐시)');
+    return found;
+  })().then(items=>({items}),(e)=>{const unverified=ppsMetadataFound||(e instanceof Error&&e.message==='PPS_DISCOVERED_NOTICE_UNVERIFIED');result.warnings!.push('조달청 최신 공표 확인·검증 실패 · '+(unverified?'발견한 공표 검증 전까지 현대 요율 자동 적용을 중단합니다.':'검증된 과거 이력만 사용하며 최신으로 표시하지 않습니다.'));return {items:[],failed:true,unverified};});
   const historicalFiles = new Map<string,Promise<Uint8Array>>();
   const issue = (date: string, field: EsSourceField, reason: string) => result.issues.push({ date, field, reason });
   await Promise.all([
     (async () => {
       try {
-        const rows = parseCakWages(await extractHwpxTables(await readPublicFile(CAK_WAGE_URL, fetcher, 'https://www.cak.or.kr/lay1/bbs/S1T41C42/A/14/view.do?article_seq=160598')));
+        let wageUrl=CAK_WAGE_URL, notice='https://www.cak.or.kr/lay1/bbs/S1T41C42/A/14/view.do?article_seq=160598', fresh=false;
+        let report: Awaited<ReturnType<typeof latestCakReports>>[number] | undefined;
+        try { report=(await latestCakReports('wage',fetcher))[0]; wageUrl=report.file;notice=report.url;fresh=true; }
+        catch(e) { result.warnings!.push('대한건설협회 최신 노임 공표 확인 실패 · 새 첨부 미확인 시 자동 반영하지 않습니다.');if(e instanceof Error&&/CAK_ATTACHMENT/.test(e.message))throw e; }
+        let rows = parseCakWages(await extractHwpxTables(await readPublicFile(wageUrl, fetcher, notice)));
+        if(report && (rows[0].date.slice(0,4)!==report.year || (report.half==='상' ? rows[0].date.slice(5,7)>='07' : rows[0].date.slice(5,7)<'07')))throw new Error('CAK_NEW_PUBLICATION_UNVERIFIED');
+        if(wageUrl!==CAK_WAGE_URL && dates.some(d=>d<rows.at(-1)!.date)) {
+          const old=parseCakWages(await extractHwpxTables(await readPublicFile(CAK_WAGE_URL,fetcher,'https://www.cak.or.kr')));
+          rows=[...rows,...old.filter(r=>!rows.some(n=>n.date===r.date))].sort((a,b)=>b.date.localeCompare(a.date));
+        }
+        if(fresh)result.warnings!.push('대한건설협회 최신 노임 자동확인 · '+checkedToday()+' · 최신 공표 '+rows[0].date+'(기준일에 맞춰 선택)');
         for (const date of new Set(dates)) {
-          const row = date <= VERIFIED_THROUGH ? rows.find(r => r.date <= date) : undefined;
+          const row = date <= (fresh?checkedToday():VERIFIED_THROUGH) ? rows.find(r => r.date <= date) : undefined;
           if (!row) { issue(date, 'wage', '해당 공표기간 노임 자료 미연결 · 공식 공표자료 확인 후 수동 입력'); continue; }
-          result.items.push({ date, field: 'wage', value: row.value, effectiveDate: row.date, source: `대한건설협회 일반공사 평균 / 공표 ${row.date} / ${CAK_WAGE_URL}`, condition: '원본 Excel T열과 같은 일반공사 직종 평균(원/일) · 전체직종 평균·조사월과 다름' });
+          result.items.push({ date, field: 'wage', value: row.value, effectiveDate: row.date, source: `대한건설협회 일반공사 평균 / 공표 ${row.date} / ${notice} / ${wageUrl}${wageUrl!==CAK_WAGE_URL?' / 과거 이력 '+CAK_WAGE_URL:''}`, condition: '원본 Excel T열과 같은 일반공사 직종 평균(원/일) · 전체직종 평균·조사월과 다름' });
         }
       } catch (error) { for (const date of new Set(dates)) issue(date, 'wage', `대한건설협회 자료 조회 실패 (${failureCode(error)}) · 재조회 또는 수동 입력`); }
     })(),
@@ -144,29 +177,49 @@ export async function fetchEsPublicSources(dates: string[], trade: string, grade
         } catch(error) { for(const field of PPS_FIELDS) issue(date,field,`조달청 과거 공표자료 조회 실패 (${failureCode(error)}) · 기존 값 유지 · 재조회 또는 원문 확인 / ${PPS_LIST_URL}`); }
         return;
       }
-      const publication = date <= VERIFIED_THROUGH ? [...PPS_PUBLICATIONS].reverse().find(p => p[0] <= date) : undefined;
+      const updates=await dynamicPps;
+      if('unverified' in updates && updates.unverified) {for(const field of PPS_FIELDS)issue(date,field,'발견한 최신 공표의 원문·적용일 미검증 · 이전 요율 자동 적용 중단 / '+PPS_LIST_URL);return;}
+      const candidates=updates.items.filter(p=>p.trade===trade && p.date<=date).sort((a,b)=>b.date.localeCompare(a.date));
+      const latest=candidates[0];
+      if(latest && candidates.some(p=>p.date===latest.date && p.text!==latest.text)) { for(const field of PPS_FIELDS)issue(date,field,'같은 적용일의 공종·계약법별 공표 중복 · 적용조건 확인 후 수동 입력');return; }
+      const publication = date <= ('failed' in updates?VERIFIED_THROUGH:checkedToday()) ? [...PPS_PUBLICATIONS].reverse().find(p => p[0] <= date) : undefined;
       if (!publication || !['건축', '토목'].includes(trade)) {
         for (const field of PPS_FIELDS) {
           issue(date, field, (!['건축', '토목'].includes(trade) ? '기본입력의 퇴직공제 적용 공종에 건축 또는 토목을 선택·입력한 뒤 재조회' : '해당 날짜의 조달청 공표 이력 미연결 · 공식 자료 확인 후 수동 입력') + ` / ${PPS_LIST_URL}`);
         }
         return;
       }
-      const [effectiveDate, key, notice, basis] = publication;
+      const [oldDate, key, notice, oldBasis] = publication;
+      const dynamic=latest && latest.date>=oldDate?latest:undefined;
+      const effectiveDate=dynamic?.date??oldDate,basis=dynamic?.basis??oldBasis;
       const sn = trade === '건축' ? key === '202505010004' ? 3 : 2 : 1;
-      const url = `https://www.pps.go.kr/common/fileDown.do?key=${key}&sn=${sn}`;
+      let url = dynamic?.url??`https://www.pps.go.kr/common/fileDown.do?key=${key}&sn=${sn}`;
+      const sourceNotice=dynamic?.notice??`https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`;
       try {
+        if(!('failed' in updates) && !dynamic) {
+          const latestNotice=await getPpsNotice(notice,fetcher);
+          const files=latestNotice.attachments.filter(a=>a.title.includes(trade));
+          if(!files.some(a=>a.url===url)) {
+            if(files.length!==1)throw new Error('PPS_CORRECTION_AMBIGUOUS');
+            url=files[0].url;ppsEffective(latestNotice.body,effectiveDate);
+          }
+        }
         let request = cache.get(url);
-        if (!request) { request = readPublicFile(url, fetcher, `https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`).then(extractPublicXlsxText); cache.set(url, request); }
+        if (!request) { request = readPublicFile(url, fetcher, sourceNotice).then(extractPublicXlsxText); cache.set(url, request); }
         const text = await request;
         const rates = parsePpsRates(text, trade, grade, effectiveDate);
+        const firstThisYear=effectiveDate.slice(0,4)<date.slice(0,4)?updates.items.filter(p=>p.trade===trade&&p.date.slice(0,4)===date.slice(0,4)).sort((a,b)=>a.date.localeCompare(b.date))[0]:undefined;
+        const yearRates=firstThisYear?parsePpsRates(firstThisYear.text,trade,grade,firstThisYear.date):undefined;
         for (const field of PPS_FIELDS) {
           const rate = rates[field];
-          if (!rate) { issue(date, field, (field === 'employment' && !/^[1-7](등급)?$/u.test(grade) ? '고용보험 적용 등급 1~7등급 확인 후 재조회' : '조달청 항목·분모·값 확인 실패 · 원문 확인 후 수동 입력') + ` / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`); continue; }
-          result.items.push({ date, field, value: rate.value, effectiveDate, source: `조달청 ${trade} ${effectiveDate} ${rate.cell} / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`, condition: `${rate.condition} / 공표 적용: ${effectiveDate} ${basis}부터. ES 계약상 적용 여부 검토` });
+          if(rate && yearRates?.[field] && yearRates[field]!.value!==rate.value) {issue(date,field,'연초 공표 전환 · 변경 항목 시행일 확인 필요 · 전년도 요율 자동 연장 안 함 / '+sourceNotice);continue;}
+          if (!rate) { issue(date, field, (field === 'employment' && !/^[1-7](등급)?$/u.test(grade) ? '고용보험 적용 등급 1~7등급 확인 후 재조회' : '조달청 항목·분모·값 확인 실패 · 원문 확인 후 수동 입력') + ' / '+sourceNotice); continue; }
+          result.items.push({ date, field, value: rate.value, effectiveDate, source: `조달청 ${trade} ${effectiveDate} ${rate.cell} / ${sourceNotice}`, condition: `${rate.condition} / 공표 적용: ${effectiveDate} ${basis}부터. ES 계약상 적용 여부 검토` });
         }
-      } catch (error) { for (const field of PPS_FIELDS) issue(date, field, `조달청 공표자료 조회 실패 (${failureCode(error)}) · 재조회 또는 수동 입력 / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`); }
+      } catch (error) { for (const field of PPS_FIELDS) issue(date, field, `조달청 공표자료 조회 실패 (${failureCode(error)}) · 재조회 또는 수동 입력 / ${sourceNotice}`); }
     })
   ]);
+  await dynamicPps;
   for (const date of new Set(dates)) issue(date, 'safety', '산업안전은 공사종류·대상액·기초액 조건 확인 필요 · 기존 원본 C22 공통값 유지, 수동 검토');
   return result;
 }

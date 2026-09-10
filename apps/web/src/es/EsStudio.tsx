@@ -9,7 +9,7 @@ import { EsTutorial } from './EsTutorial';
 import { EsPrintSettingsEditor } from './EsPrintSettingsEditor';
 import { resolveEsSources, syncEsSourceDates, esElapsedDays } from '../../../../packages/document-engine/src/es-source-history';
 import { applyEsEcosSources, mergeEsSourceCandidates, type EsEcosItem } from '../../../../packages/document-engine/src/es-ecos';
-import { applyEsPublicSources, esSourceValue, setEsSourceValue, type EsPublicSourceResult, type EsPublicSourceItem, type EsSourceField } from '../../../../packages/document-engine/src/es-source-candidates';
+import { applyEsPublicSources, esSourceValue, setEsSourceValue, esSourceWarnings, type EsPublicSourceResult, type EsPublicSourceItem, type EsSourceField } from '../../../../packages/document-engine/src/es-source-candidates';
 import { applyEsPairSources, ES_PAIR_LABELS, type EsPairSourceResult } from '../../../../packages/document-engine/src/es-pair-candidates';
 import { EsMoneyInput, esFormatNumber } from './EsMoneyInput';
 import { esDecimal } from '../../../../packages/document-engine/src/es-decimal';
@@ -213,10 +213,12 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       const published = await publicSources;
       if ('response' in published) {
         try {
+          const updateWarnings=esSourceWarnings(published.response.warnings);
           candidate.input = applyEsPublicSources(candidate.input, published.response.items);
           published.response.items.filter(i => i.basis === 'PPS_CONSTRUCTION_DIRECT_LABOR').forEach(i => constructionHealthDates.add(i.date));
           published.response.issues.forEach(i => { candidate.details[i.date + ':' + i.field] = i.reason; });
           published.response.items.forEach(mark);
+          candidate.warnings.push(...updateWarnings);
         } catch { candidate.warnings.push('공식 공표자료 응답 검증 실패 · 기존 값과 Excel 이력을 유지합니다.'); }
       } else candidate.warnings.push('조달청·대한건설협회 조회 실패: ' + message(published.error));
       try {
@@ -249,11 +251,13 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       const pairOutcome = await pairs;
       if ('response' in pairOutcome) {
         try {
+          const updateWarnings=esSourceWarnings(pairOutcome.response.warnings);
           if (!Array.isArray(pairOutcome.response.items) || !Array.isArray(pairOutcome.response.issues) || pairOutcome.response.issues.some(i => !i || !dates.slice(1).includes(i.date) || !Number.isInteger(i.index) || i.index < 0 || i.index > 5 || typeof i.reason !== 'string' || i.reason.length > 2000)) throw new Error('기간쌍 응답 형식 오류');
           const checked = applyEsPairSources(candidate.input, pairOutcome.response.items);
           for (const item of pairOutcome.response.items) { const id = item.date + ':pair' + item.index; candidate.automatic.push(id); candidate.details[id] = item.pair.source; }
           for (const issue of pairOutcome.response.issues) { candidate.details[issue.date + ':pair' + issue.index] = issue.reason; candidate.warnings.push(issue.reason); }
           candidate.input = checked;
+          candidate.warnings.push(...updateWarnings);
         } catch { candidate.warnings.push('기계·표준시장단가 응답 검증 실패 · 기존/Excel 기간쌍을 유지합니다.'); }
       } else candidate.warnings.push('기계·표준시장단가 조회 실패: ' + message(pairOutcome.error));
       for (const c of [candidate.input.current, candidate.input.previous]) for (const [i, pair] of [c.machinery, ...c.standards].entries()) if (!pair.commonCount || !pair.baseAverage || !pair.comparisonAverage) candidate.warnings.push(`${c.period.date} ${ES_PAIR_LABELS[i]}: 공통 수·평균 미확인. 비목 금액과 별개의 원자료가 필요합니다. 적용 후 지수·요율에서 재조회 또는 수동 입력하세요.`);
@@ -456,6 +460,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
             return <tr key={field}><th scope="row">{label} · {name}</th><td>{esFormatNumber(before) || '미입력'}</td><td><span className="es-source-state">{automatic ? '자동조회 · 적용조건 확인' : edited ? '직접 선택·수정' : after !== '' ? '기존/Excel 값 유지' : '수동 입력 필요'}</span><EsMoneyInput aria-label={`${label} ${name} 적용할 값`} aria-invalid={invalid || undefined} aria-describedby={invalid ? 'es-source-errors' : undefined} placeholder="원자료 확인 후 입력" value={after} onValueChange={value => editSource(key, field, value)} /><div className="es-source-row-actions"><button disabled={current.date !== proposed.date} onClick={() => editSource(key, field, before, true)} aria-label={`${label} ${name} 기존값 유지`}>기존값 유지</button><details><summary>출처·조건</summary><p>{detail}</p></details><EsSourceLinks text={detail} /></div></td></tr>;
           })}</tbody>;
         })}</table></div>
+        {sourcePreview.warnings.some(w=>w.includes('최신 공표')||w.includes('최신 노임')) && <p className="es-access" role="status">{sourcePreview.warnings.some(w=>/최신.*실패/.test(w))?'최신 공표 일부 미확인 · 기존 입력은 유지합니다. 아래 조회 안내를 확인하세요.':'최신 공표 목록 자동확인 · 항목별 검증 결과와 미확인 사유를 확인하세요. 목록은 최대 1시간 캐시합니다.'}</p>}
         <details><summary>조회 안내·추가 검토 항목 ({sourcePreview.warnings.length})</summary>{sourcePreview.warnings.map((warning, i) => <p className="es-warning" key={i}>{warning}</p>)}</details>
         <h3>기계경비·표준시장단가 · 적용 전 비교</h3><p>기준 평균 → 비교 평균 (원) / 공통품목 수. 적용 후 ‘지수·요율’에서 수동 수정할 수 있습니다.</p>
         <div className="es-table-wrap"><table><thead><tr><th>기간·분야</th><th>현재 입력</th><th>조회 결과·공통 수</th></tr></thead><tbody>{(['current', 'previous'] as const).flatMap((key, j) => [sourcePreview.input[key].machinery, ...sourcePreview.input[key].standards].map((p, i) => {

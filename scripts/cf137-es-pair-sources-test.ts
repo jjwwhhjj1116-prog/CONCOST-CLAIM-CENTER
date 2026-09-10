@@ -69,7 +69,7 @@ test('CF137 live-structure provider selects separate electricity/civil sources a
     for(const i of electric?[4]:[1,2,3,5]) table.push(['合成',['','토목','건축','기계','전기','통신'][i],['','23-05-10','23-05-01','23-05-01','23-08-30','23-07-01'][i],'5','3','1001','333',electric?'26-03-10':'26-01-01','6','3','1202','400']);
     const b=utils.book_new();utils.book_append_sheet(b,utils.aoa_to_sheet(table),'총괄표');return new Response(write(b,{type:'array',bookType:'xlsx'}));
   }) as typeof fetch);
-  assert.equal(r.items.length,10);assert.equal(r.issues.length,2);assert.equal(urls.length,3);assert.ok(r.issues.every(i=>i.index===0));assert.equal(JSON.stringify(r).includes('private error'),false);
+  assert.equal(r.items.length,10);assert.equal(r.issues.length,2);assert.equal(urls.filter(u=>/fileDown|download\.do/.test(u)).length,3);assert.ok(r.issues.every(i=>i.index===0));assert.equal(JSON.stringify(r).includes('private error'),false);
 });
 test('CF137 invalid or future dates never fetch unverified fallback or accept user supplied URLs', async () => {
   const deny=(async()=>{throw new Error('must not fetch');}) as typeof fetch;

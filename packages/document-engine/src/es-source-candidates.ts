@@ -8,7 +8,13 @@ export interface EsPublicSourceItem {
 }
 export interface EsPublicSourceResult {
   items: EsPublicSourceItem[];
+  warnings?: string[];
   issues: { date: string; field: EsSourceField; reason: string }[];
+}
+export function esSourceWarnings(value: unknown): string[] {
+  if(value===undefined)return [];
+  if(!Array.isArray(value)||value.length>30||value.some(v=>typeof v!=='string'||v.length>1000))throw new Error('공식자료 갱신 상태 검증에 실패했습니다.');
+  return value;
 }
 export const esSourceValue = (period: EsPeriod, field: EsSourceField) => field === 'wage' ? period.wage : period.rates[field];
 export function setEsSourceValue(period: EsPeriod, field: EsSourceField, value: string): void {

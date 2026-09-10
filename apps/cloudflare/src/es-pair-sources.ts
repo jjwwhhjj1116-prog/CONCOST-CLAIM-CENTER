@@ -4,6 +4,7 @@ import { readPublicFile } from './es-public-sources';
 import { esMaterialMonth } from '../../../packages/document-engine/src/es-source-history';
 import type { EsPair } from '../../../packages/document-engine/src/es-calculation';
 import { ES_PAIR_LABELS, type EsPairSourceResult } from '../../../packages/document-engine/src/es-pair-candidates';
+import { latestPpsNotices, latestCakReports, checkedToday, getPpsNotice } from './es-public-discovery';
 
 const VERIFIED_THROUGH = '2026-09-10';
 // Fixed official attachment catalog, not rates or customer workbooks. Per-field effective dates
@@ -45,7 +46,6 @@ const positiveInteger = (v: unknown): string => {
   if (!/^\d{1,15}$/.test(s) || BigInt(s) <= 0n) throw new Error('PAIR_NUMBER_INVALID');
   return s;
 };
-const publication = (date: string, index: number) => [...PPS_PAIR_PUBLICATIONS].reverse().find(p => p[0] <= date && p[1].includes(index));
 const ppsDate = (value: unknown) => {
   const m = String(value ?? '').trim().match(/^(\d{2}|20\d{2})-(\d{2})-(\d{2})$/);
   if (!m) return ''; const date = `${m[1].length === 2 ? '20' : ''}${m[1]}-${m[2]}-${m[3]}`;
@@ -118,29 +118,69 @@ export async function fetchEsPairSources(dates: string[], fetcher: typeof fetch 
   if (dates.length !== 3) throw new Error('ES_SOURCE_INVALID_DATE');
   try { dates.forEach(esMaterialMonth); } catch { throw new Error('ES_SOURCE_INVALID_DATE'); }
   if (dates[0] > dates[1] || dates[0] > dates[2]) throw new Error('ES_SOURCE_INVALID_DATE');
-  const result: EsPairSourceResult = { items: [], issues: [] };
+  const result: EsPairSourceResult = { items: [], issues: [], warnings: [] };
+  const publications=[...PPS_PAIR_PUBLICATIONS];
+  const machineFiles: Record<string,string> = Object.fromEntries(Object.entries(CAK_MACHINERY).map(([year,id])=>[year,'https://www.cak.or.kr/download.do?uuid='+id]));
+  let pairsFresh=false,machinesFresh=false,pairsMetadataFound=false,pairsUnverified=false,machinesUnverified=false;
   const books = new Map<string, Promise<{rows: unknown[][]; sha: string}>>(), machines = new Map<string, Promise<{rows: MachineryRow[]; sha: string}>>();
+  const getBook=(url:string,notice:string)=>{
+    let book=books.get(url);if(!book){book=(async()=>{const bytes=await readPublicFile(url,fetcher,notice),sha=await hash(bytes);const workbook=read(bytes,{type:'array',cellFormula:false,cellHTML:false,sheets:'총괄표',sheetRows:500});if(!workbook.Sheets['총괄표'])throw new Error('PPS_PAIR_SHEET_MISSING');return {rows:utils.sheet_to_json<unknown[]>(workbook.Sheets['총괄표'],{header:1,defval:null,range:'A1:L500'}),sha};})();books.set(url,book);}return book;
+  };
+  await Promise.all([
+    (async()=>{try {
+      const discovered: typeof publications=[];
+      const notices=await latestPpsNotices('pairs',fetcher);pairsMetadataFound=true;
+      for(const notice of notices) {
+        if(!notice.attachments.length)throw new Error('PPS_NEW_PAIR_UNVERIFIED');
+        let verified=false;
+        const periodValues=new Map<string,string>();
+        for(const file of notice.attachments) {
+          // Only the actual total-sheet workbook can contribute period mappings.
+          if(!/표준시장단가|지수/.test(file.title))continue;
+          const data=await getBook(file.url,notice.url);
+          for(let index=1;index<=5;index++) {
+            const name=['','토목','건축','기계','전기','통신'][index];
+            const dates=[...new Set(data.rows.filter(r=>r[1]===name).map(r=>ppsDate(r[7])).filter(Boolean))];
+            for(const date of dates) {
+              const rows=data.rows.filter(r=>r[1]===name&&ppsDate(r[7])===date);
+              for(const row of rows) {
+                const base=ppsDate(row[2]),key=index+':'+base+':'+date,value=JSON.stringify(parsePpsPairRows(data.rows,index,base,date));
+                if(periodValues.has(key)&&periodValues.get(key)!==value)throw new Error('PPS_PAIR_CORRECTION_AMBIGUOUS');
+                periodValues.set(key,value);
+              }
+              discovered.push([date,[index],file.key!,file.sn!,notice.id]);verified=true;
+            }
+          }
+        }
+        if(!verified)throw new Error('PPS_NEW_PAIR_UNVERIFIED');
+      }
+      publications.push(...discovered);publications.sort((a,b)=>a[0].localeCompare(b[0]));pairsFresh=true;
+      result.warnings!.push('표준시장단가 최신 공표 자동확인 · '+checkedToday()+' · 총괄표 분야별 적용일 검증');
+    }catch(e){pairsUnverified=pairsMetadataFound||(e instanceof Error&&e.message==='PPS_DISCOVERED_NOTICE_UNVERIFIED');result.warnings!.push('표준시장단가 최신 공표 확인·검증 실패 · '+(pairsUnverified?'새 공표 검증 전까지 자동 적용 중단':'검증된 과거 기간쌍만 사용합니다.'));}})(),
+    (async()=>{try {const reports=await latestCakReports('machinery',fetcher),seen=new Set<string>();for(const r of reports)if(!seen.has(r.year)){seen.add(r.year);if(r.file)machineFiles[r.year]=r.file;else delete machineFiles[r.year];}machinesFresh=true;result.warnings!.push('기계경비 최신 공표 자동확인 · '+checkedToday()+' · '+reports[0].year+'년(파일 본문은 조회 시 검증)');}catch(e){machinesUnverified=e instanceof Error&&/CAK_ATTACHMENT/.test(e.message);result.warnings!.push('기계경비 최신 공표 확인 실패 · '+(machinesUnverified?'새 첨부 검증 전까지 자동 적용 중단':'검증된 과거 원문만 사용합니다.'));}})(),
+  ]);
+  const choose=(date:string,index:number)=>[...publications].reverse().find(p=>p[0]<=date&&p[1].includes(index));
   const getMachines = (year: string) => {
     let value = machines.get(year);
-    if (!value) { value = (async () => { const uuid = CAK_MACHINERY[year as keyof typeof CAK_MACHINERY]; if (!uuid) throw new Error('CAK_YEAR_NOT_CONNECTED'); const bytes = await readPublicFile('https://www.cak.or.kr/download.do?uuid=' + uuid, fetcher, 'https://www.cak.or.kr'); const sha = await hash(bytes); return { rows: await parseMachineryPdf(bytes, year), sha }; })(); machines.set(year, value); }
+    if (!value) { value = (async () => { const url = machineFiles[year]; if (!url) throw new Error('CAK_YEAR_NOT_CONNECTED'); const bytes = await readPublicFile(url, fetcher, 'https://www.cak.or.kr'); const sha = await hash(bytes); return { rows: await parseMachineryPdf(bytes, year), sha }; })(); machines.set(year, value); }
     return value;
   };
   // Machinery downloads/decodes are sequential to keep the Worker memory peak bounded.
   for (const date of new Set(dates.slice(1))) for (let index = 0; index < 6; index++) {
     try {
-      if (date > VERIFIED_THROUGH) throw new Error('PAIR_PUBLICATION_NOT_VERIFIED');
+      if(index===0?machinesUnverified:pairsUnverified)throw new Error('PAIR_NEW_PUBLICATION_UNVERIFIED');
+      if (date > ((index===0?machinesFresh:pairsFresh)?checkedToday():VERIFIED_THROUGH)) throw new Error('PAIR_PUBLICATION_NOT_VERIFIED');
       let pair: EsPair;
       if (index === 0) {
         const aYear = dates[0].slice(0,4), bYear = date.slice(0,4), a = await getMachines(aYear), b = await getMachines(bYear);
         pair = machineryPair(a.rows, b.rows, aYear, bYear);
-        pair.source = `대한건설협회 ${aYear}→${bYear} 공통 분류번호 ${pair.commonCount}기종 / 시간당 손료(원), 연료·운전경비 제외 / 합계÷공통수 정수 절사 / ${pair.source} / SHA256 ${a.sha},${b.sha} / https://www.cak.or.kr/download.do?uuid=${CAK_MACHINERY[aYear as keyof typeof CAK_MACHINERY]} / https://www.cak.or.kr/download.do?uuid=${CAK_MACHINERY[bYear as keyof typeof CAK_MACHINERY]}`;
+        pair.source = `대한건설협회 ${aYear}→${bYear} 공통 분류번호 ${pair.commonCount}기종 / 시간당 손료(원), 연료·운전경비 제외 / 합계÷공통수 정수 절사 / ${pair.source} / SHA256 ${a.sha},${b.sha} / ${machineFiles[aYear]} / ${machineFiles[bYear]}`;
       } else {
-        const a = publication(dates[0], index), b = publication(date, index);
+        const a = choose(dates[0], index), b = choose(date, index);
         if (!a || !b) throw new Error('PPS_PAIR_PERIOD_NOT_CONNECTED');
-        const url = `https://www.pps.go.kr/common/fileDown.do?key=${b[2]}&sn=${b[3]}`, notice = `https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${b[4]}&key=00038`;
-        let book = books.get(url);
-        if (!book) { book = (async () => { const bytes = await readPublicFile(url, fetcher, notice), sha = await hash(bytes); const workbook = read(bytes, { type: 'array', cellFormula: false, cellHTML: false, sheets: '총괄표', sheetRows: 500 }); if (!workbook.Sheets['총괄표']) throw new Error('PPS_PAIR_SHEET_MISSING'); return { rows: utils.sheet_to_json<unknown[]>(workbook.Sheets['총괄표'], { header: 1, defval: null, range: 'A1:L500' }), sha }; })(); books.set(url, book); }
-        const data = await book; pair = parsePpsPairRows(data.rows, index, a[0], b[0]);
+        let url = `https://www.pps.go.kr/common/fileDown.do?key=${b[2]}&sn=${b[3]}`; const notice = `https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${b[4]}&key=00038`;
+        if(pairsFresh) {const n=await getPpsNotice(b[4],fetcher);if(!n.attachments.some(a=>a.url===url)){const files=n.attachments.filter(a=>/표준시장단가|지수/.test(a.title));if(files.length!==1)throw new Error('PPS_CORRECTION_AMBIGUOUS');url=files[0].url;}}
+        const data = await getBook(url,notice); pair = parsePpsPairRows(data.rows, index, a[0], b[0]);
         pair.source = `조달청 총괄표 ${a[0]}→${b[0]} / 공통 ${pair.commonCount}품목 / 원문 정수 평균·합계 검증 / SHA256 ${data.sha} / ${notice} / ${url}`;
       }
       result.items.push({ baseDate: dates[0], date, index, pair });

@@ -3,7 +3,7 @@ import { esSourceDates, esMaterialMonth } from './es-source-history';
 
 export const ES_PAIR_LABELS = ['기계경비', '토목 표준시장단가', '건축 표준시장단가', '기계설비 표준시장단가', '전기 표준시장단가', '통신 표준시장단가'] as const;
 export interface EsPairSourceItem { baseDate: string; date: string; index: number; pair: EsPair }
-export interface EsPairSourceResult { items: EsPairSourceItem[]; issues: { date: string; index: number; reason: string }[] }
+export interface EsPairSourceResult { items: EsPairSourceItem[]; issues: { date: string; index: number; reason: string }[]; warnings?: string[] }
 
 /** Only validated period pairs enter the confirmation draft. The saved document is untouched. */
 export function applyEsPairSources(input: EsInput, items: EsPairSourceItem[]): EsInput {

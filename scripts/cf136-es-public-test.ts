@@ -66,7 +66,7 @@ test('CF136 official dates pick historical files and deduplicate downloads per s
   const urls: string[] = [], mock = publicMock();
   const result = await fetchEsPublicSources(['2024-06-15', '2026-05-01', '2026-04-30'], '건축', '3등급', (async (u, init) => { urls.push(String(u)); return mock(u, init); }) as typeof fetch);
   assert.equal(result.items.length, 21); assert.equal(result.issues.length, 3);
-  assert.equal(urls.length, 3); assert.ok(urls.some(u => u.includes('202403150002'))); assert.ok(urls.some(u => u.includes('202604070010')));
+  assert.equal(urls.filter(u=>/fileDown|download\.do/.test(u)).length, 3); assert.ok(urls.some(u => u.includes('202403150002'))); assert.ok(urls.some(u => u.includes('202604070010')));
   assert.equal(result.items.find(i => i.date === '2024-06-15' && i.field === 'wage')?.effectiveDate, '2024-01-01');
   assert.equal(result.items.find(i => i.field === 'employment')?.value, '1.13');
 });
@@ -111,7 +111,7 @@ test('CF136 public download permits only the original official resource through 
   assert.equal(allowed.items.length, 7);
   const calls: string[] = [];
   const blocked = await fetchEsPublicSources(['2026-05-01'], '건축', '3등급', (async u => { calls.push(String(u)); return new Response(null, { status: 302, headers: { location: 'https://evil.invalid/file' } }); }) as typeof fetch);
-  assert.equal(blocked.items.length, 0); assert.equal(calls.length, 2); assert.ok(calls.every(u => !u.includes('evil')));
+  assert.equal(blocked.items.length, 0); assert.equal(calls.length, 4); assert.ok(calls.every(u => !u.includes('evil')));
 });
 test('CF136 Node public source route enforces role/method/date without reading a key or writing DB', async () => {
   for (const [roles, method, date, status] of [[['staff'], 'GET', '2026-05-01', 200], [['viewer'], 'GET', '2026-05-01', 403], [['admin'], 'POST', '2026-05-01', 405], [['admin'], 'GET', 'bad-date', 400]] as const) {

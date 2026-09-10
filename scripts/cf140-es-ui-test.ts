@@ -220,3 +220,12 @@ test('CF142 React: source link is visible before expanding conditions, opens new
   await dialog.getByRole('button', { name: '취소 · 기존 유지', exact: true }).click();
   assert.deepEqual(writes, []); assert.deepEqual(saved(), before);
 }));
+
+test('CF144 React: malformed update warnings never publish candidates or change existing input', { skip: !executablePath, timeout: 45000 }, () => withStudio(async ({page,writes,saved})=>{
+ const before=saved();
+ await page.route('**/api/es/sources/public?*',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({items:[{date:'2024-01-01',field:'wage',value:'999999',effectiveDate:'2024-01-01',source:'합성 공표',condition:'원/일'}],issues:[],warnings:{invalid:true}})}));
+ await page.getByRole('button',{name:'ES 요율정보 가져오기',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'ES 요율정보 가져오기 · 적용 전 확인'});
+ const value=dialog.getByLabel('기준 노임 (원/일) 적용할 값',{exact:true});await value.waitFor();assert.equal(await value.inputValue(),'100');
+ await dialog.getByRole('button',{name:'취소 · 기존 유지',exact:true}).click();assert.deepEqual(writes,[]);assert.deepEqual(saved(),before);
+}));
