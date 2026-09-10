@@ -64,3 +64,17 @@ git diff --check
 `node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1 scripts/cf102-workflow-usability-test.ts scripts/cf117-workflow-schedule-test.ts scripts/cf145-schedule-print-ui-test.ts scripts/cf58-schedule-print-hwp-test.ts scripts/cf73-workflow-minutes-parity-test.ts scripts/cf80-company-minutes-accessible-type-test.ts scripts/cf103-minutes-export-test.ts scripts/cf106-minutes-layout-test.ts scripts/cf115-workflow-ui-test.ts`
 
 다음 시작점: 개발 배포 결과 확인 → 미저장 작업 보존 후 새로고침 → 전체일정표 출력의 월 범위와 착수/현장조사 입력 그룹 확인. 롤백은 `0a3f175` 소스를 development에 재배포하며 DB 복구는 필요 없다.
+
+### CF145 개발 배포 결과
+
+- 제품 `da2461d`, Worker `31ea79c2-ff1d-4022-bbac-76f07c92b870`, 자산 `index-D9jG5h3N.js` / `index-BP3loTSC.css`.
+- 개발 URL https://concost-claim-center-development.jjwwhhjj1116.workers.dev . 운영/Node 배포·DB·키 변경 없음.
+- 배포 직후 smoke에서 1개 자산 SHA 불일치가 1회 있었으며, 해당 URL의 JS 응답 재확인과 전체 smoke 재실행으로 5개 자산 SHA 일치 PASS를 확인했다. 초기 불일치 원인은 단정하지 않는다. health/readiness/Drive 정상, 익명 문서 접근401 유지.
+
+### CF145 실제 화면 확인 및 단계 이동 보완
+
+- 로그인된 개발 화면 읽기 전용 검수: 실제 저장 일정의 마지막 종료일 2026-11-30과 기본 출력 9~11월 3쪽 일치. 한 달 1쪽에서 전체 3쪽 복귀 확인. 착수/현장조사 시간·작성자·양측 참석자 묶음과 상태 선택 제거 확인. 사용자 입력·저장·실제 인쇄 없이 검수 탭만 닫고 기존 탭 보존. 증거는 `output/cf145-live-readonly-results.json`, `output/cf145-after-*.png`.
+- 최종 화면 이동에서 현장조사 기준 일정이 착수회의에 남는 기존 문제를 재현했다. 초기 조회 effect가 최초 mount에만 실행되던 원인으로, 단계 변경 시 조회를 다시 실행하고 선택 프로젝트는 새 단계의 조회 대상 안에 있으면 유지한다. Router key로 전체 상태를 버리지 않는다.
+- 이전 단계 조회·저장 응답은 세대 번호로 화면 반영을 차단한다. 서버에 이미 요청한 저장 자체는 취소하지 않는다. 기록 저장 이후 일정 저장에도 최초 요청 세대를 전달한다.
+- 실제 Router 합성 회귀: 수정 전 단계 재조회 timeout으로 실패, 수정 후 단계별 9/21→9/17→9/21 전환과 미저장 원문 이동 취소 보존 통과. 지연된 현장조사 저장 응답이 현재 착수 일정에 반영되지 않는 회귀도 추가했다. 실제 업무 데이터 저장 테스트는 하지 않았다.
+- 기존 한계: 상단 기준 일정만 수정했을 때 및 일부 새 기록의 날짜만 바꿨을 때 미저장 이동 경고가 누락될 수 있다. 이번에 모든 입력의 이동 보호를 완성했다고 주장하지 않으며, 별도 후속 범위로 남긴다.

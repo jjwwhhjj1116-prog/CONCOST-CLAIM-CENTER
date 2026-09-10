@@ -172,6 +172,7 @@ export const WorkflowOperations: React.FC<{
   const [cases, setCases] = useState<CaseSummary[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState(initialCaseId);
   const selectedCaseRef = useRef(selectedCaseId);
+  const routeLoadGeneration = useRef(0);
   const [data, setData] = useState<WorkflowPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
@@ -239,6 +240,8 @@ export const WorkflowOperations: React.FC<{
 
   const loadWorkflow = async (caseId: string, sync = true) => {
     const requestCaseId = caseId;
+    const generation = routeLoadGeneration.current;
+    const isCurrent = () => generation === routeLoadGeneration.current && requestCaseId === selectedCaseRef.current;
     if (!requestCaseId || requestCaseId !== selectedCaseRef.current) return;
     setLoading(true);
     setFailure('');
@@ -247,37 +250,45 @@ export const WorkflowOperations: React.FC<{
       const [payload, schedule] = await Promise.all([
         apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(requestCaseId)}/workflow`),
         apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule').catch(error => {
-          if (requestCaseId === selectedCaseRef.current) { setScheduleProject(null); setScheduleFailure(messageFrom(error)); }
+          if (isCurrent()) { setScheduleProject(null); setScheduleFailure(messageFrom(error)); }
           return null;
         })
       ]);
-      if (requestCaseId !== selectedCaseRef.current) return;
+      if (!isCurrent()) return;
       setData(payload);
       if (sync) syncForms(payload);
       if (schedule) syncSharedSchedule(schedule.projects, payload);
     } catch (error) {
-      if (requestCaseId === selectedCaseRef.current) setFailure(messageFrom(error));
+      if (isCurrent()) setFailure(messageFrom(error));
     } finally {
-      if (requestCaseId === selectedCaseRef.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
   const reloadSchedule = async () => {
     if (!data || busy || importBusy) return;
     const requestCaseId = selectedCaseId;
+    const generation = routeLoadGeneration.current;
+    const isCurrent = () => generation === routeLoadGeneration.current && selectedCaseRef.current === requestCaseId;
     setBusy('기준 일정 불러오기');
     try {
       const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
-      if (selectedCaseRef.current !== requestCaseId) return;
+      if (!isCurrent()) return;
       // Retry only the unavailable calendar, never reload or initialize entered notes/dates.
       syncSharedSchedule(schedule.projects, data, false);
       setScheduleFailure('');
-    } catch (error) { if (selectedCaseRef.current === requestCaseId) setScheduleFailure(messageFrom(error)); }
-    finally { if (selectedCaseRef.current === requestCaseId) setBusy(''); }
+    } catch (error) { if (isCurrent()) setScheduleFailure(messageFrom(error)); }
+    finally { if (isCurrent()) setBusy(''); }
   };
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setData(null);
+    setScheduleProject(null);
+    setBusy('');
+    setNotice('');
+    setFailure('');
     const caseQuery = routeId === 'WF-04' ? '/api/cases?scope=project-work&stage=SITE_SURVEY&limit=100' : '/api/cases?scope=project-work&limit=100';
     apiRequest<{ cases: CaseSummary[] }>(caseQuery).then((response) => {
       if (!active) return;
@@ -292,8 +303,8 @@ export const WorkflowOperations: React.FC<{
     }).catch((error) => {
       if (active) { setFailure(messageFrom(error)); setLoading(false); }
     });
-    return () => { active = false; };
-  }, []);
+    return () => { active = false; routeLoadGeneration.current++; };
+  }, [routeId]);
 
   const selectCase = (caseId: string) => {
     if (busy || importBusy || (formDirty && !window.confirm('아직 저장하지 않은 입력·자동정리 결과가 있습니다. 현재 내용을 닫고 프로젝트를 바꿀까요?'))) return;
@@ -306,7 +317,7 @@ export const WorkflowOperations: React.FC<{
     void loadWorkflow(caseId);
   };
 
-  const persistSharedSchedule = async (dates?: { startDate: string; endDate: string }) => {
+  const persistSharedSchedule = async (dates?: { startDate: string; endDate: string }, generation = routeLoadGeneration.current) => {
     if (!scheduleProject) throw new Error('수주 확정된 프로젝트만 기준 일정을 저장할 수 있습니다. 프로젝트 접수에서 먼저 수주 확정해 주세요.');
     if (!scheduleProject.responsiblePm) throw new Error('프로젝트 일정표에서 담당 PM을 먼저 지정해 주세요.');
     if (!scheduleProject.canManageSchedule) throw new Error('기준 일정은 담당 PM 또는 관리자가 직접 저장할 수 있습니다.');
@@ -327,46 +338,52 @@ export const WorkflowOperations: React.FC<{
         })
       }
     );
-    setScheduleDraft((current) => ({ ...current, startDate: result.schedule.startDate, endDate: result.schedule.endDate, status: result.schedule.status, noteText: result.schedule.noteText, version: result.schedule.version, explicit: true }));
+    if (generation === routeLoadGeneration.current && selectedCaseId === selectedCaseRef.current) setScheduleDraft((current) => ({ ...current, startDate: result.schedule.startDate, endDate: result.schedule.endDate, status: result.schedule.status, noteText: result.schedule.noteText, version: result.schedule.version, explicit: true }));
   };
 
   const saveSharedSchedule = async () => {
     if (!selectedCaseId || busy) return;
+    const generation = routeLoadGeneration.current;
+    const isCurrent = () => generation === routeLoadGeneration.current && selectedCaseId === selectedCaseRef.current;
     setBusy('기준 일정 저장'); setFailure(''); setNotice('');
     try {
       await persistSharedSchedule();
-      setNotice(`${stage.name} 기준 일정 저장 완료 · 프로젝트 일정표와 이 화면에 같은 날짜가 반영되었습니다.`);
-    } catch (error) { setFailure(messageFrom(error)); }
-    finally { setBusy(''); }
+      if (isCurrent()) setNotice(`${stage.name} 기준 일정 저장 완료 · 프로젝트 일정표와 이 화면에 같은 날짜가 반영되었습니다.`);
+    } catch (error) { if (isCurrent()) setFailure(messageFrom(error)); }
+    finally { if (isCurrent()) setBusy(''); }
   };
 
   const mutate = async (label: string, work: () => Promise<WorkflowPayload | { payload: WorkflowPayload; notice: string }>) => {
     if (!selectedCaseId || selectedCaseId !== selectedCaseRef.current || !canEdit) return;
+    const generation = routeLoadGeneration.current;
+    const isCurrent = () => generation === routeLoadGeneration.current && selectedCaseId === selectedCaseRef.current;
     setBusy(label);
     setFailure('');
     setNotice('');
     try {
       const result = await work();
       const payload = 'payload' in result ? result.payload : result;
-      if (selectedCaseId !== selectedCaseRef.current) return;
+      if (!isCurrent()) return;
       setData(payload);
       syncForms(payload, true);
       let scheduleWarning = '';
       try {
         const schedule = await apiRequest<{ projects: SharedScheduleProject[] }>('/api/project-workflow/schedule');
-        if (selectedCaseId !== selectedCaseRef.current) return;
+        if (!isCurrent()) return;
         syncSharedSchedule(schedule.projects, payload);
       } catch (error) { scheduleWarning = ` 일정 화면의 최신 상태를 불러오지 못했습니다: ${messageFrom(error)}. 업무 기록은 이미 저장되어 다시 저장할 필요가 없습니다.`; }
+      if (!isCurrent()) return;
       setNotice(`${'payload' in result ? result.notice : `${label} 완료 · 안전하게 저장되었습니다.`}${scheduleWarning}`);
       return true;
     } catch (error) {
-      setFailure(messageFrom(error));
+      if (isCurrent()) setFailure(messageFrom(error));
     } finally {
-      if (selectedCaseId === selectedCaseRef.current) setBusy('');
+      if (isCurrent()) setBusy('');
     }
   };
 
   const saveKickoff = (draft?: WorkflowAiImport) => mutate('착수회의 기록 저장', async () => {
+    const generation = routeLoadGeneration.current;
     const meetingDate = kickoff.meetingAt.slice(0,10);
     const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/kickoff`, {
       method: 'PUT',
@@ -378,7 +395,7 @@ export const WorkflowOperations: React.FC<{
       })
     });
     try {
-      await persistSharedSchedule({ startDate: meetingDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= meetingDate ? scheduleDraft.endDate : meetingDate });
+      await persistSharedSchedule({ startDate: meetingDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= meetingDate ? scheduleDraft.endDate : meetingDate }, generation);
       return { payload, notice: draft?.summary ? '착수회의 원문·자동정리 결과와 기준 일정을 저장했습니다. 원문 대조 후 최종 확정하세요.' : '착수회의 원문과 기준 일정을 저장했습니다. 저장본 자동정리로 정리본을 만들 수 있습니다.' };
     } catch (error) {
       return { payload, notice: `착수회의 원문은 안전하게 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };
@@ -418,11 +435,12 @@ export const WorkflowOperations: React.FC<{
   });
 
   const saveSurvey = (draft?: WorkflowAiImport) => mutate('현장조사 기록 저장', async () => {
+    const generation = routeLoadGeneration.current;
     const payload = await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/site-survey`, {
       method: 'PUT', body: JSON.stringify({ ...survey, ...importedSummaryForSave(draft, survey.rawNotes) })
     });
     try {
-      await persistSharedSchedule({ startDate: survey.surveyDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= survey.surveyDate ? scheduleDraft.endDate : survey.surveyDate });
+      await persistSharedSchedule({ startDate: survey.surveyDate, endDate: scheduleDraft.endDate && scheduleDraft.endDate >= survey.surveyDate ? scheduleDraft.endDate : survey.surveyDate }, generation);
       return { payload, notice: draft?.summary ? '현장조사 원문·자동정리 결과와 기준 일정을 저장했습니다. 원문 대조 후 최종 확정하세요.' : '현장조사 원문과 기준 일정을 저장했습니다. 저장본 자동정리로 정리본을 만들 수 있습니다.' };
     } catch (error) {
       return { payload, notice: `현장조사 원문은 안전하게 저장했습니다. 일정 연동은 보류되었습니다: ${messageFrom(error)}` };

@@ -37,7 +37,8 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
         if(path==='/api/cases')return json({cases:[project]});
         if(path==='/api/project-workflow/schedule'){state.scheduleGets++;return state.scheduleFailure?json({error:'합성 기준 일정 조회 실패'},503):json({projects:[schedule]});}
         if(path.endsWith('/workflow')){state.workflowGets++;return json(payload);}
-        if(method==='PUT'&&(path.endsWith('/workflow/kickoff')||path.endsWith('/workflow/site-survey'))){state.saveAttempts++;state.lastSave=JSON.parse(init.body);return json({error:'합성 업무 기록 저장 실패'},503);}
+        if(method==='PUT'&&(path.endsWith('/workflow/kickoff')||path.endsWith('/workflow/site-survey'))){state.saveAttempts++;state.lastSave=JSON.parse(init.body);if(params.has('pending-save'))return new Promise(resolve=>{state.releaseSave=()=>resolve(json(payload));});return json({error:'합성 업무 기록 저장 실패'},503);}
+        if(method==='PUT'&&path.includes('/stages/')){state.schedulePuts=(state.schedulePuts||0)+1;return json({schedule:{startDate:'2026-09-30',endDate:'2026-09-30',status:'PLANNED',noteText:'이전 단계 지연 저장',version:2}});}
         if(path.endsWith('/evidence')){
           if(method==='POST'){state.uploads++;return json({file:{id:'source-1',originalName:'cf117.txt',storageProvider:'GOOGLE_DRIVE'}});}
           return json({files:[],googleDriveConnected:true,storagePolicy:'GOOGLE_DRIVE_REQUIRED'});
@@ -45,7 +46,15 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
         if(path.endsWith('/workflow/ai-import')){state.ai++;return new Promise(resolve=>{state.release=()=>resolve(json({error:'합성 지연 AI 종료'},503));});}
         return json({});
       };
-      createRoot(document.getElementById('root')).render(React.createElement(WorkflowOperations,{routeId:kind,roles:['admin'],onNavigate:()=>{}}));
+      const root=createRoot(document.getElementById('root'));
+      if(params.has('route-switch')){
+        schedule.stages[0].startDate='2026-09-17';schedule.stages[0].endDate='2026-09-17';
+        schedule.stages[1].startDate='2026-09-21';schedule.stages[1].endDate='2026-09-21';
+        const {RouterView}=await import('/src/routes/Router.tsx');
+        const {requestNavigation}=await import('/src/navigation-guard.ts');
+        const navigate=path=>{const proceed=()=>root.render(React.createElement(RouterView,{currentPath:path,roles:['admin'],previewMode:true,onNavigate:navigate}));if(!requestNavigation(path,proceed))proceed();};
+        state.navigate=navigate;navigate('/workflow/site-survey');
+      }else root.render(React.createElement(WorkflowOperations,{routeId:kind,roles:['admin'],onNavigate:()=>{}}));
     ` : undefined
   }] });
   await server.listen();
@@ -54,6 +63,50 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
   assert.ok(executablePath, 'Set CHROME_PATH to an installed Chrome/Chromium executable.');
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
+    await t.test('CF145 actual Router reloads each stage schedule and preserves cancelled dirty navigation', async () => {
+      const page=await browser.newPage({timezoneId:'UTC'});
+      try{
+        await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+        await page.goto(`${origin}/cf117-workflow-schedule.html?kind=WF-04&route-switch=1`);
+        const start=page.locator('.shared-stage-schedule').getByLabel('시작일',{exact:true});
+        await page.waitForFunction(()=>document.querySelector('.shared-stage-schedule input')?.value==='2026-09-21');
+        await page.locator('textarea.is-tall').fill('이동 취소 시 보존할 원문');
+        page.once('dialog',dialog=>dialog.dismiss());
+        await page.evaluate(()=>(window as any).cf117.navigate('/workflow/kickoff'));
+        assert.equal(await page.getByLabel('조사 일자',{exact:true}).count(),1);
+        assert.equal(await page.locator('textarea.is-tall').inputValue(),'이동 취소 시 보존할 원문');
+        page.once('dialog',dialog=>dialog.accept());
+        await page.evaluate(()=>(window as any).cf117.navigate('/workflow/kickoff'));
+        await page.getByLabel('회의 일시',{exact:true}).waitFor();
+        await page.waitForFunction(()=>(window as any).cf117.scheduleGets>=2,{},{timeout:5000});
+        assert.equal(await start.inputValue(),'2026-09-17');
+        await page.evaluate(()=>(window as any).cf117.navigate('/workflow/site-survey'));
+        await page.getByLabel('조사 일자',{exact:true}).waitFor();
+        await page.waitForFunction(()=>document.querySelector('.shared-stage-schedule input')?.value==='2026-09-21');
+        assert.equal(await start.inputValue(),'2026-09-21');
+        assert.equal(await page.evaluate(()=>(window as any).cf117.saveAttempts),0);
+      }finally{await page.close();}
+    });
+    await t.test('CF145 late saved survey response cannot replace the current kickoff schedule', async () => {
+      const page=await browser.newPage({timezoneId:'UTC'});
+      try{
+        await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
+        await page.goto(`${origin}/cf117-workflow-schedule.html?kind=WF-04&route-switch=1&pending-save=1`);
+        await page.getByLabel('조사 일자',{exact:true}).waitFor();
+        await page.locator('textarea.is-tall').fill('이전 조사 저장');
+        await page.getByRole('button',{name:'기록 저장',exact:true}).click();
+        await page.waitForFunction(()=>typeof (window as any).cf117.releaseSave==='function');
+        page.once('dialog',dialog=>dialog.accept());
+        await page.evaluate(()=>(window as any).cf117.navigate('/workflow/kickoff'));
+        await page.waitForFunction(()=>document.querySelector('.shared-stage-schedule input')?.value==='2026-09-17');
+        await page.evaluate(()=>(window as any).cf117.releaseSave());
+        await page.waitForFunction(()=>(window as any).cf117.schedulePuts===1);
+        await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+        assert.equal(await page.locator('.shared-stage-schedule').getByLabel('시작일',{exact:true}).inputValue(),'2026-09-17');
+        assert.equal(await page.getByText('이전 단계 지연 저장',{exact:true}).count(),0);
+        assert.equal(await page.getByLabel('회의 일시',{exact:true}).count(),1);
+      }finally{await page.close();}
+    });
     for (const kind of ['WF-03', 'WF-04']) {
       await t.test(`${kind}: CF145 grouped fields preserve status, attendees, dates, preview and responsive order`, async () => {
         const page=await browser.newPage({viewport:{width:1920,height:1080},timezoneId:'UTC'});
