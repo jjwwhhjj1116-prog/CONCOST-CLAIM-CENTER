@@ -190,9 +190,12 @@ test('CF130 Ctrl/Meta+S is page-scoped and cannot save while either nested confi
   const keydown = expression(byClass('es-editor-workspace').openingElement, 'onKeyDown');
   for (const [ctrlKey, metaKey, key, importOpen, sourceOpen, expected] of [[true, false, 's', false, false, 1], [false, true, 'S', false, false, 1], [false, false, 's', false, false, 0], [true, false, 'z', false, false, 0], [true, false, 's', true, false, 0], [false, true, 's', false, true, 0]] as const) {
     let saved = 0, prevented = 0;
-    evaluate(keydown, { importOpen, sourceOpen, save: () => { saved++; } })({ ctrlKey, metaKey, key, preventDefault: () => { prevented++; } });
+    evaluate(keydown, { importOpen, sourceOpen, documentImportOpen: false, save: () => { saved++; } })({ ctrlKey, metaKey, key, preventDefault: () => { prevented++; } });
     assert.equal(saved, expected); assert.equal(prevented, expected);
   }
+  let saved = 0;
+  evaluate(keydown, { importOpen: false, sourceOpen: false, documentImportOpen: true, save: () => { saved++; } })({ ctrlKey: true, metaKey: false, key: 's', preventDefault: () => undefined });
+  assert.equal(saved, 0, 'contract/cost import confirmation owns keyboard input');
 });
 
 test('CF130 wide-work-area toggle changes display state only and leaves draft, selected evidence and stored revision untouched', () => {

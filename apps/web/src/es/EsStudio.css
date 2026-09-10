@@ -25,6 +25,10 @@
 .es-money-input,.es-calculation-table td { text-align:right; font-variant-numeric:tabular-nums; }
 .es-studio input:not([type=checkbox]),.es-studio select,.es-studio textarea { width:100%; min-width:0; min-height:36px; padding:7px 9px; font:inherit; border:1px solid #bfcee0; border-radius:5px; color:inherit; background:var(--input-bg,#fffced); }
 .es-studio textarea { min-height:80px; resize:vertical; }
+.es-document-import .es-consent { display:flex; align-items:flex-start; gap:10px; margin:16px 0; line-height:1.6; }
+.es-document-import input[type=checkbox] { flex:none; width:18px; height:18px; }
+.es-document-import td { overflow-wrap:anywhere; }
+.es-document-import td:nth-child(3),.es-document-import td:nth-child(4) { font-variant-numeric:tabular-nums; }
 /* Theme inputs use --field-bg with !important; scope the editable color here,
    including the body-level editor portal, without changing other workflows. */
 .es-studio :is(input:not([type=checkbox]):not([type=file]),select,textarea):not(:disabled):not([readonly]) { --field-bg:#fff5cc; background-color:var(--field-bg); color:#183049; color-scheme:light; }

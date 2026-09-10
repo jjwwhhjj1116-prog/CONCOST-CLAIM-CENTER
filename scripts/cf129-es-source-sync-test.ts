@@ -96,6 +96,7 @@ function harness(input = sourceInput()) {
     ...sourceTools, input, document: { id: 'synthetic-es', revision: 4, caseId: 'synthetic-project' }, caseId: 'synthetic-project', pending: { current: false }, dirtyRef: { current: true }, loading: false, loadFailed: false,
     history: { current: [] }, future: { current: [] }, run: { id: 'old-run', revision: 4 }, busy: false, savedSignature: 'old', error: '', notice: '', importError: '', importOpen: false, importPreview: null, tab: 'input',
     structuredClone, JSON, Error, Date, encodeURIComponent, calculateEs, newEsInput,
+    autoSourceTrigger: 0, handledAutoTrigger: { current: 0 }, setSourcePreview: () => undefined, setAutoSourceTrigger: () => undefined,
     message: (error: Error) => error.message, signature: (value: EsInput, caseId: string) => JSON.stringify({ input: value, caseId }),
     editorScroll: { current: { scrollTo: () => undefined } }, window: { history: { replaceState: () => undefined } },
     apiRequest: (path: string, init: RequestInit) => { const body = JSON.parse(String(init.body)); requests.push({ path, method: init.method!, body }); if (path.endsWith('/runs')) return Promise.resolve({ run: { id: 'new-run', revision: body.expectedRevision, input: state.input, result: calculateEs(state.input) } }); return response; },

@@ -239,6 +239,14 @@ async function handle(options: ServerSettingsAdapterOptions): Promise<boolean> {
   const { pathname, method, request, response, db, context, masterKey } = options;
   const organizationOwner = `ORGANIZATION:${context.user.organizationId}`;
 
+  if (pathname === '/api/es/import/contract') {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!context.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) throw new AdapterError(403, 'ES 접근 권한이 없습니다.');
+    if (method === 'GET') { json(response, 200, { configured: false, externalAiAllowed: false, requiresConsent: true, maxBytes: 20_000_000, reason: '이 Node 서버의 계약서 Gemini 연동은 아직 지원하지 않습니다. Excel 직접 읽기는 사용할 수 있습니다.' }); return true; }
+    if (method !== 'POST') throw new AdapterError(405, '지원하지 않는 요청입니다.');
+    throw new AdapterError(503, '이 Node 서버의 계약서 Gemini 연동은 아직 지원하지 않습니다. Excel 직접 읽기는 사용할 수 있습니다.');
+  }
+
   if (pathname === '/api/es/sources/pairs') {
     response.setHeader('Cache-Control', 'no-store');
     if (!context.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) throw new AdapterError(403, 'ES 접근 권한이 없습니다.');

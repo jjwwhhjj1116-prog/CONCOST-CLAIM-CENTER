@@ -14,6 +14,9 @@ import { applyEsPairSources, ES_PAIR_LABELS, type EsPairSourceResult } from '../
 import { EsMoneyInput, esFormatNumber } from './EsMoneyInput';
 import { esDecimal } from '../../../../packages/document-engine/src/es-decimal';
 import './EsStudio.css';
+import { esPercent } from './es-display';
+import { fillMissingEsSources } from './es-auto-sources';
+import { EsDocumentImport } from './EsDocumentImport';
 
 interface EsDocument { id: string; title: string; revision: number; caseId: string | null; updatedAt: string }
 interface EsSaved { document: EsDocument; input: EsInput; inputHash: string; run?: EsRun | null }
@@ -63,9 +66,14 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   const [importPreview, setImportPreview] = useState<EsImportPreview | null>(null);
   const [importOpen, setImportOpen] = useState(false), [importName, setImportName] = useState(''), [importError, setImportError] = useState('');
   const [sourcePreview, setSourcePreview] = useState<SourcePreview | null>(null);
+  const [documentImportOpen, setDocumentImportOpen] = useState(false);
+  const [autoSourceTrigger, setAutoSourceTrigger] = useState(0), handledAutoTrigger = useRef(0);
+  const liveInput = useRef(input); liveInput.current = input;
+  const sourceOwner = useRef(''); sourceOwner.current = `${mode}:${id ?? ''}`;
+  useEffect(() => { sourceOwner.current = `${mode}:${id ?? ''}`; return () => { sourceOwner.current = 'unmounted'; }; }, [mode, id]);
   const [sourceOpen, setSourceOpen] = useState(false), sourceDialog = useRef<HTMLDialogElement>(null);
   const importDialog = useRef<HTMLDialogElement>(null), importPicker = useRef<HTMLInputElement>(null), importButton = useRef<HTMLButtonElement>(null), editorScroll = useRef<HTMLDivElement>(null);
-  const importOpenRef = useRef(importOpen); importOpenRef.current = importOpen || sourceOpen;
+  const importOpenRef = useRef(importOpen); importOpenRef.current = importOpen || sourceOpen || documentImportOpen;
   const [run, setRun] = useState<EsRun | null>(null);
   const [selection, setSelection] = useState<string[]>(ES_SHEETS.map(s => s[0]));
   const currentSignature = signature(input, caseId), dirty = currentSignature !== savedSignature;
@@ -87,9 +95,10 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   const mutate = (update: (next: EsInput) => void) => { const next = structuredClone(input); update(next); history.current = [...history.current.slice(-49), input]; future.current = [];
     const selectorsChanged = next.baseDate !== input.baseDate || next.adjustmentDate !== input.adjustmentDate || next.contract?.employmentGrade !== input.contract?.employmentGrade || next.contract?.retirementTrade !== input.contract?.retirementTrade;
     setInput(selectorsChanged ? syncEsSourceDates(next, input) : next);
+    if (selectorsChanged) { setSourcePreview(null); setAutoSourceTrigger(v => v + 1); }
   };
-  const undo = () => { const previous = history.current.pop(); if (previous) { future.current.push(input); setInput(previous); } };
-  const redo = () => { const next = future.current.pop(); if (next) { history.current.push(input); setInput(next); } };
+  const undo = () => { const previous = history.current.pop(); if (previous) { future.current.push(input); setInput(previous); setSourcePreview(null); handledAutoTrigger.current = autoSourceTrigger; } };
+  const redo = () => { const next = future.current.pop(); if (next) { history.current.push(input); setInput(next); setSourcePreview(null); handledAutoTrigger.current = autoSourceTrigger; } };
   useEffect(() => {
     if (mode !== 'editor') return;
     workbench.current?.focus();
@@ -116,6 +125,8 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       void apiRequest<{ cases: Project[] }>('/api/cases?limit=100&assignedOnly=true').then(payload => { if (active) setProjects(payload.cases); }).catch(() => { if (active) setNotice('프로젝트 목록을 불러오지 못했습니다. 연결 없이 작성할 수 있습니다.'); });
       if (id) void apiRequest<EsSaved>(`/api/es/documents/${encodeURIComponent(id)}`).then(payload => {
         if (!active) return; setDocument(payload.document); setInput(syncEsSourceDates(payload.input)); setCaseId(payload.document.caseId ?? ''); setSavedSignature(signature(payload.input, payload.document.caseId ?? '')); setRun(payload.run ?? null);
+        const synced = syncEsSourceDates(payload.input);
+        if ([synced.base, synced.current.period, synced.previous.period].some(p => p.wage === '' || p.rates.injury === '')) setAutoSourceTrigger(v => v + 1);
       }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); } }).finally(() => { if (active) setLoading(false); });
     }
     return () => { active = false; };
@@ -177,12 +188,13 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
     } catch (e) { setImportError(message(e)); } finally { pending.current = false; setBusy(false); }
   };
   const workingExport = async () => { try { download(await exportEsWorking(input), 'ES_작업용.xlsx'); } catch (e) { setError(message(e)); } };
-  const fetchSources = async () => {
+  const fetchSources = async (automatic = false) => {
     if (pending.current || loading || loadFailed) return;
+    const owner = sourceOwner.current;
     setError('');
     let candidate: SourcePreview;
     try { const resolved = resolveEsSources(input); candidate = { input: mergeEsSourceCandidates(input, resolved.input), warnings: [], details: {}, automatic: [], edited: [] }; } catch (e) { setError(message(e)); return; }
-    pending.current = true; setBusy(true); setSourcePreview(null); setSourceOpen(true);
+    pending.current = true; setBusy(true); setSourcePreview(null); if (!automatic) setSourceOpen(true);
     try {
       const before = new Date(input.adjustmentDate + 'T00:00:00Z'); before.setUTCDate(before.getUTCDate() - 1);
       const dates = [input.baseDate, input.adjustmentDate, before.toISOString().slice(0, 10)];
@@ -240,9 +252,21 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       } else candidate.warnings.push('기계·표준시장단가 조회 실패: ' + message(pairOutcome.error));
       for (const c of [candidate.input.current, candidate.input.previous]) for (const [i, pair] of [c.machinery, ...c.standards].entries()) if (!pair.commonCount || !pair.baseAverage || !pair.comparisonAverage) candidate.warnings.push(`${c.period.date} ${ES_PAIR_LABELS[i]}: 공통 수·평균 미확인. 비목 금액과 별개의 원자료가 필요합니다. 적용 후 지수·요율에서 재조회 또는 수동 입력하세요.`);
       candidate.warnings.push('조달청 요율은 공표된 참고값입니다. 공사기간·추정금액·공종 등 적용조건을 확인하세요. 산업안전 C22는 기존 공통값을 유지합니다.');
+      if (sourceOwner.current !== owner || JSON.stringify(liveInput.current) !== JSON.stringify(input)) return;
       setSourcePreview(candidate);
+      if (automatic) {
+        const filled = fillMissingEsSources(input, candidate.input, candidate.automatic);
+        if (JSON.stringify(filled) !== JSON.stringify(input)) mutate(n => Object.assign(n, filled));
+        setNotice('기준일·조건 변경에 따라 공식 자료를 조회했습니다. 확인된 빈 항목만 자동 입력했고 기존 입력은 유지했습니다. 조회 결과·근거에서 미확인 항목을 검토하세요.');
+      }
     } finally { pending.current = false; setBusy(false); }
   };
+  useEffect(() => {
+    if (!autoSourceTrigger || handledAutoTrigger.current === autoSourceTrigger || busy || loading || loadFailed || documentImportOpen || mode !== 'editor') return;
+    if (![input.baseDate, input.adjustmentDate].every(date => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date)))) return;
+    const timer = window.setTimeout(() => { handledAutoTrigger.current = autoSourceTrigger; void fetchSources(true); }, 900);
+    return () => window.clearTimeout(timer);
+  }, [autoSourceTrigger, busy, loading, loadFailed, documentImportOpen, mode, input]);
   const editSource = (key: 'base' | 'current' | 'previous', field: SourceField, value: string, keep = false) => setSourcePreview(previous => {
     if (!previous) return previous;
     const next = structuredClone(previous), period = key === 'base' ? next.input.base : next.input[key].period;
@@ -295,14 +319,15 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
   const filledCosts = ES_COSTS.filter(([row]) => input.costs[row] !== '').length;
   const positiveCosts = ES_COSTS.filter(([row]) => /^\d+(\.\d+)?$/.test(input.costs[row]) && esDecimal(input.costs[row]).compare(esDecimal(0)) > 0).length;
   const costTotal = ES_COSTS.every(([row]) => /^\d+(\.\d+)?$/.test(input.costs[row])) ? ES_COSTS.reduce((total, [row]) => total.add(esDecimal(input.costs[row])), esDecimal(0)).toString() : '';
-  const costDetail = <aside className="es-inspector" aria-label="선택 비목 상세"><h2>{selectedCost[1]} · {selectedCost[2]}</h2><p>원본 3!B{selectedRow} · 선택한 비목의 입력과 계산값</p><dl><div><dt>입력 금액 (원)</dt><dd>{esFormatNumber(input.costs[selectedRow]) || '미입력'}</dd></div><div><dt>계수</dt><dd>{selectedCalculation?.weight ?? '계산 대기'}</dd></div><div><dt>기준지수</dt><dd>{selectedCalculation?.base ?? '—'}</dd></div><div><dt>비교지수</dt><dd>{selectedCalculation?.comparison ?? '—'}</dd></div><div><dt>등락비</dt><dd>{selectedCalculation?.ratio ?? '—'}</dd></div><div><dt>조정계수</dt><dd>{selectedCalculation?.adjusted ?? '—'}</dd></div></dl><p>기준 {input.base.date || '미입력'}<br />비교 {input[reviewPeriod].period.date || '미입력'} ({reviewPeriod === 'current' ? '현재' : '직전'})</p><div className="es-actions"><button onClick={() => { goTab('costs'); window.requestAnimationFrame(() => window.document.getElementById(`es-cost-${selectedRow}`)?.focus()); }}>금액 수정</button><button onClick={() => goTab('sources')}>지수·요율 확인</button></div><details><summary>기간 원자료의 출처·메모</summary><p>기준: {input.base.source || '등록된 출처 없음'}</p><p>비교: {input[reviewPeriod].period.source || '등록된 출처 없음'}</p><p>기계·표준시장단가와 기타비목의 계산은 기간쌍·합성지수를 사용합니다. 해당 근거는 지수·요율에서 확인하세요.</p></details></aside>;
-  return <section ref={workbench} tabIndex={-1} aria-labelledby="es-editor-title" data-es-workbench="CF130" data-wide={wideMode} className="es-studio es-editor-workspace" onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !importOpen && !sourceOpen) { e.preventDefault(); void save(); } }}>
+  const costDetail = <aside className="es-inspector" aria-label="선택 비목 상세"><h2>{selectedCost[1]} · {selectedCost[2]}</h2><p>원본 3!B{selectedRow} · 선택한 비목의 입력과 계산값</p><dl><div><dt>입력 금액 (원)</dt><dd>{esFormatNumber(input.costs[selectedRow]) || '미입력'}</dd></div><div><dt>계수 (%)</dt><dd>{esPercent(selectedCalculation?.weight, '계산 대기')}</dd></div><div><dt>기준지수</dt><dd>{selectedCalculation?.base ?? '—'}</dd></div><div><dt>비교지수</dt><dd>{selectedCalculation?.comparison ?? '—'}</dd></div><div><dt>등락비</dt><dd>{selectedCalculation?.ratio ?? '—'}</dd></div><div><dt>조정계수 (%)</dt><dd>{esPercent(selectedCalculation?.adjusted)}</dd></div></dl><p>기준 {input.base.date || '미입력'}<br />비교 {input[reviewPeriod].period.date || '미입력'} ({reviewPeriod === 'current' ? '현재' : '직전'})</p><div className="es-actions"><button onClick={() => { goTab('costs'); window.requestAnimationFrame(() => window.document.getElementById(`es-cost-${selectedRow}`)?.focus()); }}>금액 수정</button><button onClick={() => goTab('sources')}>지수·요율 확인</button></div><details><summary>기간 원자료의 출처·메모</summary><p>기준: {input.base.source || '등록된 출처 없음'}</p><p>비교: {input[reviewPeriod].period.source || '등록된 출처 없음'}</p><p>기계·표준시장단가와 기타비목의 계산은 기간쌍·합성지수를 사용합니다. 해당 근거는 지수·요율에서 확인하세요.</p></details></aside>;
+  return <section ref={workbench} tabIndex={-1} aria-labelledby="es-editor-title" data-es-workbench="CF130" data-wide={wideMode} className="es-studio es-editor-workspace" onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && !importOpen && !sourceOpen && !documentImportOpen) { e.preventDefault(); void save(); } }}>
     <header className="es-heading"><div className="es-app-title"><EsIcon path={ES_STEPS[4][3]} /><div><h1 id="es-editor-title">ES 산출프로그램</h1><p>물가변동 산출 · 초회 · 검토용 초안</p></div></div><div className="es-actions"><button className="es-wide-toggle" aria-pressed={wideMode} onClick={() => setWideMode(v => !v)}>{wideMode ? '메뉴 다시 보기' : '작업영역 넓게'}</button><button aria-expanded={guideOpen} onClick={() => setGuideOpen(v => !v)}>작업 안내</button><button onClick={() => onNavigate('/es')} aria-label="산출서 목록으로">산출서 목록</button></div></header>
     <nav className="es-tabs" aria-label="ES 작업 영역">{ES_STEPS.map(([key, label, help, path], index) => <div className="es-step" key={key}><button aria-current={tab === key ? 'page' : undefined} onClick={() => goTab(key)}><EsIcon path={path} /><span><b><span className="es-step-number">{index + 1}</span> {label}</b><small>{help}</small></span></button>{index < 5 && <svg className="es-step-arrow" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6" /></svg>}</div>)}</nav>
     <div className="es-document-strip" aria-label="현재 산출서 정보"><div className="es-document-name"><small>현재 산출서 · {caseId ? '프로젝트 연결' : '독립 산출서'}</small><strong title={input.title}>{input.title || '공사명을 입력하세요'}</strong></div><div><small>입찰 기준일</small><b>{input.baseDate || '미입력'}</b></div><div><small>조정기준일</small><b>{input.adjustmentDate || '미입력'}</b></div><div><small>총계약금액 (원)</small><b>{esFormatNumber(input.contractAmount) || '미입력'}</b></div></div>
-    <div className="es-toolbar"><span className={dirty ? 'es-save-state is-dirty' : 'es-save-state'} role="status">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : document ? `저장됨 · v${document.revision}` : '새 산출서'}</span><button disabled={busy || !history.current.length} onClick={undo}>입력 취소</button><button disabled={busy || !future.current.length} onClick={redo}>재실행</button><button ref={importButton} disabled={busy || loading || loadFailed} onClick={() => importPicker.current?.click()}>Excel 가져오기</button><button disabled={busy} onClick={() => goTab('output')}>Excel 내보내기</button><button disabled={busy || loading || loadFailed} onClick={() => void save()}>저장</button><button className="es-primary" disabled={busy || loading || loadFailed} onClick={() => void save(true)}>저장·계산</button></div>
+    <div className="es-toolbar"><span className={dirty ? 'es-save-state is-dirty' : 'es-save-state'} role="status">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : document ? `저장됨 · v${document.revision}` : '새 산출서'}</span><button disabled={busy || !history.current.length} onClick={undo}>입력 취소</button><button disabled={busy || !future.current.length} onClick={redo}>재실행</button><button disabled={busy || loading || loadFailed} onClick={() => setDocumentImportOpen(true)}>계약서·원가 가져오기</button><button ref={importButton} disabled={busy || loading || loadFailed} onClick={() => importPicker.current?.click()}>Excel 가져오기</button><button disabled={busy} onClick={() => goTab('output')}>Excel 내보내기</button><button disabled={busy || loading || loadFailed} onClick={() => void save()}>저장</button><button className="es-primary" disabled={busy || loading || loadFailed} onClick={() => void save(true)}>저장·계산</button></div>
     <input ref={importPicker} hidden type="file" accept=".xlsx" aria-label="가져올 Excel 파일" onChange={e => { const file = e.target.files?.[0]; e.target.value = ''; void importFile(file); }} />
     <div ref={editorScroll} className="es-editor-scroll">
+      {sourcePreview && !sourceOpen && <p className="es-source-status">공식 자료 조회 완료 · 기존 수동값은 유지합니다. <button disabled={busy} onClick={() => { setSourcePreview(p => { if (!p) return p; const merged = mergeEsSourceCandidates(input, p.input); return { ...p, input: { ...input, base: merged.base, current: merged.current, previous: merged.previous } }; }); setSourceOpen(true); }}>조회 결과·근거 확인</button></p>}
     {error && <p className="es-error" role="alert">{error} {document && <button onClick={() => { if (window.confirm('현재 입력을 버리고 저장본을 다시 불러올까요?')) window.location.reload(); }}>저장본 다시 확인</button>}</p>}
     {notice && <p role="status" className="es-notice">{notice}</p>}
     {loading ? <p role="status">저장본을 불러오는 중입니다.</p> : loadFailed ? <p>원본을 불러오지 못해 덮어쓰기를 차단했습니다.</p> : <>
@@ -336,19 +361,19 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
           {field('선금 지급액 (원)', input.advancePaid, v => mutate(n => { n.advancePaid = v; }), 'text', 'E11')}
         </div></section>
         </div><aside className="es-derived-ledger" aria-label="자동 계산 및 기준일별 적용자료"><h2>자동 계산 · 적용자료</h2>
-          <dl className="es-derived-summary"><div><dt>현재 조정률 K</dt><dd>{result.current?.displayK ?? '계산 대기'}</dd></div><div><dt>직전 조정률 K</dt><dd>{result.previous?.displayK ?? '계산 대기'}</dd></div><div><dt>경과일 (계약일~조정일−1)</dt><dd>{esElapsedDays(input) || '—'} 일</dd></div><div><dt>현재 원자료 이력</dt><dd>{input.sourceHistory ? `${input.sourceHistory.months.length}개월 · 요율 ${input.sourceHistory.rates.length}행` : '원본 Excel 가져오기 필요'}</dd></div></dl>
+          <dl className="es-derived-summary"><div><dt>현재 조정률 K</dt><dd>{esPercent(result.current?.displayK, '계산 대기')}</dd></div><div><dt>직전 조정률 K</dt><dd>{esPercent(result.previous?.displayK, '계산 대기')}</dd></div><div><dt>경과일 (계약일~조정일−1)</dt><dd>{esElapsedDays(input) || '—'} 일</dd></div><div><dt>현재 원자료 이력</dt><dd>{input.sourceHistory ? `${input.sourceHistory.months.length}개월 · 요율 ${input.sourceHistory.rates.length}행` : '원본 Excel 가져오기 필요'}</dd></div></dl>
           <div className="es-table-wrap"><table><thead><tr><th>항목</th><th>기준일</th><th>직전일</th><th>조정일</th></tr></thead><tbody>
             <tr><th>적용일</th>{[input.base, input.previous.period, input.current.period].map((p, i) => <td key={i}>{p.date || '—'}</td>)}</tr>
             <tr><th>노임 (원)</th>{[input.base, input.previous.period, input.current.period].map((p, i) => <td key={i}>{esFormatNumber(p.wage) || '—'}</td>)}</tr>
             {['광산품', '공산품', '전력·수도·가스', '농림수산품'].map((label, i) => <tr key={label}><th>{label}</th>{[input.base, input.previous.period, input.current.period].map((p, j) => <td key={j}>{p.materials[i] || '—'}</td>)}</tr>)}
             {ES_RATE_KEYS.map((key, i) => <tr key={key}><th>{RATE_LABELS[i]} (%)</th>{[input.base, input.previous.period, input.current.period].map((p, j) => <td key={j}>{p.rates[key] || '—'}</td>)}</tr>)}
           </tbody></table></div>
-          <p className="es-source-status" role="status">{input.sourceHistory ? '날짜·등급·공종 변경 시 가져온 이력에서 즉시 다시 선택합니다. 이력에 없는 값은 —로 표시합니다.' : '월별 원자료 이력이 없습니다. 날짜가 바뀌면 이전 자료를 재사용하지 않습니다. 원본 Excel을 다시 가져오거나 지수·요율에 해당 기간 값을 입력하세요.'} <b>ES 요율정보 가져오기</b>는 현재 입력한 날짜로 ECOS 재료지수와 건강보험 법령을 조회합니다.</p>
+          <p className="es-source-status" role="status">{input.sourceHistory ? '날짜·등급·공종 변경 시 가져온 이력에서 즉시 다시 선택합니다. 이력에 없는 값은 —로 표시합니다.' : '월별 원자료 이력이 없습니다. 날짜가 바뀌면 이전 자료를 재사용하지 않습니다. 원본 Excel을 다시 가져오거나 지수·요율에 해당 기간 값을 입력하세요.'} <b>ES 요율정보 가져오기</b>는 현재 입력한 날짜로 공식 노임·보험요율·재료지수·기계경비·표준시장단가를 조회합니다.</p>
           <p className="es-field-help">노임은 해당 월, 재료는 월말이면 해당 월·그 외에는 전월로 선택합니다. —는 0이 아니라 원자료 확인이 필요한 값입니다.</p>
           <p className="es-field-help">비목 금액과 기성 내역은 계약별 원자료입니다. 원본 Excel에서 가져오거나 비목·적용대가 / 선금·공제에 입력해야 합니다. 자료가 부족하면 자동 계산·출력을 완료로 처리하지 않습니다.</p>
         </aside></div>
       </div>}
-      {tab === 'costs' && <><section aria-label="비목 원가와 적용대가 안내"><h2>비목 원가 입력 · 적용대가 확인</h2><p className="es-field-help">비목 금액은 계약 원가내역서의 금액입니다. 총계약금액이나 조회한 지수·요율로 자동 배분되지 않습니다. 입력한 비목 비중으로 K를 계산하고, 별도의 적용대가에 K를 곱합니다.</p><dl className="es-derived-summary"><div><dt>비목 원가 합계 (원) · 계수 산정 기준</dt><dd>{esFormatNumber(costTotal) || '미입력 확인 필요'}</dd></div><div><dt>적용대가 (원) · 총계약금액 − 제외액</dt><dd>{esFormatNumber(result.amount?.applicable ?? '—')}</dd></div></dl><div className="es-actions"><button disabled={busy || loading || loadFailed} onClick={() => importPicker.current?.click()}>원가가 포함된 Excel 가져오기</button><button onClick={() => goTab('deductions')}>기성·직접 지급 제외액 확인</button></div><p className="es-field-help">금액 변경은 계수·K에 즉시 반영됩니다. 모든 비목을 같은 비율로 바꾸면 비중이 같아 K는 유지됩니다. 출력에 반영하려면 저장·계산을 누르세요.</p></section><div className="es-source-actions"><label className="es-search">비목 찾기<input value={costQuery} onChange={e => setCostQuery(e.target.value)} placeholder="비목명 또는 코드" /></label><span>금액 있는 비목 {positiveCosts} / 28개 · 0원 {filledCosts - positiveCosts}개 · 미입력 {28 - filledCosts}개</span><button onClick={() => setCostQuery('')}>검색 초기화</button></div><p className="es-field-help">금액 한 열을 Excel에서 복사해 붙여넣으세요. 붙여넣기는 원본의 연속 비목 순서로 적용됩니다.</p>
+      {tab === 'costs' && <><section aria-label="비목 원가와 적용대가 안내"><h2>비목 원가 입력 · 적용대가 확인</h2><p className="es-field-help">비목 금액은 계약 원가내역서의 금액입니다. 총계약금액이나 조회한 지수·요율로 자동 배분되지 않습니다. 입력한 비목 비중으로 K를 계산하고, 별도의 적용대가에 K를 곱합니다.</p><dl className="es-derived-summary"><div><dt>비목 원가 합계 (원) · 계수 산정 기준</dt><dd>{esFormatNumber(costTotal) || '미입력 확인 필요'}</dd></div><div><dt>적용대가 (원) · 총계약금액 − 제외액</dt><dd>{esFormatNumber(result.amount?.applicable ?? '—')}</dd></div></dl><div className="es-actions"><button disabled={busy || loading || loadFailed} onClick={() => setDocumentImportOpen(true)}>원가계산서에서 비목 가져오기</button><button onClick={() => goTab('deductions')}>기성·직접 지급 제외액 확인</button></div><p className="es-field-help">금액 변경은 계수·K에 즉시 반영됩니다. 모든 비목을 같은 비율로 바꾸면 비중이 같아 K는 유지됩니다. 출력에 반영하려면 저장·계산을 누르세요.</p></section><div className="es-source-actions"><label className="es-search">비목 찾기<input value={costQuery} onChange={e => setCostQuery(e.target.value)} placeholder="비목명 또는 코드" /></label><span>금액 있는 비목 {positiveCosts} / 28개 · 0원 {filledCosts - positiveCosts}개 · 미입력 {28 - filledCosts}개</span><button onClick={() => setCostQuery('')}>검색 초기화</button></div><p className="es-field-help">금액 한 열을 Excel에서 복사해 붙여넣으세요. 붙여넣기는 원본의 연속 비목 순서로 적용됩니다.</p>
       <div className="es-review-layout"><div className="es-table-wrap es-cost-table"><table><thead><tr><th>코드</th><th>비목</th><th>금액 (원)</th><th>원본 셀</th></tr></thead><tbody>{ES_COSTS.map(([r, code, label], index) => <tr hidden={!`${code} ${label}`.toLocaleLowerCase().includes(costQuery.toLocaleLowerCase())} className={selectedRow === r ? 'is-selected' : ''} key={r}><td>{code}</td><th scope="row"><button aria-pressed={selectedRow === r} onClick={() => setSelectedRow(r)}>{label}</button></th><td><EsMoneyInput id={`es-cost-${r}`} aria-label={label + ' 금액 (원)'} value={input.costs[r]} onFocus={() => setSelectedRow(r)} onValueChange={value => mutate(n => { n.costs[r] = value; })} onPaste={e => {
         const text = e.clipboardData.getData('text'); if (!/[\n\t]/.test(text)) return; e.preventDefault();
         const values = text.trim().split(/\r?\n/).map(v => v.trim().replace(/,/g, ''));
@@ -368,7 +393,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
         {(['current', 'previous'] as const).map(key => <section key={key}><h2>{key === 'current' ? '현재일' : '직전일'} 기계·표준시장단가 기간쌍</h2><p>기계경비는 공통 기종의 시간당 손료(원), 표준시장단가는 공통품목의 단가 평균(원)입니다. 비목 금액이나 등락지수를 넣는 칸이 아닙니다. 자동조회 후에도 직접 수정할 수 있습니다.</p><div className="es-table-wrap"><table><thead><tr><th>분야</th><th>기준 평균 (원)</th><th>비교 평균 (원)</th><th>공통품목 수</th><th>출처</th></tr></thead><tbody>{[input[key].machinery, ...input[key].standards].map((pair, i) => <tr key={i}><th>{pair.label}</th>{(['baseAverage', 'comparisonAverage', 'commonCount', 'source'] as const).map(k => <td key={k}>{k === 'source' ? <details><summary>출처·검토 메모</summary><textarea aria-label={`${key} ${pair.label} ${k}`} value={pair[k]} onChange={e => mutate(n => { const p = i === 0 ? n[key].machinery : n[key].standards[i - 1]; p[k] = e.target.value; })} /></details> : <EsMoneyInput data-es-pair-missing={pair[k] === '' ? 'true' : undefined} aria-label={`${key} ${pair.label} ${k}`} placeholder="자동조회 또는 직접 입력" value={pair[k]} onValueChange={value => mutate(n => { const p = i === 0 ? n[key].machinery : n[key].standards[i - 1]; p[k] = value; delete p.baseSum; delete p.comparisonSum; p.source = `${p.source} / 사용자 수동 수정 ${k}=${value || '미입력'}`.slice(-2000); })} />}</td>)}</tr>)}</tbody></table></div></section>)}
       </>}
       {tab === 'result' && <><div className="es-source-actions"><label className="es-search">비교 기간<select aria-label="계산 검토 기간" value={reviewPeriod} onChange={e => setReviewPeriod(e.target.value as 'current' | 'previous')}><option value="current">현재 조정일</option><option value="previous">직전일</option></select></label><span>{outputReady ? `v${document?.revision} 저장·계산본과 일치` : '화면 계산값 · 출력하려면 저장·계산하세요'}</span></div>{result.fatal.map(text => <div role="alert" className="es-error" key={text}>{text}<div className="es-actions"><button onClick={() => goTab('input')}>기본입력 확인</button><button onClick={() => goTab('costs')}>비목 금액 확인</button><button onClick={revealMissingSource}>원자료 확인</button><button className="es-primary" onClick={() => void fetchSources()}>ES 요율정보 가져오기</button></div></div>)}<details className="es-review-notes"><summary>계산 적용범위·검수 주의사항 ({result.warnings.length}건)</summary>{result.warnings.map(text => <p className="es-warning" key={text}>{text}</p>)}</details>
-        {result[reviewPeriod] && <div className="es-review-layout"><div className="es-table-wrap es-calculation-table"><table><thead><tr>{['비목', '금액 (원)', '계수', '기준지수', '비교지수', '등락비', '조정계수'].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{result[reviewPeriod]!.rows.map(r => <tr className={selectedRow === r.row ? 'is-selected' : ''} key={r.row}><th><button aria-pressed={selectedRow === r.row} onClick={() => setSelectedRow(r.row)}>{r.code} · {r.label}</button></th>{[r.amount, r.weight, r.base, r.comparison, r.ratio, r.adjusted].map((v, i) => <td key={i}>{esFormatNumber(v)}</td>)}</tr>)}</tbody></table></div>{costDetail}</div>}
+        {result[reviewPeriod] && <div className="es-review-layout"><div className="es-table-wrap es-calculation-table"><table><thead><tr>{['비목', '금액 (원)', '계수 (%)', '기준지수', '비교지수', '등락비', '조정계수 (%)'].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{result[reviewPeriod]!.rows.map(r => <tr className={selectedRow === r.row ? 'is-selected' : ''} key={r.row}><th><button aria-pressed={selectedRow === r.row} onClick={() => setSelectedRow(r.row)}>{r.code} · {r.label}</button></th>{[r.amount, r.weight, r.base, r.comparison, r.ratio, r.adjusted].map((v, i) => <td key={i}>{i === 1 || i === 5 ? esPercent(v) : esFormatNumber(v)}</td>)}</tr>)}</tbody></table></div>{costDetail}</div>}
       </>}
       {tab === 'output' && <div className="es-output-layout"><aside className="es-output-selection"><div className="es-section-title"><h2>Excel 내보내기</h2><button onClick={() => void workingExport()}>작업용 Excel 내보내기</button></div><details><summary>작업용·제출 형식의 차이</summary><p>작업용 파일은 입력·원자료·계산 수식과 17개 출력 시트를 포함합니다. 입력을 바꾸면 ES_계산 시트의 연결 수식이 계산됩니다. 17개 출력 시트는 내보낸 시점의 값이므로, Excel 수정 후 웹으로 다시 가져와 재계산·출력하세요. Excel 자체 재계산 및 실프린터 대조는 아직 미검수입니다.</p></details>
         <div className="es-section-title"><h2>출력 시트 선택</h2><button onClick={() => setSelection(ES_SHEETS.map(s => s[0]))}>전체 선택</button><button onClick={() => setSelection([])}>선택 해제</button></div>
@@ -380,7 +405,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       </div>}
       </fieldset>
     </>}
-    </div><footer className="es-summary-footer"><span>현재 K <b>{result.current?.k ?? '—'}</b></span><span>직전일 K <b>{result.previous?.k ?? '—'}</b></span><span>적용대가 (원)<b>{esFormatNumber(result.amount?.applicable ?? '—')}</b></span><span>선금 공제 (원)<b>{esFormatNumber(result.amount?.advance ?? '—')}</b></span><span className="es-net-amount">최종 조정금액 (원)<b>{result.status === 'INCOMPLETE' ? '계산 대기' : esFormatNumber(result.amount?.net ?? '—')}</b></span><div className="es-next-action"><small>{result.status === 'INCOMPLETE' ? '자료 확인 필요' : outputReady ? '저장·계산본 출력 가능' : '화면 계산 · 저장·계산 필요'}</small>{stepIndex < 5 ? <button onClick={() => goTab(ES_STEPS[stepIndex + 1][0])}>다음 · {ES_STEPS[stepIndex + 1][1]} →</button> : <button onClick={() => goTab('result')}>계산 검토로</button>}</div></footer>
+    </div><footer className="es-summary-footer"><span>현재 K (%) <b>{esPercent(result.current?.k)}</b></span><span>직전일 K (%) <b>{esPercent(result.previous?.k)}</b></span><span>적용대가 (원)<b>{esFormatNumber(result.amount?.applicable ?? '—')}</b></span><span>선금 공제 (원)<b>{esFormatNumber(result.amount?.advance ?? '—')}</b></span><span className="es-net-amount">최종 조정금액 (원)<b>{result.status === 'INCOMPLETE' ? '계산 대기' : esFormatNumber(result.amount?.net ?? '—')}</b></span><div className="es-next-action"><small>{result.status === 'INCOMPLETE' ? '자료 확인 필요' : outputReady ? '저장·계산본 출력 가능' : '화면 계산 · 저장·계산 필요'}</small>{stepIndex < 5 ? <button onClick={() => goTab(ES_STEPS[stepIndex + 1][0])}>다음 · {ES_STEPS[stepIndex + 1][1]} →</button> : <button onClick={() => goTab('result')}>계산 검토로</button>}</div></footer>
     {importOpen && <dialog ref={importDialog} className="es-import-dialog" aria-labelledby="es-import-title" aria-describedby="es-import-description" onCancel={e => { e.preventDefault(); if (!pending.current) { setImportOpen(false); setImportPreview(null); } }} onKeyDown={e => {
       if (e.key !== 'Tab') return;
       const focusable = [...e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),summary')].filter(el => el.getClientRects().length);
@@ -409,6 +434,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       </div>
       <footer className="es-actions"><button autoFocus disabled={busy} onClick={() => { if (!pending.current) { setImportOpen(false); setImportPreview(null); } }}>취소 · 기존 입력 유지</button><button className="es-primary" disabled={busy || loading || loadFailed || !importPreview} onClick={() => { if (importPreview) void save(false, importPreview.input); }}>{busy && importPreview ? '저장 중…' : '가져온 내용으로 저장'}</button></footer>
     </dialog>}
+    {documentImportOpen && <EsDocumentImport input={input} onBusy={value => { pending.current = value; setBusy(value); }} onClose={() => setDocumentImportOpen(false)} onApply={next => { mutate(n => Object.assign(n, next)); setDocumentImportOpen(false); setNotice('선택한 원본 항목을 입력에 적용했습니다. 미분류 비목과 금액·날짜 근거를 확인한 뒤 저장·계산하세요.'); }} />}
     {sourceOpen && <dialog ref={sourceDialog} className="es-import-dialog es-source-dialog" aria-labelledby="es-source-title" onCancel={e => { e.preventDefault(); if (!pending.current) setSourceOpen(false); }}>
       <header><h2 id="es-source-title">ES 요율정보 가져오기 · 적용 전 확인</h2><p>① 공식 자료 자동조회 → ② 값·적용조건 확인 또는 수정 → ③ 입력에 적용</p><p>확인 전에는 기존 입력을 바꾸지 않습니다. 적용 후 저장·계산하세요.</p></header>
       <div className="es-import-body">{busy ? <p role="status">조달청 요율·표준시장단가 · 대한건설협회 노임·기계경비 · ECOS 재료지수 · 국가법령을 조회하고 있습니다…</p> : sourcePreview && <>
