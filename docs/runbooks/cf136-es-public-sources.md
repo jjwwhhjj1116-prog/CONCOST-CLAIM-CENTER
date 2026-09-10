@@ -124,3 +124,13 @@ CF142 롤백: 직전 `360f227` 소스로 development 재배포. DB 복구 불필
 4. Node 어댑터는 공통 provider를 사용하지만 해당 서버에는 배포하지 않는다. 운영 서버·DB·인증키는 변경하지 않는다. 계산식/출력 템플릿은 유지했고 실제 새 17시트 파일 전체 재생성 검수는 하지 않았다.
 
 CF143 롤백: `4a27d50` 소스로 development 재배포. DB 복구 불필요.
+
+### CF143 최종 검증·개발 배포
+
+- 제품 커밋 `b18f294`. 최종 회귀 **332/332 PASS**, 실패/skip 0. 최종 관련 strict TypeScript PASS, 웹 build PASS. 별도 전문 연초 변경 검수 16/16 및 실제 원문 경계 14건 PASS(전체와 중복, 합산하지 않음).
+- 개발 Worker `1bedf375-1800-42ae-9405-730b0e240300`, 자산 `index-DBoe2Ehm.js`, CSS `index-CQH-WD6I.css`.
+- URL: https://concost-claim-center-development.jjwwhhjj1116.workers.dev/es . 개발 서버만 배포, Node/운영 DB/인증키 변경 없음.
+- `node scripts/cf114-live-smoke.mjs development` PASS: health/readiness 정상, Google Drive 연결 유지, 익명 접근401, 로컬/원격 5개 자산 SHA 일치.
+- 실제 배포 별도 탭에서 사용자 문서v10 조회1회: 기준2020-12-15 산재3.73/고용0.87/퇴직2.3/건강3.335/연금4.5/요양10.25의 6항목 모두 자동조회 후보 확인. 전체 자동33항목, 각 행에 조달청 원문·첨부 링크 표시, 건강 법령 교차확인 일치. UI 오류0. 입력 적용·저장하지 않았으며 원래 미저장 탭은 조작하지 않음.
+- 취소 후 저장됨v10·입력취소 비활성·기준 퇴직공제 원래 빈값과 나머지 요율 보존 확인, 별도 검수 탭 닫음. 이번 live 검수는 링크 표시·href 확인까지이며 실제 원문 클릭은 재실행하지 않았다. 동일 공식 URL의 실제 도달은 위 CF142, 새 탭 동작 회귀는 최종 로컬 React 테스트에서 확인했다.
+- 로컬 증거 `output/cf143-live-readonly-results.json`, `output/cf143-live-source-preview.png`. JSON은 원시 HTTP 응답이 아니라 실제 화면 DOM 추출값이며, 고객 화면 증거는 Git에 포함하지 않는다.
