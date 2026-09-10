@@ -66,6 +66,7 @@ async function withStudio(run: (context: Context) => Promise<void>) {
           return reply({ items: [...new Set(url.searchParams.getAll('date'))].flatMap(date => [
             { date, field: 'wage', value: '268486', effectiveDate: '2024-01-01', source: '합성 CAK 자료', condition: '일반공사 원/일' },
             { date, field: 'injury', value: '3.56', effectiveDate: '2024-01-01', source: '합성 PPS 자료', condition: '노무비 대비 %' },
+            { date, field: 'retirement', value: '2.3', effectiveDate: '2020-09-08', source: '합성 PPS 퇴직 자료 / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=0001213031&key=00038', condition: '직접노무비 대비 % · 적용대상 확인' },
           ]), issues: [] });
         }
         return reply(url.pathname.endsWith('/pairs') ? { items: [], issues: [] } : { items: [], warnings: ['합성 일부 미조회'] });
@@ -170,4 +171,26 @@ test('CF140 React: late public response cannot change a different loaded documen
   assert.equal(await page.getByLabel('기준일 노임 (원)', { exact: true }).inputValue(), '654,321'); assert.equal(await page.getByLabel('현재일 노임 (원)', { exact: true }).inputValue(), '200');
   assert.equal(await page.getByLabel('현재일 적용일', { exact: true }).inputValue(), '2024-03-01');
   assert.equal(await page.getByRole('button', { name: '조회 결과·근거 확인', exact: true }).count(), 0); assert.equal(sources.filter(v => v.includes('/public?')).length, 1); assert.deepEqual(writes, []); assert.deepEqual(saved(), before);
+}));
+
+test('CF142 React: source link is visible before expanding conditions, opens new tab, cancel preserves input', { skip: !executablePath, timeout: 45000 }, () => withStudio(async ({ page, writes, saved }) => {
+  const before = saved();
+  await page.getByRole('button', { name: 'ES 요율정보 가져오기', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'ES 요율정보 가져오기 · 적용 전 확인' });
+  const row = dialog.getByRole('row').filter({ has: page.getByRole('rowheader', { name: '기준 · 퇴직공제 (%)', exact: true }) });
+  const link = row.getByRole('link', { name: '조달청 원문 열기', exact: true }); await link.waitFor();
+  assert.equal(await row.locator('details').getAttribute('open'), null);
+  assert.equal(await link.getAttribute('href'), 'https://www.pps.go.kr/kor/bbs/view.do?bbsSn=0001213031&key=00038');
+  assert.equal(await link.getAttribute('target'), '_blank'); assert.match(await link.getAttribute('rel') ?? '', /noopener/);
+  await page.context().route('https://www.pps.go.kr/**', route => route.fulfill({ contentType: 'text/html', body: '<title>Official source navigation fixture</title>' }));
+  const popupPromise = page.waitForEvent('popup'); await link.click(); const popup = await popupPromise;
+  await popup.waitForLoadState(); assert.equal(popup.url(), await link.getAttribute('href')); await popup.close();
+  assert.equal(await dialog.getByLabel('기준 퇴직공제 (%) 적용할 값', { exact: true }).inputValue(), '2.3');
+  mkdirSync('output/playwright/cf142', { recursive: true });
+  await page.screenshot({ path: resolve('output/playwright/cf142/source-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 }); await link.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve('output/playwright/cf142/source-mobile.png') });
+  assert.ok(await dialog.evaluate(el => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 1; }));
+  await dialog.getByRole('button', { name: '취소 · 기존 유지', exact: true }).click();
+  assert.deepEqual(writes, []); assert.deepEqual(saved(), before);
 }));

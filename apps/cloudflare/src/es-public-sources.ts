@@ -19,6 +19,23 @@ export const PPS_PUBLICATIONS = [
   ['2026-04-13', '202604070010', '2604070010', '입찰공고']
 ] as const;
 const VERIFIED_THROUGH = '2026-09-10';
+const PPS_LIST_URL = 'https://www.pps.go.kr/kor/bbs/list.do?key=00038';
+export const PPS_2020_RETIREMENT_NOTICE = 'https://www.pps.go.kr/kor/bbs/view.do?bbsSn=0001213031&key=00038';
+const PPS_2020_FILE = 'https://www.pps.go.kr/common/fileDown.do?key=200001213031&sn=';
+// Verified archive scope, NOT a statutory expiry date. Other historical fields remain unmapped.
+// Architecture is legacy HWP: pin the independently inspected original rather than guess its cells.
+const PPS_2020_ARCH_SHA256 = 'cb56eb19fe31bfecd515ee77f93a8ce0b9fe10b25015a57b20e5fba8fd082f90';
+export async function parsePps2020Retirement(text: string, trade: string, architecture?: Uint8Array) {
+  if (!['건축', '토목'].includes(trade)) throw new Error('PPS_TITLE_MISMATCH');
+  const rate = parsePpsRates(text, '토목', '', '2020-09-08').retirement;
+  if (!rate || Number(rate.value) !== 2.3) throw new Error('PPS_PUBLICATION_MISMATCH');
+  if (trade === '건축') {
+    if (!architecture) throw new Error('PPS_PUBLICATION_MISMATCH');
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(architecture)))].map(v => v.toString(16).padStart(2, '0')).join('');
+    if (hash !== PPS_2020_ARCH_SHA256) throw new Error('PPS_PUBLICATION_MISMATCH');
+  }
+  return { ...rate, cell: trade === '건축' ? '건축 HWP 퇴직공제부금비 표(원문 버전 확인) · 토목 B107 교차확인' : rate.cell };
+}
 export const CAK_WAGE_URL = 'https://www.cak.or.kr/download.do?uuid=173735f5-cd8d-45d4-8d8f-ffc0968f8500.hwpx';
 const PPS_FIELDS = ['injury', 'employment', 'retirement', 'health', 'pension', 'care'] as const;
 const compact = (s: string) => s.replace(/\s+/gu, '');
@@ -118,6 +135,7 @@ export async function fetchEsPublicSources(dates: string[], trade: string, grade
   if (!Array.isArray(dates) || !dates.length || dates.length > 3) throw new Error('ES_SOURCE_INVALID_DATE');
   try { dates.forEach(esMaterialMonth); } catch { throw new Error('ES_SOURCE_INVALID_DATE'); }
   const result: EsPublicSourceResult = { items: [], issues: [] }, cache = new Map<string, Promise<string>>();
+  let historicalRetirement: ReturnType<typeof parsePps2020Retirement> | undefined;
   const issue = (date: string, field: EsSourceField, reason: string) => result.issues.push({ date, field, reason });
   await Promise.all([
     (async () => {
@@ -133,7 +151,21 @@ export async function fetchEsPublicSources(dates: string[], trade: string, grade
     ...[...new Set(dates)].map(async date => {
       const publication = date <= VERIFIED_THROUGH ? [...PPS_PUBLICATIONS].reverse().find(p => p[0] <= date) : undefined;
       if (!publication || !['건축', '토목'].includes(trade)) {
-        for (const field of PPS_FIELDS) issue(date, field, !['건축', '토목'].includes(trade) ? '기본입력의 퇴직공제 적용 공종에 건축 또는 토목을 선택·입력한 뒤 재조회' : '해당 날짜의 조달청 공표 이력 미연결 · 공식 자료 확인 후 수동 입력');
+        const historical = date >= '2020-09-08' && date <= '2020-12-31' && ['건축', '토목'].includes(trade);
+        if (historical) {
+          try {
+            historicalRetirement ??= Promise.all([
+              readPublicFile(PPS_2020_FILE + '1', fetcher, PPS_2020_RETIREMENT_NOTICE).then(extractPublicXlsxText),
+              trade === '건축' ? readPublicFile(PPS_2020_FILE + '2', fetcher, PPS_2020_RETIREMENT_NOTICE) : undefined,
+            ]).then(([text, architecture]) => parsePps2020Retirement(text, trade, architecture));
+            const rate = await historicalRetirement;
+            result.items.push({ date, field: 'retirement', value: rate.value, effectiveDate: '2020-09-08', source: `조달청 ${trade} 2020-09-08 ${rate.cell} / ${PPS_2020_RETIREMENT_NOTICE} / ${PPS_2020_FILE}${trade === '건축' ? '2' : '1'}`, condition: `${rate.condition} / 2020-09-08 입찰공고부터. 자동조회 검증 범위 2020-09-08~2020-12-31(법적 효력 종료일 아님). ES 계약상 적용 여부 검토` });
+          } catch (error) { issue(date, 'retirement', `조달청 과거 퇴직공제 원문 확인 실패 (${failureCode(error)}) · 재조회 또는 원문 확인 후 수동 입력 / ${PPS_2020_RETIREMENT_NOTICE}`); }
+        }
+        for (const field of PPS_FIELDS) {
+          if (historical && field === 'retirement') continue;
+          issue(date, field, (!['건축', '토목'].includes(trade) ? '기본입력의 퇴직공제 적용 공종에 건축 또는 토목을 선택·입력한 뒤 재조회' : '해당 날짜의 조달청 공표 이력 미연결 · 공식 자료 확인 후 수동 입력') + ` / ${PPS_LIST_URL}`);
+        }
         return;
       }
       const [effectiveDate, key, notice, basis] = publication;
@@ -146,10 +178,10 @@ export async function fetchEsPublicSources(dates: string[], trade: string, grade
         const rates = parsePpsRates(text, trade, grade, effectiveDate);
         for (const field of PPS_FIELDS) {
           const rate = rates[field];
-          if (!rate) { issue(date, field, field === 'employment' && !/^[1-7](등급)?$/u.test(grade) ? '고용보험 적용 등급 1~7등급 확인 후 재조회' : '조달청 항목·분모·값 확인 실패 · 원문 확인 후 수동 입력'); continue; }
+          if (!rate) { issue(date, field, (field === 'employment' && !/^[1-7](등급)?$/u.test(grade) ? '고용보험 적용 등급 1~7등급 확인 후 재조회' : '조달청 항목·분모·값 확인 실패 · 원문 확인 후 수동 입력') + ` / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`); continue; }
           result.items.push({ date, field, value: rate.value, effectiveDate, source: `조달청 ${trade} ${effectiveDate} ${rate.cell} / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`, condition: `${rate.condition} / 공표 적용: ${effectiveDate} ${basis}부터. ES 계약상 적용 여부 검토` });
         }
-      } catch (error) { for (const field of PPS_FIELDS) issue(date, field, `조달청 공표자료 조회 실패 (${failureCode(error)}) · 재조회 또는 수동 입력`); }
+      } catch (error) { for (const field of PPS_FIELDS) issue(date, field, `조달청 공표자료 조회 실패 (${failureCode(error)}) · 재조회 또는 수동 입력 / https://www.pps.go.kr/kor/bbs/view.do?bbsSn=${notice}&key=00038`); }
     })
   ]);
   for (const date of new Set(dates)) issue(date, 'safety', '산업안전은 공사종류·대상액·기초액 조건 확인 필요 · 기존 원본 C22 공통값 유지, 수동 검토');
