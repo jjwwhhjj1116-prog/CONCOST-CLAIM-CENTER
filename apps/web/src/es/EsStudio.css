@@ -97,6 +97,18 @@
 .es-import-comparison thead { background:var(--surface-muted,#eef4f9); }
 .es-import-comparison th:first-child { width:28%; }
 .es-import-comparison td:last-child { background:#fff5cc; color:#183049; }
+.es-source-dialog { width:min(960px,calc(100vw - 24px)); }
+.es-source-dialog .es-import-comparison th:first-child { width:25%; }
+.es-source-dialog .es-import-comparison th:nth-child(2) { width:20%; }
+.es-source-dialog .es-import-comparison td:last-child { background:var(--surface,#fff); color:var(--text-primary,#183049); }
+.es-source-dialog .es-import-comparison input { width:100%; min-width:0; padding:8px; border:1px solid #9bb6cf; border-radius:4px; background:#fff5cc; color:#183049; text-align:right; font-variant-numeric:tabular-nums; }
+.es-source-dialog input[aria-invalid=true] { border:2px solid #bc3030; }
+.es-source-state { display:block; font-size:12px; margin-bottom:5px; }
+.es-source-row-actions { display:flex; align-items:flex-start; flex-wrap:wrap; gap:8px; margin-top:6px; }
+.es-source-row-actions button,.es-source-row-actions summary { font-size:12px; }
+.es-source-row-actions details { flex:1; min-width:90px; }
+.es-source-row-actions details p { margin:6px 0; font-size:12px; }
+.es-source-dialog .es-source-date th,.es-source-dialog .es-source-date td { background:var(--surface-muted,#eef4f9); font-weight:700; }
 @media(max-width:600px) { .es-import-dialog > header,.es-import-dialog > footer { padding:12px; } .es-import-body { padding:0 12px 12px; } .es-import-dialog > footer button { flex:1; } .es-import-comparison th,.es-import-comparison td { padding:6px; } }
 .es-pages { max-height:750px; overflow:auto; border:1px solid #c2ceda; margin-top:15px; }
 .es-studio details { border-top:1px solid #d4dee8; padding-top:15px; }

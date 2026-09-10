@@ -141,7 +141,7 @@ function textNodes(xml: string): string {
   return [...xml.matchAll(/<(?:[A-Za-z_][\w.-]*:)?t(?:\s[^>]*)?>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?t>/giu)].map((match) => xmlText(match[1])).join('');
 }
 
-async function extractXlsx(bytes: Uint8Array): Promise<string> {
+async function extractXlsx(bytes: Uint8Array, publicFirstSheet = false): Promise<string> {
   if (read32(bytes, 0) !== 0x04034b50) throw new IntakeSourceError('INVALID_INTAKE_XLSX', '선택한 파일은 유효한 .xlsx 파일이 아닙니다.');
   const entries = zipEntries(bytes);
   // HWP/Excel and third-party spreadsheet writers do not always preserve the
@@ -167,13 +167,16 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
     if (characterCount > MAX_EXTRACTED_CHARACTERS) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel에서 추출한 내용이 100,000자를 넘습니다. 원문이 누락되지 않도록 파일을 나누어 다시 올려 주세요.');
     lines.push(line);
   };
-  for (const entry of worksheetEntries) {
+  for (const entry of publicFirstSheet ? worksheetEntries.slice(0, 1) : worksheetEntries) {
     const xml = decoder.decode(await unzipEntry(bytes, entry));
     appendLine(`[${entry.name.replace(/^xl\/worksheets\//iu, '').replace(/\.xml$/iu, '')}]`);
     // Empty formatted cells are commonly serialized as <c .../>. Match those
     // atomically so they cannot swallow the next populated cell and shift all
     // references/values in company meeting-minute templates.
     for (const match of xml.matchAll(/<(?:[A-Za-z_][\w.-]*:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[A-Za-z_][\w.-]*:)?c>)/giu)) {
+      // Official PPS sheets have tens of thousands of empty formatting cells.
+      // This public-only path reads the first sheet, retaining the ZIP/expanded-byte limits.
+      if (publicFirstSheet && !match[2]) continue;
       cellCount += 1;
       if (cellCount > 20_000) throw new IntakeSourceError('INTAKE_SOURCE_TOO_LARGE', 'Excel 셀이 20,000개를 넘습니다. 필요한 시트만 남겨 다시 올려 주세요.');
       const attrs = match[1];
@@ -199,6 +202,8 @@ async function extractXlsx(bytes: Uint8Array): Promise<string> {
   if (!populatedCellCount) throw new IntakeSourceError('EMPTY_INTAKE_XLSX', 'Excel 파일에 AI가 정리할 셀 내용이 없습니다.');
   return text;
 }
+
+export const extractPublicXlsxText = (bytes: Uint8Array) => extractXlsx(bytes, true);
 
 export async function extractIntakeSource(fileName: string, suppliedMimeType: string, bytes: Uint8Array): Promise<IntakeSource> {
   const extension = extensionOf(fileName);
@@ -239,4 +244,23 @@ export async function extractEvidenceText(fileName: string, mimeType: string, by
   const result = parts.join('\n').trim();
   if (!result) throw new IntakeSourceError('EMPTY_EVIDENCE_DOCUMENT', '문서에서 비교할 텍스트를 찾지 못했습니다.');
   return result;
+}
+
+/** Preserve public HWPX table boundaries; use the same bounded ZIP/XML reader as uploads. */
+export async function extractHwpxTables(bytes: Uint8Array): Promise<string[][][]> {
+  const sections = zipEntries(bytes).filter(entry => /^Contents\/section\d+\.xml$/u.test(entry.name));
+  if (!sections.length || sections.length > 30) throw new Error('PUBLIC_DOCUMENT_INVALID');
+  const tables: string[][][] = []; let length = 0;
+  for (const entry of sections) {
+    const xml = new TextDecoder('utf-8', { fatal: true }).decode(await unzipEntry(bytes, entry));
+    for (const table of xml.matchAll(/<hp:tbl\b[^>]*>([\s\S]*?)<\/hp:tbl>/gu)) {
+      const rows = [...table[1].matchAll(/<hp:tr\b[^>]*>([\s\S]*?)<\/hp:tr>/gu)].map(row =>
+        [...row[1].matchAll(/<hp:tc\b[^>]*>([\s\S]*?)<\/hp:tc>/gu)].map(cell =>
+          [...cell[1].matchAll(/<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>/gu)].map(t => xmlText(t[1])).join(' ').trim()));
+      length += JSON.stringify(rows).length;
+      if (length > 250_000 || tables.length >= 100) throw new Error('PUBLIC_DOCUMENT_TOO_LARGE');
+      tables.push(rows);
+    }
+  }
+  return tables;
 }

@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import type * as http from 'node:http';
 import { hashPassword, verifyPassword, type PrismaClient } from '@claim-studio/database';
 import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../../packages/document-engine/src/es-ecos';
+import { fetchEsPublicSources } from '../../../cloudflare/src/es-public-sources';
 
 export interface ServerSettingsContext {
   user: { id: string; email: string; name: string; organizationId: string };
@@ -236,6 +237,16 @@ function workspaceProjection(row: SettingRow | null): { settings: Record<string,
 async function handle(options: ServerSettingsAdapterOptions): Promise<boolean> {
   const { pathname, method, request, response, db, context, masterKey } = options;
   const organizationOwner = `ORGANIZATION:${context.user.organizationId}`;
+
+  if (pathname === '/api/es/sources/public') {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!context.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) throw new AdapterError(403, 'ES 접근 권한이 없습니다.');
+    if (method !== 'GET') throw new AdapterError(405, '지원하지 않는 요청입니다.');
+    const query = new URL(request.url ?? '/', 'http://localhost').searchParams;
+    try { json(response, 200, await fetchEsPublicSources(query.getAll('date'), query.get('trade') ?? '', query.get('grade') ?? '', options.fetcher ?? fetch)); }
+    catch { throw new AdapterError(400, '조회 기준일을 확인하세요. 기존 입력은 유지됩니다.'); }
+    return true;
+  }
 
   if (pathname === '/api/settings/ecos' || pathname === '/api/settings/ecos/test' || pathname === '/api/es/sources/ecos') {
     response.setHeader('Cache-Control', 'no-store');

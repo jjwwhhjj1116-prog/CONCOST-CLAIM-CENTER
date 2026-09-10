@@ -6,6 +6,29 @@ import { esMaterialMonth, resolveEsSources, validateEsSourceHistory, type EsSour
 
 // Public API shapes, synthetic law metadata. No customer OC or live network in this suite.
 const OC = 'synthetic_cf127_oc';
+test('CF136 health follows only same-origin same-query redirects and blocks secret forwarding', async () => {
+  const mock = fixture(); let redirectCount = 0;
+  const valid = await fetchEsHealthSources(OC, ['2026-01-01'], (async (u, init) => {
+    const url = new URL(String(u));
+    if (!url.searchParams.has('validated')) { url.searchParams.set('validated', '1'); redirectCount++; return new Response(null, { status: 302, headers: { location: url.href } }); }
+    return mock.fetcher(u, init);
+  }) as typeof fetch);
+  assert.equal(valid.items[0].value, '3.595'); assert.ok(redirectCount > 0);
+  for (const target of ['https://evil.invalid/', 'http://www.law.go.kr/DRF/lawSearch.do', '/signin', '?OC=changed', `?OC=${OC}&OC=changed`]) {
+    let calls = 0;
+    await assert.rejects(fetchEsHealthSources(OC, ['2026-01-01'], (async () => { calls++; return new Response(null, { status: 302, headers: { location: target } }); }) as typeof fetch), /REDIRECT_UNSAFE/);
+    assert.equal(calls, 2, 'only the two initial law searches run; redirect destination is never contacted');
+  }
+});
+test('CF136 health returns verified dates when a different date fails', async () => {
+  const mock = fixture();
+  const result = await fetchEsHealthSources(OC, ['2025-12-31', '2026-01-01'], (async (u, init) => {
+    const url = new URL(String(u));
+    if (url.searchParams.get('efYd')?.endsWith('20251231')) return new Response('{}', { status: 503 });
+    return mock.fetcher(u, init);
+  }) as typeof fetch);
+  assert.deepEqual(result.items.map(i => i.date), ['2026-01-01']); assert.equal(result.warnings.length, 1);
+});
 const DECREE = '국민건강보험법 시행령';
 const ACT = '국민건강보험법';
 type JsonObject = Record<string, any>;
@@ -48,7 +71,7 @@ function fixture(options: FixtureOptions = {}) {
     assert.equal(url.searchParams.get('OC'), OC);
     assert.equal(url.searchParams.get('target'), 'eflaw');
     assert.equal(url.searchParams.get('type'), 'JSON');
-    assert.equal(init?.redirect, 'error', 'credential-bearing requests never follow redirects');
+    assert.equal(init?.redirect, 'manual', 'credential-bearing redirects require explicit validation');
     assert.ok(init?.signal, 'provider request has an abort deadline');
     let payload: JsonObject;
     if (url.pathname.endsWith('/lawSearch.do')) {

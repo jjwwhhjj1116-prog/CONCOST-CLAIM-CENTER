@@ -41,6 +41,7 @@ import { joinReportPresentation, splitReportPresentation } from '../../../packag
 import { mergeGeneratedChapter, type ReportNode } from '../../../packages/document-engine/src/report-chapter';
 import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
 import { fetchEsHealthSources } from './es-health-source';
+import { fetchEsPublicSources } from './es-public-sources';
 import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../packages/document-engine/src/es-ecos';
 
 interface D1StatementLike {
@@ -8331,12 +8332,19 @@ const worker = {
       return handlePreviewDashboard(request, env);
     }
 
+    if (url.pathname === '/api/es/sources/public' && request.method === 'GET') {
+      const user = await previewSessionUser(request, env);
+      if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
+      if (!user.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) return json({ error: 'ES 접근 권한이 없습니다.' }, 403);
+      try { return json({ ...await fetchEsPublicSources(url.searchParams.getAll('date'), url.searchParams.get('trade') ?? '', url.searchParams.get('grade') ?? '') }); }
+      catch { return json({ error: '조회 기준일을 확인하세요. 기존 입력은 유지됩니다.' }, 400); }
+    }
     if (url.pathname === '/api/es/sources/health' && request.method === 'GET') {
       const user = await previewSessionUser(request, env);
       if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
       if (!user.roles.some(role => ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'].includes(role))) return json({ error: 'ES 접근 권한이 없습니다.' }, 403);
-      try { return json(await fetchEsHealthSources(await previewLawApiOc(env), url.searchParams.getAll('date'))); }
-      catch (reason) { const code = reason instanceof Error ? reason.message : ''; return json({ error: code === 'LAW_API_OC_REQUIRED' ? '관리자 설정의 국가법령정보 OC 인증값을 먼저 저장하세요.' : code === 'ES_SOURCE_INVALID_DATE' ? '조회 기준일을 확인하세요.' : '해당 날짜의 건강보험 법령·사업주 부담률을 검증하지 못했습니다. 기존 값을 유지하며 수동 입력할 수 있습니다.', code: /^ES_(SOURCE|LAW)_[A-Z_]+$/.test(code) || code === 'LAW_API_OC_REQUIRED' ? code : 'ES_LAW_SOURCE_UNAVAILABLE' }, code === 'ES_SOURCE_INVALID_DATE' ? 400 : 503); }
+      try { return json(await fetchEsHealthSources(await previewLawApiOc(env), url.searchParams.getAll('date'), env.LAW_API_TEST_FETCH ?? fetch)); }
+      catch (reason) { const message = reason instanceof Error ? reason.message : ''; const code = /^ES_(SOURCE|LAW)_[A-Z_]+$/.test(message) || /^ES_LAW_HTTP_\d{3}$/.test(message) || message === 'LAW_API_OC_REQUIRED' ? message : 'ES_LAW_SOURCE_UNAVAILABLE'; return json({ error: code === 'LAW_API_OC_REQUIRED' ? '관리자 설정의 국가법령정보 OC 인증값을 먼저 저장하세요.' : code === 'ES_SOURCE_INVALID_DATE' ? '조회 기준일을 확인하세요.' : `건강보험 공식 자료 조회·검증 실패 (${code}). 기존 값은 유지됩니다. 잠시 후 재조회하거나 원자료를 직접 입력하세요.`, code }, code === 'ES_SOURCE_INVALID_DATE' ? 400 : 503); }
     }
     if (url.pathname === '/api/es/sources/ecos' && request.method === 'GET') {
       const user = await previewSessionUser(request, env);
