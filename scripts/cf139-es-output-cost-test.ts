@@ -31,6 +31,7 @@ test('CF139 percentage units appear once and exported fractions retain native nu
   }
   assert.equal(JSON.stringify(i),before); assert.deepEqual(calculateEs(i),result);
   i.advanceContract='';assert.match(esTemplateValues(i,calculateEs(i),grid('2.2(선금)')).A21,/미입력/);
+  for(const zero of ['0','0.0','0.00']){i.advanceContract=zero;assert.match(esTemplateValues(i,calculateEs(i),grid('2.2(선금)')).A21,/선금 대상금액 0 원/);}
 });
 test('CF139 expense composition changes K; proportional cost and contract-only changes do not allocate costs',()=>{
   const i=fixture(), a=calculateEs(i); i.costs[11]='200000'; const b=calculateEs(i); assert.equal(b.current!.k,a.current!.k);

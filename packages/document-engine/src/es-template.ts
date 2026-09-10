@@ -69,7 +69,7 @@ export function esTemplateValues(input: EsInput, result: EsResult, grid: EsTempl
   display.directPaidEvidence = input.directPaid.map(won).join(' + ') || '—';
   display.advanceEquation = input.advanceContract && d(input.advanceContract).compare(d(0)) > 0
     ? `${won(advanceRemaining)} × ${result.current?.k ?? '—'} × ${won(input.advancePaid)} ÷ ${won(input.advanceContract)}`
-    : input.advanceContract === '0' ? '선금 대상금액 0 원 · 선금 공제액 0 원' : '선금 대상금액 미입력 · 선금 공제액 미확정';
+    : input.advanceContract !== '' && d(input.advanceContract).compare(d(0)) === 0 ? '선금 대상금액 0 원 · 선금 공제액 0 원' : '선금 대상금액 미입력 · 선금 공제액 미확정';
   const root = { input, metadata, ...contexts, amount: result.amount, display, base: { display: { wageStatement: `${input.baseDate} 적용 노임 ${input.base.wage}` } } };
   const values: Record<string,string> = { ...grid.staticCells };
   const cellStyles = new Map(grid.cellStyles);
