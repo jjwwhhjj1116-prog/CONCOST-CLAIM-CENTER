@@ -1,0 +1,38 @@
+diff --git a/rhwp-studio/src/main.ts b/rhwp-studio/src/main.ts
+--- a/rhwp-studio/src/main.ts
++++ b/rhwp-studio/src/main.ts
+@@ -2000,4 +2000,6 @@
+     async getPageSvg(page) {
+       await initPromise;
+-      return wasm.renderPageSvg(page);
++      wasm.setClipEnabled(true);
++      try { return wasm.renderPageSvgWithProfile(page, 'print'); }
++      finally { wasm.setClipEnabled(!userSettings.getViewSettings().clipView); }
+     },
+diff --git a/rhwp-studio/vite.config.ts b/rhwp-studio/vite.config.ts
+--- a/rhwp-studio/vite.config.ts
++++ b/rhwp-studio/vite.config.ts
+@@ -12,4 +12,7 @@
+   'rhwp-subsecond-vite',
+ );
+ const useSubsecondWasm = process.env.RHWP_SUBSECOND === '1';
++const wasmPkg = process.env.RHWP_WASM_PKG
++  ? resolve(process.env.RHWP_WASM_PKG)
++  : resolve(configDir, '..', 'pkg');
+ /**
+@@ -36,6 +39,6 @@
+       '@': resolve(configDir, 'src'),
+       '@wasm/rhwp.js': useSubsecondWasm
+         ? resolve(subsecondWasmDir, 'rhwp-subsecond.js')
+-        : resolve(configDir, '..', 'pkg', 'rhwp.js'),
+-      '@wasm': resolve(configDir, '..', 'pkg'),
++        : resolve(wasmPkg, 'rhwp.js'),
++      '@wasm': wasmPkg,
+       // 플러그인 패키지 — 동적 import 로만 들어오므로 별도 청크가 된다.
+@@ -59,5 +62,5 @@
+       // [Task #741 후속] 외부 file path 그림 영역 영역 samples/ dir 영역 영역 fetch 가능 영역.
+       allow: [
+         configDir,
+-        resolve(configDir, '..', 'pkg'),
++        wasmPkg,
+         subsecondWasmDir,

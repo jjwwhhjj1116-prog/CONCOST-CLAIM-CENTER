@@ -15,7 +15,7 @@ test('CF117 DOCX preserves ordinary first paragraphs and styled titles, and refu
   const ordinary = await Packer.toArrayBuffer(new Document({ sections: [{ children: [new Paragraph(firstParagraph), new Paragraph('두 번째 본문도 보존한다.')] }] }));
   const titled = await Packer.toArrayBuffer(new Document({ sections: [{ children: [new Paragraph({ text: '정식 문서 제목', heading: HeadingLevel.TITLE }), new Paragraph('제목 다음의 첫 본문'), new Paragraph('마지막 본문')] }] }));
   const numbered = await Packer.toArrayBuffer(new Document({ numbering: { config: [{ reference: 'cf117', levels: [{ level: 0, format: 'decimal', text: '%1.', alignment: AlignmentType.START }] }] }, sections: [{ children: [new Paragraph({ text: '합성 보고서', heading: HeadingLevel.TITLE }), new Paragraph({ text: '첫 번째 근거', numbering: { reference: 'cf117', level: 0 } }), new Paragraph({ text: '두 번째 근거', numbering: { reference: 'cf117', level: 0 } })] }] }));
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' } as any);
   await server.listen();
   const origin = `http://127.0.0.1:${(server.httpServer!.address() as { port: number }).port}`;

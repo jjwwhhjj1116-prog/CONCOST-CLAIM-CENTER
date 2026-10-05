@@ -76,7 +76,7 @@ async function fixture() {
     const hash = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
     db.run('INSERT INTO preview_sessions (id_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)', [hash, id, now, new Date(Date.now() + 3_600_000).toISOString()]);
   }
-  for (const name of readdirSync(migrationRoot).filter(name => /^\d{4}_.+\.sql$/u.test(name) && Number(name.slice(0, 4)) <= 62 && !foundation.includes(name)).sort()) apply(name);
+  for (const name of readdirSync(migrationRoot).filter(name => /^\d{4}_.+\.sql$/u.test(name) && (Number(name.slice(0, 4)) <= 62 || name === '0065_cf148_finalization_metadata.sql') && !foundation.includes(name)).sort()) apply(name);
   const d1 = new D1(db), env: CloudflareEnv = { DB: d1 as unknown as NonNullable<CloudflareEnv['DB']> };
   const call = (path: string, init: RequestInit = {}, token: string | null = TOKEN) => worker.fetch(request(path, init, token), env);
   const create = async (suffix: string) => {

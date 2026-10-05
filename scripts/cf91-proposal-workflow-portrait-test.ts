@@ -7,7 +7,7 @@ const read = (path: string): string => readFileSync(path, 'utf8');
 test('CF91 links intake client data and keeps reviewer navigation resumable', () => {
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   assert.match(proposal, /const linkedClientName=caseRow\?\.clientName\?\.trim\(\)\?\?''/u);
-  assert.match(proposal, /setClientName\(linkedClientName\|\|String\(parsed\.clientName\?\?''\)\)/u);
+  assert.match(proposal, /setClientName\(typeof parsed\.clientName==='string'\?parsed\.clientName:linkedClientName\)/u);
   assert.match(proposal, /당 현장의 핵심 쟁점 분석/u);
   assert.match(proposal, /업무 수행 내용/u);
   assert.match(proposal, /target>=3&&\(!firstThreeComplete\|\|\(dirty&&!currentVersion\)\)/u);

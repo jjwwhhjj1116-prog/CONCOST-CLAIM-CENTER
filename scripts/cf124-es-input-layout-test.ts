@@ -161,7 +161,7 @@ test('CF126 project link remains optional, describes save semantics, and request
   assert.ok(basicText.includes('연결만으로 계약정보가 자동 입력되지는 않으며'));
   assert.ok(basicText.includes('<option value="">연결 없이 독립 산출서</option>'));
   assert.ok(basicText.includes('현재 연결 프로젝트 (목록 확인 필요)'));
-  const projectRequests = nodes(tree).filter(ts.isCallExpression).filter(call => call.expression.getText(tree) === 'apiRequest' && call.arguments[0] && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text.startsWith('/api/cases?'));
+  const projectRequests = nodes(tree).filter(ts.isCallExpression).filter(call => call.expression.getText(tree) === 'loadCaseOptions' && call.arguments[0] && ts.isStringLiteral(call.arguments[0]) && call.arguments[0].text.startsWith('/api/cases?'));
   assert.equal(projectRequests.length, 1);
   assert.equal((projectRequests[0].arguments[0] as ts.StringLiteral).text, '/api/cases?limit=100&assignedOnly=true');
 });

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest, triggerBrowserDownload } from '../api';
+import { loadCaseOptions } from '../case-options';
 import { registerNavigationBlocker } from '../navigation-guard';
 import { ES_COSTS, ES_RATE_KEYS, ES_CONTRACT_FIELDS, newEsContract, calculateEs, newEsInput, type EsInput, type EsResult } from '../../../../packages/document-engine/src/es-calculation';
 import { ES_SHEETS } from '../../../../packages/document-engine/src/es-output';
@@ -123,7 +124,7 @@ export function EsStudio({ mode, search, onNavigate }: { mode: 'list' | 'editor'
       setLoading(true); setLoadFailed(false); setError('');
       void apiRequest<{ documents: EsDocument[] }>('/api/es/documents' + (showDeleted ? '/trash' : '')).then(payload => { if (active) setDocuments(payload.documents); }).catch(e => { if (active) { setError(message(e)); setLoadFailed(true); setDocuments([]); } }).finally(() => { if (active) setLoading(false); });
     } else {
-      void apiRequest<{ cases: Project[] }>('/api/cases?limit=100&assignedOnly=true').then(payload => { if (active) setProjects(payload.cases); }).catch(() => { if (active) setNotice('프로젝트 목록을 불러오지 못했습니다. 연결 없이 작성할 수 있습니다.'); });
+      void loadCaseOptions<Project>('/api/cases?limit=100&assignedOnly=true').then(payload => { if (active) setProjects(payload.cases); }).catch(() => { if (active) setNotice('프로젝트 목록을 불러오지 못했습니다. 연결 없이 작성할 수 있습니다.'); });
       if (id) void apiRequest<EsSaved>(`/api/es/documents/${encodeURIComponent(id)}`).then(payload => {
         if (!active) return; setDocument(payload.document); setInput(syncEsSourceDates(payload.input)); setCaseId(payload.document.caseId ?? ''); setSavedSignature(signature(payload.input, payload.document.caseId ?? '')); setRun(payload.run ?? null);
         const synced = syncEsSourceDates(payload.input);

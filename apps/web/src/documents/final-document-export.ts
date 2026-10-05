@@ -1,8 +1,11 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { AlignmentType, Document, ImageRun, Packer, PageOrientation, Paragraph } from 'docx';
+import { createEditableDocx } from './editable-docx-export';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
+import { createNativeHwp, type NativeHwpPage } from './editable-hwp-export';
+import { collectNativeHwpPages } from './native-hwp-pages';
+import { loadNativeHwpEngine } from './native-hwp-runtime';
 
 export type FinalDocumentFormat = 'docx' | 'pdf' | 'hwp';
 export type FinalDocumentOrientation = 'landscape' | 'portrait';
@@ -99,8 +102,7 @@ const canvasPage = async (source: HTMLCanvasElement, top: number, height: number
   return result;
 };
 
-const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrientation, onProgress?: (message: string) => void): Promise<CapturedPage[]> => {
-  const layout = pageLayout(orientation);
+const prepareExportPages = async (root: HTMLElement): Promise<HTMLElement[]> => {
   const visibleText = root.innerText;
   if (/<\/?[a-z][^>]{0,500}>/iu.test(visibleText)) {
     throw new Error('미리보기에 HTML 코드가 노출되어 내보내기를 중단했습니다. 담당자 검수에서 해당 장을 확인해 주세요.');
@@ -124,10 +126,47 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
       throw new Error(`문서 ${pageNumber}페이지 내용이 A4 영역을 넘었습니다. 담당자 검수에서 문단·표·이미지 크기를 조정한 뒤 다시 내보내 주세요.`);
     }
   }
+  return elements;
+};
+
+const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrientation, onProgress?: (message: string) => void): Promise<CapturedPage[]> => {
+  const layout = pageLayout(orientation);
+  const elements = await prepareExportPages(root);
   const result: CapturedPage[] = [];
   for (let index = 0; index < elements.length; index += 1) {
     const isFittedSheet = elements[index].dataset.exportPagePolicy === 'fit';
     if (index === 0 || index === elements.length - 1 || (index + 1) % 3 === 0) onProgress?.(`미리보기 ${index + 1}/${elements.length} 페이지를 고해상도로 변환하고 있습니다.`);
+    const sheet = elements[index];
+    const image = sheet.querySelector<HTMLImageElement>('img[data-report-source-page="true"]');
+    const box = sheet.getBoundingClientRect(), imageBox = image?.getBoundingClientRect();
+    // Whole imported pages already contain their cover, tables and numbering.
+    // Do not clone/refetch every other page for each single-page PDF capture.
+    const plainSourcePage = sheet.matches('.report-native-sheet') && image && sheet.querySelectorAll('img').length === 1 && !sheet.innerText.trim()
+      && [...sheet.querySelectorAll('*')].every(node => ['ARTICLE', 'P', 'BR', 'IMG'].includes(node.tagName))
+      && [sheet, ...sheet.querySelectorAll('*')].every(node => {
+        const css = getComputedStyle(node);
+        const effects = ['transform', 'rotate', 'scale', 'translate', 'filter', 'backdrop-filter', 'clip-path', 'mask-image', 'background-image', 'box-shadow'];
+        if (effects.some(property => { const value = css.getPropertyValue(property); return value && value !== 'none'; }) || css.opacity !== '1' || css.mixBlendMode !== 'normal') return false;
+        if (!['transparent', 'rgba(0, 0, 0, 0)', 'rgb(255, 255, 255)'].includes(css.backgroundColor)) return false;
+        if (['top', 'right', 'bottom', 'left'].some(side => parseFloat(css.getPropertyValue(`border-${side}-width`)) > 0)
+          || (css.outlineStyle !== 'none' && parseFloat(css.outlineWidth) > 0) || css.borderRadius !== '0px') return false;
+        return ['::before', '::after'].every(pseudo => { const style = getComputedStyle(node, pseudo); return style.display === 'none' || ['none', 'normal', '""'].includes(style.content); });
+      })
+      && ['contain', 'fill'].includes(getComputedStyle(image).objectFit) && getComputedStyle(image).objectPosition === '50% 50%'
+      && imageBox && (['left', 'top', 'width', 'height'] as const).every(key => Math.abs(box[key] - imageBox[key]) < .5);
+    if (plainSourcePage && image) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(layout.widthPx * 1.25); canvas.height = Math.round(layout.heightPx * 1.25);
+      const context = canvas.getContext('2d'); if (!context) throw new Error('원본 페이지 출력용 캔버스를 만들지 못했습니다.');
+      context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height);
+      const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
+      // Match the reviewed CSS box, including older imported images with fill.
+      const fill = getComputedStyle(image).objectFit === 'fill';
+      const width = fill ? canvas.width : image.naturalWidth * scale, height = fill ? canvas.height : image.naturalHeight * scale;
+      context.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+      result.push(await canvasPage(canvas, 0, canvas.height, orientation)); canvas.width = 1; canvas.height = 1;
+      continue;
+    }
     const captureId = `final-export-page-${Date.now()}-${index}`;
     // html2canvas's cloned document can apply a different list reset. Preserve
     // the reviewed markers, continuation markers and indentation explicitly.
@@ -181,43 +220,6 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
   return result;
 };
 
-const createDocx = async (pages: CapturedPage[], orientation: FinalDocumentOrientation): Promise<Uint8Array> => {
-  const layout = pageLayout(orientation);
-  // Use docx's standards-compliant OOXML relationships and drawing records. The previous
-  // handwritten DrawingML package contained the JPEG files but Word ignored the incomplete
-  // drawing records, which produced apparently valid, blank documents.
-  const document = new Document({
-    creator: '클레임센터 스튜디오',
-    description: '화면 미리보기와 동일한 A4 확정본',
-    sections: [{
-      properties: {
-        page: {
-          // docx swaps the portrait base dimensions when LANDSCAPE is selected.
-          size: { width: Math.min(layout.docxWidth, layout.docxHeight), height: Math.max(layout.docxWidth, layout.docxHeight), orientation: orientation === 'portrait' ? PageOrientation.PORTRAIT : PageOrientation.LANDSCAPE },
-          margin: { top: 0, right: 0, bottom: 0, left: 0, header: 0, footer: 0, gutter: 0 },
-        },
-      },
-      children: pages.map((page, index) => new Paragraph({
-        alignment: AlignmentType.CENTER,
-        pageBreakBefore: index > 0,
-        spacing: { before: 0, after: 0, line: 1 },
-        children: [new ImageRun({
-          type: 'jpg',
-          data: page.bytes,
-          // Keep a narrow safety area for Word's paragraph mark so it cannot overflow
-          // onto an extra blank page, while preserving the A4 preview aspect ratio.
-          transformation: { width: layout.imageWidth, height: layout.imageHeight },
-          altText: {
-            title: `확정 문서 페이지 ${index + 1}`,
-            description: `미리보기 ${index + 1}페이지`,
-            name: `page-${index + 1}.jpg`,
-          },
-        })],
-      })),
-    }],
-  });
-  return new Uint8Array(await Packer.toArrayBuffer(document));
-};
 
 const createPdf = (pages: CapturedPage[], orientation: FinalDocumentOrientation): Uint8Array => {
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation, compress: true });
@@ -250,7 +252,7 @@ const renderedSvgHasInk = async (svg: string): Promise<boolean> => {
     const href = image.getAttribute('href') ?? image.getAttribute('xlink:href') ?? '';
     return href.length > 512;
   });
-  if (!embeddedImages.length) return false;
+  if (!embeddedImages.length && !parsed.querySelector('text,path')) return false;
   const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
   try {
     const image = new Image();
@@ -336,34 +338,24 @@ export const createHwpx = (pages: CapturedPage[], title: string, orientation: Fi
   return zipSync(archive, { level: 6 });
 };
 
-const createHwp = async (pages: CapturedPage[], title: string, orientation: FinalDocumentOrientation, onProgress?: (message: string) => void): Promise<Uint8Array> => {
-  onProgress?.('A4 확정본을 HWP 문서로 변환하고 있습니다.');
-  const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;left:-12000px;top:0;width:1200px;height:900px;opacity:0;pointer-events:none;';
-  document.body.append(host);
-  const { createEditor } = await import('@rhwp/editor');
-  const configuredStudioUrl = (window as Window & { __CLAIM_CENTER_RHWP_STUDIO_URL__?: string }).__CLAIM_CENTER_RHWP_STUDIO_URL__;
-  const editor = await createEditor(host, { renderer: 'canvas2d', requestTimeoutMs: 180_000, ...(configuredStudioUrl ? { studioUrl: configuredStudioUrl } : {}) });
+const createHwp = async (pages: NativeHwpPage[], orientation: FinalDocumentOrientation, onProgress?: (message: string) => void, containsSourcePages = false): Promise<Uint8Array> => {
+  onProgress?.(containsSourcePages ? 'HWP 파일을 생성합니다. 원본 페이지 이미지는 문장·표 개별 편집 불가입니다. 수정은 원본에서 해주세요.' : '문단·표·개별 사진을 편집 가능한 HWP로 변환하고 있습니다.');
+  const Engine = await loadNativeHwpEngine();
+  const hwp = createNativeHwp(pages, Engine);
+  const reopened = new Engine(hwp);
   try {
-    const hwpx = createHwpx(pages, title, orientation);
-    const loaded = await editor.loadFile(hwpx, `${fileSafe(title)}.hwpx`, { suppressDialogs: true, skipUnsavedGuard: true });
-    if (loaded.pageCount !== pages.length) throw new Error(`HWP 변환 페이지 수가 미리보기와 다릅니다. (${loaded.pageCount}/${pages.length})`);
-    const hwp = await editor.exportHwp();
     const oleSignature = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
     if (hwp.byteLength <= 512 || oleSignature.some((value, index) => hwp[index] !== value)) throw new Error('완성된 HWP 파일 형식 검증에 실패했습니다.');
     onProgress?.('완성된 HWP 파일을 다시 열어 백지·페이지 누락을 검사하고 있습니다.');
-    const reopened = await editor.loadFile(hwp, `${fileSafe(title)}.hwp`, { suppressDialogs: true, skipUnsavedGuard: true });
-    if (reopened.pageCount !== pages.length) throw new Error(`완성된 HWP 재열기 검증에서 페이지가 누락되었습니다. (${reopened.pageCount}/${pages.length})`);
-    onProgress?.(`완성된 HWP ${pages.length}페이지의 본문 이미지를 검사하고 있습니다.`);
+    if (reopened.pageCount() !== pages.length) throw new Error('완성된 HWP 재열기 검증에서 페이지가 누락되었습니다.');
     for (let index = 0; index < pages.length; index += 1) {
-      const svg = await editor.getPageSvg(index);
+      const svg = reopened.renderPageSvg(index);
       if (!svgOrientationMatches(svg, orientation)) throw new Error(`HWP ${index + 1}페이지 용지 방향이 A4 ${orientation === 'portrait' ? '세로' : '가로'}로 보존되지 않아 다운로드를 중단했습니다.`);
       if (svg.length < 1_024 || !await renderedSvgHasInk(svg)) throw new Error(`HWP ${index + 1}페이지가 백지로 변환되어 다운로드를 중단했습니다.`);
     }
     return hwp;
   } finally {
-    editor.destroy();
-    host.remove();
+    reopened.free();
   }
 };
 
@@ -374,29 +366,36 @@ export async function downloadFinalDocument(options: {
   orientation?: FinalDocumentOrientation;
   onProgress?: (message: string) => void;
 }): Promise<FinalDocumentExportResult> {
-  const orientation = options.orientation ?? 'landscape';
-  const revision = options.root.querySelector<HTMLElement>('[data-export-document-revision]')?.dataset.exportDocumentRevision?.trim() ?? '';
-  const imageSignature = [...options.root.querySelectorAll('img')].map((image) => `${image.currentSrc || image.src}:${image.naturalWidth}x${image.naturalHeight}`).join('|');
-  const cacheKey = `${orientation}:${revision}:${options.root.innerHTML.length}:${imageSignature}`;
-  const cached = revision ? capturedPageCache.get(options.root) : undefined;
-  let pagePromise: Promise<CapturedPage[]>;
-  if (cached?.key === cacheKey) {
-    options.onProgress?.('검수 완료된 A4 페이지를 다시 캡처하지 않고 재사용합니다.');
-    pagePromise = cached.pages;
-  } else {
-    pagePromise = capturePages(options.root, orientation, options.onProgress);
-    if (revision) capturedPageCache.set(options.root, { key: cacheKey, pages: pagePromise });
-  }
-  let pages: CapturedPage[];
-  try { pages = await pagePromise; }
-  catch (error) { if (revision && capturedPageCache.get(options.root)?.pages === pagePromise) capturedPageCache.delete(options.root); throw error; }
+  const report = options.root.matches('[data-export-document-kind="REPORT"]') || options.root.querySelector('[data-export-document-kind="REPORT"]');
+  const orientation = report ? 'portrait' : options.orientation ?? 'landscape';
   const baseName = fileSafe(options.fileName.replace(/\.(?:docx|pdf|hwp)$/iu, ''));
-  options.onProgress?.(`${pages.length}개 A4 페이지를 ${options.format.toUpperCase()}로 묶고 있습니다.`);
-  const bytes = options.format === 'docx'
-    ? await createDocx(pages, orientation)
-    : options.format === 'pdf'
-      ? createPdf(pages, orientation)
-      : await createHwp(pages, baseName, orientation, options.onProgress);
+  let bytes: Uint8Array;
+  let pageCount: number;
+  const containsSourcePages = Boolean(options.root.querySelector('img[data-report-source-page="true"]'));
+  if (options.format === 'docx') {
+    const elements = await prepareExportPages(options.root);
+    pageCount = elements.length;
+    options.onProgress?.(containsSourcePages ? `${pageCount}개 A4 페이지를 DOCX로 변환합니다. 원본 페이지 이미지는 문장·표 개별 편집 불가입니다. 수정은 원본에서 해주세요.` : `${pageCount}개 A4 페이지의 문단·표·이미지를 편집 가능한 DOCX로 변환하고 있습니다.`);
+    bytes = await createEditableDocx(options.root, orientation);
+  } else if (options.format === 'hwp') {
+    await prepareExportPages(options.root);
+    const pages = await collectNativeHwpPages(options.root, orientation);
+    pageCount = pages.length;
+    bytes = await createHwp(pages, orientation, options.onProgress, containsSourcePages);
+  } else {
+    const revision = options.root.querySelector<HTMLElement>('[data-export-document-revision]')?.dataset.exportDocumentRevision?.trim() ?? '';
+    const imageSignature = [...options.root.querySelectorAll('img')].map((image) => `${image.currentSrc || image.src}:${image.naturalWidth}x${image.naturalHeight}`).join('|');
+    const cacheKey = `${orientation}:${revision}:${options.root.innerHTML.length}:${imageSignature}`;
+    const cached = revision ? capturedPageCache.get(options.root) : undefined;
+    const pagePromise = cached?.key === cacheKey ? cached.pages : capturePages(options.root, orientation, options.onProgress);
+    if (revision && cached?.key !== cacheKey) capturedPageCache.set(options.root, { key: cacheKey, pages: pagePromise });
+    let pages: CapturedPage[];
+    try { pages = await pagePromise; }
+    catch (error) { if (revision && capturedPageCache.get(options.root)?.pages === pagePromise) capturedPageCache.delete(options.root); throw error; }
+    pageCount = pages.length;
+    options.onProgress?.(`${pageCount}개 A4 페이지를 ${options.format.toUpperCase()}로 묶고 있습니다.`);
+    bytes = createPdf(pages, orientation);
+  }
   const expectedSignature = options.format === 'docx'
     ? [0x50, 0x4b, 0x03, 0x04]
     : options.format === 'pdf'
@@ -410,5 +409,5 @@ export async function downloadFinalDocument(options: {
   const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const digest = await sha256(bytes);
   downloadBlob(new Blob([payload], { type: options.format === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : options.format === 'pdf' ? 'application/pdf' : 'application/x-hwp' }), fileName);
-  return { byteSize: bytes.byteLength, fileName, pageCount: pages.length, sha256: digest };
+  return { byteSize: bytes.byteLength, fileName, pageCount, sha256: digest };
 }

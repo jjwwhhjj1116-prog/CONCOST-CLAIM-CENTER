@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
+import { loadCaseOptions } from '../case-options';
+import { confirmAppAction } from '../documents/confirm-report-pages';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import type { UserRole } from '../routes/Router';
 
@@ -168,11 +170,14 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   const [receptionLoading, setReceptionLoading] = useState(routeId === 'WF-02' || routeId === 'WF-07');
   const keysRef = useRef(new Map<string, string>());
   const detailEpoch = useRef(0);
+  const receptionRouteContext = useMemo(() => ({ routeId }), [routeId]);
+  const receptionLoadState = useRef({ epoch: 0, context: receptionRouteContext, active: false });
+  const receptionConfirmation = useRef<AbortController | null>(null);
   const canMutate = roles.some((role) => MUTATION_ROLES.includes(role));
   const isAdmin = roles.includes('admin');
 
   const loadCases = useCallback(async () => {
-    const result = await apiRequest<{ cases: CaseOption[] }>('/api/cases?limit=100&q=');
+    const result = await loadCaseOptions<CaseOption>('/api/cases?limit=100&q=');
     setCases(result.cases);
     setLinkForm((current) => current.caseId ? current : { ...current, caseId: result.cases[0]?.id ?? '' });
   }, []);
@@ -192,11 +197,14 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   }, [awardFilter, query, selectedId]);
 
   const loadReceptions = useCallback(async (preferredId?: string) => {
+    if (!receptionLoadState.current.active || receptionLoadState.current.context !== receptionRouteContext) return;
+    const epoch = ++receptionLoadState.current.epoch;
     setReceptionLoading(true); setError('');
     try {
       const params = new URLSearchParams();
-      if (query.trim()) params.set('q', query.trim());
+      if (routeId === 'WF-07' && query.trim()) params.set('q', query.trim());
       const result = await apiRequest<{ receptions: ProposalReception[] }>(`/api/proposal-workflow/receptions?${params}`);
+      if (epoch !== receptionLoadState.current.epoch) return;
       setReceptions(result.receptions);
       setSelectedReceptionId((current) => {
         const preferred = preferredId || current;
@@ -206,14 +214,17 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
           ?? result.receptions.find((item) => isReceptionWon(item.receptionStatus))?.proposalId
           ?? (routeId === 'WF-07' ? result.receptions[0]?.proposalId ?? '' : '');
       });
-    } catch (reason) { setError(errorMessage(reason)); }
-    finally { setReceptionLoading(false); }
-  }, [query, routeId]);
+    } catch (reason) { if (epoch === receptionLoadState.current.epoch) setError(errorMessage(reason)); }
+    finally { if (epoch === receptionLoadState.current.epoch) setReceptionLoading(false); }
+  }, [query, routeId, receptionRouteContext]);
 
   useEffect(() => {
+    receptionLoadState.current.context = receptionRouteContext;
+    receptionLoadState.current.active = true;
     if (routeId === 'WF-02' || routeId === 'WF-07') void loadReceptions();
     else void Promise.all([loadCases(), loadProposals()]).catch((reason) => setError(errorMessage(reason)));
-  }, []);
+    return () => { receptionLoadState.current.active = false; receptionLoadState.current.epoch += 1; };
+  }, [receptionRouteContext]);
 
   useEffect(() => {
     if (!selectedId) { setSelected(null); setDecisions([]); return; }
@@ -274,6 +285,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
 
   const selectedReception = receptions.find((item) => item.proposalId === selectedReceptionId
     && (routeId === 'WF-07' || isReceptionReady(item.receptionStatus) || isReceptionWon(item.receptionStatus))) ?? null;
+  useEffect(() => () => receptionConfirmation.current?.abort(), [routeId, canMutate, selectedReception?.proposalId, selectedReception?.caseId, selectedReception?.proposalVersion, selectedReception?.caseVersion, selectedReception?.receptionStatus]);
 
   useEffect(() => {
     if (routeId !== 'WF-02' || !selectedReceptionId) return;
@@ -287,11 +299,14 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
   }, [receptionQuery, receptions, routeId, selectedReceptionId]);
 
   const submitReception = async (decision: 'WON' | 'LOST') => {
-    if (!selectedReception || !isReceptionReady(selectedReception.receptionStatus)) return;
+    if (!canMutate || busy || receptionConfirmation.current || !selectedReception || !isReceptionReady(selectedReception.receptionStatus)) return;
     const prompt = decision === 'WON'
       ? `${selectedReception.caseNumber} · ${selectedReception.caseTitle}\n\n이 제안서의 수주를 확인하고 프로젝트를 접수할까요?\n접수 후 바로 프로젝트 일정표로 이동합니다.`
       : `${selectedReception.caseNumber} · ${selectedReception.caseTitle}\n\n이 제안서를 접수 취소 처리할까요?\n취소 이력은 보존되며 수행 프로젝트로 전환되지 않습니다.`;
-    if (!window.confirm(prompt)) return;
+    const controller = new AbortController();
+    receptionConfirmation.current = controller;
+    const accepted = await confirmAppAction(decision === 'WON' ? '수주 확정 · 프로젝트 접수' : '제안서 접수 취소', prompt, decision === 'WON' ? '확인 · 수주 확정' : '확인 · 접수 취소', controller.signal);
+    if (!accepted || controller.signal.aborted) { receptionConfirmation.current = null; return; }
     const payload = {
       proposalId: selectedReception.proposalId,
       decision,
@@ -305,6 +320,7 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
         method: 'POST', headers: { 'Idempotency-Key': stable.key }, body: JSON.stringify(payload)
       });
       keysRef.current.delete(stable.fingerprint);
+      if (controller.signal.aborted) return;
       if (decision === 'WON') {
         setNotice('프로젝트 접수가 완료되었습니다. 단계별 기준 일정을 입력하세요.');
         onNavigate(`/projects/schedule?projectId=${encodeURIComponent(`project-${result.reception.caseId}`)}&edit=1&erpSync=${encodeURIComponent(result.erpSync?.status ?? 'PENDING')}`);
@@ -312,8 +328,8 @@ export function ProposalAwardWorkflow({ routeId, roles, onNavigate }: { routeId:
       }
       setNotice('접수 취소가 저장되었습니다. 제안서와 취소 이력은 그대로 보존됩니다.');
       await loadReceptions(selectedReception.proposalId);
-    } catch (reason) { setError(errorMessage(reason)); }
-    finally { setBusy(''); }
+    } catch (reason) { if (!controller.signal.aborted) setError(errorMessage(reason)); }
+    finally { receptionConfirmation.current = null; setBusy(''); }
   };
 
   const adjustReception = async (item: ProposalReception) => {

@@ -36,7 +36,8 @@ test('CF115 XLSX preserves speaker line breaks, empty lines, rich text, tabs and
 test('CF115 XLSX enforces the 20000-cell limit without returning a partial source', async () => {
   const blanks = Array.from({ length: 19_999 }, (_, i) => `<c r="A${i + 1}" s="1"/>`).join('');
   assert.equal(await xlsx(workbook([blanks + cell('A20000', '최종 결정') ])), '[sheet1]\nA20000: 최종 결정');
-  await assert.rejects(xlsx(workbook([blanks + cell('A20000', '최종 결정') + cell('A20001', '추가 담당자')])), rejectsCode('INTAKE_SOURCE_TOO_LARGE', /20,000/u));
+  assert.equal(await xlsx(workbook([blanks + cell('A20000', '최종 결정') + cell('A20001', '추가 담당자')])), '[sheet1]\nA20000: 최종 결정\nA20001: 추가 담당자');
+  await assert.rejects(xlsx(workbook(['<c><v></v></c>'.repeat(20_001)])), rejectsCode('INTAKE_SOURCE_TOO_LARGE', /20,000/u));
 });
 
 test('CF115 the 100000-character XLSX limit includes source labels and separators', async () => {

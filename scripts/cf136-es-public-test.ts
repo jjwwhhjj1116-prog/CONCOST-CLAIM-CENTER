@@ -103,7 +103,9 @@ test('CF136 automatic candidate priority is atomic, preserves failures including
 test('CF136 public first-sheet reader handles empty PPS formatting without weakening upload limits', async () => {
   const bytes = zipSync({ '[Content_Types].xml': strToU8('<Types/>'), 'xl/worksheets/sheet1.xml': strToU8(`<worksheet>${'<c r="Z1"/>'.repeat(20_001)}<c r="A1" t="inlineStr"><is><t>공개표</t></is></c></worksheet>`) });
   assert.match(await extractPublicXlsxText(bytes), /A1: 공개표/);
-  await assert.rejects(extractIntakeSource('upload.xlsx', '', bytes), /20,000/);
+  assert.match((await extractIntakeSource('upload.xlsx', '', bytes)).extractedText ?? '', /A1: 공개표/);
+  const populated = zipSync({ '[Content_Types].xml': strToU8('<Types/>'), 'xl/worksheets/sheet1.xml': strToU8(`<worksheet>${'<c r="A1"><v/></c>'.repeat(20_001)}</worksheet>`) });
+  await assert.rejects(extractIntakeSource('upload.xlsx', '', populated), /20,000/);
 });
 test('CF136 public download permits only the original official resource through bounded redirects', async () => {
   const mock = publicMock();

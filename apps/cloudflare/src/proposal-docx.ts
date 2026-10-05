@@ -121,39 +121,15 @@ function markdownParagraphs(body: string, imageXmlByKey: ReadonlyMap<string,stri
   return output.join('');
 }
 
-const proposalAssetAnchor: Readonly<Record<string,RegExp>> = {
-  CH04_EXPERT_PROFILE:/대표이사|전문가 현황|현동명/u,
-  CH06_ORG_CHART:/조직 체계|조직도|조직 구성/u,
-  CH06_BUSINESS_AREAS:/업무 영역/u,
-  CH10_DEGREE:/학위/u,
-  CH10_APPRAISER:/감정사|자격증/u,
-  CH10_PUBLICATIONS:/저서|논문/u
-};
-
 function proposalBodyWithAssetMarkers(body:string, assets:readonly ProposalExportAsset[]):string {
-  const lines=body.replaceAll('\r\n','\n').split('\n');
-  const pending=[...assets];
-  const output:string[]=[];
-  for(const line of lines){
-    const explicit=pending.find((asset)=>line.includes(`/assets/${asset.assetKey}`)||line.includes(`[PROPOSAL_ASSET:${asset.assetKey}]`));
-    if(explicit){
-      output.push(`[PROPOSAL_ASSET:${explicit.assetKey}]`);
-      pending.splice(pending.indexOf(explicit),1);
-      continue;
-    }
-    output.push(line);
-    for(let index=pending.length-1;index>=0;index-=1){
-      const asset=pending[index];
-      if(asset.placement==='INLINE')continue;
-      const anchor=proposalAssetAnchor[asset.assetKey];
-      if(anchor?.test(line)){
-        output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');
-        pending.splice(index,1);
-      }
-    }
-  }
-  for(const asset of pending){if(asset.placement!=='INLINE')output.push('',`[PROPOSAL_ASSET:${asset.assetKey}]`,'');}
-  return output.join('\n');
+  // Only explicit occurrences belong to the approved document. Do not hydrate
+  // deleted company defaults, and do not consume repeated image references.
+  return body.replace(/!\[[^\]]*\]\(([^)]+)\)|<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/giu,(original,markdownSrc:string,htmlSrc:string)=>{
+    const path=(markdownSrc?markdownSrc.trim().replace(/\s+["'][\s\S]*["']$/u,''):htmlSrc).split('?')[0];
+    const asset=assets.find(item=>path.endsWith(`/assets/${item.assetKey}`));
+    if(!asset)throw new Error('Approved proposal image is unavailable');
+    return `\n[PROPOSAL_ASSET:${asset.assetKey}]\n`;
+  });
 }
 
 function proposalImageDrawing(asset: ProposalExportAsset, relationshipId: string, drawingId: number): string {

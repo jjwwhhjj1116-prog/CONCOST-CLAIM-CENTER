@@ -272,6 +272,66 @@ test('CF39 judgment performance is derived only from recorded court events and f
   sql.close();
 });
 
+test('CF148 project bounds include saved stages without discarding the original contract period', async () => {
+  const {sql,env}=await setup();
+  try {
+    const current=sql.exec('SELECT version,updated_at FROM preview_cases WHERE id=?',[CASE_ID])[0].values[0];
+    sql.run("UPDATE preview_cases SET status='CONTRACT',version=version+1,updated_at=? WHERE id=?",[new Date(Date.parse(String(current[1]))+1).toISOString(),CASE_ID]);
+    sql.run("INSERT INTO preview_proposal_links (id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,project_end_on,request_key,request_fingerprint,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",['40000000-0000-4000-8000-000000000098',CASE_ID,'CF148-BOUNDS','합성 일정','v1','합성 거래처','2026-09-10T00:00:00.000Z','WON','2026-09-10T00:00:00.000Z',ADMIN_ID,1,'2026-09-10','2026-09-10','cf148-bounds-001','a'.repeat(64),ADMIN_ID,'2026-09-10T00:00:00.000Z','2026-09-10T00:00:00.000Z']);
+    const readProject=async()=>{
+      const res=await worker.fetch(request('/api/project-workflow/schedule',ADMIN_TOKEN),env);
+      assert.equal(res.status,200);
+      const project=(await res.json() as any).projects.find((item:any)=>item.caseId===CASE_ID);
+      assert.ok(project);return project;
+    };
+    const assigned=await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({responsiblePmId:PM_ID,expectedProfileVersion:0})}),env);
+    assert.equal(assigned.status,200);
+    assert.equal((await readProject()).end,'2026-09-10','no saved stage keeps intake end');
+    const save=async(endDate:string,version:number,token=PM_TOKEN)=>worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/REPORT_WRITING`,token,{method:'PUT',body:JSON.stringify({startDate:'2026-10-01',endDate,status:'PLANNED',noteText:'합성 일정 검수',expectedVersion:version})}),env);
+    assert.equal((await save('2026-11-30',0)).status,200);
+    const extended=await readProject();
+    assert.equal(extended.end,'2026-11-30','intake day cannot hide the saved November stage');
+    assert.equal(extended.start,[...extended.stages.map((item:any)=>item.startDate),'2026-09-10'].filter(Boolean).sort()[0]);
+    assert.equal((await save('2026-12-30',1,STAFF_TOKEN)).status,403);
+    assert.equal((await readProject()).end,'2026-11-30','rejected write cannot move bounds');
+    assert.equal((await save('2026-11-15',1)).status,200);
+    assert.equal((await readProject()).end,'2026-11-15','shortening follows the latest saved stage');
+    // Seed a distinct later contract snapshot; awarded records are immutable.
+    sql.run("INSERT INTO preview_proposal_links (id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,project_end_on,request_key,request_fingerprint,created_by,created_at,updated_at) SELECT '40000000-0000-4000-8000-000000000097',case_id,proposal_number,proposal_title,'v2',client_name,sent_at,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,'2026-12-31','cf148-bounds-002',request_fingerprint,created_by,created_at,'2099-01-01T00:00:00.000Z' FROM preview_proposal_links WHERE case_id=?",[CASE_ID]);
+    assert.equal((await readProject()).end,'2026-12-31','longer original contract period remains visible');
+  } finally {sql.close();}
+});
+
+test('CF148 project bounds include saved stages without discarding the original contract period', async () => {
+  const {sql,env}=await setup();
+  try {
+    const current=sql.exec('SELECT version,updated_at FROM preview_cases WHERE id=?',[CASE_ID])[0].values[0];
+    sql.run("UPDATE preview_cases SET status='CONTRACT',version=version+1,updated_at=? WHERE id=?",[new Date(Date.parse(String(current[1]))+1).toISOString(),CASE_ID]);
+    sql.run("INSERT INTO preview_proposal_links (id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,project_end_on,request_key,request_fingerprint,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",['40000000-0000-4000-8000-000000000098',CASE_ID,'CF148-BOUNDS','합성 일정','v1','합성 거래처','2026-09-10T00:00:00.000Z','WON','2026-09-10T00:00:00.000Z',ADMIN_ID,1,'2026-09-10','2026-09-10','cf148-bounds-001','a'.repeat(64),ADMIN_ID,'2026-09-10T00:00:00.000Z','2026-09-10T00:00:00.000Z']);
+    const readProject=async()=>{
+      const res=await worker.fetch(request('/api/project-workflow/schedule',ADMIN_TOKEN),env);
+      assert.equal(res.status,200);
+      const project=(await res.json() as any).projects.find((item:any)=>item.caseId===CASE_ID);
+      assert.ok(project);return project;
+    };
+    const assigned=await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({responsiblePmId:PM_ID,expectedProfileVersion:0})}),env);
+    assert.equal(assigned.status,200);
+    assert.equal((await readProject()).end,'2026-09-10','no saved stage keeps intake end');
+    const save=async(endDate:string,version:number,token=PM_TOKEN)=>worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/stages/REPORT_WRITING`,token,{method:'PUT',body:JSON.stringify({startDate:'2026-10-01',endDate,status:'PLANNED',noteText:'합성 일정 검수',expectedVersion:version})}),env);
+    assert.equal((await save('2026-11-30',0)).status,200);
+    const extended=await readProject();
+    assert.equal(extended.end,'2026-11-30','intake day cannot hide the saved November stage');
+    assert.equal(extended.start,[...extended.stages.map((item:any)=>item.startDate),'2026-09-10'].filter(Boolean).sort()[0]);
+    assert.equal((await save('2026-12-30',1,STAFF_TOKEN)).status,403);
+    assert.equal((await readProject()).end,'2026-11-30','rejected write cannot move bounds');
+    assert.equal((await save('2026-11-15',1)).status,200);
+    assert.equal((await readProject()).end,'2026-11-15','shortening follows the latest saved stage');
+    // Seed a distinct later contract snapshot; awarded records are immutable.
+    sql.run("INSERT INTO preview_proposal_links (id,case_id,proposal_number,proposal_title,revision_label,client_name,sent_at,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,project_end_on,request_key,request_fingerprint,created_by,created_at,updated_at) SELECT '40000000-0000-4000-8000-000000000097',case_id,proposal_number,proposal_title,'v2',client_name,sent_at,award_status,award_decided_at,award_decided_by,contract_amount_krw,project_start_on,'2026-12-31','cf148-bounds-002',request_fingerprint,created_by,created_at,'2099-01-01T00:00:00.000Z' FROM preview_proposal_links WHERE case_id=?",[CASE_ID]);
+    assert.equal((await readProject()).end,'2026-12-31','longer original contract period remains visible');
+  } finally {sql.close();}
+});
+
 test('CF40 responsible PM owns explicit stage schedules and approved change requests update the calendar atomically', async () => {
   const { sql, env } = await setup();
   const assigned = await worker.fetch(request(`/api/project-workflow/projects/${CASE_ID}/profile`, ADMIN_TOKEN, {
@@ -505,7 +565,7 @@ test('CF115 real company XLSX goes as complete text with the 12-field schema, th
     referenceDepartments: '모든 부서', clientParticipants: '이발주', attachmentName: '도면.pdf', meetingStartTime: '10:00', meetingEndTime: '11:30', participants: '김검수, 박실무', meetingTitle: '도면 검토회의'
   };
   const notes = ['김검수: 계약 도면을 확인합니다.', ...Array.from({ length: 100 }, (_, i) => `박실무: 쟁점 ${i + 1}의 범위와 증거는 아직 확인 필요합니다.`), '김검수: 마지막 원문 TAIL_CF115_끝, 금액은 미확정입니다.'].join('\n');
-  const bytes = meetingMinutesWorkbook({ ...fields, meetingDate: '2026. 09. 07', meetingTime: '10:00', location: '합성 회의실', summary: notes });
+  const bytes = meetingMinutesWorkbook({ ...fields, meetingDate: '2026. 09. 07', meetingTime: '10:00', location: '합성 회의실', summary: notes, followUps: '' });
   env.GEMINI_TEST_FETCH = async (_url, init) => {
     bodies.push(JSON.parse(String(init?.body)));
     // A model may mix parties or copy the form footer; explicit source fields/body must win.

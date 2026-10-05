@@ -67,5 +67,6 @@ test('CF61 prevents a false HWP blank-document export path', () => {
   assert.match(dialog, /if \(!hasImportedTemplate\)/u);
   assert.match(dialog, /disabled=\{busy \|\| !hasImportedTemplate\}/u);
   assert.match(dialog, /빈 HWP 생성 API를 제공하지 않습니다/u);
-  assert.match(dialog, /exportHwpVerify/u);
+  assert.match(dialog, /captureReportNativeSource\(bytes, fileName/u);
+  assert.match(dialog, /assertReportNativePagesMatch\(before, snapshot.pages\)/u);
 });

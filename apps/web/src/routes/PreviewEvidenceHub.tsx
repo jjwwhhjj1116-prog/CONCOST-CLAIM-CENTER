@@ -1,6 +1,7 @@
 import { Button, Card, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../api';
+import { loadCaseOptions } from '../case-options';
 import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
 
 interface CaseSummary { id: string; caseNumber: string; title: string; claimType: string; status: string }
@@ -11,7 +12,7 @@ export function PreviewEvidenceHub({ roles, onNavigate }: { userName: string; ro
   const [error, setError] = useState('');
 
   useEffect(() => {
-    void apiRequest<{ cases: CaseSummary[] }>('/api/cases?limit=100&q=&scope=project-work').then((result) => {
+    void loadCaseOptions<CaseSummary>('/api/cases?limit=100&q=&scope=project-work').then((result) => {
       setCases(result.cases);
       setSelectedCaseId((current) => result.cases.some((entry) => entry.id === current) ? current : result.cases[0]?.id ?? '');
     }).catch((reason) => setError(reason instanceof Error ? reason.message : '프로젝트를 불러오지 못했습니다.'));
@@ -37,6 +38,7 @@ interface GoogleDriveStatus {
   status: 'CONNECTED' | 'DISCONNECTED';
   accountEmail: string | null;
   allowedDomain: string | null;
+  verification?: { status: 'NOT_CHECKED' | 'VERIFIED' | 'FAILED'; stage: 'TOKEN_REFRESH' | 'DRIVE_ACCOUNT' | null; code: string | null };
 }
 
 interface GoogleOAuthAppState {
@@ -65,18 +67,21 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showOAuthEditor, setShowOAuthEditor] = useState(false);
   const [copiedValue, setCopiedValue] = useState<'redirect' | 'scope' | null>(null);
   const load = useCallback(async () => {
+    setChecking(true); setStatus(null);
     try {
       const [drive, app] = await Promise.all([
-        apiRequest<GoogleDriveStatus>('/api/google/status'),
+        apiRequest<GoogleDriveStatus>('/api/google/status', { timeoutMs: 45_000 }),
         apiRequest<GoogleOAuthAppState>('/api/google/oauth-app')
       ]);
       setStatus(drive); setOauthApp(app); setError('');
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Google Drive 상태를 확인하지 못했습니다.'); }
+    finally { setChecking(false); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
@@ -138,9 +143,18 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
     finally { setBusy(false); }
   };
 
+  const verified = status?.connected && status.verification?.status === 'VERIFIED';
+  const failed = status?.verification?.status === 'FAILED';
+  const verificationHelp = status?.verification?.code === 'GOOGLE_RECONSENT_REQUIRED'
+    ? 'Google 저장 계정의 승인을 다시 받아야 합니다. 아래 연결 계정 변경을 이용하세요. 스튜디오 재로그인은 필요 없습니다.'
+    : status?.verification?.code === 'GOOGLE_COMPANY_ACCOUNT_REQUIRED'
+    ? '현재 승인된 회사 Google 계정이 아닙니다. 연결 계정과 회사 승인 정책을 관리자에게 확인해 주세요. 기존 자료는 이동하거나 삭제하지 않습니다.'
+    : '잠시 후 연결 상태 다시 확인을 눌러 주세요. 기존 파일과 연결 설정은 유지됩니다. 조회 성공만으로 보류된 업로드가 복구되지는 않습니다.';
+
   return <section className="route-view preview-drive-setup" aria-labelledby="preview-drive-title">
     <div><span className="workspace-eyebrow">COMPANY GOOGLE DRIVE ACCOUNT</span><h2 id="preview-drive-title">회사 Google Drive 연결·폴더 복구</h2><p><b>concost.dt@gmail.com</b> 한 계정만 Drive에 연결하고, 직원은 스튜디오 로그인과 부서 권한으로만 자료를 업로드·다운로드합니다.</p></div>
-    <div className="preview-drive-status" role="status"><span className={status?.connected ? 'is-connected' : ''}>{status?.connected ? 'CONNECTED' : 'DISCONNECTED'}</span><strong>{status?.connected ? `현재 회사 Drive 계정 · ${status.accountEmail ?? '계정 확인 필요'}` : status?.configured ? '준비 완료 · 아래 회사 Google 계정 연결 버튼을 누르세요' : 'Google OAuth 앱 최초 등록이 필요합니다'}</strong></div>
+    <div className="preview-drive-status" role="status"><span className={verified ? 'is-connected' : ''}>{checking ? '연결 확인 중…' : !status ? '상태 확인 실패' : verified ? 'CONNECTED' : failed ? '조회 실패' : status.connected ? '연결 정보 저장됨' : 'DISCONNECTED'}</span><strong>{checking ? '저장된 연결과 실제 Google 응답을 확인하고 있습니다.' : !status ? '연결 상태 다시 확인을 눌러 주세요. 연결 해제나 설정 변경은 하지 않았습니다.' : verified ? `현재 회사 Drive 계정 · ${status.accountEmail}` : failed ? '인증정보는 저장돼 있지만 현재 Drive 연결을 확인하지 못했습니다.' : status.connected ? '실제 Drive 계정을 다시 확인해 주세요.' : status.configured ? '준비 완료 · 아래 회사 Google 계정 연결 버튼을 누르세요' : 'Google OAuth 앱 최초 등록이 필요합니다'}</strong></div>
+    {failed && <p className="error-box" role="alert">{status?.verification?.stage === 'TOKEN_REFRESH' ? 'Google 인증 갱신' : 'Drive 계정 조회'} 실패 · {status?.verification?.code}. {verificationHelp}</p>}
     {oauthApp && (!oauthApp.configured || showOAuthEditor) && <section className="preview-drive-config-card" aria-labelledby="google-oauth-app-title">
       <header><div><span>{oauthApp.configured ? 'CHANGE OAUTH CLIENT' : 'ONE-TIME SETUP'}</span><h3 id="google-oauth-app-title">{oauthApp.configured ? 'Google OAuth 앱 자체를 교체합니다' : 'Google OAuth 앱을 한 번만 등록하세요'}</h3><p>이 값은 Google Drive 저장 계정이 아니라 연결 버튼을 작동시키는 회사 OAuth 앱 정보입니다. 저장 계정만 바꿀 때는 이 값을 수정하지 마세요. Client Secret은 브라우저에 다시 표시하지 않고 AES-256-GCM으로 암호화해 D1에 저장합니다.</p></div><a href={GOOGLE_CONSOLE_LINKS.clients} target="_blank" rel="noreferrer">Google 인증 플랫폼 · 클라이언트 열기 ↗</a></header>
       <ol><li>Google Cloud에서 <b>Google Drive API</b>를 사용 설정합니다.</li><li><b>OAuth 클라이언트 ID · 웹 애플리케이션</b>을 만듭니다.</li><li>아래 주소를 <b>승인된 리디렉션 URI</b>에 정확히 등록합니다.</li><li>발급된 Client ID와 Client Secret을 아래에 저장합니다.</li></ol>
@@ -172,6 +186,6 @@ export function PreviewGoogleDriveSetup({ onNavigate }: { onNavigate: (path: str
     <div className="preview-drive-steps"><article><span>01</span><strong>회사 계정 단일 연결</strong><p>직원 개인 Google 계정에는 Drive 폴더를 공유하지 않습니다.</p></article><article><span>02</span><strong>프로젝트 폴더 자동 생성</strong><p>CONCOST 자료실/20_클레임센터 아래에 프로젝트명과 자료종류(업로더_날짜) 폴더를 자동 생성합니다.</p></article><article><span>03</span><strong>스튜디오 부서 권한</strong><p>클레임센터·경영지원본부와 관리자만 스튜디오를 통해 업로드·다운로드할 수 있습니다.</p></article></div>
     {error && <p className="error-box" role="alert">{error}</p>}
     {notice && <p className="notice-box" role="status">{notice}</p>}
-    <div className="preview-drive-actions"><div><button type="button" disabled={busy || !status?.configured} onClick={() => void connect()}>{busy ? '처리 중…' : status?.connected ? '연결 계정 변경' : '회사 Google 계정 연결'}</button>{status?.connected && <button type="button" className="is-secondary" disabled={busy} onClick={() => void repairFolders()}>폴더 구조 확인·복구</button>}{status?.connected && <button type="button" disabled={busy} onClick={() => void disconnect()}>연결 해제</button>}<Button variant="secondary" onClick={() => onNavigate('/cases/files')}>현재 자료실 보기</Button></div><span>원본 저장소 · 회사 Google Drive · R2 미사용</span></div>
+    <div className="preview-drive-actions"><div><button type="button" disabled={busy || checking} onClick={() => void load()}>{checking ? '연결 확인 중…' : '연결 상태 다시 확인'}</button><button type="button" disabled={busy || checking || !status?.configured} onClick={() => void connect()}>{busy ? '처리 중…' : status?.connected ? '연결 계정 변경' : '회사 Google 계정 연결'}</button>{status?.connected && <button type="button" className="is-secondary" disabled={busy || checking} onClick={() => void repairFolders()}>폴더 구조 확인·복구</button>}{status?.connected && <button type="button" disabled={busy || checking} onClick={() => void disconnect()}>연결 해제</button>}<Button variant="secondary" onClick={() => onNavigate('/cases/files')}>현재 자료실 보기</Button></div><span>원본 저장소 · 회사 Google Drive · R2 미사용</span></div>
   </section>;
 }

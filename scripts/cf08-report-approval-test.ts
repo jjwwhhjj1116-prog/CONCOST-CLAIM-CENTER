@@ -101,6 +101,44 @@ async function submitReview(env: CloudflareEnv, caseId: string, key = 'cf08-revi
   return { status: response.status, id: body.reviews[0].id };
 }
 
+test('CF148 submitted document preserves its revision and enforces project access', async () => {
+  const {sql,env}=await databaseFixture();
+  try {
+    const caseId=await createSavedReport(env,sql);
+    const submitted=await submitReview(env,caseId,'cf148-document-review');
+    const path=`/api/report-reviews/${submitted.id}/document`;
+    const updated=await worker.fetch(request(`/api/report-drafts?caseId=${caseId}`,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({title:'변경 제목',content:'제출 후 변경 본문',expectedVersion:1})}),env);
+    assert.equal(updated.status,200);
+    const read=await worker.fetch(request(path,REVIEWER_TOKEN),env);assert.equal(read.status,200);
+    const {document}=await read.json() as {document:{title:string;content:string;version:number;editorJson:unknown;revisionId:string}};
+    assert.equal(document.version,1);assert.equal(document.content,'근거에 따라 작성한 검토 본문입니다.');assert.equal(document.editorJson,null);
+    assert.ok(document.revisionId);assert.notEqual(document.title,'변경 제목');
+    assert.equal((await worker.fetch(new Request('https://preview.example'+path),env)).status,401);
+    sql.run('DELETE FROM preview_case_assignments WHERE case_id=? AND user_id=?',[caseId,REVIEWER_ID]);
+    assert.equal((await worker.fetch(request(path,REVIEWER_TOKEN),env)).status,404);
+    assert.equal((await worker.fetch(request('/api/report-reviews/00000000-0000-4000-8000-000000000000/document',ADMIN_TOKEN),env)).status,404);
+  } finally {sql.close();}
+});
+
+test('CF148 submitted document preserves its revision and enforces project access', async () => {
+  const {sql,env}=await databaseFixture();
+  try {
+    const caseId=await createSavedReport(env,sql);
+    const submitted=await submitReview(env,caseId,'cf148-document-review');
+    const path=`/api/report-reviews/${submitted.id}/document`;
+    const updated=await worker.fetch(request(`/api/report-drafts?caseId=${caseId}`,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({title:'변경 제목',content:'제출 후 변경 본문',expectedVersion:1})}),env);
+    assert.equal(updated.status,200);
+    const read=await worker.fetch(request(path,REVIEWER_TOKEN),env);assert.equal(read.status,200);
+    const {document}=await read.json() as {document:{title:string;content:string;version:number;editorJson:unknown;revisionId:string}};
+    assert.equal(document.version,1);assert.equal(document.content,'근거에 따라 작성한 검토 본문입니다.');assert.equal(document.editorJson,null);
+    assert.ok(document.revisionId);assert.notEqual(document.title,'변경 제목');
+    assert.equal((await worker.fetch(new Request('https://preview.example'+path),env)).status,401);
+    sql.run('DELETE FROM preview_case_assignments WHERE case_id=? AND user_id=?',[caseId,REVIEWER_ID]);
+    assert.equal((await worker.fetch(request(path,REVIEWER_TOKEN),env)).status,404);
+    assert.equal((await worker.fetch(request('/api/report-reviews/00000000-0000-4000-8000-000000000000/document',ADMIN_TOKEN),env)).status,404);
+  } finally {sql.close();}
+});
+
 test('CF08 exact saved revision is submitted idempotently and independently approved across restart', async () => {
   const { sql, env } = await databaseFixture();
   const caseId = await createSavedReport(env, sql);
@@ -127,6 +165,86 @@ test('CF08 exact saved revision is submitted idempotently and independently appr
   assert.deepEqual(restarted.exec('SELECT status, report_version FROM preview_report_reviews')[0].values[0], ['APPROVED', 1]);
   assert.equal(restarted.exec('SELECT count(*) FROM preview_report_review_events')[0].values[0][0], 2);
   restarted.close(); sql.close();
+});
+
+test('CF162 a different requester cannot let the revision author approve their own report', async () => {
+  const { sql, env } = await databaseFixture();
+  try {
+    const caseId = await createSavedReport(env, sql);
+    for (const name of ['0027_cf35_guided_workspace.sql', '0028_cf36_workflow_integrity_tutorial_approval_intake.sql']) sql.exec(readFileSync(join(process.cwd(), 'apps/cloudflare/migrations', name), 'utf8'));
+    sql.run('UPDATE preview_users SET roles_json=? WHERE id=?', ['["admin","director"]', ADMIN_ID]);
+    sql.run('UPDATE preview_users SET roles_json=? WHERE id=?', ['["pm","reviewer"]', REVIEWER_ID]);
+    const submitted = await worker.fetch(request('/api/report-reviews', REVIEWER_TOKEN, {
+      method: 'POST', headers: { 'Idempotency-Key': 'cf162-other-requester' },
+      body: JSON.stringify({ caseId, expectedVersion: 1, note: '작성자가 아닌 담당자가 제출' })
+    }), env);
+    assert.equal(submitted.status, 201);
+    const reviewId = (await submitted.json() as { reviews: { id: string }[] }).reviews[0].id;
+    for (const decision of ['APPROVED', 'CHANGES_REQUESTED']) {
+      const result = await worker.fetch(request(`/api/report-reviews/${reviewId}/decision`, ADMIN_TOKEN, {
+        method: 'POST', body: JSON.stringify({ decision, note: '작성자 결정 시도', expectedStatus: 'PENDING' })
+      }), env);
+      assert.equal(result.status, 403, 'The revision author must be blocked even if someone else requested review');
+      assert.equal((await result.json() as { code: string }).code, 'SELF_APPROVAL_FORBIDDEN');
+    }
+    assert.deepEqual(sql.exec('SELECT status,reviewed_by FROM preview_report_reviews')[0].values[0], ['PENDING', null]);
+    assert.equal(sql.exec('SELECT count(*) FROM preview_report_review_events')[0].values[0][0], 1);
+    const list = await worker.fetch(request('/api/report-reviews', ADMIN_TOKEN), env);
+    assert.equal((await list.json() as { reviews: { canDecide: boolean }[] }).reviews[0].canDecide, false);
+    const independentId = '20000000-0000-4000-8000-000000000003';
+    const independentToken = 'cf162-independent-session-token';
+    const now = new Date().toISOString();
+    sql.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)', [independentId, 'independent', '1'.repeat(32), '2'.repeat(64), 100000, '독립 검토자', 'qa@example.invalid', '["director"]', now]);
+    sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)', [await sha256(independentToken), independentId, now, new Date(Date.now() + 3_600_000).toISOString()]);
+    sql.run('INSERT INTO preview_case_assignments VALUES (?,?,?,?)', [caseId, independentId, ADMIN_ID, now]);
+    const approved = await worker.fetch(request(`/api/report-reviews/${reviewId}/decision`, independentToken, {
+      method: 'POST', body: JSON.stringify({ decision: 'APPROVED', note: '독립 검토 완료', expectedStatus: 'PENDING' })
+    }), env);
+    assert.equal(approved.status, 200);
+    assert.equal(sql.exec('SELECT reviewed_by FROM preview_report_reviews')[0].values[0][0], independentId);
+    assert.equal(sql.exec('SELECT user_id FROM preview_notifications')[0].values[0][0], REVIEWER_ID);
+    assert.equal(sql.exec('SELECT status FROM preview_email_outbox')[0].values[0][0], 'CONFIG_REQUIRED', 'No real mail bridge is used in this isolated fixture');
+  } finally { sql.close(); }
+});
+
+test('CF162 a different requester cannot let the revision author approve their own report', async () => {
+  const { sql, env } = await databaseFixture();
+  try {
+    const caseId = await createSavedReport(env, sql);
+    for (const name of ['0027_cf35_guided_workspace.sql', '0028_cf36_workflow_integrity_tutorial_approval_intake.sql']) sql.exec(readFileSync(join(process.cwd(), 'apps/cloudflare/migrations', name), 'utf8'));
+    sql.run('UPDATE preview_users SET roles_json=? WHERE id=?', ['["admin","director"]', ADMIN_ID]);
+    sql.run('UPDATE preview_users SET roles_json=? WHERE id=?', ['["pm","reviewer"]', REVIEWER_ID]);
+    const submitted = await worker.fetch(request('/api/report-reviews', REVIEWER_TOKEN, {
+      method: 'POST', headers: { 'Idempotency-Key': 'cf162-other-requester' },
+      body: JSON.stringify({ caseId, expectedVersion: 1, note: '작성자가 아닌 담당자가 제출' })
+    }), env);
+    assert.equal(submitted.status, 201);
+    const reviewId = (await submitted.json() as { reviews: { id: string }[] }).reviews[0].id;
+    for (const decision of ['APPROVED', 'CHANGES_REQUESTED']) {
+      const result = await worker.fetch(request(`/api/report-reviews/${reviewId}/decision`, ADMIN_TOKEN, {
+        method: 'POST', body: JSON.stringify({ decision, note: '작성자 결정 시도', expectedStatus: 'PENDING' })
+      }), env);
+      assert.equal(result.status, 403, 'The revision author must be blocked even if someone else requested review');
+      assert.equal((await result.json() as { code: string }).code, 'SELF_APPROVAL_FORBIDDEN');
+    }
+    assert.deepEqual(sql.exec('SELECT status,reviewed_by FROM preview_report_reviews')[0].values[0], ['PENDING', null]);
+    assert.equal(sql.exec('SELECT count(*) FROM preview_report_review_events')[0].values[0][0], 1);
+    const list = await worker.fetch(request('/api/report-reviews', ADMIN_TOKEN), env);
+    assert.equal((await list.json() as { reviews: { canDecide: boolean }[] }).reviews[0].canDecide, false);
+    const independentId = '20000000-0000-4000-8000-000000000003';
+    const independentToken = 'cf162-independent-session-token';
+    const now = new Date().toISOString();
+    sql.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)', [independentId, 'independent', '1'.repeat(32), '2'.repeat(64), 100000, '독립 검토자', 'qa@example.invalid', '["director"]', now]);
+    sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)', [await sha256(independentToken), independentId, now, new Date(Date.now() + 3_600_000).toISOString()]);
+    sql.run('INSERT INTO preview_case_assignments VALUES (?,?,?,?)', [caseId, independentId, ADMIN_ID, now]);
+    const approved = await worker.fetch(request(`/api/report-reviews/${reviewId}/decision`, independentToken, {
+      method: 'POST', body: JSON.stringify({ decision: 'APPROVED', note: '독립 검토 완료', expectedStatus: 'PENDING' })
+    }), env);
+    assert.equal(approved.status, 200);
+    assert.equal(sql.exec('SELECT reviewed_by FROM preview_report_reviews')[0].values[0][0], independentId);
+    assert.equal(sql.exec('SELECT user_id FROM preview_notifications')[0].values[0][0], REVIEWER_ID);
+    assert.equal(sql.exec('SELECT status FROM preview_email_outbox')[0].values[0][0], 'CONFIG_REQUIRED', 'No real mail bridge is used in this isolated fixture');
+  } finally { sql.close(); }
 });
 
 test('CF08 rejects stale decisions, mismatched keys, and raw review history mutation', async () => {

@@ -59,3 +59,21 @@ coverage/
 
 # Cloudflare Wrangler local emulator state
 .wrangler/
+
+# Protected recovery and QA artifacts are not deployment source.
+/tmp/
+/output/
+/outputs/
+/pinned-runtime/
+/.cf166-npm-cache/
+/.cf166-pnpm-store/
+/cf166-before.pnpm-lock.yaml
+
+# Private environment variants; keep distributable examples.
+.env.*
+!.env.example
+!.env.*.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+!.dev.vars.*.example

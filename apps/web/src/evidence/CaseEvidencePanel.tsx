@@ -1,4 +1,5 @@
 import { fetchEvidenceUpload } from './upload-evidence';
+import { apiRequest } from '../api';
 import { Button } from '@claim-studio/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -25,6 +26,12 @@ interface CaseEvidenceFile {
   isLatest?: boolean;
   changeSummary?: string[];
   folder?: { key: string; name: string | null };
+}
+
+interface EvidenceStorageCheck { id: string; category: CaseEvidenceCategory; createdAt: string; errorCode: string; manualRetryAuthorized?: boolean; manualRetryAllowed?: boolean; replacementStatus?: string | null }
+
+function storageCheckBlocks(entry: EvidenceStorageCheck): boolean {
+  return !entry.manualRetryAllowed && !(entry.manualRetryAuthorized && entry.replacementStatus === 'SUCCEEDED');
 }
 
 export function groupEvidenceFiles(files: CaseEvidenceFile[]) {
@@ -76,16 +83,21 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const [draggingCategory, setDraggingCategory] = useState<CaseEvidenceCategory | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [storageChecks, setStorageChecks] = useState<EvidenceStorageCheck[]>([]);
+  const [checkingStorage, setCheckingStorage] = useState('');
+  const storageController = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const keysRef = useRef(new Map<string, string>());
   const caseIdRef = useRef(caseId);
   const loadSequenceRef = useRef(0);
   const uploadBusyRef = useRef(false);
+  const [uncertainUploads, setUncertainUploads] = useState<Set<string>>(() => new Set());
   const [preparingId, setPreparingId] = useState('');
   const prepareController = useRef<AbortController | null>(null);
   useEffect(() => {
     setPreparingId('');
-    return () => { prepareController.current?.abort(); };
+    setCheckingStorage('');
+    return () => { prepareController.current?.abort(); storageController.current?.abort(); };
   }, [caseId]);
   const load = useCallback(async () => {
     if (!caseId) { setFiles([]); return; }
@@ -93,23 +105,24 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     const sequence = ++loadSequenceRef.current;
     setLoading(true); setError('');
     try {
-      const response = await fetch(`/api/cases/${encodeURIComponent(requestCaseId)}/evidence`, { headers: { Accept: 'application/json' } });
-      const payload = await response.json() as { files?: CaseEvidenceFile[]; error?: string; storagePolicy?: 'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'; googleDriveConnected?: boolean };
-      if (!response.ok) throw new Error(payload.error ?? '프로젝트 자료를 불러오지 못했습니다.');
+      const payload = await apiRequest<{ files?: CaseEvidenceFile[]; storageChecks?: EvidenceStorageCheck[]; storagePolicy?: 'GOOGLE_DRIVE_REQUIRED' | 'D1_TEST_FALLBACK'; googleDriveConnected?: boolean }>(`/api/cases/${encodeURIComponent(requestCaseId)}/evidence`, { headers: { Accept: 'application/json' } });
       if (sequence !== loadSequenceRef.current || caseIdRef.current !== requestCaseId) return;
       setFiles(payload.files ?? []);
+      setStorageChecks(payload.storageChecks ?? []);
       setStoragePolicy(payload.storagePolicy ?? 'D1_TEST_FALLBACK');
       setGoogleDriveConnected(Boolean(payload.googleDriveConnected));
     } catch (reason) { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : '프로젝트 자료를 불러오지 못했습니다.'); }
     finally { if (sequence === loadSequenceRef.current && caseIdRef.current === requestCaseId) setLoading(false); }
   }, [caseId]);
 
-  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setCategory(initialCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setDraggingCategory(null); setGoogleDriveConnected(false); }, [caseId, categoryKey, initialCategory]);
+  useEffect(() => { caseIdRef.current = caseId; loadSequenceRef.current += 1; setFiles([]); setStorageChecks([]); setCategory(initialCategory); setNotice(''); setError(''); setUploading(0); setDragging(false); setDraggingCategory(null); setGoogleDriveConnected(false); }, [caseId, categoryKey, initialCategory]);
   useEffect(() => { void load(); }, [load]);
 
   const upload = async (incoming: FileList | File[], requestedCategory: CaseEvidenceCategory = category) => {
     const selected = Array.from(incoming);
-    if (!caseId || !selected.length || uploadBusyRef.current) return;
+    if (!caseId || !selected.length || uploadBusyRef.current || checkingStorage) return;
+    if (uncertainUploads.has(`${caseId}:${requestedCategory}`)) { setError('저장 결과를 확인하지 못했습니다. 재업로드하지 말고 관리자에게 저장 기록 확인을 요청해 주세요.'); return; }
+    if (storageChecks.some((entry) => entry.category === requestedCategory && storageCheckBlocks(entry))) { setError('이 자료 구분은 저장 확인 대기 중입니다. 다시 업로드하지 말고 Drive 저장 결과를 확인해 주세요.'); return; }
     if (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected) { setError('관리자 설정에서 회사 Google Drive 계정을 먼저 연결해 주세요.'); return; }
     const targetCaseId = caseId;
     const targetCategory = requestedCategory;
@@ -122,21 +135,33 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
       const fingerprint = `${targetCaseId}:${targetCategory}:${file.name}:${file.size}:${file.lastModified}`;
       const key = keysRef.current.get(fingerprint) ?? `case-evidence-${crypto.randomUUID()}`;
       keysRef.current.set(fingerprint, key);
+      let retryable = false;
       try {
         const form = new FormData();
         form.set('file', file); form.set('category', targetCategory);
         const response = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(targetCaseId)}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: form }, { isCurrent: () => caseIdRef.current === targetCaseId });
-        const payload = await response.json() as { file?: CaseEvidenceFile; error?: string; code?: string };
-        if (caseIdRef.current !== targetCaseId) break;
-        if (['DUPLICATE_EXACT', 'UPLOAD_CANCELLED'].includes(payload.code ?? '')) { keysRef.current.delete(fingerprint); continue; }
-        if (!response.ok || !payload.file) throw new Error(payload.error ?? `${file.name}: 업로드에 실패했습니다.`);
+        const payload = await response.json() as { file?: CaseEvidenceFile; error?: string; code?: string; retryable?: boolean };
+        if (payload.code === 'UPLOAD_CANCELLED') { keysRef.current.delete(fingerprint); break; }
+        if (payload.code === 'DUPLICATE_EXACT') { keysRef.current.delete(fingerprint); continue; }
+        retryable = !response.ok && payload.retryable === true;
+        if (retryable) keysRef.current.delete(fingerprint);
+        if (!response.ok || !payload.file) throw new Error((payload.error ?? `${file.name}: 업로드에 실패했습니다.`) + (payload.retryable === true ? ' 실패한 파일을 다시 선택하면 새 시도로 저장합니다.' : ''));
         keysRef.current.delete(fingerprint);
+        if (caseIdRef.current !== targetCaseId) break;
         completed += 1;
         await load();
-      } catch (reason) { if (caseIdRef.current === targetCaseId) setError(reason instanceof Error ? reason.message : `${file.name}: 업로드에 실패했습니다.`); }
+      } catch (reason) {
+        if (!retryable) setUncertainUploads(current => new Set(current).add(`${targetCaseId}:${targetCategory}`));
+        if (caseIdRef.current === targetCaseId) {
+          await load();
+          if (caseIdRef.current === targetCaseId) setError((reason instanceof Error ? reason.message : `${file.name}: 업로드에 실패했습니다.`) + (!retryable ? ' 저장 결과 확인 전에는 재업로드하지 마세요. 나머지 파일 전송을 중단했습니다.' : ' 나머지 파일 전송을 중단했습니다.'));
+        }
+        break;
+      }
       finally { if (caseIdRef.current === targetCaseId) setUploading((count) => Math.max(0, count - 1)); }
     }
     uploadBusyRef.current = false;
+    if (caseIdRef.current === targetCaseId) setUploading(0);
     if (completed && caseIdRef.current === targetCaseId) setNotice(`${categoryCopy[targetCategory].title} 파일 ${completed}개를 프로젝트 자료실에 저장했습니다.`);
     if (inputRef.current) inputRef.current.value = '';
   };
@@ -149,6 +174,32 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = file.displayName ?? file.originalName; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (reason) { setError(reason instanceof Error ? reason.message : '파일 다운로드에 실패했습니다.'); }
+  };
+
+  const checkStorage = async (operation: EvidenceStorageCheck) => {
+    if (checkingStorage || uploading) return;
+    const targetCaseId = caseId;
+    const controller = new AbortController(); storageController.current = controller;
+    setCheckingStorage(operation.id); setError(''); setNotice('');
+    try {
+      // Token, candidates, download headers/body and two parents: up to six 20s deadlines.
+      const result = await apiRequest<{ status?: string; message?: string; reasonCode?: string; file?: { originalName: string; byteSize: number } }>(
+        `/api/cases/${encodeURIComponent(targetCaseId)}/evidence/storage-check?operationId=${encodeURIComponent(operation.id)}`, { signal: controller.signal, timeoutMs: 130_000 });
+      if (controller.signal.aborted || caseIdRef.current !== targetCaseId) return;
+      if (result.status !== 'VERIFIED_STORED') {
+        const reasons: Record<string, string> = {
+          EMPTY_SCOPED_SEARCH: '조회 가능한 계정·사건·업로더 범위에서 후보를 찾지 못했습니다. 파일 미저장이 확인된 것은 아닙니다.',
+          NO_FINGERPRINT_MATCH: '조회한 후보 중 업로드 기록의 파일명·크기·해시·버전 조건과 일치하는 파일을 찾지 못했습니다.',
+          AMBIGUOUS_MATCH: '일치하는 후보가 여러 개여서 저장 파일을 하나로 확정하지 못했습니다.',
+          BYTES_MISMATCH: '후보 파일의 메타데이터와 실제 다운로드 내용의 크기·해시 검증을 통과하지 못했습니다.',
+          PARENT_MISMATCH: '후보 파일의 저장 폴더가 기록된 사건·자료 구분·업로더 날짜와 일치하지 않습니다.',
+          PROJECT_ROOT_MISMATCH: '후보 파일의 상위 폴더가 해당 사건의 프로젝트 폴더인지 확인하지 못했습니다.'
+        };
+        throw new Error(`${result.message ?? '저장 여부를 확정하지 못했습니다. 재업로드하지 마세요.'}${result.reasonCode && reasons[result.reasonCode] ? ` ${reasons[result.reasonCode]}` : ''}`);
+      }
+      setNotice(`${result.message ?? '저장 여부를 확정하지 못했습니다.'}${result.file ? ` · ${result.file.originalName} · ${formatBytes(result.file.byteSize)}` : ''}`);
+    } catch (reason) { if (!controller.signal.aborted && caseIdRef.current === targetCaseId) setError(reason instanceof Error ? reason.message : 'Drive 저장 확인에 실패했습니다.'); }
+    finally { if (!controller.signal.aborted && caseIdRef.current === targetCaseId) setCheckingStorage(''); }
   };
 
   const recordRoute = (value: CaseEvidenceCategory) =>
@@ -183,7 +234,9 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
   const folderGroups = groupEvidenceFiles(categoryFiles.filter((file) => file.isLatest === false || visibleFiles.includes(file)));
   const missingFolderNames = categoryFiles.some((file) => file.storageProvider === 'GOOGLE_DRIVE' && !file.folder?.name);
   const fileRow = (file: CaseEvidenceFile) => <li key={file.id}><b aria-hidden="true">{categoryCopy[file.category].icon}</b><div><strong title={file.originalName}>{file.originalName}</strong><small className="case-evidence-uploader">업로더: {file.uploadedBy || '기록 없음'}</small><small>v{file.versionNumber ?? 1} · {new Date(file.uploadedAt).toLocaleString('ko-KR')} · {formatBytes(file.byteSize)}</small>{Boolean(file.changeSummary?.length) && <details className="evidence-change-summary"><summary title={file.changeSummary?.join('\n')}>Gemini 변경 요약</summary><ul>{file.changeSummary?.map((text, index) => <li key={index}>{text}</li>)}</ul></details>}</div><span className={`evidence-version-badge ${file.isLatest === false ? 'is-archive' : 'is-latest'}`}>{file.isLatest === false ? '이전 버전 / ARCHIVE' : '최신본 / FINAL'}</span><div className="case-evidence-file-actions">{recordRoute(file.category) && <Button size="sm" disabled={Boolean(preparingId) || recordBusy} onClick={() => void prepareRecord(file)}>{preparingId === file.id ? '원본 읽는 중…' : file.category.startsWith('SITE_') ? 'AI 조사기록 작성' : 'AI 회의록 작성'}</Button>}<Button size="sm" variant="secondary" onClick={() => void download(file)}>스튜디오 권한으로 다운로드</Button></div></li>;
-  const uploadDisabled = Boolean(uploading) || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
+  const storageCheckPending = uncertainUploads.has(`${caseId}:${category}`) || storageChecks.some((entry) => entry.category === category && storageCheckBlocks(entry));
+  const uploadDisabled = Boolean(uploading) || Boolean(checkingStorage) || storageCheckPending || (storagePolicy === 'GOOGLE_DRIVE_REQUIRED' && !googleDriveConnected);
+  const uploadState = uploading ? `${uploading}개 파일 저장 중…` : checkingStorage ? 'Drive 저장 결과 확인 중…' : storageCheckPending ? '외부 저장 확인 대기 중 · 재업로드하지 마세요' : uploadDisabled ? '회사 Google Drive 연결이 필요합니다' : '파일을 끌어다 놓거나 선택하세요';
   return <section className={`case-evidence-panel${compact ? ' is-compact' : ''}`} aria-label="프로젝트 통합 자료실">
     {!compact && <h3>프로젝트 자료 → 회사 Google Drive에 업로드하세요</h3>}
     <div className="case-evidence-categories" role="tablist" aria-label="자료 구분">
@@ -191,9 +244,10 @@ export function CaseEvidencePanel({ caseId, defaultCategory = 'TAKEOFF_SOURCE', 
     </div>
     <div className={`case-evidence-dropzone${dragging ? ' is-dragging' : ''}${uploadDisabled ? ' is-disabled' : ''}`} onDragEnter={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragOver={(event) => { event.preventDefault(); if (!uploadDisabled) setDragging(true); }} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); if (!uploadDisabled && event.dataTransfer.files) void upload(event.dataTransfer.files); }}>
       <input ref={inputRef} type="file" multiple accept={ACCEPT} disabled={uploadDisabled} onChange={(event) => event.target.files && void upload(event.target.files)} />
-      <span aria-hidden="true">⇧</span><div><strong>{categoryCopy[category].title} → 회사 Google Drive에 업로드하세요</strong><small>{uploading ? `${uploading}개 파일 저장 중… · ` : uploadDisabled ? '회사 Google Drive 연결이 필요합니다 · ' : '파일을 끌어다 놓거나 선택하세요 · '}문서·사진·녹음파일 최대 10MB · CONCOST 자료실/20_클레임센터/프로젝트명/자료종류(업로더_날짜)에 저장합니다.{storagePolicy === 'D1_TEST_FALLBACK' && ' Drive 연결 전에는 임시 보관됩니다.'}</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
+      <span aria-hidden="true">⇧</span><div><strong>{categoryCopy[category].title} → 회사 Google Drive에 업로드하세요</strong><small>{uploadState} · 문서·사진·녹음파일 최대 10MB · CONCOST 자료실/20_클레임센터/프로젝트명/자료종류(업로더_날짜)에 저장합니다.{storagePolicy === 'D1_TEST_FALLBACK' && ' Drive 연결 전에는 임시 보관됩니다.'}</small></div><Button disabled={uploadDisabled} onClick={() => inputRef.current?.click()}>파일 선택</Button>
     </div>
     <p className="case-evidence-storage-note"><strong>{storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? '회사 Google Drive 저장' : '임시 보관'}</strong> {storagePolicy === 'GOOGLE_DRIVE_REQUIRED' ? googleDriveConnected ? '회사 계정 연결 완료 · 개인 Google 계정 공유 없이 소관 부서(클레임센터·경영지원본부), 관리자 또는 해당 프로젝트에 배정된 회원이 스튜디오 로그인으로 이용합니다.' : '업로드가 잠겨 있습니다. 관리자에게 회사 Drive 연결을 요청하세요.' : '회사 Drive 연결 전에는 업로드 자료를 임시 보관합니다.'} {googleDriveConnected && <button type="button" className="case-evidence-drive-link" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기 →</button>}</p>
+    {storageChecks.filter((entry) => entry.category === category).map((entry) => <p key={entry.id} className="notice-box">{entry.manualRetryAuthorized ? entry.replacementStatus === 'SUCCEEDED' ? '수동 승인된 새 요청의 저장을 완료했습니다. 과거 보류 이력은 미확정 상태로 보존됩니다.' : entry.manualRetryAllowed ? '관리자 수동 재시도 1회 승인 · 승인된 같은 파일만 다시 선택하세요. 과거 저장 여부는 미확정이며 기존 보류 이력·원고·파일은 보존됩니다.' : '수동 재시도 승인이 만료되었거나 이미 사용되었습니다. 과거 보류 이력은 보존되며 추가 업로드는 차단됩니다.' : `${categoryCopy[category].title}의 외부 저장 결과 확인이 필요합니다. 기존 원고와 파일은 보존됩니다.`} <Button size="sm" variant="secondary" disabled={Boolean(checkingStorage) || Boolean(uploading)} onClick={() => void checkStorage(entry)}>{checkingStorage === entry.id ? '원본 크기·해시 확인 중…' : 'Drive 저장 결과 확인'}</Button></p>)}
     {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error} <button type="button" onClick={() => void load()}>다시 확인</button></p>}
     <div className="case-evidence-list"><header><div><h3>{categoryCopy[category].title} · 폴더별 자료</h3></div><div><em>파일 {categoryFiles.length}개</em>{compact && <Button size="sm" variant="secondary" onClick={() => onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>자료실 전체 보기</Button>}</div></header>
       {!loading && missingFolderNames && <p className="case-evidence-folder-notice">일부 저장 폴더명을 확인하지 못했습니다. 파일과 업로더 정보는 그대로 이용할 수 있습니다. <button type="button" onClick={() => void load()}>폴더명 다시 확인</button></p>}

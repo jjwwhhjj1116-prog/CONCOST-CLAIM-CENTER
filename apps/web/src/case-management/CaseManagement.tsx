@@ -4,6 +4,7 @@ import { ApiError, apiDownload, apiRequest } from '../api';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { StatusFeedbackState, type StatusFeedbackType } from '../layout/StatusFeedbackState';
 import { CLAIM_TYPES } from '../routes/Router';
+import { claimTypeLabel } from '../claim-types';
 
 interface CaseCategory { major: string; middle: string; minor: string }
 interface Party { id: string; name: string; role: string; contact?: string | null }
@@ -645,7 +646,7 @@ function CaseDetailPage({ section, onNavigate, previewMode = false }: { section:
 
   return <div className="content-stack">
     <Card title={`${record.caseNumber} · ${record.title}`}>
-      <p><strong>유형:</strong> {record.claimType} · <strong>상태:</strong> {STATUS_LABELS[record.status] ?? record.status} · <strong>버전:</strong> {record.version}</p>
+      <p><strong>유형:</strong> {claimTypeLabel(record.claimType)} · <strong>상태:</strong> {STATUS_LABELS[record.status] ?? record.status} · <strong>버전:</strong> {record.version}</p>
       <p><strong>분류:</strong> {record.category ? `${record.category.major} > ${record.category.middle} > ${record.category.minor}` : '미분류'}</p>
       <div className="action-row">
         <Button size="sm" variant={section === 'overview' ? 'primary' : 'secondary'} onClick={() => onNavigate(`/cases/detail?caseId=${caseId}`)}>개요</Button>
@@ -658,6 +659,11 @@ function CaseDetailPage({ section, onNavigate, previewMode = false }: { section:
     </Card>
     {error && <ErrorBox error={error} />}
     {section === 'overview' && <>
+      <Card title="등록된 의뢰 내용">
+        <p><strong>클라이언트:</strong> {record.clientName || '미입력'}</p>
+        <p><strong>클라이언트 지위:</strong> {({VICTIM:'피해자·원고 측',SUSPECT:'피의자·피고 측',OTHER:'기타 이해관계인',UNSPECIFIED:'미확정'} as Record<string,string>)[record.clientLegalPosition ?? 'UNSPECIFIED'] ?? record.clientLegalPosition}{record.clientPositionDetail ? ` · ${record.clientPositionDetail}` : ''}</p>
+        <p style={{whiteSpace:'pre-wrap'}}>{record.description || '사건 설명 미입력'}</p>
+      </Card>
       <Card title="사건 생애주기"><Button onClick={() => void advanceStatus()} disabled={record.status === 'CLOSED'}>다음 단계로 이동</Button></Card>
       <Card title="활동 타임라인"><Timeline items={(record.activityTimeline ?? []).map((item) => ({ id: item.id, title: item.title, timestamp: new Date(item.createdAt).toLocaleString('ko-KR'), description: item.description ?? undefined }))} /></Card>
     </>}
@@ -681,7 +687,11 @@ function CaseDetailPage({ section, onNavigate, previewMode = false }: { section:
 export function CaseManagement({ routeId, onNavigate, previewMode = false }: { routeId: string; onNavigate: (path: string) => void; previewMode?: boolean }): React.ReactElement {
   if (routeId === 'DASH-01') return <DashboardPage onNavigate={onNavigate} />;
   if (routeId === 'CASE-01') return <CaseListPage onNavigate={onNavigate} />;
-  if (routeId === 'CASE-02') return <CaseCreatePage onNavigate={onNavigate} />;
+  // Old intake-list links used the creation URL with an existing ID. Never
+  // expose the new-record POST form when reopening that saved project.
+  if (routeId === 'CASE-02') return new URLSearchParams(window.location.search).get('caseId')
+    ? <CaseDetailPage key={window.location.search} section="overview" onNavigate={onNavigate} previewMode={previewMode} />
+    : <CaseCreatePage onNavigate={onNavigate} />;
   if (routeId === 'CASE-03') return <CaseDetailPage section="overview" onNavigate={onNavigate} previewMode={previewMode} />;
   if (routeId === 'CASE-04') return <CaseDetailPage section="schedules" onNavigate={onNavigate} previewMode={previewMode} />;
   if (routeId === 'CASE-05') return <CaseDetailPage section="parties" onNavigate={onNavigate} previewMode={previewMode} />;

@@ -35,12 +35,12 @@ test('CF112 whole generation saves every chapter before next request and keeps f
   assert.match(source,/readOnly=\{generating \|\| savingOutline \|\| improving \|\| saving \|\| Boolean\(chapterBusy\)\}/);assert.match(source,/generationBlockedReason \|\| \(dirty/);
   assert.match(source,/\/api\/report-authoring\/case-law\?caseId=\$\{encodeURIComponent\(requestCaseId\)\}&chapterId=\$\{encodeURIComponent\(chapter.id\)\}/);
 });
-test('CF111 actual landscape sheets are shared by preview and export; capture re-queries after refit',()=>{
+test('CF146 portrait report sheets are shared by preview and export; capture re-queries after refit',()=>{
   const component=read('apps/web/src/documents/ReportBodyPages.tsx');
   const output=read('apps/web/src/documents/final-document-export.ts');
   const css=read('apps/web/src/documents/DocumentReviewWorkspace.css');
   assert.match(component,/data-export-page-policy="fit"/);assert.match(component,/source.clientHeight/);
-  assert.match(css,/width:1123px;height:794px;min-height:794px/);assert.match(css,/연속 편집/);
+  assert.match(css,/width:794px;height:1123px;min-height:1123px/);assert.match(css,/연속 편집/);
   assert.ok(output.indexOf("const elements = [...root.querySelectorAll")>output.indexOf("window.dispatchEvent(new Event('final-document:refit'))"));
   assert.match(output,/element.dataset.pageFitOverflow === 'true' \|\|/);
   const pagination=read('apps/web/src/documents/report-pagination.ts');

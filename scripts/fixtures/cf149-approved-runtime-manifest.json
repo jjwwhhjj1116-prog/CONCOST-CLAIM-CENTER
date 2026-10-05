@@ -1,0 +1,120 @@
+{
+  "upstream": "c3bc96a6cc5aa852228ce157c2aa5104014a539e",
+  "patch": "57b552a1e334b6456090a972fd9b0609e5ca2009a23ca06353af7d540536744d",
+  "cf149PatchSha256": "acbea1510dbd408f605ba0b651f342829aa278d57a0862dd3c2a5570c7e1bea9",
+  "wasm": "bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44",
+  "files": [
+    {
+      "path": "LICENSE-canvaskit.txt",
+      "sha256": "d27678cba0d529e77201e2d2a053628143e986aad8f1e77f7039ad4366c8f978"
+    },
+    {
+      "path": "LICENSE-rhwp.txt",
+      "sha256": "1c3a7d5643b163a3ead4965e1bea33b832caee5bfca265efe42afcd7bc696b5b"
+    },
+    {
+      "path": "THIRD_PARTY_LICENSES.md",
+      "sha256": "25baf4e05f26ab6009522d47843ac7247c1be64ae45658400227497106fda79b"
+    },
+    {
+      "path": "assets/canvaskit-SCAxUyCS.wasm",
+      "sha256": "25ebed8e60158c5854f8dc807b936daca21354f8bfb6a2231266b0a93812f301"
+    },
+    {
+      "path": "assets/canvaskit-renderer-C-8opVrU.js",
+      "sha256": "15140a5ab2bacc9fb15fd4efd546b058e8d63f7bddc81461d419e06d9c8443b6"
+    },
+    {
+      "path": "assets/index-BmypLIfn.js",
+      "sha256": "b8e8f07ba2b2980242d6d22ae81304323142f0f2a98a13ebb2f29fca7b19ec8e"
+    },
+    {
+      "path": "assets/index-DZuBJGwZ.css",
+      "sha256": "c5a84c52423deee734d7525d5bc20ebfc5981f13b5bbdb9cb4d9d9a9f3dc58bd"
+    },
+    {
+      "path": "assets/rhwp_bg-B0teb3MV.wasm",
+      "sha256": "bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44"
+    },
+    {
+      "path": "favicon.ico",
+      "sha256": "136d51c3d0a12bc67352964998fa78a5dcf2702873f73eb261990f9e20eb0ade"
+    },
+    {
+      "path": "fonts/NotoSansKR-Bold.woff2",
+      "sha256": "dab3d492daa687386292cff1499225db580f931f800ee0d124eb0636378c6020"
+    },
+    {
+      "path": "fonts/NotoSansKR-ExtraLight.woff2",
+      "sha256": "3b5cac6af73fd94fa91ded10f6cfc54c7ce52189986fe7ca6fd457208f1d3673"
+    },
+    {
+      "path": "fonts/NotoSansKR-OFL.txt",
+      "sha256": "1c05c68c34f9708415aada51f17e1b0092d2cea709bf4a94cd38114f9e73d7d9"
+    },
+    {
+      "path": "fonts/NotoSansKR-Regular.woff2",
+      "sha256": "d1bf8649914a4fe9477a8735bf056383e44e466141fb3d61897252e06d900c1a"
+    },
+    {
+      "path": "fonts/NotoSerifKR-Bold.woff2",
+      "sha256": "504d6af6abb882acd912d47bafa383c4512a6c8c33635e4e8fb37111d9310941"
+    },
+    {
+      "path": "fonts/NotoSerifKR-OFL.txt",
+      "sha256": "5e0da210fb04058a8c0087985d2d456b931c2579811a49655721d3cf0c36b6d6"
+    },
+    {
+      "path": "fonts/NotoSerifKR-Regular.woff2",
+      "sha256": "c9a1e3ac69994d680883b53b1fd83d520733b704792522a932bfaa276117de45"
+    },
+    {
+      "path": "fonts/SourceHanSerifK-OFL.txt",
+      "sha256": "9ff5bb567e1b92c801fc1069e5fbf992ff8efccacb9db94e5959a5b3ba9bb903"
+    },
+    {
+      "path": "fonts/SourceHanSerifK-OldHangul-subset.woff2",
+      "sha256": "9e419cd16df2ea3b220aa7751320d956ac2493440ba412484d98325078f09d43"
+    },
+    {
+      "path": "icons/icon-128.png",
+      "sha256": "ce3047204dedd260b62b507ef1773ecfa1e68be1ddf08304a664fcb1341d502d"
+    },
+    {
+      "path": "icons/icon-192.png",
+      "sha256": "1180863b994272a7591043ecf0ae539de78c0f404eecad15b4e67b0315cbaf9c"
+    },
+    {
+      "path": "icons/icon-256.png",
+      "sha256": "b851d2271495a9858efd51def7615f68f2204417977672cde1da1ced53120ad0"
+    },
+    {
+      "path": "icons/icon-512.png",
+      "sha256": "25074cfb4bc9e9c543fd56504e4088741e4fe2b4927f36ab90741efa7947887a"
+    },
+    {
+      "path": "images/icon_small_ko.svg",
+      "sha256": "a0ac1200a41b6a75e9afb30cda5bb850276087d45c2f25870605888238ba9b39"
+    },
+    {
+      "path": "images/icon_small_ko_dark.svg",
+      "sha256": "9d02ea0b8c1d399a89290d97613759826f19f3e3f392b6d79dcf6109e7e15fa6"
+    },
+    {
+      "path": "index.html",
+      "sha256": "0d91fbef9c40a51aeb5046f61a2a8c01328b92bf94e9d5e8f470bc8ae1d48dd7"
+    },
+    {
+      "path": "native/rhwp-ad01e939079e.js",
+      "sha256": "ad01e939079e3518bc76c442bf395ab058a912991ccb54c8b0be7f5a9a760153"
+    },
+    {
+      "path": "print.html",
+      "sha256": "930907863afbafcc76099d386f6a995bc6c69387cb56838b18e4cdaf6eea6b79"
+    },
+    {
+      "path": "theme-init.js",
+      "sha256": "5a3afcc0139187bfe509414cd60fde2a0dfea72fd72751c4e6e696cdc0f6c587"
+    }
+  ]
+}

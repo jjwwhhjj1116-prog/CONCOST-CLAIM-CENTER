@@ -1,24 +1,33 @@
-import { fetchEvidenceUpload } from '../evidence/upload-evidence';
+import { createReportEvidenceUploader } from '../evidence/report-evidence-upload';
 import './ReportOutlinePlanner.css';
 import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { ApiError, apiDownload, apiRequest } from '../api';
+import { loadCaseOptions } from '../case-options';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
+import { confirmReportPages } from '../documents/confirm-report-pages';
+import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, type ReportNativeSource } from '../documents/report-native-source';
 import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
 import { expandDocumentSpacingMarkers } from '../documents/document-spacing';
+import { ReportEvidenceInsert } from '../documents/ReportEvidenceInsert';
+import { hwpSvgPageForUpload } from '../documents/hwp-page-image';
+import { normalizeReportAiContent } from '../../../../packages/document-engine/src/report-ai-content';
+import { claimTypeLabel } from '../claim-types';
 import { ReportBodyPages } from '../documents/ReportBodyPages';
+import { ReportFrontMatterEditor } from '../documents/ReportFrontMatterEditor';
 import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, editorHtmlToMarkdown, parseStructuredDocumentMarkdown, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { mergeGeneratedChapter } from '../reports/report-generated-chapter';
+import { repairReportAiFormatting } from '../reports/report-format-repair';
 import { renameStructuredReportTitles, renameUnstructuredReportTitles } from '../reports/report-outline-sync';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import { registerNavigationBlocker, type PendingNavigation } from '../navigation-guard';
 import { readReportDocx, readReportStudioWorkbook, reportStudioWorkbook } from '../proposals/proposal-excel';
-import { joinReportPresentation, splitReportPresentation, type ReportHeader } from '../../../../packages/document-engine/src/report-presentation';
+import { joinReportPresentation, splitReportPresentation, type ReportHeader, type ReportFrontMatter } from '../../../../packages/document-engine/src/report-presentation';
 import { WORKFLOW_PROJECTS } from '../workflow/workflow-model';
 import type { UserRole } from './Router';
 import type { PreviewReportReview } from './PreviewApprovalInbox';
@@ -69,6 +78,7 @@ interface CaseLawCitation { id: string; sourceId: string; generationId: string; 
 interface CaseLawPayload { sources: CaseLawSource[]; citations: CaseLawCitation[]; apiConfigured?: boolean }
 type MemoryScope = 'GLOBAL' | 'REPORT_TYPE' | 'CLAIM_TYPE' | 'CHAPTER' | 'USER_FEEDBACK';
 interface FinalOutput { id: string; format: 'DOCX' | 'PDF'; fileName: string; contentSha256: string; byteSize: number; createdAt: string }
+interface FinalReportSnapshot { caseNumber: string; caseTitle: string; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null; version: number }
 interface Finalization {
   id: string; caseId: string; reviewId: string; reportVersion: number; reportTitle: string; finalizedAt: string;
   finalizedBy: { id: string; name: string }; approvedBy: string; approvedAt: string; outputs: FinalOutput[];
@@ -111,6 +121,11 @@ function replaceReportChapterBlock(content: string, chapterCode: string, chapter
 const WHOLE_DOCUMENT_START = '<!-- MANUAL-WHOLE-DOCUMENT:START -->';
 const WHOLE_DOCUMENT_END = '<!-- MANUAL-WHOLE-DOCUMENT:END -->';
 
+export function reportDraftMethod(content: string, aiConnected: boolean): 'MANUAL' | 'AI' {
+  const manual = content.includes('<!-- MANUAL-CHAPTER:') || (content.includes(WHOLE_DOCUMENT_START) && content.includes(WHOLE_DOCUMENT_END));
+  return manual || !aiConnected ? 'MANUAL' : 'AI';
+}
+
 function wholeReportDocument(content: string): string {
   return `${WHOLE_DOCUMENT_START}\n${content.trim()}\n${WHOLE_DOCUMENT_END}`;
 }
@@ -119,19 +134,19 @@ function reportPreviewHtml(content: string, editorJson: import('@tiptap/core').J
   const structured = editorJson ? renderStructuredDocumentHtml(editorJson) : '';
   const rendered = structured || marked.parse(expandDocumentSpacingMarkers(content), { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
-    ADD_ATTR: ['data-document-spacer', 'data-document-page-break', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-report-source-page', 'data-document-spacer', 'data-document-page-break', 'data-image-align', 'data-table-width', 'data-table-align', 'data-table-density', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 }
 
 export function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, content, editorJson }: { caseNumber: string; caseTitle: string; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null }): React.ReactElement {
   const presentation = splitReportPresentation(editorJson);
   const html = reportPreviewHtml(content, presentation.body);
-  const [headerTitle, ...headerDetails] = (presentation.header.text ?? `${title}\n${caseNumber} · ${caseTitle}`).split('\n');
-  return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기" data-export-document-title={title} data-export-document-kind="REPORT">
-    <section className="report-final-cover" data-export-page data-export-page-policy="fit" data-page-number="1">
-      <img className="proposal-template-logo" src="/api/proposal-studio/assets/BRAND_LOGO?v=1" alt="주식회사 컨코스트"/><span>CONCOST CLAIM CENTER STUDIO</span><h2>{title}</h2><p>{caseNumber} · {caseTitle}</p><strong>프로젝트 기술 보고서</strong>
-    </section>
-    <ReportBodyPages html={html} header={presentation.header.enabled && <header><h2>{headerTitle}</h2>{headerDetails.length > 0 && <p style={{ whiteSpace: 'pre-line' }}>{headerDetails.join('\n')}</p>}</header>}/>
+
+  return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기" data-export-document-title={title} data-export-document-kind="REPORT" data-export-orientation="portrait">
+    {presentation.frontMatter.enabled && <section className="report-final-cover" data-export-page data-export-page-policy="fit" data-page-number="1">
+      <div className="report-cover-heading"><h1>{title || '보고서'}</h1>{(presentation.frontMatter.subtitle ?? (caseTitle !== title ? caseTitle : '')) && <p>{presentation.frontMatter.subtitle ?? caseTitle}</p>}</div><div className="report-cover-signature">{presentation.frontMatter.date && <p>{presentation.frontMatter.date}</p>}{presentation.frontMatter.author && <p>{presentation.frontMatter.author}</p>}</div>
+    </section>}
+    <ReportBodyPages html={html} contents={presentation.frontMatter.enabled} tocTitle={presentation.frontMatter.tocTitle} tocTitles={presentation.frontMatter.tocTitles}/>
   </article>;
 }
 
@@ -145,6 +160,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const editorJsonRef = useRef(editorJson);
   const [reportHeader, setReportHeaderState] = useState<ReportHeader>({ enabled: true, text: null });
   const reportHeaderRef = useRef(reportHeader);
+  const [reportFrontMatter, setReportFrontMatterState] = useState<ReportFrontMatter>({ enabled: true, date: '', author: '' });
+  const reportFrontMatterRef = useRef(reportFrontMatter);
+  const setReportFrontMatter = (next: ReportFrontMatter) => { reportFrontMatterRef.current = next; setReportFrontMatterState(next); };
   const setReportHeader = useCallback((next: ReportHeader) => { reportHeaderRef.current = next; setReportHeaderState(next); }, []);
   const setEditorJson = useCallback((next: import('@tiptap/core').JSONContent | null) => { editorJsonRef.current = next; setEditorJsonState(next); }, []);
   const [version, setVersionState] = useState(0);
@@ -153,6 +171,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [backups, setBackups] = useState<ReportBackup[]>([]);
   const [reviews, setReviews] = useState<PreviewReportReview[]>([]);
   const [finalizations, setFinalizations] = useState<Finalization[]>([]);
+  const [finalSnapshot, setFinalSnapshot] = useState<{ id: string; document: FinalReportSnapshot } | null>(null);
+  const [finalSnapshotError, setFinalSnapshotError] = useState('');
+  const [finalSnapshotRetry, setFinalSnapshotRetry] = useState(0);
   const [reviewNote, setReviewNote] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -203,10 +224,17 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [resumeCaseId, setResumeCaseId] = useState('');
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [navigationBusy, setNavigationBusy] = useState(false);
+  const [evidenceInsertOpen, setEvidenceInsertOpen] = useState(false);
   const [hwpEditorOpen, setHwpEditorOpen] = useState(false);
+  const pageImportInFlight = useRef(false);
+  const pageImportAbort = useRef<AbortController | null>(null);
+  const [reportUploads] = useState(createReportEvidenceUploader);
+  useEffect(() => () => pageImportAbort.current?.abort(), []);
   const [hwpSourceFile, setHwpSourceFile] = useState<File | null>(null);
   const [linkedHwpName, setLinkedHwpName] = useState('');
-  const [linkingHwp, setLinkingHwp] = useState(false);
+  const [linkingHwp, setLinkingHwpState] = useState(false);
+  const linkingHwpRef = useRef(false);
+  const setLinkingHwp = (value: boolean) => { linkingHwpRef.current = value; setLinkingHwpState(value); };
 
 
 
@@ -299,9 +327,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       contentRef.current = loadedContent;
       setTitle(loadedTitle);
       setContent(loadedContent);
-      setDraftMethod(loadedContent.includes('<!-- MANUAL-CHAPTER:') ? 'MANUAL' : authoringResult.aiConnected ? 'AI' : 'MANUAL');
+      setDraftMethod(reportDraftMethod(loadedContent, authoringResult.aiConnected));
       const presentation = splitReportPresentation(result.draft?.editorJson);
-      setEditorJson(presentation.body); setReportHeader(presentation.header);
+      setEditorJson(presentation.body); setReportHeader(presentation.header); setReportFrontMatter(presentation.frontMatter);
       setVersion(result.draft?.version ?? 0);
       setSavedAt(result.draft?.updatedAt ?? null);
       setBackups(result.backups ?? []);
@@ -343,7 +371,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     void (async () => {
       try {
         const [result, workspaces] = await Promise.all([
-          apiRequest<{ cases: CaseSummary[] }>('/api/cases?scope=project-work&limit=100&q='),
+          loadCaseOptions<CaseSummary>('/api/cases?scope=project-work&limit=100&q='),
           loadSavedWorkspaces()
         ]);
         setCases(result.cases);
@@ -368,7 +396,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     // Outline saves and navigation can run in the same render: always use the latest document/version.
     const requestTitle = titleRef.current;
     const requestContent = contentRef.current;
-    const requestEditorJson = joinReportPresentation(editorJsonRef.current, reportHeaderRef.current);
+    const requestEditorJson = joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current);
     const requestVersion = versionRef.current;
     const requestWizardStep = activeStepRef.current;
     const requestChapterId = selectedChapterRef.current || null;
@@ -384,7 +412,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setSavedAt(result.draft.updatedAt);
       setBackups(result.backups ?? []);
       setSaveError('');
-      const unsavedChanges = titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current)) !== JSON.stringify(requestEditorJson);
+      const unsavedChanges = titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current)) !== JSON.stringify(requestEditorJson);
       setDirty(unsavedChanges);
       setWorkspaceDirty(activeStepRef.current !== requestWizardStep || (selectedChapterRef.current || null) !== requestChapterId);
       outlineSyncPendingRef.current = false; setOutlineSyncPending(false);
@@ -398,7 +426,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       draftSaveInFlight.current = false;
       if (selectedCaseRef.current === requestCaseId) setSaving(false);
     }
-  }, [activeStep, content, dirty, editable, editorJson, reportHeader, loadedCaseId, loadSavedWorkspaces, saveError, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
+  }, [activeStep, content, dirty, editable, editorJson, reportHeader, reportFrontMatter, loadedCaseId, loadSavedWorkspaces, saveError, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
     if (saveError || generationInFlight.current || chapterSaveInFlight.current || chapterBusy || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
@@ -516,6 +544,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const changeSelectedChapter = (chapterId: string) => {
+    const chapter = authoring?.chapters.find(item => item.id === chapterId);
+    if (chapter) reportBodyRef.current?.goToChapter(chapter.chapterCode);
     if (chapterId === selectedChapterId) return;
     selectedChapterRef.current = chapterId;
     setSelectedChapterId(chapterId);
@@ -764,7 +794,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         });
         if (selectedCaseRef.current !== requestCaseId) return;
         if (!result.chapter.content?.trim() || result.chapter.chapterCode !== chapter.chapterCode) throw new Error('AI 챕터 응답이 비어 있거나 요청한 챕터와 다릅니다. 기존 본문은 유지했습니다.');
-        const block = `<!-- AI-CHAPTER:${chapter.chapterCode}:START -->\n## ${chapter.chapterCode} ${outlineTitles[chapter.id]?.trim() || chapter.title}\n\n${result.chapter.content}\n<!-- AI-CHAPTER:${chapter.chapterCode}:END -->`;
+        const block = `<!-- AI-CHAPTER:${chapter.chapterCode}:START -->\n## ${chapter.chapterCode} ${outlineTitles[chapter.id]?.trim() || chapter.title}\n\n${normalizeReportAiContent(result.chapter.content)}\n<!-- AI-CHAPTER:${chapter.chapterCode}:END -->`;
         const nextJson = mergeGeneratedChapter(editorJsonRef.current ?? parseStructuredDocumentMarkdown(contentRef.current), chapter.chapterCode, parseStructuredDocumentMarkdown(block));
         const renderedHtml = renderStructuredDocumentHtml(nextJson);
         if (!renderedHtml.trim()) throw new Error('생성한 본문을 편집 형식으로 변환하지 못했습니다. 기존 본문은 보존했습니다.');
@@ -860,56 +890,138 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const openAndLinkReportHwp = async (file: File | undefined) => {
     if (!file) return;
+    if (linkingHwpRef.current || selectedCaseRef.current !== selectedCaseId || loadedCaseId !== selectedCaseId) return;
     if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) { if (hwpInputRef.current) hwpInputRef.current.value=''; setError('진행 중인 저장·챕터 반영이 끝난 뒤 파일을 다시 선택해 주세요. 기존 내용은 유지됩니다.'); return; }
     setHwpSourceFile(file);
     setHwpEditorOpen(true);
     setLinkedHwpName(file.name);
     if (!selectedCaseId) return;
+    const requestCaseId = selectedCaseId;
+    const controller = new AbortController(); pageImportAbort.current = controller;
+    const isCurrent = () => !controller.signal.aborted && selectedCaseRef.current === requestCaseId;
     setLinkingHwp(true);
     try {
-      const form = new FormData();
-      form.set('file', file);
-      form.set('category', 'REPORT_REFERENCE');
-      const response = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(selectedCaseId)}/evidence`, { method: 'POST', headers: { 'Idempotency-Key': `report-hwp-${crypto.randomUUID()}` }, body: form }, { reuseExact: true });
-      const payload = await response.json() as { file?: { originalName: string }; error?: string };
-      if (!response.ok || !payload.file) throw new Error(payload.error ?? 'HWP 원본을 프로젝트 보고서 자료에 연결하지 못했습니다.');
-      setMemoryNotice(`${payload.file.originalName} 원본을 프로젝트 보고서 근거자료에 연결했습니다. 팝업의 “보고서 전체에 적용”을 누르면 현재 본문을 이 문서로 교체합니다.`);
+      const stored = await reportUploads.upload(requestCaseId, file, isCurrent);
+      setMemoryNotice(`${stored.originalName} 원본을 프로젝트 보고서 근거자료에 연결했습니다. 팝업의 “보고서 전체에 적용”을 누르면 현재 본문을 이 문서로 교체합니다.`);
     } catch (reason) {
-      setError(`${reason instanceof Error ? reason.message : 'HWP 원본 연결에 실패했습니다.'} 편집기는 계속 사용할 수 있습니다.`);
+      if (isCurrent()) setError(`${reason instanceof Error ? reason.message : 'HWP 원본 연결에 실패했습니다.'} 편집기는 계속 사용할 수 있습니다.`);
     } finally {
       setLinkingHwp(false);
+      if (pageImportAbort.current === controller) pageImportAbort.current = null;
       if (hwpInputRef.current) hwpInputRef.current.value = '';
     }
   };
 
-  const applyHwpTextToCurrentChapter = (importedContent: string) => {
-    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) return;
-    if (!selectedChapter) {
-      setError('HWP 내용을 넣을 보고서 챕터를 먼저 선택해 주세요.');
-      return;
-    }
-    const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
-    try { applyChapterText(selectedChapter.chapterCode, chapterTitle, importedContent); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return; }
-    setMemoryNotice(`HWP/HWPX 본문을 ${selectedChapter.chapterCode} ${chapterTitle}에 반영했습니다. 저장하면 현재 보고서 버전에 기록됩니다.`);
+  const reopenNativeSource = async (download?: 'original' | 'edited') => {
+    const source = download === 'original' ? readReportOriginalSource(editorJsonRef.current, selectedCaseId) : readReportNativeSource(editorJsonRef.current, selectedCaseId);
+    if (!source || !editable || linkingHwp || saving || generating) return;
+    const requestCaseId = selectedCaseId;
+    setLinkingHwp(true); setError('');
+    try {
+      const result = await apiRequest<{ files: Array<{ id: string; sha256: string; byteSize: number }> }>(`/api/cases/${encodeURIComponent(requestCaseId)}/evidence?category=REPORT_REFERENCE&evidenceId=${encodeURIComponent(source.evidenceId)}`);
+      if (!result.files.some(file => file.id === source.evidenceId && file.sha256 === source.sha256 && file.byteSize === source.byteSize)) throw new Error('현재 프로젝트 자료 목록에서 연결된 HWP 편집본을 확인하지 못했습니다. 자료실의 원본을 확인해 주세요.');
+      const { blob } = await apiDownload(source.downloadUrl);
+      if (blob.size !== source.byteSize || await reportSourceSha256(await blob.arrayBuffer()) !== source.sha256) throw new Error('연결된 HWP 편집본의 파일 검증에 실패했습니다.');
+      const current = download === 'original' ? readReportOriginalSource(editorJsonRef.current, requestCaseId) : readReportNativeSource(editorJsonRef.current, requestCaseId);
+      if (selectedCaseRef.current !== requestCaseId || current?.sha256 !== source.sha256) throw new Error('프로젝트 또는 연결된 편집본이 변경되어 열기를 중단했습니다.');
+      if (download) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a'); anchor.href = url; anchor.download = source.name; anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setMemoryNotice(`${source.name} 파일의 크기·해시를 확인해 원본 바이트 그대로 내려받았습니다. 이후 웹 본문 수정은 포함하지 않습니다.`);
+        return;
+      }
+      setHwpSourceFile(new File([blob], source.name, { type: /\.hwp$/iu.test(source.name) ? 'application/x-hwp' : 'application/vnd.hancom.hwpx' })); setHwpEditorOpen(true);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'HWP 편집본을 열지 못했습니다.'); }
+    finally { setLinkingHwp(false); }
   };
 
-  const applyHwpTextToWholeReport = (importedContent: string) => {
-    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) return;
-    const nextContent = wholeReportDocument(importedContent);
-    contentRef.current = nextContent;
-    setContent(nextContent);
-    setEditorJson(null);
-    setDraftMethod('MANUAL');
-    setDirty(true);
-    setMemoryNotice('HWP/HWPX 전체 문서를 챕터 구분 없이 보고서 본문 전체에 적용했습니다. 3초 자동저장 또는 Ctrl+S로 백업본을 남길 수 있습니다.');
+  const applySourcePagesToReport = async (count: number, source: 'HWP' | 'PDF', readPage: (index: number) => Promise<File>, editedSource?: File, originalFile?: File) => {
+    if (pageImportInFlight.current) throw new Error('전체 페이지 적용 확인 또는 저장이 진행 중입니다.');
+    pageImportInFlight.current = true;
+    try {
+    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current || !count) throw new Error('현재 원고 작업이 끝난 뒤 다시 가져오세요.');
+    const requestCaseId = selectedCaseId;
+    const before = contentRef.current;
+    const originalJson = JSON.stringify(editorJsonRef.current);
+    const originalFrontMatter = JSON.stringify(reportFrontMatterRef.current);
+    const controller = new AbortController(); pageImportAbort.current = controller;
+    const isCurrent = () => !controller.signal.aborted && selectedCaseRef.current === requestCaseId && contentRef.current === before && JSON.stringify(editorJsonRef.current) === originalJson && JSON.stringify(reportFrontMatterRef.current) === originalFrontMatter;
+    const assertCurrent = () => { if (!isCurrent()) throw new Error('프로젝트 또는 원고가 변경되어 적용하지 않았습니다. 다시 확인해 주세요.'); };
+    if (!await confirmReportPages(count, source, controller.signal)) throw new Error('기존 보고서를 유지했습니다.');
+    assertCurrent();
+    if (dirty && !await saveNow('MANUAL', false, true)) throw new Error('현재 원고를 먼저 저장하지 못해 가져오기를 중단했습니다.');
+    assertCurrent();
+    setLinkingHwp(true); setError('');
+    try {
+      let nativeSource: ReportNativeSource | undefined;
+      if (editedSource) {
+        setMemoryNotice('HWP 편집본을 회사 Drive에 보존하고 있습니다. 기존 보고서는 아직 변경하지 않습니다.');
+        const sha256 = await reportSourceSha256(await editedSource.arrayBuffer());
+        assertCurrent();
+        const stored = await reportUploads.upload(requestCaseId, editedSource, isCurrent);
+        nativeSource = { caseId: requestCaseId, evidenceId: stored.id, downloadUrl: stored.downloadUrl, name: editedSource.name, byteSize: editedSource.size, sha256 };
+        if (!readReportNativeSource({ attrs: { reportNativeSource: nativeSource } }, requestCaseId)) throw new Error('수정 HWP 원본 연결 정보를 확인하지 못했습니다.');
+        if (originalFile) {
+          const originalHash = await reportSourceSha256(await originalFile.arrayBuffer());
+          assertCurrent();
+          const previous = readReportNativeSource(editorJsonRef.current, requestCaseId);
+          if (previous?.sha256 === originalHash) {
+            nativeSource.originalSource = readReportOriginalSource(editorJsonRef.current, requestCaseId) ?? undefined;
+          } else {
+            setMemoryNotice('가져온 HWP 원본을 회사 Drive에 보존하고 있습니다. 기존 원본은 유지합니다.');
+            const stored = await reportUploads.upload(requestCaseId, originalFile, isCurrent);
+            const reference = { caseId: requestCaseId, evidenceId: stored.id, downloadUrl: stored.downloadUrl, name: originalFile.name, byteSize: originalFile.size, sha256: originalHash };
+            if (!readReportNativeSource({ attrs: { reportNativeSource: reference } }, requestCaseId)) throw new Error('가져온 원본 연결 정보를 확인하지 못했습니다.');
+            nativeSource.originalSource = reference;
+          }
+        }
+      }
+      const html: string[] = [];
+      for (let index = 0; index < count; index++) {
+        if (selectedCaseRef.current !== requestCaseId || contentRef.current !== before || JSON.stringify(editorJsonRef.current) !== originalJson) throw new Error('가져오는 동안 원고가 변경되어 중단했습니다.');
+        setMemoryNotice(`${source} 페이지 보존 중 · ${index + 1}/${count}쪽`);
+        const file = await readPage(index);
+        assertCurrent();
+        const stored = await reportUploads.upload(requestCaseId, file, isCurrent);
+        const image = document.createElement('img'); image.src = stored.downloadUrl; image.alt = `${source} 원본 ${index + 1}쪽`; image.dataset.reportSourcePage = 'true';
+        html.push(image.outerHTML);
+      }
+      assertCurrent();
+      const imported = wholeReportDocument(html.join('\n\n'));
+      const parsed = parseStructuredDocumentMarkdown(imported);
+      if ((JSON.stringify(parsed).match(/reportSourcePage/g) ?? []).length !== count) throw new Error('원본 페이지 수를 보존하지 못해 적용하지 않았습니다.');
+      if (nativeSource) parsed.attrs = { ...parsed.attrs, reportNativeSource: nativeSource };
+      contentRef.current = imported; setContent(imported); setEditorJson(parsed);
+      setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: false });
+      setDraftMethod('MANUAL'); setDirty(true); setHwpEditorOpen(false); setHwpSourceFile(null);
+      setShowTemplatePreview(false);
+      setMemoryNotice(`${source} ${count}쪽을 페이지 이미지로 가져왔습니다. 문장·표 수정은 원본에서 한 뒤 다시 가져오세요. 원본 대조 검수 후 저장하세요.${source === 'HWP' ? ' 웹 HWP 변환은 쪽 나눔·표 배치가 원본과 다를 수 있습니다.' : ' HWP 재변환 없이 선택한 PDF의 쪽 순서를 사용했습니다.'}`);
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : `${source} 페이지 적용 실패`;
+      setError(`${message} 현재 원고는 변경하지 않습니다. 이미 보관된 페이지는 프로젝트 자료실에 남습니다.`); throw reason;
+    } finally { setLinkingHwp(false); }
+    } finally { pageImportInFlight.current = false; pageImportAbort.current = null; }
+  };
+
+  const applyHwpPagesToReport = async (pages: string[], editedSource?: File, originalSource?: File) => {
+    if (linkingHwpRef.current || selectedCaseRef.current !== selectedCaseId || loadedCaseId !== selectedCaseId) throw new Error('프로젝트 원본 연결이 끝난 뒤 다시 적용해 주세요.');
+    if (!editedSource) throw new Error('수정 원본이 없어 적용하지 않았습니다. HWP 편집기를 다시 열어 주세요.');
+    for (let index = 0; index < pages.length; index++) {
+      const svg = new DOMParser().parseFromString(pages[index], 'image/svg+xml');
+      const vb = (svg.documentElement.getAttribute('viewBox') ?? '').split(/[ ,]+/u).map(Number);
+      const width = vb[2] || Number.parseFloat(svg.documentElement.getAttribute('width') ?? '0');
+      const height = vb[3] || Number.parseFloat(svg.documentElement.getAttribute('height') ?? '0');
+      if (!(width > 0 && height > width && Math.abs(width / height - 210 / 297) < .025)) throw new Error(`${index + 1}쪽이 A4 세로가 아니어서 가져오기를 중단했습니다. HWP에서 용지를 확인해 주세요.`);
+    }
+    await applySourcePagesToReport(pages.length, 'HWP', index => hwpSvgPageForUpload(pages[index], `report-hwp-page-${index + 1}.jpg`), editedSource, originalSource);
   };
 
   const restoreRevision = (revision: ReportRevision) => {
     if (!editable || saving || improving || chapterBusy || outlineSaveInFlight.current || draftSaveInFlight.current || outlineSyncPendingRef.current) return;
     if ((dirty || outlineDirty || chaptersDirty) && !window.confirm('저장하지 않은 편집 내용이 있습니다. 백업 본문으로 바꾸시겠습니까? 협업 원고와 목차는 별도로 유지됩니다.')) return;
     titleRef.current = revision.title; contentRef.current = revision.content;
-    setTitle(revision.title); setContent(revision.content); const presentation = splitReportPresentation(revision.editorJson); setEditorJson(presentation.body); setReportHeader(presentation.header); setDraftMethod('MANUAL'); setDirty(true);
+    setTitle(revision.title); setContent(revision.content); const presentation = splitReportPresentation(revision.editorJson); setEditorJson(presentation.body); setReportHeader(presentation.header); setReportFrontMatter(presentation.frontMatter); setDraftMethod('MANUAL'); setDirty(true);
     setMemoryNotice(`백업 버전 ${revision.version}을 작업 화면에 불러왔습니다. 현재 버전을 덮어쓰지 않았으며 저장하면 새 버전으로 기록됩니다.`);
   };
 
@@ -1004,8 +1116,24 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     finally { if (selectedCaseRef.current === requestCaseId) setSubmittingMemory(false); }
   };
 
-  const currentReview = reviews.find((review) => review.reportVersion === version) ?? null;
-  const currentFinalization = currentReview ? finalizations.find((entry) => entry.reviewId === currentReview.id) ?? null : null;
+  const currentReview = loadedCaseId === selectedCaseId ? reviews.find((review) => review.reportVersion === version) ?? null : null;
+  const currentFinalization = currentReview ? finalizations.find((entry) => entry.caseId === selectedCaseId && entry.reviewId === currentReview.id) ?? null : null;
+  const finalSnapshotId = currentFinalization?.id ?? '';
+  const finalSnapshotVersion = currentFinalization?.reportVersion;
+  const approvedDocument = finalSnapshot?.id === finalSnapshotId ? finalSnapshot.document : null;
+  useEffect(() => {
+    let active = true;
+    setFinalSnapshot(null); setFinalSnapshotError('');
+    if (!finalSnapshotId) return;
+    void apiRequest<{ document: FinalReportSnapshot }>(`/api/report-finalizations/${encodeURIComponent(finalSnapshotId)}/document`)
+      .then(result => {
+        if (!active) return;
+        if (!result.document || result.document.version !== finalSnapshotVersion) throw new Error('확정 버전이 일치하지 않아 출력을 중단했습니다.');
+        setFinalSnapshot({ id: finalSnapshotId, document: result.document });
+      })
+      .catch(reason => { if (active) setFinalSnapshotError(reason instanceof Error ? reason.message : '확정본을 불러오지 못했습니다.'); });
+    return () => { active = false; };
+  }, [finalSnapshotId, finalSnapshotVersion, finalSnapshotRetry]);
   const pendingReview = reviews.find((review) => review.status === 'PENDING') ?? null;
   const requestReview = async () => {
     if (!editable || !selectedCaseId || !version || dirty || saving || currentReview || pendingReview) return;
@@ -1023,31 +1151,59 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const finalizeApproved = async () => {
-    if (!currentReview || currentReview.status !== 'APPROVED' || !selectedCaseId || currentFinalization) return;
+    if (!currentReview || currentReview.status !== 'APPROVED' || !selectedCaseId || currentFinalization || dirty || saving || submittingReview) return;
+    const requestCaseId = selectedCaseId;
     setSubmittingReview(true); setError('');
     try {
       const result = await apiRequest<{ finalizations: Finalization[] }>('/api/report-finalizations', {
         method: 'POST', headers: { 'Idempotency-Key': `report-finalize:${selectedCaseId}:v${version}` },
         body: JSON.stringify({ caseId: selectedCaseId, reviewId: currentReview.id })
       });
-      setFinalizations(result.finalizations);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setSubmittingReview(false); }
+      if (selectedCaseRef.current === requestCaseId) setFinalizations(result.finalizations);
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { if (selectedCaseRef.current === requestCaseId) setSubmittingReview(false); }
   };
 
   const downloadFinalReport = async (format: FinalDocumentFormat) => {
-    if (!currentFinalization || !finalReportPreviewRef.current || !selectedCase) return;
+    if (!currentFinalization || !approvedDocument || !finalReportPreviewRef.current || submittingReview) return;
     setSubmittingReview(true); setError(''); setFinalExportMessage('');
     try {
       const result = await downloadFinalDocument({
         root: finalReportPreviewRef.current,
-        format,
-        fileName: `${selectedCase.caseNumber}_${title}_v${currentFinalization.reportVersion}`,
+        format, orientation: 'portrait',
+        fileName: `${approvedDocument.caseNumber}_${approvedDocument.title}_v${approvedDocument.version}`,
         onProgress: setFinalExportMessage
       });
-      setFinalExportMessage(`${format.toUpperCase()} 확정본 ${result.pageCount}페이지 내려받기 완료 · 화면 미리보기와 동일한 A4 출력본입니다.`);
+      setFinalExportMessage(format === 'docx' ? `미리보기 ${result.pageCount}쪽의 문단·표·이미지를 편집 가능한 DOCX로 내려받았습니다. 제출 전 Word에서 쪽 배치를 확인하세요.` : `${format.toUpperCase()} 확정본 ${result.pageCount}페이지 내려받기 완료 · 화면 미리보기와 동일한 A4 출력본입니다.`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSubmittingReview(false); }
+  };
+
+  const importSavedReportTemplate = async (file: TemplateLibraryFile) => {
+    if (!editable || saving || linkingHwp || generationInFlight.current || outlineSaveInFlight.current || chapterSaveInFlight.current) return;
+    if (!['hwp', 'hwpx', 'pdf'].includes(file.fileExtension.toLowerCase())) return;
+    const caseId = selectedCaseId;
+    const requestedContent = contentRef.current;
+    const requestedJson = JSON.stringify(editorJsonRef.current);
+    setLinkingHwp(true); setError('');
+    try {
+      const result = await apiDownload(file.contentUrl);
+      if (selectedCaseRef.current !== caseId) throw new Error('프로젝트가 변경되어 원본 열기를 취소했습니다.');
+      if (file.fileExtension.toLowerCase() === 'pdf') {
+        const { openPdfPageImages } = await import('../documents/pdf-page-image');
+        setMemoryNotice('저장된 PDF의 페이지와 용지를 확인하고 있습니다. 아직 본문은 변경하지 않습니다.');
+        const pages = await openPdfPageImages(new Uint8Array(await result.blob.arrayBuffer()));
+        try {
+          if (selectedCaseRef.current !== caseId || contentRef.current !== requestedContent || JSON.stringify(editorJsonRef.current) !== requestedJson) throw new Error('프로젝트 또는 원고가 변경되어 PDF 가져오기를 취소했습니다. 변경한 원고를 저장한 뒤 다시 가져오세요.');
+          await applySourcePagesToReport(pages.count, 'PDF', pages.readPage);
+        } finally { await pages.close(); }
+        return;
+      }
+      setHwpSourceFile(new File([result.blob], file.originalName, { type: result.blob.type }));
+      setLinkedHwpName(file.originalName); setShowTemplatePreview(false); setHwpEditorOpen(true);
+      setMemoryNotice('보관된 원본을 재업로드 없이 열었습니다. 아직 보고서 본문은 바꾸지 않았습니다. 원본의 다른 사건명·금액·사진을 현재 사건 자료로 오인하지 않도록 확인한 뒤 적용하세요.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '저장된 원본을 열지 못했습니다.'); }
+    finally { setLinkingHwp(false); }
   };
 
   const openTemplateSource = async (file: TemplateLibraryFile) => {
@@ -1106,13 +1262,24 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       {id:'import',label:stepId===4?'현재 챕터에 DOCX 반영':stepId===3?'DOCX 전체 문서 적용':'Word DOCX 가져오기',onClick:()=>reportDocxInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy)},
     ]},
     {id:'hwp',label:'HWP',actions:[
-      {id:'import',label:stepId===4?'현재 챕터에 HWP 반영':stepId===3?'HWP 전체 문서 적용':'HWP/HWPX 가져오기·편집',onClick:()=>hwpInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy) || linkingHwp},
+      {id:'import',label:'HWP/HWPX 전체 페이지 가져오기',onClick:()=>hwpInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy) || linkingHwp},
     ]},
   ]}/> : null;
-  const renderReportHeaderControls = (step: 3 | 4) => <div className="report-header-controls">
-    <label className="report-header-controls__toggle"><input type="checkbox" checked={reportHeader.enabled} disabled={!editable || saving || savingOutline || generating || Boolean(chapterBusy) || loadedCaseId !== selectedCaseId} onChange={event => { setReportHeader({ ...reportHeaderRef.current, enabled: event.target.checked }); setDirty(true); }} />머리글 고정 사용</label>
-    {reportHeader.enabled && <label htmlFor={`report-header-text-${step}`} className="report-header-controls__text">머리글 내용<textarea id={`report-header-text-${step}`} rows={2} maxLength={1000} value={reportHeader.text ?? `${title}\n${selectedCase?.caseNumber ?? ''} · ${selectedCase?.title ?? ''}`} disabled={!editable || saving || savingOutline || generating || Boolean(chapterBusy) || loadedCaseId !== selectedCaseId} onChange={event => { setReportHeader({ ...reportHeaderRef.current, text: event.target.value }); setDirty(true); }} /></label>}
-    <small>표지와 본문은 유지됩니다. 첫 줄은 제목, 다음 줄은 보조정보로 표시됩니다.</small>
+  const repairAiFormatting = () => {
+    if (!editable || saving || generating || improving || chapterBusy) return;
+    const document = editorJsonRef.current ?? parseStructuredDocumentMarkdown(contentRef.current);
+    const { document: changed, repaired, skipped } = repairReportAiFormatting(document, parseStructuredDocumentMarkdown);
+    const skippedNotice = skipped ? ` HTML·문서 구분자 등 원문 확인이 필요한 ${skipped}개 블록은 변경하지 않았습니다.` : '';
+    if (!repaired) { setMemoryNotice('변환할 AI Markdown 코드블록이 없습니다. 현재 원고는 유지합니다.' + skippedNotice); return; }
+    const markdown = editorHtmlToMarkdown(renderStructuredDocumentHtml(changed));
+    setEditorJson(changed); contentRef.current = markdown; setContent(markdown); setDirty(true);
+    setMemoryNotice(`AI 코드블록 ${repaired}개를 제목·표 서식으로 복구했습니다. 문장·수치의 정확성을 검증한 것은 아닙니다. 내부 데이터 표현과 근거를 대조해 주세요.${skippedNotice}`);
+  };
+  const renderReportHeaderControls = (_step: 3 | 4) => <div className="report-header-controls">
+    <strong>A4 세로 · 갑지 → 목차 → 본문 · 하단 쪽번호</strong><Button variant="secondary" disabled={!editable || saving || generating} onClick={() => setEvidenceInsertOpen(true)}>사진·근거자료 넣기</Button><Button variant="secondary" disabled={!editable || saving || generating} onClick={repairAiFormatting}>AI Markdown 서식 복구</Button>
+    <label><input type="checkbox" checked={reportFrontMatter.enabled} disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: event.target.checked }); setDirty(true); }}/>갑지·목차 자동 구성</label>
+    {reportFrontMatter.enabled && <><label>갑지 작성일<input aria-label="갑지 작성일" value={reportFrontMatter.date} maxLength={80} placeholder="예: 2026. 9." disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, date: event.target.value }); setDirty(true); }}/></label><label>갑지 작성자·기관<input aria-label="갑지 작성자·기관" value={reportFrontMatter.author} maxLength={200} placeholder="확인한 작성자·기관명" disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, author: event.target.value }); setDirty(true); }}/></label></>}
+    <small>본문은 유지하고 반복 머리글·회사 꼬리말은 출력하지 않습니다. 이미 갑지·목차가 있는 전체 문서를 가져왔다면 자동 구성을 해제하세요. 목차는 실제 본문의 제목과 쪽 위치로 작성합니다.</small>
   </div>;
 
   const renderStageHeader = (stepId: ReportWizardStep) => {
@@ -1133,7 +1300,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="보고서 자동 저장 스튜디오">
-      <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel={activeStep===4&&selectedChapter?`현재 내용을 ${selectedChapter.chapterCode}에 적용`:'HWP 전체 문서를 보고서에 적용'} onApplyContent={activeStep===4?applyHwpTextToCurrentChapter:applyHwpTextToWholeReport} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
+      {evidenceInsertOpen && <ReportEvidenceInsert key={selectedCaseId} caseId={selectedCaseId} onClose={() => setEvidenceInsertOpen(false)} onInsert={html => reportBodyRef.current?.insertHtml(html) ?? false}/>}
+      {readReportNativeSource(editorJson, selectedCaseId) && <div className="notice-box"><Button variant="secondary" disabled={!editable || linkingHwp || saving || generating} onClick={() => void reopenNativeSource()}>연결된 HWP 편집본 다시 열기</Button><Button variant="secondary" disabled={!editable || linkingHwp || saving || generating} onClick={() => void reopenNativeSource('edited')}>HWP 편집본 파일 내려받기</Button>{readReportOriginalSource(editorJson, selectedCaseId) && <Button variant="secondary" disabled={!editable || linkingHwp || saving || generating} onClick={() => void reopenNativeSource('original')}>가져온 HWP 원본 내려받기</Button>}<small> 문장·표는 연결된 HWP 편집기에서 수정한 뒤 전체 페이지를 다시 적용하세요. 다운로드만으로 보고서가 갱신되지는 않습니다. 이후 웹 본문 수정은 HWP 파일에 포함되지 않습니다.</small></div>}
+      <RhwpEditorDialog preserveAppliedSource applyProgress={pageImportInFlight.current && linkingHwp ? memoryNotice : undefined} applyDisabled={linkingHwp || saving || generating} isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel="수정 원본 보존·전체 페이지 적용" onApplyPages={editable ? applyHwpPagesToReport : undefined} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
@@ -1148,10 +1317,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <header><div><strong>저장한 보고서 이어쓰기</strong><small>프로젝트를 찾아 마지막 저장 단계부터 계속합니다.</small></div><button type="button" aria-label="이어쓰기 창 닫기" onClick={() => setShowResumePicker(false)}>×</button></header>
               <label><span>프로젝트 검색</span><input value={resumeSearch} onChange={(event) => setResumeSearch(event.target.value)} placeholder="프로젝트 번호·이름·보고서 제목" autoFocus /></label>
               <label><span>저장된 프로젝트</span><select value={resumeCaseId} onChange={(event) => setResumeCaseId(event.target.value)}><option value="">프로젝트를 선택하세요</option>{filteredSavedWorkspaces.map((workspace) => <option key={workspace.caseId} value={workspace.caseId}>{workspace.caseNumber} · {workspace.caseTitle} · {workspace.wizardStep}단계 · v{workspace.version}</option>)}</select></label>
-              <Button disabled={!resumeCaseId} onClick={() => { selectCase(resumeCaseId); setShowResumePicker(false); setResumeSearch(''); }}>선택한 보고서 이어쓰기</Button>
+              <Button disabled={!filteredSavedWorkspaces.some(workspace => workspace.caseId === resumeCaseId)} onClick={() => { if (!filteredSavedWorkspaces.some(workspace => workspace.caseId === resumeCaseId)) return; selectCase(resumeCaseId); setShowResumePicker(false); setResumeSearch(''); }}>선택한 보고서 이어쓰기</Button>
             </section>}
           </div>
-          <Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '간단히 보기' : '단계 도움말 보기'}</Button><Button variant="secondary" disabled={!selectedTemplatePreview} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}
+          <Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '간단히 보기' : '단계 도움말 보기'}</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}
         </div>
       </section>
 
@@ -1175,7 +1344,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         <span className="report-wizard-navigation__progress"><i style={{ width: `${(activeStep / 5) * 100}%` }} /></span>
       </nav>
 
-      {activeStep !== 1 && selectedCase&&<div className="report-current-project report-current-project--persistent" aria-live="polite"><span>현재 프로젝트</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{selectedCase.claimType} · {selectedCase.status}</small></div>}
+      {activeStep !== 1 && selectedCase&&<div className="report-current-project report-current-project--persistent" aria-live="polite"><span>현재 프로젝트</span><strong>{selectedCase.caseNumber} · {selectedCase.title}</strong><small>{authoring?.typeGuideline?.typeName || claimTypeLabel(selectedCase.claimType)} · {selectedCase.status}</small></div>}
       {saveError && <section className="error-box" role="alert" aria-label="보고서 저장 오류">
         <strong>{saving ? '보고서 저장 재시도 중' : '자동 저장 일시 중단 · 저장이 완료되지 않았습니다'}</strong>
         <p>{saveError}</p>
@@ -1198,9 +1367,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           </div>
         </div>
         <div className="report-template-viewer-control">
-          <label htmlFor="report-template-preview-type"><span>원본 보고서 템플릿 선택</span><select id="report-template-preview-type" value={previewTemplateCategoryCode} onChange={(event) => setPreviewTemplateCategoryCode(event.target.value)}>{authoring?.templateLibrary.map((category) => <option key={category.categoryCode} value={category.categoryCode}>{category.matchesCurrentType ? '● ' : ''}{category.categoryCode} · {category.displayName} · {category.uploadedSourceCount}/{category.expectedSourceCount}</option>)}</select></label>
+          <label htmlFor="report-template-preview-type"><span>원본 보고서 템플릿 선택</span><select id="report-template-preview-type" value={previewTemplateCategoryCode} onChange={(event) => setPreviewTemplateCategoryCode(event.target.value)}>{authoring?.templateLibrary.map((category) => <option key={category.categoryCode} value={category.categoryCode}>{category.matchesCurrentType ? '● ' : ''}{category.displayName} · {category.uploadedSourceCount}/{category.expectedSourceCount}</option>)}</select></label>
           <Button aria-label="선택 템플릿 완제품 보기" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>원본 완제품·분석 보기</Button>
-          <small>● 표시는 현재 프로젝트 {authoring?.claimType ?? selectedCase?.claimType}에 연결된 원본 분류입니다. PDF는 웹에서 바로 열고 HWP·HWPX·XLSX는 원본으로 내려받습니다.</small>
+          <small>● 표시는 현재 프로젝트 {authoring?.typeGuideline?.typeName || claimTypeLabel(authoring?.claimType ?? selectedCase?.claimType ?? '')}에 연결된 원본 분류입니다. PDF는 웹에서 바로 열고 HWP·HWPX·XLSX는 원본으로 내려받습니다.</small>
         </div>
         </div>
         {!loading && loadedCaseId === selectedCaseId && authoring && !authoring.available && <p className="error-box" role="alert">{authoring.unavailableReason ?? '이 프로젝트 유형에 승인된 보고서 템플릿이 없습니다. 관리자에게 등록을 요청하세요.'}</p>}
@@ -1217,14 +1386,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           {renderStageHeader(2)}
           {!authoring?.available ? <div className="error-box">{authoring?.unavailableReason ?? '이 유형의 승인된 목차 템플릿이 없습니다.'}</div> : <div className="report-outline-planner">
             <header><div><h3>목차를 직접 다듬고, AI 제안과 비교하세요.</h3><p>왼쪽이 보고서에 사용할 목차입니다. 제목을 클릭해 바로 수정하거나, 오른쪽 제안을 적용한 뒤 저장·확정하세요.</p></div></header>
-            {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.claimType} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
+            {authoring.typeGuideline && <details className="report-outline-guideline"><summary><span>관리자 승인 {authoring.typeGuideline.typeName || claimTypeLabel(authoring.claimType)} 작성 지침 v{authoring.typeGuideline.version}</span><strong>표준 목차 블루프린트 보기</strong></summary><p>{authoring.typeGuideline.targetWork}</p><pre>{authoring.typeGuideline.tocBlueprint}</pre><small>{authoring.typeGuideline.sourceFileName} · SHA {authoring.typeGuideline.sourceSha256.slice(0, 16)}…</small></details>}
             <div className="report-outline-columns">
               <section className="report-outline-column report-outline-current" aria-labelledby="report-outline-current-title">
                 <header><h4 id="report-outline-current-title">사용할 목차 · 직접 편집</h4><p>기본 목차에서 시작합니다. 제목을 누르면 그 자리에서 수정할 수 있습니다.</p></header>
                 <ol>{authoring.chapters.map(chapter => <li className="report-outline-current-row" key={chapter.id}>
                   <span className="report-outline-number" aria-hidden="true">{String(chapter.ordinal).padStart(2,'0')}</span>
                   <div className="report-outline-current-content">
-                  <span className="report-outline-code">{chapter.chapterCode}</span>
+                  <span className="report-outline-code">{chapter.ordinal}장</span>
                   {editingOutlineChapterId === chapter.id ? <input autoFocus aria-label={`${chapter.chapterCode} 목차 제목`} maxLength={300} value={outlineTitles[chapter.id] ?? chapter.title} disabled={outlineEditingBlocked} onChange={event => { setOutlineTitles(current => ({ ...current, [chapter.id]: event.target.value })); setOutlineDirty(true); setOutlineSyncNotice(''); }} onBlur={() => setEditingOutlineChapterId(null)} onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.currentTarget.blur(); }} />
                     : <button type="button" className="report-outline-edit-title" aria-label={`${chapter.chapterCode} 목차 제목 직접 수정`} disabled={outlineEditingBlocked} onClick={() => setEditingOutlineChapterId(chapter.id)}><strong>{outlineTitles[chapter.id] ?? chapter.title}</strong><span>직접 수정</span></button>}
                   </div>
@@ -1281,7 +1450,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </section>}
             </div>
             {draftMethod === 'MANUAL' && <section className="report-manual-source"><div><b>HWP·DOCX 전체 문서 적용</b><span>가져온 문서는 챕터로 임의 분할하지 않고 현재 보고서 본문 전체를 교체합니다. HWP는 팝업에서 원본을 확인한 뒤 “전체 문서를 보고서에 적용”을 누르세요.</span>{linkedHwpName && <small>연결된 원본: {linkedHwpName}</small>}</div><div className="report-manual-source__actions"><Button className="report-action-hwp" onClick={() => hwpInputRef.current?.click()} disabled={linkingHwp}>{linkingHwp ? 'HWP 연결 중…' : 'HWP 업로드 · 회사 Google Drive 저장'}</Button><Button className="report-action-review" variant="secondary" onClick={() => reportDocxInputRef.current?.click()} disabled={saving}>DOCX 전체 적용</Button><Button className="report-action-confirm" onClick={continueWithoutAi} disabled={!editable || outlineStatus !== 'CONFIRMED' || outlineDirty || saving}>AI 없이 담당자 검수로 이동</Button></div></section>}
-            {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>담당자 직접 편집</b><span>AI·수동·외부 문서 초안을 편집기에서 고칩니다. 우측 출력 미리보기를 함께 확인하세요. 입력은 자동 저장되고 Ctrl+S로 즉시 저장 지점을 만들 수 있습니다.</span></div><div className="report-stage-inline-editor__actions"><Button className="report-action-review" variant="secondary" onClick={() => void saveNow('MANUAL')} disabled={!dirty || saving}>{saving ? '저장 중…' : 'Ctrl+S 저장 지점 만들기'}</Button>{backups.length > 0 && <a href="#report-backups">시간별 백업 불러오기</a>}</div></header>{renderReportHeaderControls(3)}<div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader)}/>} documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" readOnly={generating || savingOutline || improving || saving || Boolean(chapterBusy)} value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></section>}
+            {editable && (content.trim() || draftMethod === 'MANUAL') && activeStep === 3 && <section className="report-stage-inline-editor"><header><div><b>담당자 직접 편집</b><span>AI·수동·외부 문서 초안을 편집기에서 고칩니다. 우측 출력 미리보기를 함께 확인하세요. 입력은 자동 저장되고 Ctrl+S로 즉시 저장 지점을 만들 수 있습니다.</span></div><div className="report-stage-inline-editor__actions"><Button className="report-action-review" variant="secondary" onClick={() => void saveNow('MANUAL')} disabled={!dirty || saving}>{saving ? '저장 중…' : 'Ctrl+S 저장 지점 만들기'}</Button>{backups.length > 0 && <a href="#report-backups">시간별 백업 불러오기</a>}</div></header>{renderReportHeaderControls(3)}<div className="document-review-split"><StructuredDocumentEditor reportMode beforeContent={<ReportFrontMatterEditor title={title} caseTitle={selectedCase?.title ?? ''} html={reportPreviewHtml(content, editorJson)} value={reportFrontMatter} disabled={!editable || saving || generating || improving || Boolean(chapterBusy)} onTitle={next => { titleRef.current = next; setTitle(next); setDirty(true); }} onChange={next => { setReportFrontMatter(next); setDirty(true); }}/>} ref={reportBodyRef} previewWidth={794} onRequestInsertImage={() => setEvidenceInsertOpen(true)} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader, reportFrontMatter)}/>} documentKey={`report-step3-${selectedCaseId}`} label="현재까지 작성된 보고서 초안" readOnly={generating || savingOutline || improving || saving || Boolean(chapterBusy)} value={content} editorJson={editorJson} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></section>}
             {draftMethod === 'AI' && <p className="muted">프로젝트 유형 {authoring.claimType} · {authoring.providerLabel} / {authoring.modelLabel} · {authoring.credentialSource === 'PERSONAL' ? '내 개인 API 키 우선 사용' : authoring.credentialSource === 'ORGANIZATION' ? '조직 공용 암호화 키 사용' : authoring.credentialSource === 'ENVIRONMENT' ? '회사 서버 보안 키 사용' : '키 연결 필요'} · 프롬프트 원문은 관리자만 열람·수정할 수 있습니다.</p>}
             {(outlineStatus !== 'CONFIRMED' || outlineDirty) && <div className="error-box">2단계에서 최신 목차 기획을 확정해야 챕터 자동 작성이 열립니다.</div>}
             {draftMethod === 'AI' && !authoring.aiConnected && <div className="error-box">AI 연결이 없어 자동작성을 사용할 수 없습니다. 수동·외부 LLM을 선택하면 API 키 없이 계속 작성할 수 있습니다.</div>}
@@ -1319,7 +1488,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </details>
             <details className="report-case-law-review report-advanced-panel"><summary>판례 인용 검수 · {caseLawSources.length}건</summary><header><div><span>CASE-LAW CITATION REVIEW</span><h3 id="report-case-law-review-title">판례 인용 검수</h3><p>선택 판례의 공식 원문과 초안 문장을 대조합니다. 판례는 법리 근거이며 프로젝트 사실관계나 귀책을 자동 확정하지 않습니다.</p></div><em>{caseLawSources.length ? `${caseLawSources.length}건 대조` : '판례 미사용'}</em></header>{caseLawSources.length?<div>{caseLawSources.map((source)=>{const citation=latestCaseLawCitationBySource.get(source.id);const status=citation?.validationStatus??'REVIEW_REQUIRED';const label=status==='VERIFIED'?'ID 연결 정상':status==='INSUFFICIENT'?'근거 연결 불충분':status==='MISMATCH'?'내용 불일치':'사람 확인 필요';return <article key={source.id} data-citation-status={status}><header><div><strong>{source.caseNumber} · {source.caseName}</strong><small>{source.courtName} · {source.decisionDate}</small></div><span>{label}</span></header><p>{citation?.citationText||'이 판례와 연결된 생성 문장이 아직 없습니다. 판례 근거 초안을 생성하거나 직접 인용을 확인해 주세요.'}</p><small>{citation?.validationNote||'공식 판례 원문과 보고서 문장을 사람이 대조해야 합니다.'}</small><footer><a href={source.officialUrl} target="_blank" rel="noreferrer">공식 원문 열기</a><Button variant="secondary" size="sm" onClick={()=>void excludeCaseLaw(source.id)} disabled={Boolean(caseLawBusy)}>판례 교체·제외</Button></footer></article>})}</div>:<p className="empty-box">현재 챕터는 판례를 사용하지 않았습니다. 사실관계 근거만 검수하면 됩니다.</p>}</details>
             <Input required label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} />
-            {activeStep === 4 && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor ref={reportBodyRef} previewWidth={1123} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || saving || Boolean(chapterBusy)} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
+            {activeStep === 4 && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor reportMode beforeContent={<ReportFrontMatterEditor title={title} caseTitle={selectedCase?.title ?? ''} html={reportPreviewHtml(content, editorJson)} value={reportFrontMatter} disabled={!editable || saving || generating || improving || Boolean(chapterBusy)} onTitle={next => { titleRef.current = next; setTitle(next); setDirty(true); }} onChange={next => { setReportFrontMatter(next); setDirty(true); }}/>} ref={reportBodyRef} previewWidth={794} onRequestInsertImage={() => setEvidenceInsertOpen(true)} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader, reportFrontMatter)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || saving || Boolean(chapterBusy)} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
             {editable && selectedChapter && <details className="report-memory-feedback report-advanced-panel"><summary>AI 개선 피드백 등록</summary><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>APPROVED MEMORY</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</details>}
             <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
           </fieldset>
@@ -1342,11 +1511,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 이후 변경·삭제할 수 없습니다.</span></div>
           </div> : <div className="form-stack">
             <p className="notice-box"><strong>최종 확정 완료 · v{currentFinalization.reportVersion}</strong><br />{currentFinalization.finalizedBy.name} · {new Date(currentFinalization.finalizedAt).toLocaleString('ko-KR')} · 승인자 {currentFinalization.approvedBy}</p>
-            <div ref={finalReportPreviewRef} className="report-final-export-source"><ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader)}/></div>
+            {finalSnapshotError ? <p role="alert">{finalSnapshotError}<Button variant="secondary" onClick={() => setFinalSnapshotRetry(value => value + 1)}>확정본 다시 조회</Button></p> : !approvedDocument ? <p role="status">확정 당시 본문과 서식을 불러오는 중입니다.</p> : <p>현재 편집본이 아닌 승인·확정 당시의 본문과 서식으로 출력합니다.</p>}
+            <div ref={finalReportPreviewRef} className="report-final-export-source">{approvedDocument && <ReportFinalDocumentPreview {...approvedDocument}/>}</div>
             <div className="action-row final-export-actions" aria-label="확정 보고서 파일 내려받기">
-              <Button className="final-export-button is-docx" aria-label="확정 보고서 Word DOCX 내려받기" onClick={() => void downloadFinalReport('docx')} disabled={submittingReview}><FileFormatIcon format="docx"/><span>Word DOCX</span></Button>
-              <Button className="final-export-button is-pdf" aria-label="확정 보고서 PDF 내려받기" onClick={() => void downloadFinalReport('pdf')} disabled={submittingReview}><FileFormatIcon format="pdf"/><span>PDF</span></Button>
-              <Button className="final-export-button is-hwp" aria-label="확정 보고서 HWP 내려받기" onClick={() => void downloadFinalReport('hwp')} disabled={submittingReview}><FileFormatIcon format="hwp"/><span>HWP</span></Button>
+              <Button className="final-export-button is-docx" aria-label="확정 보고서 Word DOCX 내려받기" onClick={() => void downloadFinalReport('docx')} disabled={submittingReview || !approvedDocument}><FileFormatIcon format="docx"/><span>Word DOCX</span></Button>
+              <Button className="final-export-button is-pdf" aria-label="확정 보고서 PDF 내려받기" onClick={() => void downloadFinalReport('pdf')} disabled={submittingReview || !approvedDocument}><FileFormatIcon format="pdf"/><span>PDF</span></Button>
+              <Button className="final-export-button is-hwp" aria-label="확정 보고서 HWP 내려받기" onClick={() => void downloadFinalReport('hwp')} disabled={submittingReview || !approvedDocument}><FileFormatIcon format="hwp"/><span>HWP</span></Button>
             </div>
             {finalExportMessage && <p className="notice-box" role="status">{finalExportMessage}</p>}
             {currentFinalization.outputs.map((output) => <p className="muted" key={output.id}>{output.format} · {(output.byteSize / 1024).toFixed(1)} KB · SHA {output.contentSha256.slice(0, 16)}…</p>)}
@@ -1383,7 +1553,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </div>}
       </Dialog>
       <Dialog isOpen={showTemplatePreview && Boolean(selectedTemplateCategory)} title={selectedTemplateCategory ? `${selectedTemplateCategory.categoryCode} · ${selectedTemplateCategory.displayName}` : '원본 보고서 템플릿'} onClose={() => setShowTemplatePreview(false)}>
-        {selectedTemplateCategory && <div className="report-template-preview-dialog"><header><span>SOURCE-ANALYZED TEMPLATE · FINISHED REPORT REFERENCE · v{selectedTemplateCategory.analysisVersion}</span><p>{selectedTemplateCategory.analysisSummary}</p>{!selectedTemplateCategory.matchesCurrentType && <strong>참고 열람 전용 · 현재 프로젝트 유형은 {authoring?.claimType}, 이 원본의 주 유형은 {selectedTemplateCategory.primaryClaimType}입니다.</strong>}</header><section className="report-template-source-outline"><h3>원본에서 확인한 목차·작성 순서</h3><ol>{selectedTemplateCategory.outline.map((item) => <li key={item}>{item}</li>)}</ol></section><section className="report-template-source-files"><header><div><span>PRIVATE COMPANY GOOGLE DRIVE</span><h3>실제 원본 완제품 {selectedTemplateCategory.uploadedSourceCount}/{selectedTemplateCategory.expectedSourceCount}개</h3></div></header>{selectedTemplateCategory.files.length ? <ul>{selectedTemplateCategory.files.map((file) => <li key={file.id}><div><strong>{file.originalName}</strong><small>{file.fileExtension.toUpperCase()} · {(file.byteSize / 1024 / 1024).toFixed(1)} MB · {file.uploadedByName} · SHA {file.sha256.slice(0, 12)}…</small></div><Button variant="secondary" onClick={() => void openTemplateSource(file)}>{file.viewMode === 'INLINE' ? '원본 PDF 열기' : '원본 다운로드'}</Button></li>)}</ul> : <p className="empty-box">구조 분석과 챕터 프롬프트는 적용됐지만 Google Drive 원본 파일은 아직 등록되지 않았습니다. 관리자가 AI·템플릿 관리 화면에서 원본 폴더를 한 번 등록해야 합니다.</p>}</section>{selectedTemplatePreview && <details className="report-template-structure-fallback"><summary>웹용 구조 예시도 함께 보기</summary><pre>{selectedTemplatePreview.finishedExample}</pre></details>}</div>}
+{selectedTemplateCategory && <div className="report-template-preview-dialog"><header><span>SOURCE-ANALYZED TEMPLATE · FINISHED REPORT REFERENCE · v{selectedTemplateCategory.analysisVersion}</span><p>{selectedTemplateCategory.analysisSummary}</p>{!selectedTemplateCategory.matchesCurrentType && <strong>참고 열람 전용 · 현재 프로젝트 유형은 {authoring?.typeGuideline?.typeName || claimTypeLabel(authoring?.claimType ?? '')}, 이 원본의 주 유형은 {claimTypeLabel(selectedTemplateCategory.primaryClaimType)}입니다.</strong>}</header><section className="report-template-source-outline"><h3>원본에서 확인한 목차·작성 순서</h3><ol>{selectedTemplateCategory.outline.map((item) => <li key={item}>{item}</li>)}</ol></section><section className="report-template-source-files"><header><div><span>PRIVATE COMPANY GOOGLE DRIVE</span><h3>실제 원본 완제품 {selectedTemplateCategory.uploadedSourceCount}/{selectedTemplateCategory.expectedSourceCount}개</h3></div></header>{selectedTemplateCategory.files.length ? <ul>{selectedTemplateCategory.files.map((file) => <li key={file.id}><div><strong>{file.originalName}</strong><small>{file.fileExtension.toUpperCase()} · {(file.byteSize / 1024 / 1024).toFixed(1)} MB · {file.uploadedByName} · SHA {file.sha256.slice(0, 12)}…</small></div>{['hwp', 'hwpx', 'pdf'].includes(file.fileExtension.toLowerCase()) && <Button disabled={!editable || linkingHwp || saving || generating} onClick={() => void importSavedReportTemplate(file)}>{file.fileExtension.toLowerCase() === 'pdf' ? 'PDF 원본 페이지 가져오기' : '저장 원본을 HWP에서 열기'}</Button>}<Button variant="secondary" onClick={() => void openTemplateSource(file)}>{file.viewMode === 'INLINE' ? '원본 PDF 열기' : '원본 다운로드'}</Button></li>)}</ul> : <p className="empty-box">구조 분석과 챕터 프롬프트는 적용됐지만 Google Drive 원본 파일은 아직 등록되지 않았습니다. 관리자가 AI·템플릿 관리 화면에서 원본 폴더를 한 번 등록해야 합니다.</p>}</section>{selectedTemplatePreview && <details className="report-template-structure-fallback"><summary>웹용 구조 예시도 함께 보기</summary><pre>{selectedTemplatePreview.finishedExample}</pre></details>}</div>}
       </Dialog>
     </div>
   );

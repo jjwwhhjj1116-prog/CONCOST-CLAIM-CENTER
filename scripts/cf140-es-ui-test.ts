@@ -35,7 +35,7 @@ type Context = {
   saved: () => EsInput; holdPublic: () => { started: Promise<void>; release: () => void };
 };
 async function withStudio(run: (context: Context) => Promise<void>, initial?: EsInput) {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
     name: 'cf140-ui-harness', enforce: 'pre', resolveId(id: string) { if (id === '/cf140-ui.js') return '\0cf140-ui'; },
     load(id: string) { if (id === '\0cf140-ui') return `import React from 'react'; import {createRoot} from 'react-dom/client'; import {EsStudio} from '/src/es/EsStudio.tsx'; function Harness(){const [id,setId]=React.useState('cf140-local');return React.createElement(React.Fragment,null,React.createElement('button',{onClick:()=>setId('cf140-other')},'합성 다른 문서 열기'),React.createElement(EsStudio,{mode:'editor',search:'?documentId='+id,onNavigate:()=>{}}));} createRoot(document.getElementById('root')).render(React.createElement(Harness));`; },

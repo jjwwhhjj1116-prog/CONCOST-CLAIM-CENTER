@@ -330,12 +330,24 @@ test('CF123 actual Node migration runner and HTTP ES routes preserve settings, n
   let server: ManagedApiServer | undefined;
   try {
     writeFileSync(dbPath, db.export()); db.close();
-    await migrateDatabase(databaseUrl); await migrateDatabase(databaseUrl);
+    await migrateDatabase(databaseUrl);
+    const firstMigrationImage = readFileSync(dbPath);
+    await migrateDatabase(databaseUrl);
     const SQL = await initSqlJs(), checked = new SQL.Database(readFileSync(dbPath)); checked.run('PRAGMA foreign_keys=ON');
     try {
       const names = Object.keys(before).filter(name => name !== '_P04Migration'); assert.deepEqual(snapshot(checked, names), Object.fromEntries(names.map(name => [name, before[name]])));
-      assert.deepEqual(rows(checked, 'SELECT * FROM "_P04Migration" WHERE name<>? ORDER BY rowid', [nodeMigrationName]), before._P04Migration);
-      assert.deepEqual(rows(checked, 'SELECT name,checksum FROM "_P04Migration" WHERE name=?', [nodeMigrationName]), [{ name: nodeMigrationName, checksum: digest(nodeMigration) }]); integrity(checked);
+      const pendingNames = [nodeMigrationName, '20260914090000_cf148_finalization_metadata'];
+      const ledger = rows(checked, 'SELECT * FROM "_P04Migration" ORDER BY rowid');
+      assert.deepEqual(ledger.filter(row => !pendingNames.includes(row.name)), before._P04Migration);
+      assert.deepEqual(ledger.filter(row => pendingNames.includes(row.name)).map(({name,checksum}) => ({name,checksum})), pendingNames.map(name => ({name,checksum:digest(readFileSync(new URL(`${name}/migration.sql`,nodeRoot),'utf8'))})));
+      const first = new SQL.Database(firstMigrationImage);
+      try {
+        assert.deepEqual(snapshot(checked), snapshot(first), 'second migration run must preserve every row including ledger timestamps');
+        assert.deepEqual(rows(checked, 'SELECT type,name,sql FROM sqlite_master ORDER BY name'), rows(first, 'SELECT type,name,sql FROM sqlite_master ORDER BY name'));
+        assert.deepEqual(rows(checked, 'SELECT * FROM "ReportFinalizationMetadata"'), []);
+      }
+      finally { first.close(); }
+      integrity(checked);
     } finally { checked.close(); }
     server = createApiServer({ databaseUrl, environment: {}, allowedOrigins: ['https://es.example'], uploadDir: path.join(directory, 'uploads'), backupRootDir: path.join(directory, 'backups'), restoreRootDir: path.join(directory, 'restores'), credentialVaultDir: path.join(directory, 'vault'), pkceVaultDir: path.join(directory, 'pkce') });
     await new Promise<void>((resolve, reject) => { server!.once('error', reject); server!.listen(0, '127.0.0.1', resolve); });

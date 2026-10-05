@@ -45,6 +45,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; providerBod
   sql.exec(migration('0010_cf10_product_experience.sql'));
   insertUser(STAFF_ID, 'staff', '["staff"]'); insertUser(OUTSIDER_ID, 'outsider', '["staff"]');
   for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0013_cf13_litigation_records.sql']) sql.exec(migration(name));
+  sql.exec(migration('0024_cf32_source_template_library.sql'));
   sql.run('INSERT INTO preview_case_assignments VALUES (?, ?, ?, ?)', [CASE_ID, STAFF_ID, ADMIN_ID, now]);
   for (const [token, id] of [[ADMIN_TOKEN, ADMIN_ID],[STAFF_TOKEN, STAFF_ID],[OUTSIDER_TOKEN, OUTSIDER_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token), id, now, new Date(Date.now() + 3_600_000).toISOString()]);
   const providerBodies: Array<Record<string, unknown>> = [];
@@ -126,8 +127,13 @@ test('CF13 enforces official source, assignment, mutation role, version, and rep
   assert.equal(stale.status, 409);
 
   const config = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+  assert.equal(config.status, 200);
   const chapterId = (await config.json() as { chapters: Array<{ id: string }> }).chapters[0].id;
-  const generated = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId, expectedDraftVersion: 0 }) }), env);
+  const staffGeneration = await worker.fetch(request('/api/report-authoring/generate', STAFF_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId, expectedDraftVersion: 0 }) }), env);
+  assert.equal(staffGeneration.status, 403);
+  assert.equal((await staffGeneration.json() as { code: string }).code, 'RESPONSIBLE_PM_REQUIRED');
+  assert.equal(providerBodies.length, 0);
+  const generated = await worker.fetch(request('/api/report-authoring/generate', ADMIN_TOKEN, { method: 'POST', body: JSON.stringify({ caseId: CASE_ID, chapterId, expectedDraftVersion: 0 }) }), env);
   assert.equal(generated.status, 200);
   const providerInput = String(providerBodies[0].input);
   assert.match(providerInput, /2026가합12345/u);

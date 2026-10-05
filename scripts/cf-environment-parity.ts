@@ -119,6 +119,7 @@ export function validateSharedSecrets(values: Record<string, string>): string[] 
   const allowed = new Set<string>(SYNCABLE_SHARED_SECRETS);
   for (const key of Object.keys(values)) if (!allowed.has(key)) errors.push(`공통 secret 파일에 서버별 또는 미등록 키가 있습니다: ${key}`);
   if (Object.keys(values).length === 0) errors.push('동기화할 공통 secret 값이 없습니다.');
+  for (const [key, value] of Object.entries(values)) if (!value.trim()) errors.push(`${key} 값이 비어 있습니다.`);
   if (values.ANTHROPIC_WORKSPACE_ID && !/^wrkspc_[A-Za-z0-9]{10,100}$/u.test(values.ANTHROPIC_WORKSPACE_ID)) errors.push('ANTHROPIC_WORKSPACE_ID 형식이 올바르지 않습니다.');
   if (Boolean(values.GOOGLE_CLIENT_ID) !== Boolean(values.GOOGLE_CLIENT_SECRET)) errors.push('GOOGLE_CLIENT_ID와 GOOGLE_CLIENT_SECRET은 반드시 함께 입력해야 합니다.');
   if (Boolean(values.ANTHROPIC_API_KEY) !== Boolean(values.ANTHROPIC_WORKSPACE_ID)) errors.push('현재 Claude 키는 ANTHROPIC_API_KEY와 ANTHROPIC_WORKSPACE_ID를 반드시 함께 입력해야 합니다.');
@@ -167,6 +168,12 @@ function failIfAny(errors: string[]): void {
   throw new Error(`Cloudflare 환경 parity 검사 실패:\n- ${errors.join('\n- ')}`);
 }
 
+export function buildSharedSecretPayload(values: Record<string, string>): string {
+  failIfAny(validateSharedSecrets(values));
+  // Omitted keys must remain untouched; synchronization is not deletion authority.
+  return JSON.stringify(values);
+}
+
 function resolveSecretFile(root: string, fileArg: string | undefined): string {
   if (!fileArg) throw new Error('sync에는 --file <.env.cloudflare.shared.local>이 필요합니다.');
   const path = isAbsolute(fileArg) ? fileArg : resolve(root, fileArg);
@@ -194,13 +201,10 @@ export function main(argv = process.argv.slice(2), root = process.cwd()): void {
   const fileIndex = argv.indexOf('--file');
   const secretFile = resolveSecretFile(root, fileIndex >= 0 ? argv[fileIndex + 1] : '.env.cloudflare.shared.local');
   const values = parseDotEnv(readFileSync(secretFile, 'utf8'));
-  failIfAny(validateSharedSecrets(values));
+  const payload = buildSharedSecretPayload(values);
   const targets: TargetName[] = argv.includes('--include-gaopen') ? ['test', 'gaopen'] : ['test'];
   for (const target of targets) {
-    const existing = new Set(listSecretNames(root, target));
-    const payload: Record<string, string | null> = { ...values };
-    for (const name of SYNCABLE_SHARED_SECRETS) if (!Object.hasOwn(values, name) && existing.has(name)) payload[name] = null;
-    runWrangler(root, ['secret', 'bulk', '--config', TARGETS[target].config], true, JSON.stringify(payload));
+    runWrangler(root, ['secret', 'bulk', '--config', TARGETS[target].config], true, payload);
     const names = new Set(listSecretNames(root, target));
     failIfAny(Object.keys(values).filter((name) => !names.has(name)).map((name) => `${target}: 동기화 후 secret 이름 확인 실패: ${name}`));
   }

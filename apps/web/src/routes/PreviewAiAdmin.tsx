@@ -37,6 +37,10 @@ export function PreviewAiAdmin({ embedded = false }: { embedded?: boolean } = {}
   const [templateCategoryCode, setTemplateCategoryCode] = useState('REF-01');
   const [templateImporting, setTemplateImporting] = useState(false);
   const [templateImportProgress, setTemplateImportProgress] = useState('');
+  const [templateRefreshRequired, setTemplateRefreshRequired] = useState(false);
+  const [templateRefreshing, setTemplateRefreshing] = useState(false);
+  const [templateErrors, setTemplateErrors] = useState<string[]>([]);
+  const [templateRefreshError, setTemplateRefreshError] = useState('');
   const templateImportKeys = useRef(new Map<string, string>());
   const templateFolderInput = useRef<HTMLInputElement | null>(null);
 
@@ -104,15 +108,28 @@ export function PreviewAiAdmin({ embedded = false }: { embedded?: boolean } = {}
     finally { setSaving(false); }
   };
 
+  const refreshTemplateLibrary = async () => {
+    setTemplateRefreshing(true); setTemplateRefreshError('');
+    try {
+      const result = await apiRequest<{ categories: TemplateLibraryCategory[] }>('/api/report-templates/library');
+      if (!Array.isArray(result.categories)) throw new Error('원본 템플릿 목록 응답을 확인하지 못했습니다. 다시 조회해 주세요.');
+      setPayload((current) => current ? { ...current, templateLibrary: result.categories } : current);
+      setTemplateRefreshRequired(false);
+    } catch (reason) {
+      setTemplateRefreshRequired(true);
+      setTemplateRefreshError(reason instanceof Error ? reason.message : '목록을 조회하지 못했습니다. 기존 등록은 유지됩니다.');
+    } finally { setTemplateRefreshing(false); }
+  };
+
   const importTemplateFolder = async (incoming: FileList | null) => {
-    if (!incoming?.length || !payload) return;
+    if (!incoming?.length || !payload || templateImporting || templateRefreshing || templateRefreshRequired) return;
     const files = Array.from(incoming).filter((file) => {
       const normalizedName = file.name.normalize('NFC');
       return /\.(?:pdf|hwp|hwpx|xlsx)$/iu.test(normalizedName)
         && normalizedName !== '클레임 업무 프로세스.xlsx';
     });
-    if (!files.length) { setError('선택한 폴더에 PDF·HWP·HWPX·XLSX 보고서 템플릿이 없습니다.'); return; }
-    setTemplateImporting(true); setError(''); setNotice('');
+    if (!files.length) { setTemplateErrors(['선택한 폴더에 PDF·HWP·HWPX·XLSX 보고서 템플릿이 없습니다.']); return; }
+    setTemplateImporting(true); setTemplateErrors([]); setError(''); setNotice('');
     let completed = 0;
     let failed = 0;
     for (const file of files) {
@@ -124,14 +141,16 @@ export function PreviewAiAdmin({ embedded = false }: { embedded?: boolean } = {}
       templateImportKeys.current.set(fingerprint, requestKey);
       setTemplateImportProgress(`${completed + failed + 1}/${files.length} · ${file.name}`);
       try {
-        const form = new FormData(); form.set('categoryCode', categoryCode); form.set('file', file);
+        const form = new FormData(); form.set('categoryCode', categoryCode); form.set('file', file, file.name);
         const response = await fetch('/api/admin/report-templates/import', { method: 'POST', credentials: 'include', headers: { 'Idempotency-Key': requestKey }, body: form });
-        const result = await response.json() as { categories?: TemplateLibraryCategory[]; error?: string };
-        if (!response.ok || !result.categories) throw new Error(result.error ?? `${file.name} 등록에 실패했습니다.`);
+        const result = await response.json() as { categories?: TemplateLibraryCategory[]; error?: string; fileId?: string; importCommitted?: boolean; libraryRefreshRequired?: boolean };
+        const hasLibrary = Array.isArray(result.categories);
+        if (!response.ok || (!hasLibrary && !(result.importCommitted === true && result.libraryRefreshRequired === true && result.fileId))) throw new Error(result.error ?? `${file.name} 등록 결과를 확인하지 못했습니다.`);
         templateImportKeys.current.delete(fingerprint);
-        setPayload((current) => current ? { ...current, templateLibrary: result.categories as TemplateLibraryCategory[] } : current);
+        if (hasLibrary) setPayload((current) => current ? { ...current, templateLibrary: result.categories! } : current);
+        setTemplateRefreshRequired(!hasLibrary);
         completed += 1;
-      } catch (reason) { failed += 1; setError(reason instanceof Error ? reason.message : `${file.name} 등록에 실패했습니다.`); }
+      } catch (reason) { failed += 1; setTemplateErrors((current) => [...current, `${relativePath || file.name}: ${reason instanceof Error ? reason.message : '등록에 실패했습니다.'}`]); }
     }
     setTemplateImportProgress(''); setTemplateImporting(false);
     if (templateFolderInput.current) templateFolderInput.current.value = '';
@@ -173,8 +192,11 @@ export function PreviewAiAdmin({ embedded = false }: { embedded?: boolean } = {}
       {notice && <p className="notice-box" role="status">{notice}</p>}{error && <p className="error-box" role="alert">{error}</p>}
     </Card>
     {!embedded && <Card title="원본 보고서 템플릿 라이브러리 · 회사 Google Drive">
-      <div className="template-library-admin__intro"><div><p className="eyebrow">PRIVATE SOURCE LIBRARY · 32 ORIGINAL FILES</p><h2>원본 폴더를 그대로 등록하고, 분석 근거와 함께 관리합니다.</h2><p className="muted">원본은 공개 Git·정적 웹 자산에 포함하지 않습니다. 관리자만 등록하며 로그인 사용자는 보고서 작성 화면에서 PDF를 열람하고 HWP·HWPX·XLSX를 내려받을 수 있습니다.</p></div><strong>{payload.templateLibrary.reduce((sum, category) => sum + category.uploadedSourceCount, 0)}/{payload.templateLibrary.reduce((sum, category) => sum + category.expectedSourceCount, 0)}<small>GOOGLE DRIVE REGISTERED</small></strong></div>
-      <div className="template-library-admin__actions"><Select label="단일 파일 기본 분류" value={templateCategoryCode} onChange={(event) => setTemplateCategoryCode(event.target.value)} options={payload.templateLibrary.map((category) => ({ value: category.categoryCode, label: `${category.categoryCode} · ${category.displayName}` }))} /><input ref={(node) => { templateFolderInput.current = node; if (node) node.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden accept=".pdf,.hwp,.hwpx,.xlsx" onChange={(event) => void importTemplateFolder(event.target.files)} /><Button onClick={() => templateFolderInput.current?.click()} disabled={templateImporting}>{templateImporting ? templateImportProgress || '원본 등록 중…' : '원본 32개 폴더 선택·등록'}</Button></div>
+      <div className="template-library-admin__intro"><div><p className="eyebrow">PRIVATE SOURCE LIBRARY · 32 ORIGINAL FILES</p><h2>원본 폴더를 그대로 등록하고, 분석 근거와 함께 관리합니다.</h2><p className="muted">원본은 공개 Git·정적 웹 자산에 포함하지 않습니다. 관리자만 등록하며 로그인 사용자는 보고서 작성 화면에서 PDF를 열람하고 HWP·HWPX·XLSX를 내려받을 수 있습니다.</p></div><strong>{templateRefreshRequired ? '목록 갱신 필요' : `${payload.templateLibrary.reduce((sum, category) => sum + category.uploadedSourceCount, 0)}/${payload.templateLibrary.reduce((sum, category) => sum + category.expectedSourceCount, 0)}`}<small>{templateRefreshRequired ? '아래 목록은 마지막 조회 결과입니다' : 'GOOGLE DRIVE REGISTERED'}</small></strong></div>
+      <div className="template-library-admin__actions"><Select label="단일 파일 기본 분류" value={templateCategoryCode} onChange={(event) => setTemplateCategoryCode(event.target.value)} options={payload.templateLibrary.map((category) => ({ value: category.categoryCode, label: `${category.categoryCode} · ${category.displayName}` }))} /><input ref={(node) => { templateFolderInput.current = node; if (node) node.setAttribute('webkitdirectory', ''); }} type="file" multiple hidden accept=".pdf,.hwp,.hwpx,.xlsx" onChange={(event) => void importTemplateFolder(event.target.files)} /><Button onClick={() => templateFolderInput.current?.click()} disabled={templateImporting || templateRefreshing || templateRefreshRequired}>{templateImporting ? templateImportProgress || '원본 등록 중…' : '원본 32개 폴더 선택·등록'}</Button><Button variant="secondary" onClick={() => void refreshTemplateLibrary()} disabled={templateImporting || templateRefreshing}>{templateRefreshing ? '목록 조회 중…' : '목록 다시 조회'}</Button></div>
+      {templateRefreshRequired && <p className="notice-box" role="status">등록 원본은 유지됩니다. 목록을 최신 상태로 확인하지 못했으므로 재업로드하지 말고 ‘목록 다시 조회’를 눌러 주세요.</p>}
+      {templateErrors.length > 0 && <div className="error-box" role="alert"><strong>확인할 오류 {templateErrors.length}건</strong><ul>{templateErrors.map((message, index) => <li key={index}>{message}</li>)}</ul></div>}
+      {templateRefreshError && <p className="error-box" role="alert">{templateRefreshError}</p>}
       <div className="template-library-admin__grid">{payload.templateLibrary.map((category) => <article key={category.id} data-complete={category.uploadedSourceCount >= category.expectedSourceCount}><header><span>{category.categoryCode} · {category.primaryClaimType}</span><strong>{category.displayName}</strong><em>{category.uploadedSourceCount}/{category.expectedSourceCount}</em></header><p>{category.analysisSummary}</p><ol>{category.outline.map((item) => <li key={item}>{item}</li>)}</ol>{category.files.length ? <details><summary>등록 원본 {category.files.length}개 보기</summary><ul>{category.files.map((file) => <li key={file.id}><a href={file.contentUrl} target={file.viewMode === 'INLINE' ? '_blank' : undefined} rel="noreferrer">{file.originalName}</a><small>{(file.byteSize / 1024 / 1024).toFixed(1)} MB · SHA {file.sha256.slice(0, 12)}…</small></li>)}</ul></details> : <small className="template-library-admin__empty">아직 Drive 원본 미등록 · 구조 분석과 프롬프트는 적용됨</small>}</article>)}</div>
     </Card>}
   </div>;

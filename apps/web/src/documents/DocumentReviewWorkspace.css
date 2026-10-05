@@ -42,14 +42,62 @@
 .document-review-pages__paper{display:flow-root}
 .document-review-pages__paper>.proposal-final-chapter:not(.proposal-final-pagination-source){margin-bottom:22px}
 .document-review-pages__paper>.report-final-document{margin:0;padding:0;width:100%;max-width:none}
-.document-review-pages__paper .report-final-cover{display:none}
 .report-final-document{position:relative}
-.report-final-document .report-final-cover[data-export-page]{box-sizing:border-box;width:1123px;height:794px;min-height:794px;padding:74px 74px 66px}
-.report-final-document .report-paginated-sheet[data-export-page],.report-final-document .report-pagination-source{box-sizing:border-box;display:flex;flex-direction:column;width:1123px;height:794px;min-height:794px;padding:74px 74px 66px;overflow:visible}
+.report-edit-canvas .report-chapter-hidden{display:none!important}
+.report-edit-canvas .report-chapter-heading::before{content:attr(data-report-chapter-number)}
+.structured-editor .report-edit-canvas .tiptap{padding:96px 80px 76px!important;font:16px/1.85 '휴먼명조','Noto Serif KR',Batang,serif;color:#111}
+.structured-editor .report-edit-canvas .tiptap h1,.structured-editor .report-edit-canvas .tiptap h2,.structured-editor .report-edit-canvas .tiptap h3{font-family:inherit;color:#111;border:0;padding:0;line-height:1.6;word-break:keep-all}
+.structured-editor .report-edit-canvas .tiptap h1,.structured-editor .report-edit-canvas .tiptap .report-chapter-heading{font-size:24px;margin:0 0 24px}
+.structured-editor .report-edit-canvas .tiptap h2:not(.report-chapter-heading){font-size:20px;margin:28px 0 16px}
+.structured-editor .report-edit-canvas .tiptap h3{font-size:18px;margin:24px 0 12px}
+.report-frontmatter-edit{width:var(--review-paper-width);zoom:var(--review-scale);margin:0 auto}
+.report-frontmatter-cover,.report-frontmatter-toc{box-sizing:border-box;width:794px;min-height:1123px;padding:96px 80px 76px;background:#fff;color:#111;border:1px solid #cbd5df;margin-bottom:22px;font:16px/1.85 '휴먼명조','Noto Serif KR',Batang,serif}
+.report-frontmatter-cover{display:flex;flex-direction:column;justify-content:space-between;text-align:center}
+.report-frontmatter-edit textarea,.report-frontmatter-edit input{box-sizing:border-box;max-width:100%;width:100%;font:inherit;color:#111;background:#fff;border:1px dashed #a8b8c8;border-radius:0;padding:4px;resize:vertical}
+.report-frontmatter-edit .report-cover-heading>textarea:first-child{font-size:34px;font-weight:700;line-height:1.65;text-align:center;margin-bottom:40px}
+.report-frontmatter-edit .report-cover-heading>textarea:last-child,.report-frontmatter-edit .report-cover-signature input{font-size:20px;text-align:center}
+.report-frontmatter-edit .report-toc-title-input{font-size:28px;font-weight:700;text-align:center;margin-bottom:24px}
+.report-frontmatter-edit .report-toc-entry textarea{width:85%;min-width:0;flex:1}
+.report-frontmatter-help{font:14px/1.6 sans-serif;color:#435b76}
+.report-final-document .report-final-cover[data-export-page]{box-sizing:border-box;width:794px;height:1123px;min-height:1123px;padding:96px 80px 76px}
+.report-final-document .report-paginated-sheet[data-export-page],.report-final-document .report-pagination-source{box-sizing:border-box;display:flex;flex-direction:column;width:794px;height:1123px;min-height:1123px;padding:96px 80px 76px;overflow:visible}
 .report-final-document .report-paginated-sheet>header,.report-final-document .report-pagination-source>header{flex:none}
 .report-final-document .report-paginated-sheet>.structured-editor__preview,.report-final-document .report-pagination-source>.structured-editor__preview{display:flow-root;position:relative;flex:1;min-height:0;margin:0;padding:0}
 .report-final-document .report-pagination-source{position:absolute;top:0;left:0;visibility:hidden;pointer-events:none;z-index:-1}
-.report-page-label{position:absolute;right:24px;top:16px;font-size:13px;color:#244c70;background:#f7fbff;padding:3px 8px;border:1px solid #b8cad9;border-radius:3px}
+.report-final-document .report-page-number{position:absolute;bottom:35px;left:80px;right:80px;text-align:center;color:#111;font:14px/1.4 '휴먼명조','Noto Serif KR',Batang,serif}
+.report-final-document .report-final-cover::after,.report-final-document .report-final-body::after{display:none}
+.report-final-document .report-final-cover[data-export-page]{border:1px solid #cbd5df;background:#fff;color:#111;justify-content:space-between;text-align:center;align-items:stretch}
+.report-cover-heading{margin-top:120px;overflow-wrap:anywhere}
+.report-cover-heading h1{font:700 34px/1.65 '휴먼명조','Noto Serif KR',Batang,serif;color:#111;word-break:keep-all;margin:0 0 60px}
+.report-final-cover .report-cover-heading p,.report-final-cover .report-cover-signature p{font:20px/1.8 '휴먼명조','Noto Serif KR',Batang,serif;color:#111;margin:24px 0}
+.report-cover-signature{margin-bottom:80px}
+.report-final-document .report-final-body .structured-editor__preview{color:#111;font-family:'휴먼명조','Noto Serif KR',Batang,serif;font-size:16px;line-height:1.85}
+/* Preserve preformatted evidence, but wrap long lines to the printable A4 width. */
+.report-final-document .structured-editor__preview pre,.report-final-document .structured-editor__preview pre code{white-space:pre-wrap;overflow-wrap:anywhere}
+.report-final-document .report-final-body .structured-editor__preview h1,.report-final-document .report-final-body .structured-editor__preview h2,.report-final-document .report-final-body .structured-editor__preview h3{color:#111;font-family:inherit;border:0;padding:0;line-height:1.6;word-break:keep-all}
+.report-final-document .report-final-body .structured-editor__preview h1{font-size:24px;margin:0 0 24px}
+.report-final-document .report-final-body .structured-editor__preview h2{font-size:20px;margin:28px 0 16px}
+.report-final-document .report-final-body .structured-editor__preview h3{font-size:18px;margin:24px 0 12px}
+.report-final-document .report-final-toc>h2{flex:none;margin:0 0 36px;text-align:center;font:700 28px/1.6 '휴먼명조','Noto Serif KR',Batang,serif;color:#111}
+.report-final-document .report-toc-content{flex:1;min-height:0;display:flow-root;margin:0;padding:0;font:16px/1.8 '휴먼명조','Noto Serif KR',Batang,serif;color:#111}
+.report-toc-entry{display:flex;align-items:baseline;gap:8px;margin:0 0 14px;break-inside:avoid}
+.report-toc-entry>span:first-child{min-width:0;overflow-wrap:anywhere;max-width:88%}
+.report-toc-leader{flex:1;min-width:12px;border-bottom:1px dotted #333}
+.report-toc-page{flex:none;font-variant-numeric:tabular-nums}
+.report-toc-level-1{font-weight:700;margin-top:22px}.report-toc-level-2{padding-left:18px}.report-toc-level-3{padding-left:36px}
+.report-final-document .report-native-sheet[data-export-page]{padding:0;border:0;border-radius:0;box-shadow:none;overflow:hidden}
+.report-final-document .report-native-sheet>.structured-editor__preview{height:1123px;flex:none}
+.report-final-document .report-native-sheet .structured-editor__preview img[data-report-source-page="true"]{display:block!important;width:794px!important;height:1123px!important;max-width:none!important;max-height:none!important;object-fit:contain;margin:0!important}
+/* Whole HWP/PDF pages already contain their own margins. Never apply this to mixed prose/photos. */
+.structured-editor.has-source-pages .report-edit-canvas :is(.tiptap,.structured-editor__preview){box-sizing:border-box;width:794px;padding:0!important;border:0}
+.structured-editor.has-source-pages .report-edit-canvas img[data-report-source-page="true"]{display:block!important;width:794px!important;height:1123px!important;max-width:none!important;max-height:none!important;object-fit:contain;margin:0!important}
+.structured-editor.has-source-pages .report-edit-canvas .tiptap [data-resize-container][data-node="image"]{width:794px;padding:0;margin:0 0 22px}
+.structured-editor.has-source-pages .report-edit-canvas .tiptap [data-resize-wrapper]{width:794px!important;height:1123px!important}
+.structured-editor.has-source-pages .report-edit-canvas :is(.tiptap,.structured-editor__preview) p:has(img){margin:0;padding:0;min-height:0}
+.structured-editor.has-source-pages .report-edit-canvas :is(.tiptap,.structured-editor__preview) :is(p:not(:has(img)),[data-document-page-break]){display:none}
+.report-final-document .structured-editor__preview td img{object-fit:contain;max-width:100%}
+.structured-editor img[data-report-photo="true"]{object-fit:contain}
+.report-evidence-insert{display:grid;gap:16px}.report-evidence-insert label{display:grid;gap:6px;font-size:14px}.report-evidence-insert input:not([type=checkbox]),.report-evidence-insert select{box-sizing:border-box;width:100%;min-height:36px;padding:8px;border:1px solid #b8cad9;border-radius:4px;font:inherit}.report-evidence-list{max-height:360px;overflow:auto;display:grid;gap:12px}.report-evidence-list>div{padding:8px 0;border-bottom:1px solid #d9e1e8}.report-evidence-list label{display:flex;align-items:center;gap:8px;overflow-wrap:anywhere}.report-header-controls>label{display:flex;align-items:center;gap:8px}.report-header-controls input:not([type=checkbox]){padding:6px;min-width:0;border:1px solid #b8cad9}
 .document-review-pages:has(.report-final-document) .document-review-pages__heading::after{content:'연속 편집 · 실제 페이지 구분과 쪽번호는 출력 미리보기에서 확인하세요.';grid-column:1/-1;text-align:center;font-size:12px;color:#435b76}
 .structured-editor__top-tools{position:relative;z-index:5;background:#f7fbff}
 .structured-editor__top-tools .structured-editor__toolbar{max-height:none;overflow:visible;gap:6px;padding:8px 12px}

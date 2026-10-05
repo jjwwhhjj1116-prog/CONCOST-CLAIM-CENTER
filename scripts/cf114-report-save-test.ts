@@ -66,7 +66,7 @@ async function fixture() {
     '0001_cf_foundation.sql', '0001_cf02_preview_drafts.sql', '0002_cf03_preview_evidence.sql',
     '0003_cf04_preview_auth.sql', '0004_cf05_google_drive.sql', '0005_cf06_case_operations.sql',
     '0006_cf07_report_studio_drafts.sql', '0007_cf08_report_review_approval.sql',
-    '0008_cf09_final_output.sql', '0009_cf09_output_actor_scope.sql',
+    '0008_cf09_final_output.sql', '0009_cf09_output_actor_scope.sql', '0065_cf148_finalization_metadata.sql',
     '0029_cf37_report_workspace_resume.sql', '0043_cf60_structured_document_editor.sql'
   ]) db.exec(migration(name));
   const now = new Date().toISOString();

@@ -6,7 +6,7 @@ import { chromium } from 'playwright-core';
 
 // Actual React event handlers; only the existing synthetic fixture's API timing changes.
 test('CF117 report workflow preserves concurrent edits and keeps reference-only templates separate', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf117-report-workflow-fixture', enforce: 'pre',
     transform(code, id) {
@@ -74,7 +74,9 @@ test('CF117 report workflow preserves concurrent edits and keeps reference-only 
       await page.goto(`${origin}/qa/cf114-studio.html?step=1&reference=1`);
       await page.locator('#report-template-preview-type').selectOption('REF-04');
       await page.getByRole('button', { name: '선택 템플릿 완제품 보기', exact: true }).click();
-      await page.getByText('참고 열람 전용 · 현재 프로젝트 유형은 TYPE-01, 이 원본의 주 유형은 TYPE-04입니다.', { exact: true }).waitFor();
+      const referenceNotice=page.getByText(/^참고 열람 전용 · 현재 프로젝트 유형은 .+, 이 원본의 주 유형은 .+입니다\.$/u);
+      await referenceNotice.waitFor();
+      assert.doesNotMatch(await referenceNotice.innerText(),/TYPE-0[14]/u,'display business type names, not internal codes');
       await page.getByRole('dialog').getByRole('button', { name: '확인', exact: true }).click();
       await page.locator('.report-wizard-navigation li:nth-child(2) button').click();
       await page.getByRole('button', { name: '템플릿 목차 제안', exact: true }).click();

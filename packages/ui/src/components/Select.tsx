@@ -23,9 +23,8 @@ export const Select: React.FC<SelectProps> = ({ label, options, id, className = 
     ? options
     : options.filter((option) => option.label.toLocaleLowerCase('ko-KR').includes(needle) || option.value.toLocaleLowerCase('ko-KR').includes(needle));
   const selectedOption = options.find((option) => option.value === selectedValue);
-  const visibleOptions = selectedOption && !filteredOptions.some((option) => option.value === selectedOption.value)
-    ? [selectedOption, ...filteredOptions]
-    : filteredOptions;
+  const searching = searchable && Boolean(needle);
+  const selectionOutsideResults = searching && !filteredOptions.some((option) => option.value === selectedValue);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100%' }}>
@@ -73,14 +72,20 @@ export const Select: React.FC<SelectProps> = ({ label, options, id, className = 
           width: '100%'
         }}
         {...props}
+        size={searching ? Math.min(6, Math.max(2, filteredOptions.length)) : props.size}
+        aria-describedby={searching ? `${selectId}-search-status` : props['aria-describedby']}
       >
-        {visibleOptions.map((opt) => (
+        {selectionOutsideResults && <option value={selectedValue} hidden>{selectedOption?.label ?? ''}</option>}
+        {filteredOptions.map((opt) => (
           <option key={opt.value} value={opt.value} style={{ background: `var(--field-bg, ${color.background.primary})`, color: `var(--text-primary, ${color.text.primary})` }}>
             {opt.label}
           </option>
         ))}
-        {searchable && visibleOptions.length === 0 && <option value="" disabled>검색 결과가 없습니다</option>}
+        {searching && filteredOptions.length === 0 && <option disabled>검색 결과가 없습니다</option>}
       </select>
+      {searching && <small id={`${selectId}-search-status`} role="status" style={{ color: `var(--text-secondary, ${color.text.secondary})` }}>
+        검색 결과 {filteredOptions.length}건 · {selectedOption ? `현재 선택: ${selectedOption.label}. ` : ''}결과를 선택해야 적용됩니다.
+      </small>}
     </div>
   );
 };

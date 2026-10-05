@@ -7,7 +7,7 @@ import { chromium, type Page } from 'playwright-core';
 // Exercise the actual React studio with the existing synthetic CF114 fixture.
 // The fixture is transformed only in this Vite process; no app API or account is used.
 test('CF116 report save failures pause autosave, remain visible and preserve navigation protection', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf116-report-save-fixture', enforce: 'pre',
     transform(code, id) {

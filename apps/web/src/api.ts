@@ -46,9 +46,14 @@ export async function apiRequest<T>(pathname: string, init: RequestInit & { time
   if (callerSignal?.aborted) abortFromCaller();
   else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
   const timeout = window.setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), timeoutMs);
-  let response: Response;
   try {
-    response = await fetch(`${API_ORIGIN}${pathname}`, { ...requestInit, method, headers, credentials: 'include', signal: controller.signal });
+    const response = await fetch(`${API_ORIGIN}${pathname}`, { ...requestInit, method, headers, credentials: 'include', signal: controller.signal });
+    const payload = await response.json().catch((reason: unknown) => {
+      if (controller.signal.aborted) throw reason;
+      return {};
+    }) as { error?: string } & Record<string, unknown>;
+    if (!response.ok) throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`, payload);
+    return payload as T;
   } catch (reason) {
     if (controller.signal.aborted && !callerSignal?.aborted) {
       throw new ApiError(504, `서버 응답이 ${Math.ceil(timeoutMs / 1000)}초를 초과했습니다. 최신 데이터를 다시 불러와 저장 여부를 확인한 뒤 재시도해 주세요.`, { code: 'CLIENT_REQUEST_TIMEOUT' });
@@ -58,9 +63,6 @@ export async function apiRequest<T>(pathname: string, init: RequestInit & { time
     window.clearTimeout(timeout);
     callerSignal?.removeEventListener('abort', abortFromCaller);
   }
-  const payload = await response.json().catch(() => ({})) as { error?: string } & Record<string, unknown>;
-  if (!response.ok) throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`, payload);
-  return payload as T;
 }
 
 export async function apiDownload(pathname: string): Promise<{ blob: Blob; filename: string }> {

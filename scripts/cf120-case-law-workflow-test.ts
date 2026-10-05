@@ -7,7 +7,7 @@ import { chromium, type Page } from 'playwright-core';
 // Production Studio/handlers/styles with the existing in-memory fixture only.
 // HMR is disabled because replacing its root render must not remove refresh bindings.
 test('CF120 numbered outlines and AI query-to-official-case-law workflow',async t=>{
-  const {createServer}=await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const {createServer}=await import('../apps/web/qa/vite-server.js');
   const server=await createServer({root:fileURLToPath(new URL('../apps/web',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{
     name:'cf120-case-law-fixture',enforce:'pre',
     transform(code:string,id:string){

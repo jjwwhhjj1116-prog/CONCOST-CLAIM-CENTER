@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
+import { loadCaseOptions } from '../case-options';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
 import type { UserRole } from './Router';
 
@@ -164,7 +165,7 @@ export function PreviewLitigationCenter({ roles, onNavigate }: { roles: UserRole
 
   useEffect(() => {
     void Promise.all([
-      apiRequest<{ cases: CaseOption[] }>('/api/cases?scope=project-work&limit=100&q=').then((result) => {
+      loadCaseOptions<CaseOption>('/api/cases?scope=project-work&limit=100&q=').then((result) => {
         setCases(result.cases);
         setRecordForm((current) => current.caseId ? current : { ...current, caseId: result.cases[0]?.id ?? '' });
       }),

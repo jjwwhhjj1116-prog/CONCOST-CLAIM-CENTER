@@ -1,5 +1,6 @@
 /** Paginate rendered HTML only; never insert layout nodes into the saved editor. */
 export function paginateReport(source: HTMLElement, height: number): { pages: string[]; overflow: boolean } {
+  const nativeOnly = !source.textContent?.trim() && source.querySelector('img[data-report-source-page="true"]') && !source.querySelector('img:not([data-report-source-page="true"])');
   const tester = source.cloneNode(false) as HTMLElement;
   tester.style.cssText = `position:absolute;left:0;top:0;width:${source.clientWidth}px;height:auto;min-height:0;max-height:none;display:flow-root;overflow:visible;margin:0;`;
   source.append(tester);
@@ -112,6 +113,74 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
       next.createTBody(); return next;
     };
     let current = shell(); tester.append(current);
+    const splitTallRow = (row: HTMLTableRowElement) => {
+      // Render-only continuation rows keep the original table grid. A merged
+      // row or atomic image cannot be split without changing its meaning.
+      if ([...row.cells].some(cell => cell.rowSpan !== 1 || cell.querySelector('img,table,svg,canvas,iframe,video,audio,object,embed,hr,input,textarea,button') || (!cell.textContent?.length && !cell.querySelector('br') && cell.childElementCount))) return false;
+      const startPages = pages.length;
+      const fail = () => {
+        // A later unsplittable cell must not leave earlier fragments beside
+        // the intact blocked row: that would duplicate evidence in preview.
+        pages.length = startPages; tester.replaceChildren();
+        current = shell(); tester.append(current); return false;
+      };
+      let remaining = [...row.cells].map(cell => cell.cloneNode(true) as HTMLTableCellElement);
+      const meaningful = (cell: HTMLTableCellElement) => Boolean(cell.textContent?.length || cell.querySelector('br'));
+      for (let page = 0; page < 200; page++) {
+        const part = row.cloneNode(false) as HTMLTableRowElement;
+        part.append(...remaining.map(cell => cell.cloneNode(false)));
+        current.tBodies[0].append(part);
+        let advanced = false;
+        const next: HTMLTableCellElement[] = [];
+        for (let index = 0; index < remaining.length; index++) {
+          const cell = remaining[index], placeholder = part.cells[index];
+          if (!meaningful(cell)) { next.push(cell.cloneNode(false) as HTMLTableCellElement); continue; }
+          const full = cell.cloneNode(true) as HTMLTableCellElement;
+          placeholder.replaceWith(full);
+          if (fits()) { advanced = true; next.push(cell.cloneNode(false) as HTMLTableCellElement); continue; }
+          full.replaceWith(placeholder);
+          const positions: Array<[Node, number]> = [];
+          const walk = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+          while (walk.nextNode()) {
+            const node = walk.currentNode;
+            if (node.nodeType === Node.TEXT_NODE) {
+              const content = node.textContent ?? '';
+              for (let offset = 1; offset <= content.length; offset++) {
+                if (offset < content.length && /[\uD800-\uDBFF]/u.test(content[offset - 1])) continue;
+                positions.push([node, offset]);
+              }
+            } else if ((node as Element).tagName === 'BR' && node.parentNode) {
+              positions.push([node.parentNode, Array.prototype.indexOf.call(node.parentNode.childNodes, node) + 1]);
+            }
+          }
+          const fragment = (at: number, tail = false) => {
+            const range = document.createRange(); range.selectNodeContents(cell);
+            let [container, offset] = positions[at];
+            if (tail) {
+              while (container !== cell && offset === (container.nodeType === Node.TEXT_NODE ? (container.textContent ?? '').length : container.childNodes.length)) {
+                const parent = container.parentNode!;
+                offset = Array.prototype.indexOf.call(parent.childNodes, container) + 1; container = parent;
+              }
+              range.setStart(container, offset);
+            } else range.setEnd(container, offset);
+            const copy = cell.cloneNode(false) as HTMLTableCellElement;
+            copy.append(range.cloneContents()); return copy;
+          };
+          let low = 0, high = positions.length - 1, best = -1;
+          while (low <= high) {
+            const middle = Math.floor((low + high) / 2), candidate = fragment(middle);
+            placeholder.replaceWith(candidate); const okay = fits(); candidate.replaceWith(placeholder);
+            if (okay) { best = middle; low = middle + 1; } else high = middle - 1;
+          }
+          if (best < 0) { next.push(cell); continue; }
+          placeholder.replaceWith(fragment(best)); next.push(fragment(best, true)); advanced = true;
+        }
+        if (!advanced || !fits()) return fail();
+        if (next.every(cell => !meaningful(cell))) return true;
+        remaining = next; commit(); current = shell(); tester.append(current);
+      }
+      return fail();
+    };
     for (let index = 0; index < bodyRows.length;) {
       // Keep every connected rowspan group on one sheet.
       const group: HTMLTableRowElement[] = []; let end = index + 1;
@@ -124,7 +193,12 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
         copies.forEach(copy => copy.parentNode?.removeChild(copy));
         if (!current.tBodies[0].rows.length) current.remove();
         commit(); current = shell(); tester.append(current); current.tBodies[0].append(...copies);
-        if (!fits()) overflow = true;
+        if (!fits()) {
+          copies.forEach(copy => copy.parentNode?.removeChild(copy));
+          if (group.length !== 1 || !splitTallRow(group[0])) {
+            current.tBodies[0].append(...copies); overflow = true;
+          }
+        }
       }
     }
     if (!bodyRows.length && !fits()) { current.remove(); appendAtomic(table); }
@@ -153,6 +227,15 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
       const contents=range.cloneContents();if(contents.childNodes.length){const part=container.cloneNode(false);part.appendChild(contents);nodes.push(part);}
     }
     for (const node of nodes) {
+      if (node.nodeType === Node.COMMENT_NODE || (node.nodeType === Node.TEXT_NODE && !node.textContent?.trim())) continue;
+      if (node instanceof HTMLElement && node.hasAttribute('data-ai-chapter-marker')) continue;
+      // Tiptap's block image conversion may leave empty paragraph wrappers.
+      // Ignore those only for an otherwise all-native page document.
+      if (nativeOnly && node instanceof HTMLElement && node.matches('p') && !node.textContent?.trim() && !node.querySelector(':not(br)')) continue;
+      if (node instanceof HTMLElement) {
+        const nativePage = node.matches('img[data-report-source-page="true"]') ? node : !node.textContent?.trim() && node.querySelector('img[data-report-source-page="true"]');
+        if (nativePage && node.querySelectorAll('img').length <= 1) { commit(); pages.push(nativePage.outerHTML); continue; }
+      }
       if (node instanceof HTMLElement && node.hasAttribute('data-document-page-break')) { commit(true); continue; }
       const copy = node.cloneNode(true); tester.append(copy);
       if (fits()) continue;

@@ -90,7 +90,7 @@ test('CF32 UI replaces fake-only preview with authenticated Drive originals and 
   const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const admin = read('apps/web/src/routes/PreviewAiAdmin.tsx');
   const worker = read('apps/cloudflare/src/index.ts');
-  assert.match(studio, /원본 보고서 템플릿 선택·열람/u);
+  assert.match(studio, /원본 보고서 템플릿 선택/u);
   assert.match(studio, /원본 PDF 열기/u);
   assert.match(studio, /PRIVATE COMPANY GOOGLE DRIVE/u);
   assert.match(admin, /원본 32개 폴더 선택·등록/u);

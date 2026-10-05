@@ -1,0 +1,8 @@
+.report-page-confirm{box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;border:1px solid #8ca9c7;border-radius:12px;padding:24px;background:#fff;color:#183049;box-shadow:0 16px 50px #0006}
+.report-page-confirm::backdrop{background:#102039bb}
+.report-page-confirm h2{margin:0 0 12px;font-size:20px}
+.report-page-confirm p{font-size:16px;line-height:1.6;overflow-wrap:anywhere}
+.report-page-confirm form{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:20px}
+.report-page-confirm button{min-height:44px;border:1px solid #8ca9c7;border-radius:6px;padding:8px 12px;background:#fff;color:#183049;font:inherit;cursor:pointer}
+.report-page-confirm button.is-primary{background:#236c9a;color:#fff}
+.report-page-confirm button:focus-visible{outline:3px solid #236c9a;outline-offset:3px}

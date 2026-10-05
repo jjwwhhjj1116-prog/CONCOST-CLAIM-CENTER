@@ -30,10 +30,11 @@ class D1 {
   async batch(statements: Statement[]): Promise<unknown[]> { this.db.run('BEGIN IMMEDIATE'); try { const results = []; for (const statement of statements) results.push(await statement.run()); this.db.run('COMMIT'); return results; } catch (error) { this.db.run('ROLLBACK'); throw error; } }
 }
 
-async function fixture(): Promise<{ sql: Database; env: CloudflareEnv }> {
+async function fixture(withFinalizationMetadata = true): Promise<{ sql: Database; env: CloudflareEnv }> {
   const SQL = await initSqlJs(); const sql = new SQL.Database(); sql.run('PRAGMA foreign_keys=ON');
   const migrations = ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql','0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql'];
   for (const name of migrations) sql.exec(readFileSync(join(process.cwd(), 'apps/cloudflare/migrations', name), 'utf8'));
+  if (withFinalizationMetadata) sql.exec(readFileSync(join(process.cwd(), 'apps/cloudflare/migrations/0065_cf148_finalization_metadata.sql'), 'utf8'));
   const now = new Date().toISOString();
   const user = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
   user(ADMIN_ID, 'admin', '["admin"]'); user(REVIEWER_ID, 'reviewer', '["reviewer"]');
@@ -47,17 +48,63 @@ function request(path: string, token: string, init: RequestInit = {}): Request {
   return new Request(`https://preview.example${path}`, { ...init, headers });
 }
 
-async function approvedReport(env: CloudflareEnv, sql: Database): Promise<{ caseId: string; reviewId: string }> {
+async function approvedReport(env: CloudflareEnv, sql: Database, content = '1. 검토 목적\n근거 자료와 산식을 확인했습니다.\n2. 결론\n적정합니다.', editorJson?: unknown): Promise<{ caseId: string; reviewId: string }> {
   const created = await worker.fetch(request('/api/cases', ADMIN_TOKEN, { method:'POST', headers:{'Idempotency-Key':`cf09-case-${crypto.randomUUID()}`}, body:JSON.stringify({ title:'최종 출력 검증 사건', claimType:'TYPE-02', description:'CF09', category:{major:'보고서',middle:'출력',minor:'확정'} }) }), env);
   const createdBody = await created.json() as {case?:{id:string}; error?:string; code?:string};
   assert.equal(created.status, 201, JSON.stringify(createdBody)); const caseId = createdBody.case!.id;
   sql.run('INSERT INTO preview_case_assignments VALUES (?,?,?,?)', [caseId, REVIEWER_ID, ADMIN_ID, new Date().toISOString()]);
-  assert.equal((await worker.fetch(request(`/api/report-drafts?caseId=${caseId}`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({title:'공사비 검토 최종 보고서',content:'1. 검토 목적\n근거 자료와 산식을 확인했습니다.\n2. 결론\n적정합니다.',expectedVersion:0}) }), env)).status, 200);
+  assert.equal((await worker.fetch(request(`/api/report-drafts?caseId=${caseId}`, ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({title:'공사비 검토 최종 보고서',content,editorJson,expectedVersion:0}) }), env)).status, 200);
   const submitted = await worker.fetch(request('/api/report-reviews', ADMIN_TOKEN, { method:'POST', headers:{'Idempotency-Key':'cf09-review-001'}, body:JSON.stringify({caseId,expectedVersion:1,note:'최종 검토 요청'}) }), env);
   const reviewId = (await submitted.json() as {reviews:Array<{id:string}>}).reviews[0].id;
   assert.equal((await worker.fetch(request(`/api/report-reviews/${reviewId}/decision`, REVIEWER_TOKEN, { method:'POST', body:JSON.stringify({decision:'APPROVED',note:'확인 완료',expectedStatus:'PENDING'}) }), env)).status, 200);
   return { caseId, reviewId };
 }
+
+test('CF166 missing finalization metadata fails closed without storing a finalization',async()=>{
+  const {sql,env}=await fixture(false);
+  try {
+    const {caseId,reviewId}=await approvedReport(env,sql);
+    const response=await worker.fetch(request('/api/report-finalizations',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf166-missing-metadata'},body:JSON.stringify({caseId,reviewId})}),env);
+    assert.equal(response.status,503);
+    assert.equal((await response.json() as {code:string}).code,'D1_MIGRATION_REQUIRED');
+    assert.equal(sql.exec('SELECT count(*) FROM preview_report_finalizations')[0].values[0][0],0);
+  } finally {sql.close();}
+});
+
+test('CF148 legacy outputs refuse image loss before writing output records',async()=>{
+  for(const content of ['![현장 사진](/api/cases/evidence/photo/download)','<img src="photo.png" alt="현장 사진">','[PROPOSAL_ASSET:photo]','JSON-only photo']){
+    const {sql,env}=await fixture();
+    try{
+      const editorJson=content==='JSON-only photo'?{type:'doc',content:[{type:'paragraph',content:[{type:'text',text:content}]},{type:'blockquote',content:[{type:'image',attrs:{src:'/api/evidence/photo/download',alt:'현장 사진'}}]}]}:undefined;
+      if(editorJson)sql.exec(readFileSync(join(process.cwd(),'apps/cloudflare/migrations/0043_cf60_structured_document_editor.sql'),'utf8'));
+      const {caseId,reviewId}=await approvedReport(env,sql,content,editorJson);
+      if(editorJson){
+        const submitted=await worker.fetch(request(`/api/report-reviews/${reviewId}/document`,ADMIN_TOKEN),env);
+        assert.equal(submitted.status,200);
+        assert.deepEqual((await submitted.json() as {document:{editorJson:unknown}}).document.editorJson,editorJson);
+        assert.equal(sql.exec('SELECT content FROM preview_report_revisions')[0].values[0][0],content,'JSON-only coverage must not rely on Markdown image markers');
+      }
+      const response=await worker.fetch(request('/api/report-finalizations',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf148-image-final'},body:JSON.stringify({caseId,reviewId})}),env);
+      const id=(await response.json() as {finalizations:{id:string}[]}).finalizations[0].id;
+      for(const format of ['DOCX','PDF']){
+        const result=await worker.fetch(request(`/api/report-finalizations/${id}/outputs`,ADMIN_TOKEN,{method:'POST',body:JSON.stringify({format})}),env);
+        assert.equal(result.status,422);assert.equal((await result.json() as {code:string}).code,'REPORT_IMAGES_REQUIRE_PREVIEW_EXPORT');
+      }
+      assert.equal(sql.exec('SELECT count(*) FROM preview_report_outputs')[0].values[0][0],0);
+      assert.equal(sql.exec("SELECT count(*) FROM preview_report_output_events WHERE event_type='OUTPUT_GENERATED'")[0].values[0][0],0);
+      // An output recorded before the guard was deployed must not be regenerated without its images.
+      for(const format of ['DOCX','PDF']){
+        const outputId=crypto.randomUUID();
+        sql.run('INSERT INTO preview_report_outputs (id,finalization_id,format,file_name,content_sha256,byte_size,created_by,created_at) VALUES (?,?,?,?,?,?,?,?)',[outputId,id,format,`historical.${format.toLowerCase()}`,'a'.repeat(64),100,ADMIN_ID,new Date().toISOString()]);
+        const result=await worker.fetch(request(`/api/report-outputs/${outputId}/download`,ADMIN_TOKEN),env);
+        assert.equal(result.status,422);
+        assert.equal((await result.json() as {code:string}).code,'REPORT_IMAGES_REQUIRE_PREVIEW_EXPORT');
+      }
+      assert.equal(sql.exec('SELECT count(*) FROM preview_report_outputs')[0].values[0][0],2,'historical records remain intact');
+      assert.equal(sql.exec("SELECT count(*) FROM preview_report_output_events WHERE event_type='OUTPUT_DOWNLOADED'")[0].values[0][0],0,'blocked downloads are not recorded as successful');
+    }finally{sql.close();}
+  }
+});
 
 test('CF09 approved revision finalizes idempotently and regenerates hash-stable DOCX/PDF', async () => {
   const { sql, env } = await fixture(); const { caseId, reviewId } = await approvedReport(env, sql);
@@ -74,8 +121,13 @@ test('CF09 approved revision finalizes idempotently and regenerates hash-stable 
     const download = await worker.fetch(request(`/api/report-outputs/${output.id}/download`, ADMIN_TOKEN), env); assert.equal(download.status, 200);
     const bytes = new Uint8Array(await download.arrayBuffer());
     assert.equal(await sha256(String.fromCharCode(...bytes.slice(0, 64))) === output.contentSha256, false, 'ledger hash must cover complete binary, not prefix');
+    const fullDigest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    assert.equal([...fullDigest].map(byte => byte.toString(16).padStart(2, '0')).join(''), output.contentSha256, 'The complete downloaded file must match its ledger hash');
     assert.equal(download.headers.get('X-Content-SHA256'), output.contentSha256);
     assert.equal(output.format === 'DOCX' ? String.fromCharCode(...bytes.slice(0,4)) : new TextDecoder().decode(bytes.slice(0,8)), output.format === 'DOCX' ? 'PK\u0003\u0004' : '%PDF-1.7');
+    const repeated = await worker.fetch(request(`/api/report-outputs/${output.id}/download`, ADMIN_TOKEN), env);
+    assert.equal(repeated.status, 200);
+    assert.deepEqual(new Uint8Array(await repeated.arrayBuffer()), bytes, 'A repeated download must preserve every byte');
   }
   const SQL = await initSqlJs(); const restarted = new SQL.Database(sql.export());
   assert.equal(restarted.exec('SELECT count(*) FROM preview_report_finalizations')[0].values[0][0], 1); assert.equal(restarted.exec('SELECT count(*) FROM preview_report_outputs')[0].values[0][0], 2);

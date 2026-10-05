@@ -87,6 +87,42 @@ function request(path: string, token: string, init: RequestInit = {}): Request {
   return new Request(`https://preview.example${path}`, { ...init, headers });
 }
 
+test('CF148 case pages include older projects beyond 100 and retain assigned-only filtering', async () => {
+  const {sql,env}=await seededDatabase();
+  try {
+    for(let i=0;i<103;i++){
+      const created=await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':`pagination-case-${i}`},body:JSON.stringify({title:`검색검수 ${i}`,claimType:'TYPE-02',description:'합성 검수',category:{major:'건설',middle:'검토',minor:'검수'}})}),env);
+      assert.equal(created.status,201);
+    }
+    const first=await (await worker.fetch(request('/api/cases?limit=100',ADMIN_TOKEN),env)).json() as {cases:{id:string}[];total:number;nextOffset:number};
+    assert.equal(first.total,103);assert.equal(first.nextOffset,100);
+    const last=await (await worker.fetch(request('/api/cases?limit=100&offset=100',ADMIN_TOKEN),env)).json() as {cases:{id:string}[];nextOffset:null};
+    assert.equal(last.cases.length,3);assert.equal(last.nextOffset,null);
+    assert.equal(new Set([...first.cases,...last.cases].map(item=>item.id)).size,103);
+    const assigned=await (await worker.fetch(request('/api/cases?limit=100&offset=0&assignedOnly=true',STAFF_TOKEN),env)).json() as {cases:unknown[]};
+    assert.equal(assigned.cases.length,0);
+    for(const offset of ['-1','1.5','NaN'])assert.equal((await worker.fetch(request(`/api/cases?offset=${offset}`,ADMIN_TOKEN),env)).status,400);
+  }finally{sql.close();}
+});
+
+test('CF148 case pages include older projects beyond 100 and retain assigned-only filtering', async () => {
+  const {sql,env}=await seededDatabase();
+  try {
+    for(let i=0;i<103;i++){
+      const created=await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':`pagination-case-${i}`},body:JSON.stringify({title:`검색검수 ${i}`,claimType:'TYPE-02',description:'합성 검수',category:{major:'건설',middle:'검토',minor:'검수'}})}),env);
+      assert.equal(created.status,201);
+    }
+    const first=await (await worker.fetch(request('/api/cases?limit=100',ADMIN_TOKEN),env)).json() as {cases:{id:string}[];total:number;nextOffset:number};
+    assert.equal(first.total,103);assert.equal(first.nextOffset,100);
+    const last=await (await worker.fetch(request('/api/cases?limit=100&offset=100',ADMIN_TOKEN),env)).json() as {cases:{id:string}[];nextOffset:null};
+    assert.equal(last.cases.length,3);assert.equal(last.nextOffset,null);
+    assert.equal(new Set([...first.cases,...last.cases].map(item=>item.id)).size,103);
+    const assigned=await (await worker.fetch(request('/api/cases?limit=100&offset=0&assignedOnly=true',STAFF_TOKEN),env)).json() as {cases:unknown[]};
+    assert.equal(assigned.cases.length,0);
+    for(const offset of ['-1','1.5','NaN'])assert.equal((await worker.fetch(request(`/api/cases?offset=${offset}`,ADMIN_TOKEN),env)).status,400);
+  }finally{sql.close();}
+});
+
 test('CF06 D1 case workflow persists case, party, schedule, status, and dashboard data', async () => {
   const { sql, env } = await seededDatabase();
   const caseKey = 'cf06-case-create-0001';

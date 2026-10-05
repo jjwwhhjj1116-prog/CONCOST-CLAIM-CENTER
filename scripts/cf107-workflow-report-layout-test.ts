@@ -22,11 +22,12 @@ test('CF107 groups the project and editable baseline schedule on all three workf
   assert.match(workflow, /onChange=\{\(event\) => selectCase\(event\.target\.value\)\}/u);
 });
 
-test('CF107 renames only the allocation member label, not the responsible project PM mapping', () => {
-  assert.match(workflow, /산출 및 내역 PM<select value=\{form\.memberName\}/u);
+test('CF148 supports multiple allocation people without changing the responsible project PM mapping', () => {
+  assert.match(workflow, /투입 인원 · 여러 명 선택/u);
+  assert.match(workflow, /type="checkbox" checked=\{form\.memberNames\.includes\(member\)\}/u);
   assert.doesNotMatch(workflow, /실제 투입 담당자/u);
   assert.match(workflow, /담당 PM<\/strong><span>\{scheduleProject\.responsiblePm\?\.name/u);
-  assert.match(workflow, /memberName:event\.target\.value/u);
+  assert.match(workflow, /memberNames:event\.target\.checked/u);
 });
 
 test('CF109 fills the existing selector with current project facts without changing schedule actions', () => {
@@ -53,7 +54,7 @@ test('CF107 presents report project and template choices together with readiness
   assert.match(step1, /id="report-source-readiness-title">참고자료 준비상태</u);
   assert.doesNotMatch(step1, /className="report-template-contract"|유형별 템플릿·프롬프트 관리|AI 참고자료 준비/u);
   assert.match(step1, /aria-label="지금 저장 상태"/u);
-  assert.match(step1, /최신본 다시 불러오기/u);
+  assert.match(report, /onClick=\{reloadLatestDraft\}>최신본 다시 불러오기/u);
   assert.match(step1, /selectCase\(event\.target\.value\)/u);
   assert.match(step1, /setPreviewTemplateCategoryCode\(event\.target\.value\)/u);
   assert.match(step1, /!authoring\.available && <p className="error-box" role="alert">\{authoring\.unavailableReason/u);

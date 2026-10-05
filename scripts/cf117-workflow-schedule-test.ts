@@ -6,7 +6,7 @@ import { chromium } from 'playwright-core';
 
 // The CF115 virtual Vite fixture pattern mounts the real component; no live APIs or source edits.
 test('CF117 workflow record entry survives schedule outages and explicit reload cancellation', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf117-workflow-schedule-fixture',
     configureServer(server) { server.middlewares.use(async (request, response, next) => {
@@ -69,7 +69,7 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
         await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
         await page.goto(`${origin}/cf117-workflow-schedule.html?kind=WF-04&route-switch=1`);
         const start=page.locator('.shared-stage-schedule').getByLabel('시작일',{exact:true});
-        await page.waitForFunction(()=>document.querySelector('.shared-stage-schedule input')?.value==='2026-09-21');
+        await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('.shared-stage-schedule input')?.value==='2026-09-21');
         await page.locator('textarea.is-tall').fill('이동 취소 시 보존할 원문');
         page.once('dialog',dialog=>dialog.dismiss());
         await page.evaluate(()=>(window as any).cf117.navigate('/workflow/kickoff'));
@@ -82,7 +82,7 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
         assert.equal(await start.inputValue(),'2026-09-17');
         await page.evaluate(()=>(window as any).cf117.navigate('/workflow/site-survey'));
         await page.getByLabel('조사 일자',{exact:true}).waitFor();
-        await page.waitForFunction(()=>document.querySelector('.shared-stage-schedule input')?.value==='2026-09-21');
+        await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('.shared-stage-schedule input')?.value==='2026-09-21');
         assert.equal(await start.inputValue(),'2026-09-21');
         assert.equal(await page.evaluate(()=>(window as any).cf117.saveAttempts),0);
       }finally{await page.close();}
@@ -98,7 +98,7 @@ test('CF117 workflow record entry survives schedule outages and explicit reload 
         await page.waitForFunction(()=>typeof (window as any).cf117.releaseSave==='function');
         page.once('dialog',dialog=>dialog.accept());
         await page.evaluate(()=>(window as any).cf117.navigate('/workflow/kickoff'));
-        await page.waitForFunction(()=>document.querySelector('.shared-stage-schedule input')?.value==='2026-09-17');
+        await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('.shared-stage-schedule input')?.value==='2026-09-17');
         await page.evaluate(()=>(window as any).cf117.releaseSave());
         await page.waitForFunction(()=>(window as any).cf117.schedulePuts===1);
         await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));

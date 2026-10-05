@@ -13,6 +13,7 @@ export interface EvidenceRecord {
   uploadedAt: string; googleFileId?: string; googleFolderId?: string;
   requestFingerprint?: string; idempotencyKey?: string;
   versionNumber?: number; isLatest?: boolean; groupId?: string; changeSummary?: string[];
+  versionTracked?: boolean;
 }
 export interface VersionAnalysis {
   existing_file_id: string; similarity_score: number; is_subsequent_version: boolean;
@@ -42,7 +43,7 @@ export async function evidenceVersions(db: EvidenceDatabase, caseId: string, fil
   const byId = new Map(rows.results.map((row) => [row.id, row] as const));
   return files.map((file) => {
     const row = byId.get(file.id);
-    return { ...file, groupId: row?.groupId ?? file.id, versionNumber: Number(row?.versionNumber ?? 1), isLatest: row ? row.isLatest === 1 : true, changeSummary: row ? JSON.parse(row.summary) as string[] : [] };
+    return { ...file, versionTracked: Boolean(row), groupId: row?.groupId ?? file.id, versionNumber: Number(row?.versionNumber ?? 1), isLatest: row ? row.isLatest === 1 : true, changeSummary: row ? JSON.parse(row.summary) as string[] : [] };
   });
 }
 
@@ -54,7 +55,7 @@ export async function categoryEvidence(db: EvidenceDatabase, caseId: string, cat
 }
 
 export function duplicateEvidenceResponse(file: EvidenceRecord): Response {
-  return Response.json({ status: 'DUPLICATE_EXACT', code: 'DUPLICATE_EXACT', error: '이미 등록된 파일과 100% 일치합니다.', message: '이미 등록된 파일과 100% 일치합니다.', existing_file: { id: file.id, name: file.originalName, uploader: file.uploadedBy, created_at: file.uploadedAt }, file: { id: file.id, originalName: file.originalName, storageProvider: file.storageProvider, driveUrl: null, downloadUrl: `/api/cases/evidence/${file.id}/download` } }, { status: 409 });
+  return Response.json({ status: 'DUPLICATE_EXACT', code: 'DUPLICATE_EXACT', error: '이미 등록된 파일과 100% 일치합니다.', message: '이미 등록된 파일과 100% 일치합니다.', existing_file: { id: file.id, name: file.originalName, uploader: file.uploadedBy, created_at: file.uploadedAt }, file: { id: file.id, originalName: file.originalName, mimeType: file.mimeType, byteSize: file.byteSize, sha256: file.sha256, category: file.category, storageProvider: file.storageProvider, driveUrl: null, downloadUrl: `/api/cases/evidence/${file.id}/download` } }, { status: 409 });
 }
 
 export interface EvidenceVersionPlan {
@@ -94,6 +95,9 @@ export async function prepareEvidenceVersion(input: {
       .bind(reviewId, 'concost', caseId, category, userId, input.fingerprint, new Date().toISOString()).first<{ baseId: string; snapshot: string; analysis: string; modelCode: string }>();
     if (!review || review.snapshot !== snapshot) throw new GoogleDriveError('VERSION_REVIEW_STALE', 409, '파일 목록이 변경되었거나 확인 시간이 지났습니다. 파일을 다시 올려 비교해 주세요.');
     const analysis = parseVersionAnalysis(JSON.parse(review.analysis), files.filter((f) => f.isLatest).map((f) => f.id));
+    if (choice === 'REPLACE_AS_LATEST' && (!analysis.is_subsequent_version || analysis.recommendation !== 'REPLACE_AS_LATEST')) {
+      throw new GoogleDriveError('VERSION_REVIEW_STALE', 409, '같은 문서의 개정본으로 확인되지 않았습니다. 다시 비교하거나 별도 자료로 저장해 주세요.');
+    }
     base = choice === 'REPLACE_AS_LATEST' ? files.find((f) => f.id === review.baseId) ?? null : null;
     summary = analysis.change_summary; modelCode = review.modelCode;
   } else {
@@ -104,7 +108,8 @@ export async function prepareEvidenceVersion(input: {
       const result = await input.analyze(candidates);
       const analysis = parseVersionAnalysis(result.analysis, candidates.map((f) => f.id));
       summary = analysis.change_summary; modelCode = result.modelCode;
-      if (analysis.similarity_score >= 0.75 || analysis.is_subsequent_version) {
+      // A shared template is not a document revision. Both identity and replacement intent must agree.
+      if (analysis.is_subsequent_version && analysis.recommendation === 'REPLACE_AS_LATEST') {
         const id = crypto.randomUUID();
         await db.prepare('INSERT INTO preview_evidence_upload_reviews(id,organization_id,case_id,category,user_id,fingerprint,base_id,snapshot_hash,analysis_json,model_code,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
           .bind(id, 'concost', caseId, category, userId, input.fingerprint, analysis.existing_file_id, snapshot, JSON.stringify(analysis), modelCode, new Date(Date.now() + 30 * 60_000).toISOString()).run();

@@ -6,7 +6,7 @@ import { chromium, type Page } from 'playwright-core';
 
 // Actual Studio and event handlers; synthetic API only, isolated Chrome, no external requests.
 test('CF119 outline candidates remain separate until explicitly applied and saved', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0, hmr:false }, logLevel: 'error', plugins: [{
     name: 'cf119-outline-fixture', enforce: 'pre',
     transform(code: string, id: string) {

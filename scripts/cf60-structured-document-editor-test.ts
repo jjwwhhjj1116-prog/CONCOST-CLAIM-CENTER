@@ -28,8 +28,7 @@ test('CF60 provides one shared Tiptap editor for report and proposal authoring',
   assert.match(proposal, /StructuredDocumentEditor/u);
   assert.match(editor, /AI 문장 개선/u);
   assert.match(proposal, /selectionAssistant/u);
-  assert.match(proposal, /repairLegacyProposalChapterMixup/u);
-  assert.match(proposal, /variablesWereDuplicated/u);
+  assert.doesNotMatch(proposal, /repairLegacyProposalChapterMixup|variablesWereDuplicated/u, 'reopening must preserve reviewed chapter text and images, not rewrite similar chapters');
   assert.match(proposal, /<ProposalManualDraft/u);
   assert.match(proposal, /onChange=\{\(number,body,editorJson\)=>/u);
   assert.match(proposal, /renderProposalBodyHtml/u);

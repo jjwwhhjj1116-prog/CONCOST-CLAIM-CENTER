@@ -1,0 +1,20 @@
+// Private local snapshot for the user-authorized test project. SELECT only.
+import {execFileSync} from 'node:child_process';
+import {mkdirSync,writeFileSync,existsSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+import assert from 'node:assert/strict';
+const label=process.argv[2];
+assert.match(label??'',/^[a-z0-9-]+$/);
+const repo=fileURLToPath(new URL('../',import.meta.url));
+const destination=new URL(`../tmp/cf146-test-project-${label}.json`,import.meta.url);
+assert.ok(!existsSync(destination),'Never overwrite an earlier snapshot');
+const sql="SELECT d.* FROM preview_report_drafts d JOIN preview_cases c ON c.id=d.case_id WHERE c.case_number='CC-2026-00004'";
+const output=execFileSync(process.execPath,['node_modules/wrangler/bin/wrangler.js','d1','execute','concost-claim-center-development-db','--remote','--config','wrangler.development.jsonc','--command',sql,'--json'],{cwd:repo,encoding:'utf8',maxBuffer:8*1024*1024});
+const query=JSON.parse(output);
+assert.equal(query.length,1); assert.equal(query[0].success,true); assert.equal(query[0].results.length,1);
+const draft=query[0].results[0];
+const sha=value=>createHash('sha256').update(value??'').digest('hex');
+mkdirSync(new URL('../tmp/',import.meta.url),{recursive:true});
+writeFileSync(destination,JSON.stringify({capturedAt:new Date().toISOString(),caseNumber:'CC-2026-00004',draft},null,2));
+console.log(JSON.stringify({file:fileURLToPath(destination),caseId:draft.case_id,version:draft.version,contentLength:draft.content.length,contentSha:sha(draft.content),editorSha:sha(draft.editor_json)}));

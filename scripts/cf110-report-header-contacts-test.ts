@@ -5,7 +5,7 @@ import { joinReportPresentation, splitReportPresentation } from '../packages/doc
 import { reportJson } from './fixtures/cf108-report';
 
 test('CF110 old reports keep their automatic header and null Markdown body', () => {
-  assert.deepEqual(splitReportPresentation(null), { body:null, header:{ enabled:true, text:null } });
+  assert.deepEqual(splitReportPresentation(null), { body:null, header:{ enabled:true, text:null }, frontMatter:{enabled:true,date:'',author:''} });
   assert.equal(joinReportPresentation(null, { enabled:true, text:null }), null);
   assert.deepEqual(splitReportPresentation(reportJson).body, reportJson);
 });
@@ -14,7 +14,7 @@ test('CF110 custom header survives serialization without changing any body nodes
   const original = JSON.stringify(reportJson);
   const header = { enabled:false, text:'검토 보고서 <문자 그대로>\n프로젝트 정보 & 검수본' };
   const stored = JSON.parse(JSON.stringify(joinReportPresentation(reportJson, header)));
-  assert.deepEqual(splitReportPresentation(stored), { body:reportJson, header });
+  assert.deepEqual(splitReportPresentation(stored), { body:reportJson, header, frontMatter:{enabled:true,date:'',author:''} });
   assert.equal(JSON.stringify(reportJson), original);
   assert.equal(splitReportPresentation(joinReportPresentation(null, header)).body, null);
   assert.deepEqual(splitReportPresentation(joinReportPresentation(null, header)).header, header);
@@ -31,12 +31,13 @@ test('CF110 blank custom header is distinct from default, bounded, and repeatabl
 
 test('CF110 editor, save, backup and three previews share versioned header settings', () => {
   const source=readFileSync('apps/web/src/routes/PreviewReportStudio.tsx','utf8');
-  assert.equal((source.match(/editorJson=\{joinReportPresentation\(editorJson, reportHeader\)\}/g)??[]).length,3);
-  assert.match(source,/requestEditorJson = joinReportPresentation\(editorJsonRef.current, reportHeaderRef.current\)/);
+  assert.equal((source.match(/editorJson=\{joinReportPresentation\(editorJson, reportHeader, reportFrontMatter\)\}/g)??[]).length,3);
+  assert.match(source,/requestEditorJson = joinReportPresentation\(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current\)/);
   assert.match(source,/splitReportPresentation\(result.draft\?\.editorJson\)/);
   assert.match(source,/splitReportPresentation\(revision.editorJson\)/);
   assert.match(source,/reportPreviewHtml\(content, presentation.body\)/);
-  assert.match(source,/presentation.header.enabled && <header>/);
+  assert.match(source,/presentation.frontMatter.enabled && <section className="report-final-cover"/);
+  assert.match(source,/<ReportBodyPages html=\{html\} contents=\{presentation.frontMatter.enabled\}/);
   for(const line of source.split('\n').filter(line=>line.includes('report-header-controls__toggle')||line.includes('htmlFor={`report-header-text-'))) {
     assert.match(line,/!editable \|\| saving \|\| savingOutline \|\| generating \|\| Boolean\(chapterBusy\)/);
   }

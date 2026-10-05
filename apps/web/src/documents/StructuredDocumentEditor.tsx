@@ -1,4 +1,7 @@
 import { HocuspocusProvider, WebSocketStatus, type StatesArray } from '@hocuspocus/provider';
+import { syncReportNativeSource } from './report-native-source';
+import { ReportChapterDecoration } from './report-chapter-decoration';
+import { prepareReportPrint } from './report-print-structure';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import CharacterCount from '@tiptap/extension-character-count';
@@ -47,6 +50,7 @@ export interface StructuredSelectionAssistant {
 }
 
 export interface StructuredDocumentEditorHandle {
+  goToChapter: (code: string) => boolean;
   focus: () => void;
   getJSON: () => JSONContent | null;
   getMarkdown: () => string;
@@ -54,6 +58,7 @@ export interface StructuredDocumentEditorHandle {
   replaceRange: (from: number, to: number, replacement: string, expectedText?: string) => boolean;
   insertTable: (rows?: number, columns?: number) => void;
   insertImage: (image: { src: string; alt: string; title?: string }) => void;
+  insertHtml: (html: string) => boolean;
   deleteSelectedTable: () => boolean;
   deleteSelectedImage: () => { deleted: boolean; src?: string };
   moveSelectedImage: (direction: 'up' | 'down') => boolean;
@@ -80,6 +85,8 @@ interface StructuredDocumentEditorProps {
   onRequestInsertImage?: () => void;
   previewContent?: React.ReactNode;
   previewWidth?: number;
+  reportMode?: boolean;
+  beforeContent?: React.ReactNode;
   onChange: (markdown: string, editorJson: JSONContent) => void;
   onSelectionChange?: (selection: StructuredSelection | null) => void;
 }
@@ -228,9 +235,12 @@ export const DocumentPresentationAttributes = Extension.create({
   name: 'documentPresentationAttributes',
   addGlobalAttributes() {
     return [
+      { types: ['doc'], attributes: { reportNativeSource: { default: null, rendered: false } } },
       {
         types: ['image'],
         attributes: {
+          reportSourcePage: { default: false, parseHTML: element => element.getAttribute('data-report-source-page') === 'true', renderHTML: attributes => attributes.reportSourcePage ? { 'data-report-source-page': 'true' } : {} },
+          reportPhoto: { default: false, parseHTML: element => element.getAttribute('data-report-photo') === 'true', renderHTML: attributes => attributes.reportPhoto ? { 'data-report-photo': 'true' } : {} },
           alignment: {
             default: 'center',
             parseHTML: (element) => IMAGE_ALIGNMENTS.has(element.getAttribute('data-image-align') ?? '') ? element.getAttribute('data-image-align') : 'center',
@@ -330,7 +340,14 @@ export class DocumentTableView extends TableView {
       node.firstChild?.forEach(cell => {
         for (let index = 0; index < cell.attrs.colspan; index++) {
           storedWidths.push(Number(cell.attrs.colwidth?.[index]) || 0);
-          weights.push(inferredTableColumnWeight(cell.textContent, cell.textContent.length));
+          let longest = cell.textContent.length;
+          const columnIndex = storedWidths.length - 1;
+          node.forEach(row => { let column = 0; row.forEach(value => {
+            const span = Number(value.attrs.colspan) || 1;
+            if (column <= columnIndex && columnIndex < column + span) longest = Math.max(longest, Math.ceil(value.textContent.length / span));
+            column += span;
+          }); });
+          weights.push(inferredTableColumnWeight(cell.textContent, longest));
         }
       });
       const proportions = normalizeColumnWidths(storedWidths, 100, weights, Number(node.attrs.documentDefaultsVersion) < 2).widths;
@@ -350,6 +367,16 @@ const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
 const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
+const isReportPageDocument = (source: JSONContent | undefined): boolean => {
+  let pages = 0;
+  const visit = (node: JSONContent): boolean => {
+    if (node.type === 'image') { if (node.attrs?.reportSourcePage !== true) return false; pages++; return true; }
+    if (node.type === 'doc' || node.type === 'paragraph') return (node.content ?? []).every(visit);
+    if (node.type === 'text') return !node.text?.trim();
+    return ['aiChapterMarker', 'documentPageBreak', 'hardBreak'].includes(node.type ?? '');
+  };
+  return Boolean(source && visit(source) && pages > 0);
+};
 export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
     const next: JSONContent = { ...node, ...(node.attrs ? { attrs: { ...node.attrs } } : {}), ...(node.content ? { content: node.content.map(visit) } : {}) };
@@ -483,7 +510,7 @@ export const markdownToEditorHtml = (markdown: string): string => {
   const withMarkers = withPageBreaks.replace(markerPattern, (_match, marker: string) => `\n<div data-ai-chapter-marker="${marker}"></div>\n`);
   const rendered = marked.parse(withMarkers, { async: false, gfm: true, breaks: true });
   return DOMPurify.sanitize(normalizeStructuredDocumentHtml(typeof rendered === 'string' ? rendered : ''), {
-    ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+    ADD_ATTR: ['data-report-photo', 'data-report-source-page', 'data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
   });
 };
 
@@ -558,7 +585,7 @@ const createTurndown = () => {
       const rawHeight = Number(node.getAttribute('height'));
       const height = Number.isFinite(rawHeight) && rawHeight > 0 ? Math.round(rawHeight) : null;
       const alignment = IMAGE_ALIGNMENTS.has(node.getAttribute('data-image-align') ?? '') ? node.getAttribute('data-image-align')! : 'center';
-      return `\n\n<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}"${title ? ` title="${escapeHtmlAttribute(title)}"` : ''}${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''} data-image-align="${alignment}">\n\n`;
+      return `\n\n<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}"${title ? ` title="${escapeHtmlAttribute(title)}"` : ''}${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''} data-image-align="${alignment}"${node.getAttribute('data-report-photo') === 'true' ? ' data-report-photo="true"' : ''}${node.getAttribute('data-report-source-page') === 'true' ? ' data-report-source-page="true"' : ''}>\n\n`;
     }
   });
   service.addRule('adjustableTable', {
@@ -594,7 +621,7 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: 
       DocumentPresentationAttributes
     ]);
     return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
-      ADD_ATTR: ['data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
+      ADD_ATTR: ['data-report-photo', 'data-report-source-page', 'data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
     });
   } catch {
     return '';
@@ -652,6 +679,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   onRequestInsertImage,
   previewContent,
   previewWidth = 794,
+  reportMode = false,
+  beforeContent,
   onChange,
   onSelectionChange
 }, ref) {
@@ -762,6 +791,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
 
   const editor = useEditor({
     extensions: [
+      ...(reportMode ? [ReportChapterDecoration] : []),
       StarterKit.configure(collaborationSession ? { undoRedo: false, link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } } : { link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
@@ -851,11 +881,13 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const desiredSignature = structuredDocumentContentSignature(value, editorJson);
     if (desiredSignature === lastAppliedContentSignature.current) return;
     lastAppliedContentSignature.current = desiredSignature;
+    syncReportNativeSource(editor, editorJson);
     editor.commands.setContent(editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), { emitUpdate: false });
   }, [collaborationSession, editor, editorJson, pageMode, value]);
 
   useEffect(() => {
     if (!collaborationSession || !collaborationSynced || !editor?.isInitialized || editor.isDestroyed || !editor.isEmpty || !value.trim()) return;
+    syncReportNativeSource(editor, editorJson);
     editor.commands.setContent(editorJson ?? markdownToEditorHtml(value));
   }, [collaborationSession, collaborationSynced, editor, editorJson, value]);
 
@@ -944,6 +976,22 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     runAction({ kind: 'attributes', target: 'table', attrs: attributes });
   };
 
+  const fitSelectedTable = () => {
+    if (!editor?.isEditable) return;
+    const { $from } = editor.state.selection;
+    for (let depth = $from.depth; depth > 0; depth--) {
+      const node = $from.node(depth);
+      if (node.type.name !== 'table') continue;
+      const json = node.toJSON() as JSONContent;
+      json.attrs = { ...json.attrs, documentDefaultsVersion: 2 };
+      json.content?.forEach(row => row.content?.forEach(cell => { cell.attrs = { ...cell.attrs, colwidth: null }; }));
+      const fitted = editor.schema.nodeFromJSON(normalizeA4TableJson(json));
+      const pos = $from.before(depth);
+      editor.view.dispatch(editor.state.tr.replaceWith(pos, pos + node.nodeSize, fitted).scrollIntoView());
+      return;
+    }
+  };
+
   const applyCellVerticalAlignment = (alignment: 'top' | 'middle' | 'bottom') => {
     if (runAction({ kind: 'cellAlign', alignment })) setCellVerticalAlignment(alignment);
   };
@@ -957,6 +1005,20 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   };
 
   useImperativeHandle(ref, () => ({
+    goToChapter: (code) => {
+      if (!editor) return false;
+      let target = -1;
+      editor.state.doc.forEach((node, pos, index) => {
+        const prefix = /^\s*(CH-\d+)\s*[:.·-]?\s+/u.exec(node.textContent);
+        if (target >= 0 || node.type.name !== 'heading' || prefix?.[1] !== code) return;
+        const next = index + 1 < editor.state.doc.childCount ? editor.state.doc.child(index + 1) : null;
+        target = next?.type.name === 'heading' && next.textContent.trim() === node.textContent.slice(prefix[0].length).trim() ? pos + node.nodeSize + 1 : pos + 1 + prefix[0].length;
+      });
+      if (target < 0) return false;
+      setPreview(false);
+      editor.chain().focus().setTextSelection(target).scrollIntoView().run();
+      return true;
+    },
     focus: () => { editor?.chain().focus().run(); },
     getJSON: () => editor?.getJSON() ?? null,
     getMarkdown: () => editor ? editorHtmlToMarkdown(editor.getHTML()) : value,
@@ -977,6 +1039,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     insertImage: ({ src, alt, title }) => {
       editor?.chain().focus().setImage({ src, alt, title: title ?? alt }).run();
     },
+    insertHtml: (html) => editor?.isEditable ? editor.chain().focus().insertContent(DOMPurify.sanitize(html)).run() : false,
     deleteSelectedTable: () => {
       if (!editor?.isActive('table')) return false;
       runAction({ kind: 'command', command: 'deleteTable' });
@@ -1075,10 +1138,11 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const wordCount = editor?.getText().trim().split(/\s+/u).filter(Boolean).length ?? 0;
   const availableFontSizes = fontSize && !FONT_SIZES.some(size => size === fontSize) ? [...FONT_SIZES, fontSize] : FONT_SIZES;
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
+  const nativePages = reportMode && isReportPageDocument(editor?.getJSON());
 
   return <>
     {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{runAction({ kind: 'table', rows: tableRows, columns: tableColumns });setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
-    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${pageMode === 'a4-portrait' ? ' is-a4-portrait' : ''}${readOnly ? ' is-readonly' : ''}`} aria-label={label} onKeyDownCapture={event => {
+    <section className={`structured-editor${fullscreen ? ' is-fullscreen' : ''}${compact ? ' is-compact' : ''}${pageMode === 'a4-portrait' ? ' is-a4-portrait' : ''}${readOnly ? ' is-readonly' : ''}${nativePages ? ' has-source-pages' : ''}`} aria-label={label} onKeyDownCapture={event => {
       if (readOnly || preview || event.altKey || event.nativeEvent.isComposing || (event.target instanceof HTMLElement && event.target.closest('input,select,textarea'))) return;
       if (event.key === 'F4' && !event.ctrlKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); requestAnimationFrame(() => repeatAction()); }
       else if ((event.ctrlKey || event.metaKey) && !event.shiftKey && ['b','i','u'].includes(event.key.toLowerCase())) {
@@ -1197,6 +1261,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       <ToolbarButton label="선택 이미지 삭제" onClick={deleteSelectedImageNode}>이미지 삭제</ToolbarButton>
     </div>}
     {!readOnly && !preview && tableActive && <div className="structured-editor__object-controls is-table" role="group" aria-label="선택 표 크기와 간격">
+      <ToolbarButton label="선택 표 열너비를 내용에 맞게 조정" onClick={fitSelectedTable}>내용에 맞게 열너비 조정</ToolbarButton>
       <strong>{selectedCellCount ? `${selectedCellCount}개 셀 선택` : '현재 표'}</strong>
       <div>{(['table','row','column'] as const).map(scope=><ToolbarButton key={scope} label={scope==='table'?'표 전체 선택':scope==='row'?'현재 행 선택':'현재 열 선택'} onClick={()=>{if(editor)selectTableCells(editor.view,scope);}}>{scope==='table'?'표 전체':scope==='row'?'행 선택':'열 선택'}</ToolbarButton>)}</div>
       <label><span>표 너비</span><input aria-label="표 너비 비율" type="range" min="35" max="100" step="5" value={tableWidthPercent} onChange={(event) => applyTablePresentation({ tableWidth: Number(event.target.value) })} /><output>{tableWidthPercent}%</output></label>
@@ -1212,8 +1277,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     <span className="structured-editor__repeat-status" role="status">{repeatStatus}</span>
     </div>
     <DocumentReviewPages previewContent={previewContent} width={previewWidth}>
-    <div className="structured-editor__canvas">
-      {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(normalizeStructuredDocumentHtml(editor?.getHTML() ?? '')) }} /> : <>
+    <div className={`structured-editor__canvas${reportMode ? ' report-edit-canvas' : ''}`}>
+      {beforeContent}
+      {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: (() => { const html = DOMPurify.sanitize(normalizeStructuredDocumentHtml(editor?.getHTML() ?? '')); if (!reportMode) return html; const source = document.createElement('div'); source.innerHTML = html; prepareReportPrint(source); return source.innerHTML; })() }} /> : <>
         {editor && <BubbleMenu
           editor={editor}
           pluginKey={`structured-selection-assistant-${documentKey ?? label}`}

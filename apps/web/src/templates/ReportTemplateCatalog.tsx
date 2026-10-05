@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input, Select } from '@claim-studio/ui';
 import { apiRequest, ApiError } from '../api';
+import { loadCaseOptions } from '../case-options';
 
 export interface ReportTemplateCatalogProps {
   routeId: string;
@@ -152,7 +153,7 @@ export const ReportTemplateCatalog: React.FC<ReportTemplateCatalogProps> = ({ ro
         ),
         apiRequest<{ blocks: BlockDefinition[] }>('/api/block-definitions'),
         apiRequest<{ inventory: ReferenceInventory[] }>('/api/reference-inventories'),
-        apiRequest<{ cases: CaseRecord[] }>('/api/cases?scope=project-work&limit=100')
+        loadCaseOptions<CaseRecord>('/api/cases?scope=project-work&limit=100')
       ]);
       setTemplates(catalog.templates);
       setActiveCounts(catalog.activeCounts);

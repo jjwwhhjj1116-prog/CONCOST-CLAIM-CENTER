@@ -8,7 +8,7 @@ import { chromium } from 'playwright-core';
 // CSS. The app's actual base stylesheet and scroll ancestors matter: a bare
 // component without .main-content cannot reproduce the sticky failure.
 test('CF118 proposal finalization keeps its actions reachable without changing confirmation or reception', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const baseStyles = readFileSync('apps/web/index.html', 'utf8').match(/<style>([\s\S]*?)<\/style>/u)?.[1];
   assert.ok(baseStyles);
   const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{

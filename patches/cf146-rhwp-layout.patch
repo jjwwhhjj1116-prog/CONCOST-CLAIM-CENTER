@@ -1,0 +1,322 @@
+diff --git a/src/renderer/float_placement.rs b/src/renderer/float_placement.rs
+index 7226f1fc..cd1f0ff9 100644
+--- a/src/renderer/float_placement.rs
++++ b/src/renderer/float_placement.rs
+@@ -696,6 +696,84 @@ fn next_plain_text_vpos(next_para: Option<&Paragraph>) -> Option<i32> {
+         .map(|(index, seg)| ladder_vpos(next, index, seg.vertical_pos))
+ }
+ 
++/// 저장 사다리가 그림 높이만 차지하는 빈 단일 그림 앵커. 이 경우 host 줄을
++/// 별도로 더하면 그림마다 한 줄씩 밀린다. 캡션/여백/합성 줄은 추정하지 않는다.
++pub(crate) fn stored_picture_host_included_advance_hu(
++    native_hwp5_layout: bool,
++    para: &Paragraph,
++    next_para: Option<&Paragraph>,
++) -> Option<i32> {
++    let [Control::Picture(pic)] = para.controls.as_slice() else {
++        return None;
++    };
++    let cm = &pic.common;
++    if !native_hwp5_layout
++        || !is_para_topbottom_float(cm)
++        || !cm.flow_with_text
++        || pic.caption.is_some()
++        || cm.vertical_offset != 0
++        || cm.margin.top != 0
++        || cm.margin.bottom != 0
++        || cm.margin.left != 0
++        || cm.margin.right != 0
++        || para.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}')
++    {
++        return None;
++    }
++    let [host] = para.line_segs.as_slice() else {
++        return None;
++    };
++    let next = next_para?;
++    let following = next.line_segs.first()?;
++    if host.tag & 0x8000_0000 != 0
++        || following.tag & 0x8000_0000 != 0
++        || host.line_height <= 0
++        || following.line_height <= 0
++        || para.layout_only_fill_lines != 0
++        || next.layout_only_fill_lines != 0
++    {
++        return None;
++    }
++    let height = i32::try_from(cm.height).ok()?;
++    let advance = host.line_height.checked_add(host.line_spacing)?;
++    let delta = ladder_vpos(next, 0, following.vertical_pos).checked_sub(ladder_vpos(
++        para,
++        0,
++        host.vertical_pos,
++    ))?;
++    (height > advance && advance > 0 && delta == height).then_some(advance)
++}
++
++/// 저장된 그림 뒤의 빈 줄과 한 줄 설명이 본문 안에서 연속되면 실제 간격이다.
++/// 뒤 설명 다음에 새 쪽이 온다는 이유만으로 이 빈 줄을 없애면 안 된다.
++pub(crate) fn stored_picture_gap_fits_body(
++    native_hwp5_layout: bool,
++    picture: &Paragraph,
++    gap: &Paragraph,
++    following: &Paragraph,
++    body_height_hu: i32,
++) -> bool {
++    if stored_picture_host_included_advance_hu(native_hwp5_layout, picture, Some(gap)).is_none()
++        || !gap.text.is_empty()
++        || !gap.controls.is_empty()
++        || !following.controls.is_empty()
++        || following.layout_only_fill_lines != 0
++    {
++        return false;
++    }
++    let ([blank], [text]) = (gap.line_segs.as_slice(), following.line_segs.as_slice()) else {
++        return false;
++    };
++    if text.tag & 0x8000_0000 != 0 || text.line_height <= 0 || blank.line_spacing < 0 {
++        return false;
++    }
++    let gap_start = i64::from(ladder_vpos(gap, 0, blank.vertical_pos));
++    let text_start = i64::from(ladder_vpos(following, 0, text.vertical_pos));
++    gap_start >= 0
++        && gap_start + i64::from(blank.line_height) + i64::from(blank.line_spacing) == text_start
++        && text_start + i64::from(text.line_height) <= i64::from(body_height_hu)
++}
++
+ fn ladder_vpos(paragraph: &Paragraph, index: usize, fallback: i32) -> i32 {
+     paragraph
+         .source_line_seg_vertical_pos
+@@ -1372,6 +1450,89 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn stored_picture_host_height_is_not_added_twice() {
++        let picture = Picture {
++            common: CommonObjAttr {
++                height: 5000,
++                flow_with_text: true,
++                ..base_common()
++            },
++            ..Default::default()
++        };
++        let mut host = Paragraph {
++            controls: vec![Control::Picture(Box::new(picture))],
++            line_segs: vec![LineSeg {
++                vertical_pos: 10000,
++                line_height: 1100,
++                line_spacing: 880,
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        let mut next = Paragraph {
++            line_segs: vec![LineSeg {
++                vertical_pos: 15000,
++                line_height: 1100,
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        assert_eq!(
++            stored_picture_host_included_advance_hu(true, &host, Some(&next)),
++            Some(1980)
++        );
++        next.line_segs[0].line_spacing = 880;
++        let mut caption = Paragraph {
++            text: "사진 설명".into(),
++            line_segs: vec![LineSeg {
++                vertical_pos: 16980,
++                line_height: 1100,
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        assert!(stored_picture_gap_fits_body(
++            true, &host, &next, &caption, 18080
++        ));
++        assert!(!stored_picture_gap_fits_body(
++            true, &host, &next, &caption, 18079
++        ));
++        assert!(!stored_picture_gap_fits_body(
++            false, &host, &next, &caption, 18080
++        ));
++        caption.line_segs[0].vertical_pos += 1;
++        assert!(!stored_picture_gap_fits_body(
++            true, &host, &next, &caption, 19000
++        ));
++        caption.line_segs[0].vertical_pos -= 1;
++        caption.line_segs[0].tag = 0x8000_0000;
++        assert!(!stored_picture_gap_fits_body(
++            true, &host, &next, &caption, 19000
++        ));
++        next.line_segs[0].vertical_pos += 1980;
++        assert_eq!(
++            stored_picture_host_included_advance_hu(true, &host, Some(&next)),
++            None
++        );
++        next.line_segs[0].vertical_pos = 15000;
++        assert_eq!(
++            stored_picture_host_included_advance_hu(false, &host, Some(&next)),
++            None
++        );
++        host.line_segs[0].tag = 0x8000_0000;
++        assert_eq!(
++            stored_picture_host_included_advance_hu(true, &host, Some(&next)),
++            None
++        );
++        host.line_segs[0].tag = 0;
++        host.controls.push(host.controls[0].clone());
++        assert_eq!(
++            stored_picture_host_included_advance_hu(true, &host, Some(&next)),
++            None
++        );
++    }
++
+     fn supported_picture(flow: TextFlow) -> Picture {
+         Picture {
+             common: CommonObjAttr {
+diff --git a/src/renderer/layout.rs b/src/renderer/layout.rs
+index d65d0fd8..34284405 100644
+--- a/src/renderer/layout.rs
++++ b/src/renderer/layout.rs
+@@ -13002,7 +13002,13 @@ impl LayoutEngine {
+                             {
+                                 let has_visible_text =
+                                     para.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}');
+-                                if !has_visible_text {
++                                if !has_visible_text
++                                    && super::float_placement::stored_picture_host_included_advance_hu(
++                                        self.profile.get().hwp5_stored_pagination_layout(),
++                                        para,
++                                        paragraphs.get(para_index + 1),
++                                    ).is_none()
++                                {
+                                     let line_advance = para
+                                         .line_segs
+                                         .first()
+diff --git a/src/renderer/typeset.rs b/src/renderer/typeset.rs
+index 9ea45ecb..2b00db62 100755
+--- a/src/renderer/typeset.rs
++++ b/src/renderer/typeset.rs
+@@ -1394,8 +1394,30 @@ fn page_holds_only_fresh_table_continuation(st: &TypesetState, paragraphs: &[Par
+     for item in &st.current_items {
+         match item {
+             PageItem::PartialTable {
+-                is_continuation, ..
+-            } if *is_continuation => has_continuation = true,
++                para_index,
++                control_index,
++                is_continuation,
++                ..
++            } if *is_continuation => {
++                // 글앞으로 표의 빈 앵커 필러만 원래 저장 경계와 continuation이
++                // 같은 쪽을 예약한다 (#5918). 자리차지 표의 독립 쪽 경계까지
++                // 생략하면 다음 쪽 제목이 작은 꼬리 조각 아래로 당겨진다.
++                let Some(Control::Table(table)) = paragraphs
++                    .get(*para_index)
++                    .and_then(|para| para.controls.get(*control_index))
++                else {
++                    return false;
++                };
++                if table.common.treat_as_char
++                    || !matches!(
++                        table.common.text_wrap,
++                        crate::model::shape::TextWrap::InFrontOfText
++                    )
++                {
++                    return false;
++                }
++                has_continuation = true;
++            }
+             PageItem::FullParagraph { para_index }
+             | PageItem::PartialParagraph { para_index, .. } => {
+                 let empty_only = paragraphs
+@@ -8288,6 +8310,13 @@ impl TypesetEngine {
+                             );
+                         let high_tail_heading_then_reset = para_has_visible_text(next_para)
+                             && next_para.controls.is_empty()
++                            && !(idx == para_idx + 1 && para_idx.checked_sub(1)
++                                .and_then(|i| paragraphs.get(i)).is_some_and(|picture| {
++                                    crate::renderer::float_placement::stored_picture_gap_fits_body(
++                                        st.profile.native_hwp5_layout(), picture, para, next_para,
++                                        crate::renderer::px_to_hwpunit(st.layout.body_area.height, self.dpi),
++                                    )
++                                }))
+                             && next_para.line_segs.first().is_some_and(|seg| {
+                                 let body_h_hu = crate::renderer::px_to_hwpunit(
+                                     st.layout.body_area.height,
+@@ -9295,6 +9324,13 @@ impl TypesetEngine {
+                                 _ => None,
+                             };
+                             if let Some((obj_h, extra, h_left, h_right)) = pushdown_h {
++                                // host 줄은 typeset_paragraph에서 이미 소비했다. 원본이
++                                // 그림 높이 안에 포함한 줄만 빼서 layout과 같은 진행량을 쓴다.
++                                let included_host = crate::renderer::float_placement::stored_picture_host_included_advance_hu(
++                                    st.profile.hwp5_stored_pagination_layout(), para,
++                                    paragraphs.get(para_idx + 1),
++                                ).map(|hu| hwpunit_to_px(hu, self.dpi)).unwrap_or(0.0);
++                                let extra = (extra - included_host).max(0.0);
+                                 // [Task #1079] 파일 vpos 가 이미 그림 공간을 반영(그림 para 줄
+                                 // 앞 gap ≥ 그림 높이)하면 VPOS_CORR sync 가 그 공간을 따르므로
+                                 // pushdown 가산은 이중 계상. gap 이 그림 높이 미만(파일 vpos
+@@ -27943,6 +27979,58 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn fresh_continuation_reset_exception_requires_overlay_table() {
++        let layout =
++            PageLayoutInfo::from_page_def(&a4_page_def(), &ColumnDef::default(), DEFAULT_DPI);
++        let mut st = TypesetState::new(layout, 1, 0, 0.0, 0.0, 0.0, Default::default());
++        st.current_height = st.available_height() * 0.2;
++        st.current_items.push(PageItem::PartialTable {
++            para_index: 0,
++            control_index: 0,
++            start_row: 1,
++            end_row: 2,
++            is_continuation: true,
++            start_cut: vec![],
++            end_cut: vec![],
++            is_block_split: false,
++            row_cursor_is_nested: false,
++            end_row_height_override: None,
++            start_row_height_override: None,
++        });
++        let make_paras = |wrap, tac| {
++            let mut table = Table::default();
++            table.common.text_wrap = wrap;
++            table.common.treat_as_char = tac;
++            vec![
++                Paragraph {
++                    controls: vec![Control::Table(Box::new(table))],
++                    ..Default::default()
++                },
++                Paragraph::default(),
++            ]
++        };
++        let overlay = make_paras(TextWrap::InFrontOfText, false);
++        assert!(page_holds_only_fresh_table_continuation(&st, &overlay));
++        assert!(!page_holds_only_fresh_table_continuation(
++            &st,
++            &make_paras(TextWrap::TopAndBottom, false)
++        ));
++        assert!(!page_holds_only_fresh_table_continuation(
++            &st,
++            &make_paras(TextWrap::InFrontOfText, true)
++        ));
++        assert!(!page_holds_only_fresh_table_continuation(&st, &[]));
++        st.current_items
++            .push(PageItem::FullParagraph { para_index: 1 });
++        assert!(page_holds_only_fresh_table_continuation(&st, &overlay));
++        let mut visible = overlay.clone();
++        visible[1].text = "본문".into();
++        assert!(!page_holds_only_fresh_table_continuation(&st, &visible));
++        st.current_height = st.available_height() * 0.31;
++        assert!(!page_holds_only_fresh_table_continuation(&st, &overlay));
++    }
++
+     #[test]
+     fn single_column_vpos_reset_gate_requires_exclusive_tac_picture_or_shape() {
+         let tac_picture = || {

@@ -1,8 +1,10 @@
 export const inferredTableColumnWeight = (header: string, longestValueLength: number): number => {
+  // A numeric/status label must not force a long value into a one-character column.
+  const textWeight = Math.min(2.5, Math.sqrt(Math.min(100, Math.max(header.length * 2, longestValueLength))) / 4);
   const normalized = header.replace(/\s+/gu, '').toLocaleLowerCase('ko-KR');
-  if (/^(?:no|번호|순번|단계)$/iu.test(normalized)) return 0.45;
-  if (/(?:연면적|면적|금액|공사비|단가|총액|합계|수량|비율|세대수)/iu.test(normalized)) return 0.9;
-  if (/(?:연도|년도|지역|층수|동수|구분|상태)/iu.test(normalized)) return 0.7;
+  if (/^(?:no|번호|순번|단계)$/iu.test(normalized)) return Math.max(0.45, textWeight);
+  if (/(?:연면적|면적|금액|공사비|단가|총액|합계|수량|비율|세대수)/iu.test(normalized)) return Math.max(0.9, textWeight);
+  if (/(?:연도|년도|지역|층수|동수|구분|상태)/iu.test(normalized)) return Math.max(0.7, textWeight);
   if (/(?:내용|세부|업무|산출물|비고|설명|검토|의견|범위)/iu.test(normalized)) return 2.1;
   if (/(?:발주자|법무법인|현장명|프로젝트|사업명|회사명|성명|제목)/iu.test(normalized)) return 1.5;
   return Math.min(1.8, Math.max(0.8, 0.55 + Math.sqrt(Math.min(100, longestValueLength)) / 3));

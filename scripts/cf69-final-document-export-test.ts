@@ -8,6 +8,7 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   const proposal = read('apps/web/src/proposals/ProposalView.tsx');
   const report = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const exporter = read('apps/web/src/documents/final-document-export.ts');
+  const editableDocx = read('apps/web/src/documents/editable-docx-export.ts');
   const icon = read('apps/web/src/documents/FileFormatIcon.tsx');
 
   assert.match(proposal, /ref=\{finalPreviewRef\}/u);
@@ -27,22 +28,27 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
 
   assert.match(exporter, /querySelectorAll<HTMLElement>\('\[data-export-page\]'\)/u);
   assert.match(exporter, /미리보기에 HTML 코드가 노출되어 내보내기를 중단/u);
-  assert.match(exporter, /createDocx\(pages, orientation\)/u);
-  assert.match(exporter, /new Document\(/u);
-  assert.match(exporter, /new ImageRun\(/u);
-  assert.match(exporter, /Packer\.toArrayBuffer/u);
+  assert.match(exporter, /createEditableDocx\(options\.root, orientation\)/u);
+  assert.match(editableDocx, /new Document\(/u);
+  assert.match(editableDocx, /new TextRun\(/u);
+  assert.match(editableDocx, /new Table\(/u);
+  assert.match(editableDocx, /new ImageRun\(/u);
+  assert.match(editableDocx, /Packer\.toArrayBuffer/u);
+  assert.doesNotMatch(editableDocx, /html2canvas\s*\(|CapturedPage|canvasPage\s*\(/u);
   assert.doesNotMatch(exporter, /docxDocumentXml/u);
   assert.match(exporter, /createPdf\(pages, orientation\)/u);
   assert.match(exporter, /createHwp\(pages/u);
   assert.doesNotMatch(exporter, /exportHwpVerify/u);
-  assert.match(exporter, /loadFile\(hwp/u);
+  assert.match(exporter, /new Engine\(hwp\)/u);
   assert.match(exporter, /완성된 HWP 재열기 검증/u);
-  assert.match(exporter, /getPageSvg\(index\)/u);
+  assert.match(exporter, /renderPageSvg\(index\)/u);
+  assert.match(exporter, /collectNativeHwpPages\(options.root, orientation\)/u);
+  assert.match(exporter, /createNativeHwp\(pages, Engine\)/u);
   assert.match(exporter, /oleSignature/u);
   assert.match(exporter, /widthPx: 1_123, heightPx: 794/u);
   assert.match(exporter, /widthPx: 794, heightPx: 1_123/u);
-  assert.match(exporter, /PageOrientation\.LANDSCAPE/u);
-  assert.match(exporter, /PageOrientation\.PORTRAIT/u);
+  assert.match(editableDocx, /PageOrientation\.LANDSCAPE/u);
+  assert.match(editableDocx, /PageOrientation\.PORTRAIT/u);
   assert.match(exporter, /orientation \?\? 'landscape'/u);
   assert.match(exporter, /dimensions\.width, dimensions\.height/u);
   assert.match(exporter, /orientation === 'portrait' \? 'WIDELY' : 'NARROWLY'/u);

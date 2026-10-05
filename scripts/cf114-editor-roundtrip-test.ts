@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core';
 // Use the existing Vite app and an isolated Chrome instance: browser DOMPurify,
 // Marked and Tiptap parsers must all run, not a mocked serializer or source regex.
 test('CF114 real editor preserves formatting and emits changes only for document edits', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf114-editor-test-harness',
     configureServer(server) {

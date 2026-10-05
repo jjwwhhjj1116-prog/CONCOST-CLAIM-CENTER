@@ -2,8 +2,10 @@ import { fetchEvidenceUpload } from '../evidence/upload-evidence';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Select } from '@claim-studio/ui';
 import { ApiError, apiRequest } from '../api';
+import { loadCaseOptions } from '../case-options';
 import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
 import { CompanyMinutes, MinutesFieldsEditor, downloadMinutes } from './CompanyMinutes';
+import { meetingMinutesWorkbook } from '../proposals/proposal-excel';
 import { minutesContent, minutesFieldDefaults, normalizeMinutesFields, type MinutesFields } from '../../../cloudflare/src/company-minutes';
 import { WORKFLOW_STAGES, WORKFORCE_UNITS } from './workflow-model';
 import { registerNavigationBlocker } from '../navigation-guard';
@@ -290,7 +292,7 @@ export const WorkflowOperations: React.FC<{
     setNotice('');
     setFailure('');
     const caseQuery = routeId === 'WF-04' ? '/api/cases?scope=project-work&stage=SITE_SURVEY&limit=100' : '/api/cases?scope=project-work&limit=100';
-    apiRequest<{ cases: CaseSummary[] }>(caseQuery).then((response) => {
+    loadCaseOptions<CaseSummary>(caseQuery).then((response) => {
       if (!active) return;
       const eligibleCases = response.cases;
       setCases(eligibleCases);
@@ -632,13 +634,25 @@ function workflowArchiveText(kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiI
   ].join('\n');
 }
 
+export function kickoffMinutesValues(value: { minutesFields?: MinutesFields; meetingAt: string | null; location: string; agenda: string; participants: string[]; sourceNotes: string }) {
+  const meetingAt = value.meetingAt ? (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(value.meetingAt) ? value.meetingAt : localDateTime(value.meetingAt)) : '';
+  return { ...minutesFieldDefaults, ...value.minutesFields, meetingDate: meetingAt.slice(0,10).replaceAll('-', '. '), meetingTime: meetingAt.slice(11,16), location: value.location, participants: value.participants.join(', '), meetingTitle: value.agenda, summary: value.sourceNotes, followUps: '' };
+}
+
+export function workflowArchiveFile(kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiImport, statusLabel: string): File {
+  const sourceDate = (kind === 'KICKOFF' ? kickoffMinutesValues(value).meetingDate.replaceAll('. ', '-') : value.surveyDate)?.slice(0, 10) || kstToday();
+  const safeStatus = statusLabel.replace(/[^0-9A-Za-z가-힣_-]+/g, '_');
+  if (kind === 'KICKOFF') {
+    const bytes = meetingMinutesWorkbook(kickoffMinutesValues(value), safeStatus);
+    return new File([bytes.slice().buffer as ArrayBuffer], `착수회의_회의록_${sourceDate}_${safeStatus}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+  return new File([workflowArchiveText(kind, value, statusLabel)], `현장조사_정리본_${sourceDate}_${safeStatus}.txt`, { type: 'text/plain;charset=utf-8' });
+}
+
 async function archiveWorkflowResult(caseId: string, kind: 'KICKOFF' | 'SITE_SURVEY', value: WorkflowAiImport, statusLabel: string): Promise<WorkflowArchivedFile> {
   const category = kind === 'KICKOFF' ? 'MEETING_MINUTES' : 'SITE_DOCUMENT';
-  const sourceDate = (kind === 'KICKOFF' ? value.meetingAt : value.surveyDate)?.slice(0, 10) || kstToday();
-  const safeStatus = statusLabel.replace(/[^0-9A-Za-z가-힣_-]+/g, '_');
-  const fileName = `${kind === 'KICKOFF' ? '착수회의_회의록' : '현장조사_정리본'}_${sourceDate}_${safeStatus}.txt`;
   const form = new FormData();
-  form.set('file', new File([workflowArchiveText(kind, value, statusLabel)], fileName, { type: 'text/plain;charset=utf-8' }));
+  form.set('file', workflowArchiveFile(kind, value, statusLabel));
   form.set('category', category);
   const response = await fetchEvidenceUpload(`/api/cases/${encodeURIComponent(caseId)}/evidence`, {
     method: 'POST',
@@ -785,7 +799,7 @@ const KickoffEditor: React.FC<{
   const summarySource = importedDraft ? importNotes(importedDraft) : record?.rawNotes;
   const displayedSummary = minutesContent(form.rawNotes, summarySource, importedDraft ? importedDraft.summary : record?.summaryText);
   const displayedTimeline = form.rawNotes.trim() === summarySource?.trim() ? (importedDraft?.timeline ?? record?.timeline ?? []) : [];
-  const minutesValues = { ...form.minutesFields, meetingDate: form.meetingAt.slice(0,10).replaceAll('-', '. '), meetingTime: form.meetingAt.slice(11,16), location: form.location, participants: form.participantUnits, meetingTitle: form.agenda, attachmentName: form.minutesFields.attachmentName || archivedFile?.originalName || '', summary: displayedSummary, followUps: displayedTimeline.map(item => `${item.order}. ${item.title}\n${item.detail}`).join('\n\n') };
+  const minutesValues = kickoffMinutesValues({ minutesFields: { ...form.minutesFields, attachmentName: form.minutesFields.attachmentName || archivedFile?.originalName || '' }, meetingAt: form.meetingAt, location: form.location, agenda: form.agenda, participants: [form.participantUnits], sourceNotes: form.rawNotes });
   const unsaved = Boolean(importedDraft) || !record || form.status !== record.status || form.meetingAt !== localDateTime(record.meetingAt) || form.location !== (record.location ?? '') || form.agenda !== record.agenda || form.participantUnits !== record.participantUnits.join(', ') || form.rawNotes !== record.rawNotes || JSON.stringify(form.minutesFields) !== JSON.stringify(normalizeMinutesFields(record.minutesFields) ?? minutesFieldDefaults);
   useWorkflowDraftGuard(Boolean(busy) || (unsaved && Boolean(record || importedDraft || form.agenda || form.rawNotes || form.location || form.participantUnits || JSON.stringify(form.minutesFields) !== JSON.stringify(minutesFieldDefaults))), onDirtyChange);
   const outputState = importedDraft ? importedDraft.summary ? '파일 자동정리 결과 · 저장 전' : '원문 가져오기 · AI 미실행 · 저장 전' : unsaved ? '입력 내용 미리보기 · 저장 전' : record?.status === 'CONFIRMED' ? '최종 확정본' : record?.summaryText ? '자동 정리본 · 검수 필요' : '작성 중';
@@ -810,11 +824,12 @@ const KickoffEditor: React.FC<{
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>GEMINI MINUTES · HUMAN REVIEW</span><h3>회의록 최종본 · 결정사항 · 후속업무</h3></div><em>{outputState}</em></header>
-      <p className="workflow-output-guide">입력한 양식 정보와 회의 메모를 확인하세요. 자동정리 후에는 정리본을 원문과 대조하고 확정합니다.</p>
+      <p className="workflow-output-guide">회의록에는 왼쪽에서 확인·수정한 회의 내용만 반영됩니다. AI 정리와 후속업무 제안은 아래 내부 확인사항으로 분리되며 다운로드에 자동 포함되지 않습니다.</p>
       {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 원본 보관 완료' : '원본 임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '착수회의 원본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
       <>
         <CompanyMinutes values={minutesValues}/>
         <Button className="workflow-template-button" variant="secondary" onClick={downloadCurrentMinutes}>현재 회의록 XLSX 내려받기</Button>
+        {(displayedSummary !== form.rawNotes || displayedTimeline.length > 0) && <details className="workflow-internal-review"><summary>AI 내부 확인사항 · 회의록 다운로드 제외</summary><p>실제 논의·합의된 내용인지 원문과 대조하세요. 반영할 사항만 왼쪽 회의 메모에 직접 작성한 뒤 저장합니다. 담당자·기한이 확인되지 않은 제안은 확정 일정이 아닙니다.</p><p style={{ whiteSpace: 'pre-wrap' }}>{displayedSummary}</p>{displayedTimeline.map(item => <section key={item.order}><strong>{item.title}</strong><p style={{ whiteSpace: 'pre-wrap' }}>{item.detail}</p></section>)}</details>}
         {record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
       </>
     </article>

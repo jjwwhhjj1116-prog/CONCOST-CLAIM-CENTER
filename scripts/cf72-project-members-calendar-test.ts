@@ -11,7 +11,11 @@ test('CF72 uses real weekday classes and a horizontally scrollable 31-day calend
   assert.match(scheduleDayInfo(2026,7,2).className,/is-sunday/u);
   assert.doesNotMatch(scheduleDayInfo(2026,7,3).className,/is-saturday|is-sunday/u);
   const css=read('apps/web/src/workflow/ProjectWorkflowSchedule.css');
-  assert.match(css,/grid-template-columns: 330px 1364px/u);
+  assert.match(css,/grid-template-columns: 330px 120px 1364px/u);
+  assert.match(css,/\.schedule-pm-cell\s*\{/u);
+  const schedule=read('apps/web/src/workflow/ProjectWorkflowSchedule.tsx');
+  assert.match(schedule,/role="columnheader">담당 PM/u);
+  assert.match(schedule,/project\.responsiblePm\.name/u);
   assert.match(css,/repeat\(31, 44px\)/u);
   assert.match(css,/scrollbar-gutter: stable/u);
   assert.doesNotMatch(css,/nth-child\(7n/u);

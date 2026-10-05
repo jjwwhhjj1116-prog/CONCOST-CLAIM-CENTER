@@ -62,7 +62,7 @@ test('CF138 tutorial is independent of input/save and the permanent print editor
 });
 const executablePath=['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(existsSync);
 test('CF138 real Chromium: work import roundtrip, 17-sheet reserved bands, hidden footer, page numbers and A4 PDF', {skip:!executablePath,timeout:90000},async()=>{
-  const {createServer}=await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const {createServer}=await import('../apps/web/qa/vite-server.js');
   const server=await createServer({root:resolve('apps/web'),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{name:'cf138-print-css',enforce:'pre',transform(code:string,id:string){if(id.replaceAll('\\','/').split('?')[0].endsWith('/es/EsPrintPreview.tsx')) return code+'\nexport { PRINT_CSS };';},
     resolveId(id:string){if(id==='/cf138-ui.js')return '\0cf138-ui';},
     load(id:string){if(id==='\0cf138-ui')return `import React,{useState} from 'react'; import {createRoot} from 'react-dom/client'; import {EsStudio} from '/src/es/EsStudio.tsx'; function TestApp(){const [path,navigate]=useState('/es');return React.createElement(EsStudio,{key:path.split('?')[0],mode:path.startsWith('/es/editor')?'editor':'list',search:path.includes('?')?'?'+path.split('?')[1]:'',onNavigate:navigate});} createRoot(document.getElementById('root')).render(React.createElement(TestApp));`;}
@@ -84,7 +84,7 @@ test('CF138 real Chromium: work import roundtrip, 17-sheet reserved bands, hidde
     await page.addStyleTag({content:result.css});
     const grids=esTemplateGrids.map(grid=>({grid,values:esTemplateValues(input,calculateEs(input),grid)}));
     const measured=await page.evaluate(async({grids,settings})=>{
-      const rp='/src/es/es-template-print.ts', pp='/src/es/EsPrintPreview.tsx'; const {paginateEsTemplate}=await import(rp), {decorateEsPrintPage}=await import(pp);
+      const rp='/src/es/es-template-print.ts', pp='/src/es/EsPrintPreview.tsx'; const {paginateEsTemplate}=await import(rp) as typeof import('../apps/web/src/es/es-template-print'), {decorateEsPrintPage}=await import(pp) as typeof import('../apps/web/src/es/EsPrintPreview');
       await document.fonts.ready; const measure=document.createElement('div'); document.body.append(measure);
       const raw=grids.flatMap(({grid,values})=>paginateEsTemplate(grid,values,measure,settings));
       const html=raw.map((text,i)=>decorateEsPrintPage(text,i,raw.length,1,settings)).join(''); measure.remove(); document.body.innerHTML=html;
@@ -98,7 +98,7 @@ test('CF138 real Chromium: work import roundtrip, 17-sheet reserved bands, hidde
           if(!f.textContent?.includes(`${i+1} / ${pages.length}`))issues.push(`page ${i}`);
         }
       });
-      const hidden={...settings,header:{...settings.header,mode:'hidden'},footer:{...settings.footer,mode:'hidden'}};
+      const hidden={...settings,header:{...settings.header,mode:'hidden' as const},footer:{...settings.footer,mode:'hidden' as const}};
       const temp=document.createElement('div'); const detail=grids.find(g=>g.grid.name==='3')!; const hiddenPages=paginateEsTemplate(detail.grid,detail.values,temp,hidden);
       return {count:pages.length,sheets:new Set(pages.map(p=>p.dataset.sheet)).size,issues,hiddenFooter:hiddenPages.some(p=>p.includes('__ES_PAGE_NUMBER__'))};
     },{grids,settings:input.printSettings});

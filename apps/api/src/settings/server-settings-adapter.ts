@@ -1,9 +1,7 @@
 import * as crypto from 'node:crypto';
 import type * as http from 'node:http';
 import { hashPassword, verifyPassword, type PrismaClient } from '@claim-studio/database';
-import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../../packages/document-engine/src/es-ecos';
-import { fetchEsPublicSources } from '../../../cloudflare/src/es-public-sources';
-import { fetchEsPairSources } from '../../../cloudflare/src/es-pair-sources';
+import { ES_ECOS_KEY, fetchEsEcosSources, fetchEsPublicSources, fetchEsPairSources } from '@claim-studio/document-engine';
 
 export interface ServerSettingsContext {
   user: { id: string; email: string; name: string; organizationId: string };

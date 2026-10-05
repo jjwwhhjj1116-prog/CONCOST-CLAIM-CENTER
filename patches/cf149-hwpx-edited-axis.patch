@@ -1,0 +1,89 @@
+--- a/src/model/paragraph.rs
++++ b/src/model/paragraph.rs
+@@ -63,1 +63,8 @@
+     pub hwpx_axis_shift: u32,
++    /// Fresh reflow rows use the HWP5 axis even in a HWPX-source document.
++    /// Keep this distinct from the renderer's source-axis projection shift.
++    #[serde(skip)]
++    pub line_segs_recomputed: bool,
++    /// Imported HWPX leading-slot extent, retained when renderer rows reflow.
++    #[serde(skip)]
++    pub hwpx_source_axis_shift: Option<u32>,
+@@ -640,1 +644,2 @@
+         self.hwpx_axis_shift = 0;
++        self.line_segs_recomputed = true;
+@@ -1336,1 +1341,3 @@
+             hwpx_axis_shift: 0,
++            line_segs_recomputed: true,
++            hwpx_source_axis_shift: None,
+--- a/src/model/table.rs
++++ b/src/model/table.rs
+@@ -1748,1 +1748,3 @@
+                             hwpx_axis_shift: para.hwpx_axis_shift,
++                            line_segs_recomputed: para.line_segs_recomputed,
++                            hwpx_source_axis_shift: para.hwpx_source_axis_shift,
+--- a/src/diagnostics/ir_field_sweep.rs
++++ b/src/diagnostics/ir_field_sweep.rs
+@@ -641,1 +641,3 @@
+         hwpx_axis_shift: _,
++        line_segs_recomputed: _,
++        hwpx_source_axis_shift: _,
+--- a/src/renderer/composer.rs
++++ b/src/renderer/composer.rs
+@@ -2195,1 +2195,2 @@
+             reflowed_para.hwpx_axis_shift = 0;
++            reflowed_para.line_segs_recomputed = true;
+--- a/src/serializer/hwpx/section.rs
++++ b/src/serializer/hwpx/section.rs
+@@ -785,1 +785,8 @@
+-    let hwp5_only_units = if ctx.line_segs_on_hwpx_axis {
++    // Document provenance only describes imported rows. Edited/reflowed rows
++    // are already on the HWP5 axis and must lose HWP5-only slots on export.
++    let source_axis_limit = if ctx.line_segs_on_hwpx_axis {
++        para.hwpx_source_axis_shift
++    } else {
++        None
++    };
++    let hwp5_only_units = if ctx.line_segs_on_hwpx_axis && !para.line_segs_recomputed {
+@@ -789,1 +797,2 @@
+-        8 * hwp5_only_slot_positions.len() as u32
++        let units = 8 * hwp5_only_slot_positions.len() as u32;
++        source_axis_limit.map_or(units, |limit| units.min(limit))
+@@ -802,1 +811,3 @@
+-                        text_start: seg.text_start.saturating_sub(shift),
++                        text_start: seg.text_start.saturating_sub(
++                            source_axis_limit.map_or(shift, |limit| shift.min(limit)),
++                        ),
+--- a/src/parser/hwpx/section.rs
++++ b/src/parser/hwpx/section.rs
+@@ -1013,1 +1013,2 @@
+     para.hwpx_axis_shift = 8 * hwp5_only_leading_slots;
++    para.hwpx_source_axis_shift = Some(para.hwpx_axis_shift);
+--- a/src/document_core/commands/text_editing.rs
++++ b/src/document_core/commands/text_editing.rs
+@@ -2819,1 +2819,7 @@
+                         let stored_line_segs = cell_para.line_segs.clone();
++                        let stored_line_segs_recomputed = cell_para.line_segs_recomputed;
++                        let stored_hwpx_axis_shift = cell_para.hwpx_axis_shift;
++                        let stored_layout_only_fill_lines = cell_para.layout_only_fill_lines;
++                        let stored_source_line_seg_vertical_pos =
++                            cell_para.source_line_seg_vertical_pos.clone();
++                        let stored_text_partition_dirty = cell_para.stored_text_partition_dirty;
+@@ -2870,1 +2876,8 @@
++                                    cell_para.line_segs_recomputed = candidate.line_segs_recomputed;
++                                    cell_para.hwpx_axis_shift = candidate.hwpx_axis_shift;
++                                    cell_para.layout_only_fill_lines = candidate.layout_only_fill_lines;
++                                    cell_para.source_line_seg_vertical_pos =
++                                        candidate.source_line_seg_vertical_pos;
++                                    cell_para.stored_text_partition_dirty =
++                                        candidate.stored_text_partition_dirty;
+                                     cell_para.line_segs = candidate.line_segs;
+@@ -2873,1 +2886,8 @@
+                                     cell_para.line_segs = stored_line_segs;
++                                    cell_para.line_segs_recomputed = stored_line_segs_recomputed;
++                                    cell_para.hwpx_axis_shift = stored_hwpx_axis_shift;
++                                    cell_para.layout_only_fill_lines = stored_layout_only_fill_lines;
++                                    cell_para.source_line_seg_vertical_pos =
++                                        stored_source_line_seg_vertical_pos;
++                                    cell_para.stored_text_partition_dirty =
++                                        stored_text_partition_dirty;

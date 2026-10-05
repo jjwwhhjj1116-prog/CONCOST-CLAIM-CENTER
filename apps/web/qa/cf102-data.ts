@@ -1,7 +1,7 @@
 import { WORKFLOW_STAGES, type WorkflowProject } from '../src/workflow/workflow-model';
 
 export const qaProjects: WorkflowProject[] = [
-  { id:'project-1', caseId:'case-1', code:'CF102-001', name:'세교구역 재건축 공사비 검토 용역 · 합성 검수 프로젝트', client:'검수 발주처', claimType:'TYPE-01', progress:33, start:'2026-09-02', end:'2026-10-31', awardStatus:'WON', responsiblePm:{id:'pm-1',name:'현동명'}, canManageSchedule:true, highlights:[], stages:WORKFLOW_STAGES.map((stage,index)=>({stageId:stage.id,stageCode:['PROPOSAL','AWARD','KICKOFF','SITE_SURVEY','TAKEOFF_COST','REPORT_WRITING'][index],owner:'검수 담당자',detail:stage.name,status:'PLANNED',startDay:2,endDay:30,startDate:index===5?'2026-09-30':'2026-09-02',endDate:index===5?'2026-10-31':'2026-09-16',scheduleExplicit:true,scheduleVersion:1})) },
+  { id:'project-1', caseId:'case-1', code:'CF102-001', name:'세교구역 재건축 공사비 검토 용역 · 합성 검수 프로젝트', client:'검수 발주처', claimType:'TYPE-01', progress:33, start:'2026-09-02', end:'2026-10-31', awardStatus:'WON', responsiblePm:{id:'pm-1',name:'현동명'}, canManageSchedule:true, highlights:[], stages:WORKFLOW_STAGES.map((stage,index)=>({stageId:stage.id,stageCode:(['PROPOSAL','AWARD','KICKOFF','SITE_SURVEY','TAKEOFF_COST','REPORT_WRITING'] as const)[index],owner:'검수 담당자',detail:stage.name,status:'PLANNED',startDay:2,endDay:30,startDate:index===5?'2026-09-30':'2026-09-02',endDate:index===5?'2026-10-31':'2026-09-16',scheduleExplicit:true,scheduleVersion:1})) },
   { id:'project-2', caseId:'case-2', code:'CF102-002', name:'PM 미지정 검수 프로젝트', client:'검수 발주처', claimType:'TYPE-01',progress:0,start:'2026-09-01',end:'2026-09-30',awardStatus:'WON',responsiblePm:null,highlights:[],stages:[] }
 ];
 

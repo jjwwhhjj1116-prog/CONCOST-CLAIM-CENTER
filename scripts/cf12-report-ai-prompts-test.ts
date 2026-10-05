@@ -41,6 +41,7 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv; providerReq
   sql.exec(migration('0010_cf10_product_experience.sql'));
   insertUser(STAFF_ID, 'staff', '["staff"]'); insertUser(OUTSIDER_ID, 'outsider', '["staff"]');
   sql.exec(migration('0006_cf07_report_studio_drafts.sql')); sql.exec(migration('0007_cf08_report_review_approval.sql')); sql.exec(migration('0008_cf09_final_output.sql')); sql.exec(migration('0009_cf09_output_actor_scope.sql')); sql.exec(migration('0011_cf11_project_workflow.sql')); sql.exec(migration('0012_cf12_report_ai_prompts.sql'));
+  sql.exec(migration('0024_cf32_source_template_library.sql'));
   sql.run('INSERT INTO preview_case_assignments VALUES (?, ?, ?, ?)', [CASE_ID, STAFF_ID, ADMIN_ID, now]);
   for (const [token, id] of [[ADMIN_TOKEN, ADMIN_ID],[STAFF_TOKEN, STAFF_ID],[OUTSIDER_TOKEN, OUTSIDER_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token), id, now, new Date(Date.now() + 3_600_000).toISOString()]);
   const providerRequests: Array<Record<string, unknown>> = [];
@@ -64,8 +65,9 @@ test('CF12 makes prompt bodies Admin-only and preserves optimistic prompt histor
   assert.equal((await worker.fetch(request('/api/admin/report-prompts', STAFF_TOKEN), env)).status, 403);
 
   const chapter = body.promptSets[0].chapters[0];
+  const priorHistoryCount = Number(sql.exec('SELECT COUNT(*) FROM preview_report_prompt_history')[0].values[0][0]);
   const updated = await worker.fetch(request(`/api/admin/report-prompts/TYPE-01/${chapter.chapterCode}`, ADMIN_TOKEN, { method: 'PUT', body: JSON.stringify({ rolePrompt: `${chapter.rolePrompt} 관리자 검증 역할을 추가합니다.`, instructionPrompt: `${chapter.instructionPrompt} 검토 질문을 마지막에 표시합니다.`, expectedVersion: chapter.version }) }), env);
-  assert.equal(updated.status, 200); assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_prompt_history')[0].values[0][0], 1);
+  assert.equal(updated.status, 200); assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_prompt_history')[0].values[0][0], priorHistoryCount + 1);
   assert.throws(() => sql.run('UPDATE preview_report_chapter_prompts SET role_prompt=?, version=version+1, updated_by=?, updated_at=? WHERE id=?', ['권한 없는 변경을 시도하는 충분히 긴 역할 프롬프트입니다.', STAFF_ID, new Date(Date.now() + 10_000).toISOString(), 'PROMPT-TYPE-01-CH-01']), /Admin/u);
   sql.close();
 });

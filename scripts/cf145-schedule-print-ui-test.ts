@@ -5,7 +5,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 
 test('CF145 real print UI defaults to every month and preserves range through language, colour and both print actions',async()=>{
-  const {createServer}=await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const {createServer}=await import('../apps/web/qa/vite-server.js');
   const server=await createServer({root:fileURLToPath(new URL('../apps/web',import.meta.url)),server:{host:'127.0.0.1',port:0},logLevel:'error'});
   await server.listen();const origin=`http://127.0.0.1:${(server.httpServer!.address() as {port:number}).port}`;
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','/usr/bin/chromium'].find(p=>p&&existsSync(p));assert.ok(executablePath);

@@ -15,10 +15,20 @@ export class GoogleDriveError extends Error {
     public readonly status: number,
     message: string,
     public readonly uncertain = false,
-    public readonly retryAfterSeconds: number | null = null
+    public readonly retryAfterSeconds: number | null = null,
+    public readonly providerHttpStatus: number | null = null,
+    public requestStage: 'HEADERS' | 'BODY' | null = null
   ) {
     super(message);
   }
+}
+
+export type GoogleUploadStage = 'TOKEN_REFRESH' | 'PROJECT_FOLDER' | 'DAILY_FOLDER' | 'FILE_UPLOAD' | 'RENAME' | 'METADATA_COMMIT' | 'RESPONSE_PROJECTION';
+
+export function googleUploadFailureCode(reason: unknown, stage: GoogleUploadStage): string {
+  const code = reason instanceof GoogleDriveError ? reason.code : 'GOOGLE_OPERATION_FAILED';
+  const requestStage = reason instanceof GoogleDriveError ? reason.requestStage : null;
+  return `${code}:${stage}${requestStage ? `:${requestStage}` : ''}`;
 }
 
 const encoder = new TextEncoder();
@@ -41,7 +51,7 @@ function base64Url(bytes: Uint8Array): string {
 
 export async function sha256Hex(value: string | Uint8Array): Promise<string> {
   const bytes = typeof value === 'string' ? encoder.encode(value) : value;
-  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer)));
+  return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes).buffer)));
 }
 
 async function importMasterKey(masterKeyHex: string): Promise<CryptoKey> {
@@ -133,9 +143,42 @@ function providerFailure(response: Response, operation: string, uncertain = fals
   // HTTP 400 (invalid_grant), not only as 401/403. Treat every failed refresh
   // as a reconnect request so callers can recover instead of surfacing the
   // misleading generic "Google token refresh failed" message.
-  if (response.status === 429) return new GoogleDriveError('GOOGLE_RATE_LIMITED', 429, 'Google Drive rate limit reached', false, retryAfter);
-  if ((operation === 'Google token refresh' && response.status === 400) || response.status === 401 || response.status === 403) return new GoogleDriveError('GOOGLE_RECONSENT_REQUIRED', 401, 'Google Drive connection must be renewed');
-  return new GoogleDriveError('GOOGLE_PROVIDER_ERROR', response.status >= 500 ? 502 : 400, `${operation} failed`, uncertain && response.status >= 500);
+  if (response.status === 429) return new GoogleDriveError('GOOGLE_RATE_LIMITED', 429, 'Google Drive rate limit reached', false, retryAfter, response.status);
+  if ((operation === 'Google token refresh' && response.status === 400) || response.status === 401 || response.status === 403) return new GoogleDriveError('GOOGLE_RECONSENT_REQUIRED', 401, 'Google Drive connection must be renewed', false, null, response.status);
+  return new GoogleDriveError('GOOGLE_PROVIDER_ERROR', response.status >= 500 ? 502 : 400, `${operation} failed`, uncertain && response.status >= 500, null, response.status);
+}
+
+// Bound headers AND JSON bodies. Read/token failures cannot imply a Drive write;
+// folder/file mutations must retain uncertainty when their receipt is lost.
+async function driveJsonRequest(fetcher: GoogleFetch, input: string | URL, init: RequestInit, operation: string, uncertain = false): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  let requestStage: 'HEADERS' | 'BODY' = 'HEADERS';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await fetcher(input, { ...init, signal: controller.signal });
+        if (!response.ok) throw providerFailure(response, operation, uncertain);
+        requestStage = 'BODY';
+        return safeJson(response);
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new GoogleDriveError('GOOGLE_TIMEOUT', 504, `${operation} timed out`, uncertain));
+          controller.abort();
+        }, 20_000);
+      })
+    ]);
+  } catch (error) {
+    if (error instanceof GoogleDriveError) {
+      if (error.code === 'GOOGLE_MALFORMED_RESPONSE' && uncertain) {
+        throw new GoogleDriveError(error.code, error.status, error.message, true, error.retryAfterSeconds, error.providerHttpStatus, requestStage);
+      }
+      error.requestStage ??= requestStage;
+      throw error;
+    }
+    throw new GoogleDriveError('GOOGLE_TIMEOUT', 504, `${operation} request was interrupted`, uncertain, null, null, requestStage);
+  } finally { clearTimeout(timer); controller.abort(); }
 }
 
 export async function exchangeAuthorizationCode(
@@ -150,13 +193,11 @@ export async function exchangeAuthorizationCode(
     grant_type: 'authorization_code',
     redirect_uri: input.redirectUri
   });
-  const response = await fetchWithTimeout(fetcher, GOOGLE_OAUTH_TOKEN_URL, {
+  const payload = await driveJsonRequest(fetcher, GOOGLE_OAUTH_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body
-  });
-  if (!response.ok) throw providerFailure(response, 'Google OAuth exchange');
-  const payload = await safeJson(response);
+  }, 'Google OAuth exchange');
   if (typeof payload.refresh_token !== 'string' || payload.refresh_token.length < 10) {
     throw new GoogleDriveError('GOOGLE_REFRESH_TOKEN_MISSING', 502, 'Google did not return a refresh token');
   }
@@ -169,11 +210,9 @@ export async function exchangeAuthorizationCode(
 }
 
 export async function getDriveAccount(fetcher: GoogleFetch, accessToken: string): Promise<{ email: string; displayName: string }> {
-  const response = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/about?fields=user(displayName,emailAddress,permissionId)`, {
+  const payload = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/about?fields=user(displayName,emailAddress,permissionId)`, {
     headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  if (!response.ok) throw providerFailure(response, 'Google Drive account verification');
-  const payload = await safeJson(response);
+  }, 'Google Drive account verification');
   const user = payload.user;
   if (!user || typeof user !== 'object' || Array.isArray(user)) {
     throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid account profile');
@@ -195,7 +234,7 @@ export async function refreshAccessToken(
   fetcher: GoogleFetch,
   input: { clientId: string; clientSecret: string; refreshToken: string }
 ): Promise<string> {
-  const response = await fetchWithTimeout(fetcher, GOOGLE_OAUTH_TOKEN_URL, {
+  const payload = await driveJsonRequest(fetcher, GOOGLE_OAUTH_TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -204,9 +243,7 @@ export async function refreshAccessToken(
       refresh_token: input.refreshToken,
       grant_type: 'refresh_token'
     })
-  });
-  if (!response.ok) throw providerFailure(response, 'Google token refresh');
-  const payload = await safeJson(response);
+  }, 'Google token refresh');
   if (typeof payload.access_token !== 'string' || payload.access_token.length < 10 || payload.token_type !== 'Bearer') {
     throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid access token');
   }
@@ -289,9 +326,7 @@ export async function ensureReportTemplateFolder(
     listUrl.searchParams.set('spaces', 'drive');
     listUrl.searchParams.set('pageSize', '10');
     listUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed)');
-    const listed = await fetchWithTimeout(fetcher, listUrl.toString(), { headers: { Authorization: `Bearer ${input.accessToken}` } });
-    if (!listed.ok) throw providerFailure(listed, 'Google Drive report-template folder lookup');
-    const listing = await safeJson(listed);
+    const listing = await driveJsonRequest(fetcher, listUrl, { headers: { Authorization: `Bearer ${input.accessToken}` } }, 'Google Drive report-template folder lookup');
     if (!Array.isArray(listing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid report-template folder list');
     const existing = listing.files.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
       .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
@@ -306,13 +341,11 @@ export async function ensureReportTemplateFolder(
         claimCenterTemplateCategory: kind === 'REPORT_TEMPLATE_LIBRARY' ? 'ROOT' : input.categoryCode
       }
     };
-    const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed`, {
+    const result = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(metadata)
-    });
-    if (!created.ok) throw providerFailure(created, 'Google Drive report-template folder creation', true);
-    const result = await safeJson(created);
+    }, 'Google Drive report-template folder creation', true);
     if (typeof result.id !== 'string' || !GOOGLE_ID.test(result.id) || result.name !== name || result.mimeType !== 'application/vnd.google-apps.folder' || result.trashed === true) {
       throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid report-template folder metadata', true);
     }
@@ -326,11 +359,9 @@ export async function ensureReportTemplateFolder(
 
 export async function verifyDriveFolder(fetcher: GoogleFetch, accessToken: string, folderId: string): Promise<{ id: string; name: string }> {
   if (!GOOGLE_ID.test(folderId)) throw new GoogleDriveError('INVALID_GOOGLE_FOLDER_ID', 400, 'Google Drive folder ID is invalid');
-  const response = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(folderId)}?fields=id,name,mimeType,trashed`, {
+  const payload = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(folderId)}?fields=id,name,mimeType,trashed`, {
     headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  if (!response.ok) throw providerFailure(response, 'Google Drive folder verification');
-  const payload = await safeJson(response);
+  }, 'Google Drive folder verification');
   if (payload.id !== folderId || payload.mimeType !== 'application/vnd.google-apps.folder' || payload.trashed === true || typeof payload.name !== 'string') {
     throw new GoogleDriveError('INVALID_GOOGLE_FOLDER', 400, 'Selected Google Drive item is not an active folder');
   }
@@ -423,9 +454,7 @@ export async function ensureClaimCenterDepartmentRoot(
     listUrl.searchParams.set('spaces', 'drive');
     listUrl.searchParams.set('pageSize', '10');
     listUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed,parents,appProperties)');
-    const listed = await fetchWithTimeout(fetcher, listUrl.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
-    if (!listed.ok) throw providerFailure(listed, 'Google Drive department folder lookup');
-    const listing = await safeJson(listed);
+    const listing = await driveJsonRequest(fetcher, listUrl, { headers: { Authorization: `Bearer ${accessToken}` } }, 'Google Drive department folder lookup');
     if (!Array.isArray(listing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid department folder list');
     const existing = listing.files
       .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
@@ -434,13 +463,11 @@ export async function ensureClaimCenterDepartmentRoot(
     if (existing) {
       const existingId = String(existing.id);
       if (existing.name !== name) {
-        const renamed = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(existingId)}?fields=id,name`, {
+        const result = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(existingId)}?fields=id,name`, {
           method: 'PATCH',
           headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ name })
-        });
-        if (!renamed.ok) throw providerFailure(renamed, 'Google Drive department folder rename', true);
-        const result = await safeJson(renamed);
+        }, 'Google Drive department folder rename', true);
         if (result.id !== existingId || result.name !== name) {
           throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid renamed department folder metadata', true);
         }
@@ -453,13 +480,11 @@ export async function ensureClaimCenterDepartmentRoot(
       ...(parentId ? { parents: [parentId] } : {}),
       appProperties: { concostFolderKind: kind, concostDepartment: department }
     };
-    const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
+    const result = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(metadata)
-    });
-    if (!created.ok) throw providerFailure(created, 'Google Drive department folder creation', true);
-    const result = await safeJson(created);
+    }, 'Google Drive department folder creation', true);
     if (typeof result.id !== 'string' || !GOOGLE_ID.test(result.id) || result.name !== name || result.mimeType !== 'application/vnd.google-apps.folder' || result.trashed === true) {
       throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid department folder metadata', true);
     }
@@ -497,9 +522,7 @@ export async function ensureClaimCenterFolder(
   listUrl.searchParams.set('spaces', 'drive');
   listUrl.searchParams.set('pageSize', '10');
   listUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed,parents,appProperties)');
-  const listed = await fetchWithTimeout(fetcher, listUrl.toString(), { headers: { Authorization: `Bearer ${input.accessToken}` } });
-  if (!listed.ok) throw providerFailure(listed, 'Google Drive project folder lookup');
-  const listing = await safeJson(listed);
+  const listing = await driveJsonRequest(fetcher, listUrl, { headers: { Authorization: `Bearer ${input.accessToken}` } }, 'Google Drive project folder lookup');
   if (!Array.isArray(listing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid folder list');
   const candidates = listing.files.filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
     .filter((entry) => typeof entry.id === 'string' && GOOGLE_ID.test(entry.id) && entry.mimeType === 'application/vnd.google-apps.folder' && entry.trashed !== true)
@@ -516,9 +539,7 @@ export async function ensureClaimCenterFolder(
     legacyUrl.searchParams.set('spaces', 'drive');
     legacyUrl.searchParams.set('pageSize', '10');
     legacyUrl.searchParams.set('fields', 'files(id,name,mimeType,trashed,parents,appProperties)');
-    const legacyResponse = await fetchWithTimeout(fetcher, legacyUrl.toString(), { headers: { Authorization: `Bearer ${input.accessToken}` } });
-    if (!legacyResponse.ok) throw providerFailure(legacyResponse, 'Google Drive legacy project folder lookup');
-    const legacyListing = await safeJson(legacyResponse);
+    const legacyListing = await driveJsonRequest(fetcher, legacyUrl, { headers: { Authorization: `Bearer ${input.accessToken}` } }, 'Google Drive legacy project folder lookup');
     if (!Array.isArray(legacyListing.files)) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned an invalid legacy folder list');
     const legacy = legacyListing.files
       .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === 'object' && !Array.isArray(entry)))
@@ -533,12 +554,10 @@ export async function ensureClaimCenterFolder(
       moveUrl.searchParams.set('addParents', parentId);
       if (legacyParents.length) moveUrl.searchParams.set('removeParents', legacyParents.join(','));
       moveUrl.searchParams.set('fields', 'id,name,mimeType,trashed,parents,appProperties');
-      const movedResponse = await fetchWithTimeout(fetcher, moveUrl.toString(), {
+      const moved = await driveJsonRequest(fetcher, moveUrl, {
         method: 'PATCH',
         headers: { Authorization: `Bearer ${input.accessToken}` }
-      });
-      if (!movedResponse.ok) throw providerFailure(movedResponse, 'Google Drive legacy project folder move', true);
-      const moved = await safeJson(movedResponse);
+      }, 'Google Drive legacy project folder move', true);
       if (moved.id !== legacyId || moved.mimeType !== 'application/vnd.google-apps.folder' || moved.trashed === true) {
         throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid moved project-folder metadata', true);
       }
@@ -557,29 +576,143 @@ export async function ensureClaimCenterFolder(
       concostDepartment: 'CLAIM_CENTER'
     }
   };
-  const created = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
+  const result = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/files?fields=id,name,mimeType,trashed,parents,appProperties`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(metadata)
-  });
-  if (!created.ok) throw providerFailure(created, 'Google Drive project folder creation', true);
-  const result = await safeJson(created);
+  }, 'Google Drive project folder creation', true);
   if (typeof result.id !== 'string' || !GOOGLE_ID.test(result.id) || result.name !== name || result.mimeType !== 'application/vnd.google-apps.folder' || result.trashed === true) {
     throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google returned invalid project folder metadata', true);
   }
   return { id: result.id, name, created: true };
 }
 
+interface DriveUploadCandidate {
+  id: string; name: string; mimeType: string; size: string; trashed: boolean;
+  parents: string[]; appProperties: Record<string, string>; webViewLink?: string;
+}
+
+// Receipt recovery is read-only. An unreadable POST response must never cause another POST.
+async function driveUploadCheckJson(fetcher: GoogleFetch, accessToken: string, url: URL, operation: string): Promise<Record<string, unknown>> {
+  return driveJsonRequest(fetcher, url, { headers: { Authorization: `Bearer ${accessToken}` } }, operation);
+}
+
+async function driveUploadCandidates(fetcher: GoogleFetch, accessToken: string, query: string): Promise<DriveUploadCandidate[]> {
+  const url = new URL(`${GOOGLE_DRIVE_API}/files`);
+  url.searchParams.set('q', `trashed = false and ${query}`);
+  url.searchParams.set('pageSize', '100');
+  url.searchParams.set('fields', 'nextPageToken,incompleteSearch,files(id,name,mimeType,size,trashed,parents,appProperties,webViewLink)');
+  const payload = await driveUploadCheckJson(fetcher, accessToken, url, 'Google Drive candidate search');
+  if (!Array.isArray(payload.files) || payload.nextPageToken || payload.incompleteSearch) {
+    throw new GoogleDriveError('GOOGLE_UPLOAD_VERIFICATION_INCOMPLETE', 409, 'Drive 저장 결과를 유일하게 확인하지 못했습니다. 기존 파일은 보존됩니다.');
+  }
+  return payload.files as DriveUploadCandidate[];
+}
+
+async function verifyDriveUploadBytes(fetcher: GoogleFetch, accessToken: string, file: DriveUploadCandidate): Promise<boolean> {
+  const size = Number(file.size);
+  if (!GOOGLE_ID.test(file.id) || !Number.isSafeInteger(size) || size < 1 || size > MAX_REPORT_TEMPLATE_BYTES
+    || file.trashed !== false || !/^[0-9a-f]{64}$/u.test(file.appProperties?.sha256 ?? '')
+    || !Array.isArray(file.parents) || file.parents.length !== 1 || !GOOGLE_ID.test(file.parents[0])) return false;
+  const bytes = await readTemplateDownloadBody(await downloadEvidenceFromDrive(fetcher, accessToken, file.id), size);
+  return await sha256Hex(bytes) === file.appProperties.sha256;
+}
+
+interface EvidenceUploadInspectionInput {
+  operationId?: string;
+  accessToken: string; caseId: string; category: string; uploadedById: string;
+  requestFingerprint: string; createdAt: string; updatedAt: string;
+}
+interface EvidenceUploadReceipt {
+  fileId: string; evidenceId: string; originalName: string; mimeType: string; byteSize: number;
+  sha256: string; folderId: string; uploadedAt: string;
+}
+export interface EvidenceUploadInspection {
+  diagnostics?: { candidateCount: number; matchedCount: number; rejected: Record<'attribution' | 'time' | 'evidenceId' | 'version' | 'fingerprint', number> };
+  receipt: EvidenceUploadReceipt | null;
+  reasonCode: 'EMPTY_SCOPED_SEARCH' | 'NO_FINGERPRINT_MATCH' | 'AMBIGUOUS_MATCH' | 'BYTES_MISMATCH' | 'PARENT_MISMATCH' | 'PROJECT_ROOT_MISMATCH' | 'VERIFIED';
+  stage: 'CANDIDATE_SEARCH' | 'CANDIDATE_MATCH' | 'CONTENT_VERIFY' | 'PARENT_VERIFY' | 'ROOT_VERIFY' | 'COMPLETE';
+}
+
+export async function inspectEvidenceUploadInDrive(fetcher: GoogleFetch, input: EvidenceUploadInspectionInput): Promise<EvidenceUploadReceipt | null> {
+  return (await diagnoseEvidenceUploadInDrive(fetcher, input)).receipt;
+}
+
+export async function diagnoseEvidenceUploadInDrive(fetcher: GoogleFetch, input: EvidenceUploadInspectionInput,
+  searchScope: 'OPERATION_WINDOW' | 'PROJECT_ACTOR' = 'OPERATION_WINDOW'): Promise<EvidenceUploadInspection> {
+  if (input.operationId !== undefined && !/^[0-9a-f-]{36}$/iu.test(input.operationId)) throw new GoogleDriveError('INVALID_UPLOAD_OPERATION', 409, '유효한 업로드 작업번호가 필요합니다.');
+  const start = Date.parse(input.createdAt); const end = Date.parse(input.updatedAt) + 60_000;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) throw new GoogleDriveError('INVALID_UPLOAD_OPERATION', 409, '업로드 기록의 시각을 확인해야 합니다.');
+  const query = [
+    `appProperties has { key='claimCenterCaseId' and value='${driveQueryValue(input.caseId)}' }`,
+    `appProperties has { key='claimCenterCategory' and value='${driveQueryValue(input.category)}' }`,
+    `appProperties has { key='claimCenterUploadedBy' and value='${driveQueryValue(input.uploadedById)}' }`,
+    // Broader admin inspection avoids assuming Drive creation time equals request time.
+    // Exact upload attribution/time/fingerprint checks below still apply to every candidate.
+    ...(searchScope === 'OPERATION_WINDOW' ? [`createdTime >= '${new Date(start).toISOString()}'`, `createdTime <= '${new Date(end).toISOString()}'`] : [])
+  ].join(' and ');
+  const matches: DriveUploadCandidate[] = [];
+  // The ID was persisted before POST. Never repeat a POST to recover its receipt.
+  let exactOperation = false;
+  let candidates: DriveUploadCandidate[] = [];
+  if (input.operationId) {
+    candidates = await driveUploadCandidates(fetcher, input.accessToken, `${query} and appProperties has { key='claimCenterOperationId' and value='${driveQueryValue(input.operationId)}' }`);
+    exactOperation = candidates.length > 0;
+  }
+  if (!exactOperation) candidates = await driveUploadCandidates(fetcher, input.accessToken, query);
+  if (exactOperation && candidates.length > 1) return { receipt: null, reasonCode: 'AMBIGUOUS_MATCH', stage: 'CANDIDATE_MATCH' };
+  if (!candidates.length) return { receipt: null, reasonCode: 'EMPTY_SCOPED_SEARCH', stage: 'CANDIDATE_SEARCH' };
+  const rejected = { attribution: 0, time: 0, evidenceId: 0, version: 0, fingerprint: 0 };
+  for (const file of candidates) {
+    const props = file.appProperties;
+    const hasOperationTag = Object.prototype.hasOwnProperty.call(props ?? {}, 'claimCenterOperationId');
+    const uploadedAt = Date.parse(props?.claimCenterUploadedAt ?? '');
+    const versionedName = typeof file.name === 'string' ? /^\[FINAL_v([1-9]\d*)\] (.+)$/u.exec(file.name) : null;
+    const originalName = versionedName?.[2] ?? '';
+    if (props?.claimCenterCaseId !== input.caseId || props.claimCenterCategory !== input.category
+      || props.claimCenterUploadedBy !== input.uploadedById
+      || (exactOperation ? props.claimCenterOperationId !== input.operationId : hasOperationTag)) { rejected.attribution++; continue; }
+    if (uploadedAt < start || uploadedAt > end || !Number.isFinite(uploadedAt)) { rejected.time++; continue; }
+    if (!/^[0-9a-f-]{36}$/iu.test(props.claimCenterEvidenceId ?? '')) { rejected.evidenceId++; continue; }
+    // Later versions are attributable only through the persisted operation ID.
+    // Untagged historical uploads retain the original v1-only boundary.
+    if (!versionedName || !Number.isSafeInteger(Number(versionedName[1])) || (!exactOperation && versionedName[1] !== '1')) { rejected.version++; continue; }
+    const fingerprint = await sha256Hex(`${input.caseId}:${input.category}:${originalName}:${file.mimeType}:${Number(file.size)}:${props.sha256}`);
+    if (fingerprint === input.requestFingerprint) matches.push(file);
+    else rejected.fingerprint++;
+  }
+  if (matches.length !== 1) return { receipt: null, reasonCode: matches.length ? 'AMBIGUOUS_MATCH' : 'NO_FINGERPRINT_MATCH', stage: 'CANDIDATE_MATCH',
+    diagnostics: { candidateCount: candidates.length, matchedCount: matches.length, rejected } };
+  const file = matches[0];
+  if (!await verifyDriveUploadBytes(fetcher, input.accessToken, file)) return { receipt: null, reasonCode: 'BYTES_MISMATCH', stage: 'CONTENT_VERIFY' };
+  // Confirm the parent belongs to this project; never create/move a folder while inspecting.
+  const folder = await driveUploadCheckJson(fetcher, input.accessToken, new URL(`${GOOGLE_DRIVE_API}/files/${encodeURIComponent(file.parents[0])}?fields=id,mimeType,trashed,parents,appProperties`), 'Google Drive parent folder verification');
+  const folderProps = folder.appProperties as Record<string, unknown> | undefined;
+  if (folder.id !== file.parents[0] || folder.mimeType !== 'application/vnd.google-apps.folder' || folder.trashed !== false
+    || folderProps?.claimCenterCaseId !== input.caseId || folderProps.claimCenterFolderKind !== input.category
+    || folderProps.claimCenterPeriod !== `${file.appProperties.claimCenterUploadedAt.slice(0, 10)}_${input.uploadedById}`
+    || !Array.isArray(folder.parents) || folder.parents.length !== 1 || typeof folder.parents[0] !== 'string' || !GOOGLE_ID.test(folder.parents[0])) return { receipt: null, reasonCode: 'PARENT_MISMATCH', stage: 'PARENT_VERIFY' };
+  const root = await driveUploadCheckJson(fetcher, input.accessToken, new URL(`${GOOGLE_DRIVE_API}/files/${encodeURIComponent(folder.parents[0])}?fields=id,mimeType,trashed,appProperties`), 'Google Drive project root verification');
+  const rootProps = root.appProperties as Record<string, unknown> | undefined;
+  if (root.id !== folder.parents[0] || root.mimeType !== 'application/vnd.google-apps.folder' || root.trashed !== false
+    || rootProps?.claimCenterCaseId !== input.caseId || rootProps.claimCenterFolderKind !== 'PROJECT_ROOT') return { receipt: null, reasonCode: 'PROJECT_ROOT_MISMATCH', stage: 'ROOT_VERIFY' };
+  return { reasonCode: 'VERIFIED', stage: 'COMPLETE', receipt: {
+    fileId: file.id, evidenceId: file.appProperties.claimCenterEvidenceId, originalName: file.name.replace(/^\[FINAL_v[1-9]\d*\] /u, ''), mimeType: file.mimeType,
+    byteSize: Number(file.size), sha256: file.appProperties.sha256, folderId: file.parents[0], uploadedAt: file.appProperties.claimCenterUploadedAt } };
+}
+
 export async function uploadEvidenceToDrive(
   fetcher: GoogleFetch,
-  input: { accessToken: string; folderId: string; evidenceId: string; fileName: string; mimeType: string; sha256: string; bytes: Uint8Array; caseId?: string; category?: string; uploadedById?: string; uploadedAt?: string }
+  input: { accessToken: string; folderId: string; evidenceId: string; fileName: string; mimeType: string; sha256: string; bytes: Uint8Array; caseId?: string; category?: string; uploadedById?: string; uploadedAt?: string; operationId?: string }
 ): Promise<{ fileId: string; name: string; webViewLink: string | null }> {
+  if (input.operationId !== undefined && !/^[0-9a-f-]{36}$/iu.test(input.operationId)) throw new GoogleDriveError('INVALID_UPLOAD_OPERATION', 409, '유효한 업로드 작업번호가 필요합니다.');
   const boundary = `claim-center-${crypto.randomUUID()}`;
   const metadata = JSON.stringify({
     name: input.fileName,
     parents: [input.folderId],
     appProperties: {
       claimCenterEvidenceId: input.evidenceId,
+      ...(input.operationId ? { claimCenterOperationId: input.operationId } : {}),
       sha256: input.sha256,
       ...(input.caseId ? { claimCenterCaseId: input.caseId } : {}),
       ...(input.category ? { claimCenterCategory: input.category } : {}),
@@ -590,21 +723,95 @@ export async function uploadEvidenceToDrive(
   const body = new Blob([
     `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n`,
     `--${boundary}\r\nContent-Type: ${input.mimeType}\r\n\r\n`,
-    input.bytes.buffer as ArrayBuffer,
+    new Uint8Array(input.bytes).buffer,
     `\r\n--${boundary}--\r\n`
   ]);
-  const response = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_UPLOAD_API}/files?uploadType=multipart&fields=id,name,mimeType,size,webViewLink`, {
+  const controller = new AbortController();
+  let requestStage: 'HEADERS' | 'BODY' = 'HEADERS';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+  return await Promise.race([
+  (async () => {
+  const response = await fetcher(`${GOOGLE_DRIVE_UPLOAD_API}/files?uploadType=multipart&fields=id,name,mimeType,size,webViewLink`, {
     method: 'POST',
+    signal: controller.signal,
     headers: { Authorization: `Bearer ${input.accessToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` },
     body
+  }).catch(() => {
+    throw new GoogleDriveError('GOOGLE_TIMEOUT', 504, 'Google Drive request timed out', true);
   });
   if (!response.ok) throw providerFailure(response, 'Google Drive upload', true);
-  const payload = await safeJson(response);
+  requestStage = 'BODY';
+  // A successful upload may already exist remotely even when its receipt is unreadable.
+  const payload = await safeJson(response).catch(() => {
+    throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google Drive returned invalid upload metadata', true);
+  });
   const providerSize = typeof payload.size === 'string' ? Number(payload.size) : payload.size;
   if (typeof payload.id !== 'string' || !GOOGLE_ID.test(payload.id) || payload.name !== input.fileName || payload.mimeType !== input.mimeType || providerSize !== input.bytes.length) {
     throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google Drive returned invalid file metadata', true);
   }
   return { fileId: payload.id, name: payload.name, webViewLink: typeof payload.webViewLink === 'string' ? payload.webViewLink : null };
+  })(),
+  new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new GoogleDriveError('GOOGLE_TIMEOUT', 504, 'Google Drive upload response timed out', true));
+      controller.abort();
+    }, 20_000);
+  })
+  ]);
+  } catch (reason) {
+    clearTimeout(timer);
+    controller.abort();
+    if (reason instanceof GoogleDriveError) reason.requestStage ??= requestStage;
+    if (reason instanceof GoogleDriveError && ['GOOGLE_TIMEOUT', 'GOOGLE_MALFORMED_RESPONSE'].includes(reason.code)) {
+      try {
+        const files = await driveUploadCandidates(fetcher, input.accessToken, `appProperties has { key='claimCenterEvidenceId' and value='${driveQueryValue(input.evidenceId)}' }`);
+        const file = files.length === 1 ? files[0] : null;
+        const props = file?.appProperties;
+        if (file && file.name === input.fileName && file.mimeType === input.mimeType && Number(file.size) === input.bytes.length
+          && props?.claimCenterEvidenceId === input.evidenceId && props.sha256 === input.sha256
+          && (!input.operationId || props.claimCenterOperationId === input.operationId)
+          && (!input.caseId || props.claimCenterCaseId === input.caseId) && (!input.category || props.claimCenterCategory === input.category)
+          && (!input.uploadedById || props.claimCenterUploadedBy === input.uploadedById) && (!input.uploadedAt || props.claimCenterUploadedAt === input.uploadedAt)
+          && file.parents?.length === 1 && file.parents[0] === input.folderId && await verifyDriveUploadBytes(fetcher, input.accessToken, file)) {
+          return { fileId: file.id, name: file.name, webViewLink: file.webViewLink ?? null };
+        }
+      } catch { /* Keep the original uncertain outcome; never repeat an external write. */ }
+    }
+    throw reason;
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+export async function readTemplateDownloadBody(response: Response, size: number, timeoutMs = 20_000): Promise<Uint8Array<ArrayBuffer>> {
+  if (!Number.isSafeInteger(size) || size < 1 || size > MAX_REPORT_TEMPLATE_BYTES || !response.body) {
+    throw new GoogleDriveError('TEMPLATE_SOURCE_INTEGRITY_MISMATCH', 409, 'Report template source size is invalid');
+  }
+  const reader = response.body.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const bytes = new Uint8Array(size); let offset = 0;
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          if (offset + chunk.value.length > size) throw new GoogleDriveError('TEMPLATE_SOURCE_INTEGRITY_MISMATCH', 409, 'Report template source size differs from its record');
+          bytes.set(chunk.value, offset); offset += chunk.value.length;
+        }
+        if (offset !== size) throw new GoogleDriveError('TEMPLATE_SOURCE_INTEGRITY_MISMATCH', 409, 'Report template source size differs from its record');
+        return bytes;
+      })(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new GoogleDriveError('GOOGLE_TIMEOUT', 504, 'Google Drive download body timed out')), timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timer);
+    void reader.cancel().catch(() => {});
+  }
 }
 
 export async function downloadEvidenceFromDrive(fetcher: GoogleFetch, accessToken: string, fileId: string): Promise<Response> {
@@ -618,10 +825,8 @@ export async function downloadEvidenceFromDrive(fetcher: GoogleFetch, accessToke
 
 export async function renameEvidenceInDrive(fetcher: GoogleFetch, accessToken: string, fileId: string, name: string): Promise<void> {
   if (!GOOGLE_ID.test(fileId)) throw new GoogleDriveError('INVALID_GOOGLE_FILE_ID', 400, 'Google Drive file ID is invalid');
-  const response = await fetchWithTimeout(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name`, {
+  const result = await driveJsonRequest(fetcher, `${GOOGLE_DRIVE_API}/files/${encodeURIComponent(fileId)}?fields=id,name`, {
     method: 'PATCH', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ name })
-  });
-  if (!response.ok) throw providerFailure(response, 'Google Drive version archive', true);
-  const result = await safeJson(response);
+  }, 'Google Drive version archive', true);
   if (result.id !== fileId || result.name !== name) throw new GoogleDriveError('GOOGLE_MALFORMED_RESPONSE', 502, 'Google Drive archive result needs reconciliation', true);
 }

@@ -31,7 +31,7 @@ test('CF58 shared rhwp editor imports, edits, verifies and exports HWP/HWPX', ()
   const report = read('apps/web/src/reports/ReportStudio.tsx');
   const dialogCss = read('apps/web/src/documents/RhwpEditorDialog.css');
   const webPackage = read('apps/web/package.json');
-  for (const marker of ['createEditor', 'loadFile', 'exportHwp()', 'exportHwpx()', 'exportHwpVerify()', 'notifySaved']) {
+  for (const marker of ['createEditor', 'loadFile', 'exportHwp()', 'exportHwpx()', 'captureReportNativeSource(bytes, fileName', 'assertReportNativePagesMatch(before, snapshot.pages)', 'notifySaved']) {
     assert.ok(component.includes(marker), `missing rhwp integration marker: ${marker}`);
   }
   assert.match(component, /__CLAIM_CENTER_RHWP_STUDIO_URL__/u);
@@ -42,7 +42,7 @@ test('CF58 shared rhwp editor imports, edits, verifies and exports HWP/HWPX', ()
   assert.match(dialogCss, /display:flex;flex-direction:column/u);
   assert.match(dialogCss, /height:100%!important;min-height:100%!important/u);
   assert.match(proposal, /HWP\/HWPX 가져오기·편집/u);
-  assert.match(previewReport, /HWP\/HWPX 가져오기·편집/u);
+  assert.match(previewReport, /HWP\/HWPX 전체 페이지 가져오기/u);
   assert.match(report, /HWP 가져오기·편집/u);
   assert.match(webPackage, /"@rhwp\/editor": "0\.8\.4"/u);
 });

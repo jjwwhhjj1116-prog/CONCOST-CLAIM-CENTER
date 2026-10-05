@@ -40,7 +40,7 @@ test('CF139 expense composition changes K; proportional cost and contract-only c
 });
 const executablePath=['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(existsSync);
 test('CF139 Chromium: all 17 sheets retain cells without text spill; actual cost editing, save and reopen', {skip:!executablePath,timeout:90000}, async()=>{
-  const {createServer}=await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const {createServer}=await import('../apps/web/qa/vite-server.js');
   const server=await createServer({root:resolve('apps/web'),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{name:'cf139-harness',enforce:'pre',
     transform(code:string,id:string){if(id.replaceAll('\\','/').split('?')[0].endsWith('/es/EsPrintPreview.tsx'))return code+'\nexport {PRINT_CSS};';},
     resolveId(id:string){if(id==='/cf139-ui.js')return '\0cf139-ui';},

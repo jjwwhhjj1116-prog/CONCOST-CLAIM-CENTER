@@ -138,6 +138,52 @@ test('CF16 uploads chunked project evidence and exposes the identical file in th
   sql.close();
 });
 
+test('exact evidence lookup finds an old native reference beyond the 200 item list limit', async () => {
+  const { sql, env } = await setup();
+  const id = (index: number) => `50000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+  sql.exec(migration('0022_cf30_settings_template_preview.sql'));
+  sql.exec(migration('0031_cf39_integrated_project_workspace.sql'));
+  sql.exec("ALTER TABLE preview_users ADD COLUMN department_code TEXT NOT NULL DEFAULT 'CLAIM_CENTER'");
+  for (let index = 0; index < 205; index++) {
+    sql.run('INSERT INTO preview_case_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+      id(index), 'concost', CASE_ID, 'COST_BREAKDOWN', `source-${index}.hwpx`, 'application/vnd.hancom.hwpx', 4, 'a'.repeat(64), 1, 'D1_TEMPORARY', ADMIN_ID, 'admin', new Date(1700000000000 + index * 1000).toISOString(), `lookup-key-${index}`, 'b'.repeat(64), 'REPORT_REFERENCE'
+    ]);
+  }
+  const list = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?category=REPORT_REFERENCE`), env);
+  const files = (await list.json() as { files: Array<{id:string}> }).files;
+  assert.equal(files.length, 200); assert.ok(!files.some(file => file.id === id(0)));
+  const exact = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?category=REPORT_REFERENCE&evidenceId=${id(0)}`), env);
+  assert.equal(exact.status, 200);
+  assert.deepEqual((await exact.json() as {files:Array<{id:string}>}).files.map(file => file.id), [id(0)]);
+  const wrongCategory = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?category=SITE_PHOTO&evidenceId=${id(0)}`), env);
+  assert.deepEqual((await wrongCategory.json() as {files:unknown[]}).files, []);
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?evidenceId=..%2Fother`), env)).status, 400);
+  sql.close();
+});
+
+test('exact evidence lookup finds an old native reference beyond the 200 item list limit', async () => {
+  const { sql, env } = await setup();
+  const id = (index: number) => `50000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+  sql.exec(migration('0022_cf30_settings_template_preview.sql'));
+  sql.exec(migration('0031_cf39_integrated_project_workspace.sql'));
+  sql.exec("ALTER TABLE preview_users ADD COLUMN department_code TEXT NOT NULL DEFAULT 'CLAIM_CENTER'");
+  for (let index = 0; index < 205; index++) {
+    sql.run('INSERT INTO preview_case_evidence VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [
+      id(index), 'concost', CASE_ID, 'COST_BREAKDOWN', `source-${index}.hwpx`, 'application/vnd.hancom.hwpx', 4, 'a'.repeat(64), 1, 'D1_TEMPORARY', ADMIN_ID, 'admin', new Date(1700000000000 + index * 1000).toISOString(), `lookup-key-${index}`, 'b'.repeat(64), 'REPORT_REFERENCE'
+    ]);
+  }
+  const list = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?category=REPORT_REFERENCE`), env);
+  const files = (await list.json() as { files: Array<{id:string}> }).files;
+  assert.equal(files.length, 200); assert.ok(!files.some(file => file.id === id(0)));
+  const exact = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?category=REPORT_REFERENCE&evidenceId=${id(0)}`), env);
+  assert.equal(exact.status, 200);
+  assert.deepEqual((await exact.json() as {files:Array<{id:string}>}).files.map(file => file.id), [id(0)]);
+  const wrongCategory = await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?category=SITE_PHOTO&evidenceId=${id(0)}`), env);
+  assert.deepEqual((await wrongCategory.json() as {files:unknown[]}).files, []);
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/evidence?evidenceId=..%2Fother`), env)).status, 400);
+  sql.close();
+});
+
 test('CF16 keeps evidence bytes and attribution append-only and renders the upload surface in both workflow and library', async () => {
   const { sql } = await setup();
   const now = new Date().toISOString();

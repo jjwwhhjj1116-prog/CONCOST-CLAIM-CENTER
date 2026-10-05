@@ -36,7 +36,7 @@ for (const [i, title] of titles.entries()) test(`CF129 ${i + 1} divider preserve
 
 const executablePath = process.env.CF129_CHROME_PATH ?? ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(existsSync);
 test('CF129 real Chromium pagination retains content, physical label size and full-width centered dividers', { skip: !executablePath ? 'Installed Chrome unavailable; actual DOM pagination is NOT_RUN.' : false, timeout: 60000 }, async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
     name: 'cf129-readonly-print-css', enforce: 'pre',
     transform(code: string, id: string) { if (id.replaceAll('\\', '/').split('?')[0].endsWith('/es/EsPrintPreview.tsx')) return code + '\nexport { PRINT_CSS };'; }

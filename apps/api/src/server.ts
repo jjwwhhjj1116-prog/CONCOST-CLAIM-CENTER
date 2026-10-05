@@ -2,13 +2,12 @@ import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { handleEsRequest } from '../../../packages/document-engine/src/es-service';
 import {
   createPrismaClient, databaseUrlFor, getDatabaseUrl, hashToken, verifyPassword,
   type Prisma, type PrismaClient, type User
 } from '@claim-studio/database';
 import {
-  generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer,
+  handleEsRequest, generateDocxBuffer, generatePdfBuffer, validateDocxBuffer, validatePdfBuffer,
   generateReportDocxBuffer, generateReportPdfBuffer, validateReportDocxBuffer, validateReportPdfBuffer
 } from '@claim-studio/document-engine';
 import { assertSafeBaseUrl, assertSafeResolvedBaseUrl, SsrfError, type AiProviderKind } from './ai/ssrf-guard';
@@ -105,6 +104,19 @@ const FILE_POLICIES: Record<string, readonly string[]> = {
   '.txt': ['text/plain'],
   '.hwp': ['application/x-hwp', 'application/haansofthwp']
 };
+
+export function assertLegacyReportTextOnly(sections: ReadonlyArray<{ content: string; approvedRevision?: { structuredDataJson: string | null } }>): void {
+  const hasImage = (value: unknown): boolean => Boolean(value && typeof value === 'object' && ((value as { type?: string }).type === 'image' || Object.values(value).some(hasImage)));
+  const unsupported = sections.some(section => {
+    if (/<img\b|!\[[^\]]*\]\s*[([]|\[PROPOSAL_ASSET:/iu.test(section.content)) return true;
+    const structured = section.approvedRevision?.structuredDataJson;
+    if (!structured) return false;
+    try { return hasImage(JSON.parse(structured)); } catch { return true; }
+  });
+  if (unsupported) {
+    throw new HttpError(422, '기존 서버 출력은 사진·이미지를 보존하지 못하므로 중단했습니다. 원본을 보존한 출력 경로를 사용하세요. 기존 출력 기록은 유지됩니다.');
+  }
+}
 
 function assertReportOutputSignature(format: string, bytes: Buffer): void {
   const valid = format === 'DOCX'
@@ -5704,12 +5716,13 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
 
         const finalization = await db.reportFinalization.findUnique({
           where: { id: finalizationId },
-          include: { sections: { orderBy: { sectionNumber: 'asc' } }, finalizedBy: true }
+          include: { sections: { orderBy: { sectionNumber: 'asc' }, include: { approvedRevision: { select: { structuredDataJson: true } } } }, finalizedBy: true }
         });
         if (!finalization || finalization.reportId !== reportId || finalization.organizationId !== context.user.organizationId) {
           throw new HttpError(404, 'Finalization snapshot not found');
         }
 
+        assertLegacyReportTextOnly(finalization.sections);
         // Check if output artifact already exists for this finalization + format
         const existingArtifact = await db.reportOutputArtifact.findUnique({
           where: { finalizationId_format: { finalizationId, format } },
@@ -5921,6 +5934,9 @@ export function createApiServer(options: ApiServerOptions = {}): ManagedApiServe
         }
         if (!(await canAccessCase(db, context, artifact.caseId))) throw new HttpError(403, 'Case assignment required');
 
+        const source = await db.reportFinalization.findUnique({ where: { id: artifact.finalizationId }, include: { sections: { include: { approvedRevision: { select: { structuredDataJson: true } } } } } });
+        if (!source || source.reportId !== artifact.reportId || source.organizationId !== context.user.organizationId) throw new HttpError(409, 'Output finalization snapshot is unavailable');
+        assertLegacyReportTextOnly(source.sections);
         const filePath = safeStoragePath(uploadDir, artifact.storageKey);
         if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
           throw new HttpError(409, 'Output artifact storage file is missing');

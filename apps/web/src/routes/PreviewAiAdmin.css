@@ -39,7 +39,7 @@
 .template-library-admin__intro h2 { margin:.15rem 0 .4rem; }
 .template-library-admin__intro > strong { display:grid; place-items:center; min-width:9rem; min-height:6rem; padding:1rem; border:1px solid #67e8f9; border-radius:1rem; background:#ecfeff; color:#0e7490; font:900 1.8rem/1 'Space Grotesk',sans-serif; }
 .template-library-admin__intro > strong small { margin-top:.45rem; color:#155e75; font-size:.58rem; letter-spacing:.08em; }
-.template-library-admin__actions { display:grid; grid-template-columns:minmax(260px,1fr) auto; align-items:end; gap:1rem; margin:1rem 0; }
+.template-library-admin__actions { display:grid; grid-template-columns:minmax(260px,1fr) auto auto; align-items:end; gap:1rem; margin:1rem 0; }
 .template-library-admin__grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.85rem; }
 .template-library-admin__grid article { padding:1rem; border:1px solid #dbe5f0; border-left:4px solid #f59e0b; border-radius:.9rem; background:#fff; color:#172033; }
 .template-library-admin__grid article[data-complete="true"] { border-left-color:#10b981; }

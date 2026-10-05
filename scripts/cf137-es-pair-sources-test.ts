@@ -81,7 +81,7 @@ test('CF137 invalid or future dates never fetch unverified fallback or accept us
 test('CF137 Node source route protects role/method/date and performs no DB reads/writes', async () => {
   for(const [roles,method,dates,status] of [[['staff'],'GET','date=2023-01-01&date=2027-01-02&date=2027-01-01',200],[['viewer'],'GET','',403],[['admin'],'POST','',405],[['admin'],'GET','date=bad',400]] as const){
     let body='';const response={statusCode:0,setHeader(){},end(s:string){body=s;}};
-    await handleServerSettingsRequest({pathname:'/api/es/sources/pairs',method,request:{url:'/api/es/sources/pairs?'+dates},response,context:{user:{id:'synthetic',organizationId:'synthetic'},roles:[...roles]},db:new Proxy({},{get(){throw new Error('DB forbidden');}}),masterKey:null} as unknown as ServerSettingsAdapterOptions);
+    await handleServerSettingsRequest({pathname:'/api/es/sources/pairs',method,request:{url:'/api/es/sources/pairs?'+dates},response,context:{user:{id:'synthetic',organizationId:'synthetic'},roles:[...roles]},db:new Proxy({},{get(){throw new Error('DB forbidden');}}),masterKey:null,fetcher:async()=>new Response('synthetic unavailable',{status:503})} as unknown as ServerSettingsAdapterOptions);
     assert.equal(response.statusCode,status,body);
   }
 });

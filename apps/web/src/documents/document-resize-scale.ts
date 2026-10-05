@@ -150,7 +150,7 @@ export function syncImageDimensions(element: HTMLElement, attrs: Record<string, 
   }
   const hasHeight = Number.isFinite(Number(attrs.height)) && Number(attrs.height) > 0;
   if (hasHeight || removeMissing) {
-    element.style.objectFit = hasHeight ? 'fill' : '';
+    element.style.objectFit = hasHeight ? (attrs.reportPhoto === true ? 'contain' : 'fill') : '';
     element.style.maxHeight = hasHeight ? 'none' : '';
   }
 }

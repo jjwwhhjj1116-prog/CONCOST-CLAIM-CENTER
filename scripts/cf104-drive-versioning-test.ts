@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import initSqlJs, { type Database } from 'sql.js';
 import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index.js';
-import { encryptSecret, GOOGLE_DRIVE_SCOPE, readEvidenceFolderNames } from '../apps/cloudflare/src/google-drive.js';
+import { encryptSecret, GOOGLE_DRIVE_SCOPE, readEvidenceFolderNames, readTemplateDownloadBody } from '../apps/cloudflare/src/google-drive.js';
 import { parseVersionAnalysis } from '../apps/cloudflare/src/evidence-versioning.js';
 import { extractEvidenceText } from '../apps/cloudflare/src/intake-source.js';
 import { createRequire } from 'node:module';
@@ -114,6 +114,75 @@ async function setup(): Promise<{ sql: Database; env: CloudflareEnv }> {
 
 
 const versionMigration = migration('0058_cf104_evidence_versions.sql');
+const retryMigration = migration('0066_cf151_manual_evidence_retry.sql');
+
+async function manualRetryFixture() {
+  const {sql,env}=await setup();sql.exec(versionMigration);
+  const oldId=crypto.randomUUID(), replacementId=crypto.randomUUID(), oldKey=crypto.randomUUID();
+  const name='manual-retry-original.txt', content='synthetic unchanged retry bytes';
+  const contentSha=await sha256(content), fingerprint=await sha256(`${CASE_ID}:REPORT_REFERENCE:${name}:text/plain:${new TextEncoder().encode(content).length}:${contentSha}`);
+  const createdAt='2026-09-30T00:00:00.000Z', updatedAt='2026-09-30T00:00:01.000Z';
+  sql.run("INSERT INTO preview_google_case_operations(id,organization_id,case_id,category,workflow_category,idempotency_key,request_fingerprint,status,created_by,created_at,updated_at) VALUES(?,'concost',?,'TAKEOFF_SOURCE','REPORT_REFERENCE',?,?,'PENDING',?,?,?)",[oldId,CASE_ID,oldKey,fingerprint,ADMIN_ID,createdAt,createdAt]);
+  sql.run("UPDATE preview_google_case_operations SET status='RECONCILIATION_REQUIRED',error_code='GOOGLE_TIMEOUT',updated_at=? WHERE id=?",[updatedAt,oldId]);
+  const original=JSON.stringify(sql.exec('SELECT * FROM preview_google_case_operations'));
+  const opRow=sql.exec('SELECT * FROM preview_google_case_operations')[0];
+  const snapshot=Object.fromEntries(opRow.columns.map((column,index)=>[column,opRow.values[0][index]]));
+  sql.exec(retryMigration);
+  const approve=(changes:Record<string,unknown>={})=>{
+    const row={operation_id:oldId,replacement_operation_id:replacementId,approved_by:ADMIN_ID,approved_at:'2026-09-30T00:01:00.000Z',expires_at:'2099-01-01T00:00:00.000Z',decision:'MANUAL_RETRY_WITH_UNCERTAINTY',operation_snapshot_json:JSON.stringify(snapshot),original_name:name,mime_type:'text/plain',byte_size:new TextEncoder().encode(content).length,sha256:contentSha,backup_sha256:'b'.repeat(64),review_note:'Synthetic administrator approval. Remote outcome stays UNKNOWN; no proof of absence.',...changes};
+    sql.run(`INSERT INTO preview_google_case_retry_approvals(${Object.keys(row).join(',')}) VALUES(${Object.keys(row).map(()=>'?').join(',')})`,Object.values(row) as any[]);
+  };
+  return {sql,env,oldId,replacementId,oldKey,name,content,fingerprint,snapshot,original,approve};
+}
+
+test('CF151 manual consent preserves old UNKNOWN and rejects stale/foreign approvals',async()=>{
+  const f=await manualRetryFixture();
+  try {
+    for(const changes of [{approved_by:STAFF_ID},{operation_id:crypto.randomUUID()},{backup_sha256:'not-a-sha'},{operation_snapshot_json:JSON.stringify({...f.snapshot,status:'FAILED'})}]) assert.throws(()=>f.approve(changes));
+    assert.equal(JSON.stringify(f.sql.exec('SELECT * FROM preview_google_case_operations')),f.original);
+    f.approve();assert.throws(()=>f.approve());
+    assert.throws(()=>f.sql.run('UPDATE preview_google_case_retry_approvals SET review_note=?',['changed']));
+    assert.throws(()=>f.sql.run('DELETE FROM preview_google_case_retry_approvals'));
+    assert.throws(()=>f.sql.run("UPDATE preview_google_case_operations SET status='FAILED',updated_at='2099-01-01T00:00:00Z' WHERE id=?",[f.oldId]));
+    f.sql.exec(retryMigration);assert.equal(JSON.stringify(f.sql.exec('SELECT * FROM preview_google_case_operations')),f.original);
+    assert.equal(f.sql.exec('PRAGMA foreign_key_check').length,0);
+  } finally {f.sql.close();}
+});
+
+test('CF151 approved retry is one exact new request; existing key does not send a Drive POST',async()=>{
+  const f=await manualRetryFixture();const state=await mockDrive(f.sql,f.env);f.approve();
+  try {
+    const before=await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,ADMIN_TOKEN),f.env);
+    const notice=(await before.json() as any).storageChecks[0];assert.equal(notice.manualRetryAllowed,true);assert.equal(notice.errorCode,'GOOGLE_TIMEOUT');
+    for(const [name,content,token] of [['manual-retry-renamed.txt',f.content,ADMIN_TOKEN],[f.name,f.content+'changed',ADMIN_TOKEN],[f.name,f.content,STAFF_TOKEN]]) {
+      const blocked=await upload(f.env,name,content,token,'REPORT_REFERENCE');assert.equal(blocked.status,409);assert.equal((await blocked.json() as any).code,'RECONCILIATION_REQUIRED');
+    }
+    assert.equal(state.uploads,0);
+    const replacement=await upload(f.env,f.name,f.content,ADMIN_TOKEN,'REPORT_REFERENCE',crypto.randomUUID(),{versionChoice:'REPLACE_AS_LATEST',reviewId:crypto.randomUUID()});
+    assert.equal(replacement.status,409);assert.equal((await replacement.json() as any).code,'MANUAL_RETRY_PRESERVES_ORIGINALS');assert.equal(state.uploads,0);assert.equal(state.renames.length,0);
+    const oldReplay=await upload(f.env,f.name,f.content,ADMIN_TOKEN,'REPORT_REFERENCE',f.oldKey);
+    assert.equal(oldReplay.status,409);const payload=await oldReplay.json() as any;assert.equal(payload.retryable,true);assert.equal(payload.code,'UPLOAD_MANUAL_RETRY_REQUIRED');assert.equal(state.uploads,0);
+    const saved=await upload(f.env,f.name,f.content,ADMIN_TOKEN,'REPORT_REFERENCE');assert.equal(saved.status,201,await saved.clone().text());
+    assert.equal(state.uploads,1);assert.equal(state.renames.length,0);
+    assert.equal(f.sql.exec('SELECT status FROM preview_google_case_operations WHERE id='+JSON.stringify(f.replacementId))[0].values[0][0],'SUCCEEDED');
+    const old=f.sql.exec('SELECT * FROM preview_google_case_operations WHERE id='+JSON.stringify(f.oldId));assert.equal(JSON.stringify(old),f.original);
+    const next=await upload(f.env,f.name,f.content,ADMIN_TOKEN,'REPORT_REFERENCE');assert.equal(next.status,409);assert.equal((await next.json() as any).code,'DUPLICATE_EXACT');assert.equal(state.uploads,1);
+    const after=await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,ADMIN_TOKEN),f.env);const history=(await after.json() as any).storageChecks[0];assert.equal(history.manualRetryAuthorized,true);assert.equal(history.manualRetryAllowed,false);assert.equal(history.replacementStatus,'SUCCEEDED');
+    assert.equal(f.sql.exec('PRAGMA foreign_key_check').length,0);
+  } finally {f.sql.close();}
+});
+
+test('CF151 uncertain replacement stays blocked, including renamed bytes and unapproved actors',async()=>{
+  const f=await manualRetryFixture();const state=await mockDrive(f.sql,f.env);f.approve();
+  let posts=0;const normal=f.env.GOOGLE_TEST_FETCH!;f.env.GOOGLE_TEST_FETCH=async(input,init)=>{if(String(input).includes('/upload/')){posts++;return new Response('unreadable');}return normal(input,init);};
+  try {
+    const failed=await upload(f.env,f.name,f.content,ADMIN_TOKEN,'REPORT_REFERENCE');assert.equal(failed.status,503);
+    const uncertain=f.sql.exec("SELECT COUNT(*) FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0][0];assert.equal(uncertain,2);
+    for(const name of [f.name,'manual-retry-renamed.txt'])assert.equal((await upload(f.env,name,f.content,ADMIN_TOKEN,'REPORT_REFERENCE')).status,409);
+    assert.equal(JSON.stringify(f.sql.exec('SELECT * FROM preview_google_case_operations WHERE id='+JSON.stringify(f.oldId))),f.original);
+    assert.equal(posts,1);assert.equal(state.uploads,0);assert.equal(f.sql.exec('SELECT COUNT(*) FROM preview_evidence_upload_locks')[0].values[0][0],1);
+  } finally {f.sql.close();}
+});
 const upload = (env: CloudflareEnv, name: string, content: string, token = STAFF_TOKEN, category = 'MEETING_MINUTES', key = crypto.randomUUID(), extra: Record<string,string> = {}) => {
   const form = evidenceForm(category,name,'text/plain',Array.from(new TextEncoder().encode(content)));
   for (const [field,value] of Object.entries(extra)) form.set(field,value);
@@ -123,9 +192,9 @@ const list = async (env: CloudflareEnv) => (await (await worker.fetch(request(`/
 function allowGemini(sql: Database) {
   sql.run("UPDATE preview_ai_data_governance SET provider_service_tier='PAID_NO_PRODUCT_IMPROVEMENT',confidential_external_ai_enabled=1,acknowledged_by=?,acknowledged_at=?,version=version+1,updated_at=? WHERE organization_id='concost'",[ADMIN_ID,'2098-09-03T00:00:00Z','2098-09-03T00:00:00Z']);
 }
-function mockAnalysis(env: CloudflareEnv, id: string, score = .9, subsequent = true) {
+function mockAnalysis(env: CloudflareEnv, id: string, score = .9, subsequent = true, recommendation = 'REPLACE_AS_LATEST') {
   let calls=0;
-  env.GEMINI_TEST_FETCH = async () => { calls++; return Response.json({status:'completed',steps:[{type:'model_output',content:[{type:'text',text:JSON.stringify({existing_file_id:id,similarity_score:score,is_subsequent_version:subsequent,change_summary:['회의 결정사항 추가'],recommendation:'REPLACE_AS_LATEST'})}]}]}); };
+  env.GEMINI_TEST_FETCH = async () => { calls++; return Response.json({status:'completed',steps:[{type:'model_output',content:[{type:'text',text:JSON.stringify({existing_file_id:id,similarity_score:score,is_subsequent_version:subsequent,change_summary:['회의 결정사항 추가'],recommendation})}]}]}); };
   return () => calls;
 }
 
@@ -145,6 +214,22 @@ test('CF104 project access is department OR assignment, with matching insert gua
   assert.equal((await upload(env,'source.txt','different category',STAFF_TOKEN,'SITE_DOCUMENT')).status,201);
   assert.equal((await worker.fetch(new Request(`https://preview.example${file.downloadUrl}`),env)).status,401);
   assert.equal(sql.exec('PRAGMA foreign_key_check').length,0); sql.close();
+});
+
+test('CF147 shared templates and separate-document recommendations do not create revision prompts',async()=>{
+  for(const [subsequent,recommendation] of [[false,'REPLACE_AS_LATEST'],[false,'KEEP_AS_NEW_SEPARATE'],[true,'KEEP_AS_NEW_SEPARATE']] as const){
+    const {sql,env}=await setup();sql.exec(versionMigration);allowGemini(sql);
+    try{
+      const first=await upload(env,'meeting-one.txt','first meeting');
+      assert.equal(first.status,201);const base=(await first.json() as any).file;
+      mockAnalysis(env,base.id,.99,subsequent,recommendation);
+      const next=await upload(env,'meeting-two.txt','different meeting with same template');
+      assert.equal(next.status,201,await next.clone().text());
+      const files=await list(env);assert.equal(files.length,2);
+      assert.ok(files.every(f=>f.isLatest&&f.versionNumber===1));
+      assert.equal(await (await worker.fetch(request(base.downloadUrl,STAFF_TOKEN),env)).text(),'first meeting');
+    }finally{sql.close();}
+  }
 });
 
 test('CF104 deployment maintenance stops every Worker route before database access',async()=>{
@@ -206,7 +291,7 @@ test('CF104 Gemini review requires paid governance, confirmation binds user/cont
 test('CF104 keep separate and stale review do not silently replace files',async()=>{
   const {sql,env}=await setup();sql.exec(versionMigration);allowGemini(sql);
   const base=(await (await upload(env,'v1.txt','one')).json() as any).file;
-  mockAnalysis(env,base.id,.75,false);
+  mockAnalysis(env,base.id,.75,true);
   const pending=await (await upload(env,'v2.txt','two')).json() as any;
   const second=await upload(env,'v2.txt','two',STAFF_TOKEN,'MEETING_MINUTES',crypto.randomUUID(),{reviewId:pending.reviewId,versionChoice:'KEEP_AS_NEW_SEPARATE'});
   assert.equal(second.status,201,await second.clone().text());
@@ -229,6 +314,492 @@ test('CF104 additive migration preserves populated evidence and reapplying it is
   assert.equal(await (await worker.fetch(request(files[0].downloadUrl,STAFF_TOKEN),env)).text(),'legacy');
   assert.equal(sql.exec('PRAGMA integrity_check')[0].values[0][0],'ok');assert.equal(sql.exec('PRAGMA foreign_key_check').length,0);
   sql.close();
+});
+
+test('CF32 library lookup failure is unavailable, never an empty successful library',async()=>{
+  for(const route of ['/api/report-templates/library','/api/admin/report-prompts',`/api/report-authoring/config?caseId=${CASE_ID}`]) {
+    const {sql,env}=await setup();
+    const prepare=env.DB!.prepare.bind(env.DB);
+    env.DB!.prepare=(query:string)=>{if(query.includes('FROM preview_report_template_files f'))throw Error('private SQL diagnostic');return prepare(query);};
+    const response=await worker.fetch(request(route,ADMIN_TOKEN),env);
+    assert.equal(response.status,503,route);
+    const body=await response.json() as any;
+    assert.equal(body.code,'TEMPLATE_LIBRARY_UNAVAILABLE');assert.equal(body.categories,undefined);assert.doesNotMatch(JSON.stringify(body),/private SQL/);
+    sql.close();
+  }
+});
+
+test('CF32 committed import survives failed library refresh and downloads reject corrupt bytes',async()=>{
+  const {sql,env}=await setup();const state=await mockDrive(sql,env);
+  const prepare=env.DB!.prepare.bind(env.DB);let unavailable=true;
+  env.DB!.prepare=(query:string)=>{if(unavailable&&query.includes('FROM preview_report_template_files f'))throw Error('synthetic catalog failure');return prepare(query);};
+  const send=async()=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(request('/api/admin/report-templates/import',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf32-refresh-failure-0001'},body:form}),env);
+  };
+  const created=await send();assert.equal(created.status,201);
+  const body=await created.json() as any;
+  assert.equal(body.importCommitted,true);assert.equal(body.libraryRefreshRequired,true);assert.equal(body.categories,undefined);
+  assert.deepEqual(sql.exec('SELECT status FROM preview_report_template_import_operations')[0].values,[['SUCCEEDED']]);
+  const replay=await send();assert.equal(replay.status,200);assert.equal((await replay.json() as any).libraryRefreshRequired,true);
+  unavailable=false;
+  const recovered=await send();assert.equal(recovered.status,200);assert.equal((await recovered.json() as any).categories.find((c:any)=>c.categoryCode==='REF-07').uploadedSourceCount,1);
+  assert.equal(state.uploads,1);assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_audit')[0].values[0][0],1);
+  const route=`/api/report-templates/files/${body.fileId}/content`;
+  const original=await worker.fetch(request(route,ADMIN_TOKEN),env);assert.equal(original.status,200);assert.equal(await original.text(),'%PDF-1.7\nsynthetic source');
+  state.files.set('synthetic-file-1','%PDF-1.7\nsynthetic sourcX');
+  const corrupt=await worker.fetch(request(route,ADMIN_TOKEN),env);assert.equal(corrupt.status,409);assert.equal((await corrupt.json() as any).code,'TEMPLATE_SOURCE_INTEGRITY_MISMATCH');
+  assert.equal((await worker.fetch(new Request('https://preview.example'+route),env)).status,401);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_files')[0].values[0][0],1);
+  sql.close();
+});
+
+test('CF32 library lookup failure is unavailable, never an empty successful library',async()=>{
+  for(const route of ['/api/report-templates/library','/api/admin/report-prompts',`/api/report-authoring/config?caseId=${CASE_ID}`]) {
+    const {sql,env}=await setup();
+    const prepare=env.DB!.prepare.bind(env.DB);
+    env.DB!.prepare=(query:string)=>{if(query.includes('FROM preview_report_template_files f'))throw Error('private SQL diagnostic');return prepare(query);};
+    const response=await worker.fetch(request(route,ADMIN_TOKEN),env);
+    assert.equal(response.status,503,route);
+    const body=await response.json() as any;
+    assert.equal(body.code,'TEMPLATE_LIBRARY_UNAVAILABLE');assert.equal(body.categories,undefined);assert.doesNotMatch(JSON.stringify(body),/private SQL/);
+    sql.close();
+  }
+});
+
+test('CF32 committed import survives failed library refresh and downloads reject corrupt bytes',async()=>{
+  const {sql,env}=await setup();const state=await mockDrive(sql,env);
+  const prepare=env.DB!.prepare.bind(env.DB);let unavailable=true;
+  env.DB!.prepare=(query:string)=>{if(unavailable&&query.includes('FROM preview_report_template_files f'))throw Error('synthetic catalog failure');return prepare(query);};
+  const send=async()=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(request('/api/admin/report-templates/import',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf32-refresh-failure-0001'},body:form}),env);
+  };
+  const created=await send();assert.equal(created.status,201);
+  const body=await created.json() as any;
+  assert.equal(body.importCommitted,true);assert.equal(body.libraryRefreshRequired,true);assert.equal(body.categories,undefined);
+  assert.deepEqual(sql.exec('SELECT status FROM preview_report_template_import_operations')[0].values,[['SUCCEEDED']]);
+  const replay=await send();assert.equal(replay.status,200);assert.equal((await replay.json() as any).libraryRefreshRequired,true);
+  unavailable=false;
+  const recovered=await send();assert.equal(recovered.status,200);assert.equal((await recovered.json() as any).categories.find((c:any)=>c.categoryCode==='REF-07').uploadedSourceCount,1);
+  assert.equal(state.uploads,1);assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_audit')[0].values[0][0],1);
+  const route=`/api/report-templates/files/${body.fileId}/content`;
+  const original=await worker.fetch(request(route,ADMIN_TOKEN),env);assert.equal(original.status,200);assert.equal(await original.text(),'%PDF-1.7\nsynthetic source');
+  state.files.set('synthetic-file-1','%PDF-1.7\nsynthetic sourcX');
+  const corrupt=await worker.fetch(request(route,ADMIN_TOKEN),env);assert.equal(corrupt.status,409);assert.equal((await corrupt.json() as any).code,'TEMPLATE_SOURCE_INTEGRITY_MISMATCH');
+  assert.equal((await worker.fetch(new Request('https://preview.example'+route),env)).status,401);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_files')[0].values[0][0],1);
+  sql.close();
+});
+
+test('CF32 template registration succeeds with real terminal transition guards',async()=>{
+  const {sql,env}=await setup();
+  const state=await mockDrive(sql,env);
+  const send=async(key='cf32-success-0001')=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+  };
+  state.beforeUpload=async()=>{
+    state.beforeUpload=null;
+    assert.equal((await send('cf32-concurrent-new-key-0002')).status,409);
+    assert.equal(state.uploads,1,'another key must not upload while the first registration is pending');
+  };
+  assert.equal((await send()).status,201);
+  assert.deepEqual(sql.exec('SELECT status,google_file_id FROM preview_report_template_import_operations')[0].values[0],['SUCCEEDED','synthetic-file-1']);
+  assert.equal((await send()).status,200);
+  assert.equal((await send('cf32-completed-new-key-0003')).status,200);
+  assert.equal(state.uploads,1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_files')[0].values[0][0],1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_audit')[0].values[0][0],1);
+  sql.close();
+});
+
+test('CF32 template registration succeeds with real terminal transition guards',async()=>{
+  const {sql,env}=await setup();
+  const state=await mockDrive(sql,env);
+  const send=async(key='cf32-success-0001')=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+  };
+  state.beforeUpload=async()=>{
+    state.beforeUpload=null;
+    assert.equal((await send('cf32-concurrent-new-key-0002')).status,409);
+    assert.equal(state.uploads,1,'another key must not upload while the first registration is pending');
+  };
+  assert.equal((await send()).status,201);
+  assert.deepEqual(sql.exec('SELECT status,google_file_id FROM preview_report_template_import_operations')[0].values[0],['SUCCEEDED','synthetic-file-1']);
+  assert.equal((await send()).status,200);
+  assert.equal((await send('cf32-completed-new-key-0003')).status,200);
+  assert.equal(state.uploads,1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_files')[0].values[0][0],1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_audit')[0].values[0][0],1);
+  sql.close();
+});
+
+test('CF32 template Drive success followed by DB failure preserves reconciliation identity',async()=>{
+  const {sql,env}=await setup();
+  const state=await mockDrive(sql,env);
+  let batchCalls=0;
+  env.DB!.batch=async()=>{batchCalls++;throw new Error('synthetic template batch failure');};
+  const send=async(key='cf32-failed-after-upload-0001')=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+  };
+  const failed=await send();
+  assert.equal(failed.status,503);
+  assert.equal(batchCalls,1,'must reach the injected batch failure, not fail in an earlier trigger');
+  assert.equal((await failed.json() as {code:string}).code,'RECONCILIATION_REQUIRED');
+  assert.deepEqual(sql.exec('SELECT status,google_file_id FROM preview_report_template_import_operations')[0].values[0],['RECONCILIATION_REQUIRED','synthetic-file-1']);
+  assert.equal(state.uploads,1);
+  assert.equal((await send()).status,409);
+  assert.equal(state.uploads,1,'retry must not create another Drive file');
+  assert.equal((await send('cf32-new-key-after-reload-0002')).status,409);
+  assert.equal(state.uploads,1,'reloading the page and changing the request key must not duplicate an unresolved upload');
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_import_operations')[0].values[0][0],1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_files')[0].values[0][0],0);
+  sql.close();
+});
+
+test('CF32 template download bounds stalled and oversized bodies',async()=>{
+  let cancelled=false;
+  await assert.rejects(readTemplateDownloadBody(new Response(new ReadableStream({cancel(){cancelled=true;}})),10,20),{code:'GOOGLE_TIMEOUT'});
+  assert.equal(cancelled,true);
+  for (const size of [2,4]) await assert.rejects(readTemplateDownloadBody(new Response('abc'),size),{code:'TEMPLATE_SOURCE_INTEGRITY_MISMATCH'});
+  assert.equal(new TextDecoder().decode(await readTemplateDownloadBody(new Response('abc'),3)),'abc');
+});
+
+test('CF32 stalled upload receipt expires and blocks duplicate uploads', {timeout:25_000}, async()=>{
+  const {sql,env}=await setup();
+  const state=await mockDrive(sql,env);
+  const fetcher=env.GOOGLE_TEST_FETCH!;
+  let aborted=false;
+  env.GOOGLE_TEST_FETCH=async(input,init)=>{
+    const response=await fetcher(input,init);
+    if (!new URL(String(input)).pathname.includes('/upload/')) return response;
+    return new Response(new ReadableStream({start(controller){
+      controller.enqueue(new TextEncoder().encode('{'));
+      init?.signal?.addEventListener('abort',()=>{aborted=true;controller.error(new Error('synthetic abort'));},{once:true});
+    }}));
+  };
+  const send=async(key:string)=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic stalled receipt'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+  };
+  try {
+    const failed=await send('cf32-stalled-receipt-0001');
+    assert.equal(failed.status,503);
+    assert.equal((await failed.json() as {code:string}).code,'RECONCILIATION_REQUIRED');
+    assert.equal(aborted,true);
+    assert.equal(sql.exec('SELECT status FROM preview_report_template_import_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    assert.equal((await send('cf32-stalled-receipt-0002')).status,409);
+    assert.equal(state.uploads,1);
+  } finally {sql.close();}
+});
+
+test('CF150 case upload storage check is admin-only, read-only and never releases uncertain locks', async()=>{
+  const {sql,env}=await setup(); sql.exec(versionMigration); const state=await mockDrive(sql,env);
+  const fetcher=env.GOOGLE_TEST_FETCH!; let remote:any=null;
+  env.GOOGLE_TEST_FETCH=async(input,init)=>{
+    const url=new URL(String(input));
+    if(url.pathname.includes('/upload/')){
+      const content=await (init?.body as Blob).text(); const metadata=JSON.parse(content.split('\r\n\r\n')[1].split('\r\n--')[0]);
+      const response=await fetcher(input,init); const receipt=await response.json() as any;
+      remote={...receipt,parents:metadata.parents,appProperties:metadata.appProperties,trashed:false};
+      return new Response('unreadable');
+    }
+    if(url.searchParams.get('q')?.includes("key='claimCenterCategory'"))return Response.json({files:remote?[remote]:[]});
+    const folder=state.folders.get(url.pathname.split('/').pop()!);
+    if(folder)return Response.json(folder);
+    return fetcher(input,init);
+  };
+  try {
+    const failed=await upload(env,'native-source.txt','synthetic preserved source',STAFF_TOKEN,'REPORT_REFERENCE');
+    assert.equal(failed.status,503);
+    const operation=sql.exec("SELECT id,status FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0];
+    const path=`/api/cases/${CASE_ID}/evidence/storage-check?operationId=${operation[0]}`;
+    assert.equal((await worker.fetch(request(path,STAFF_TOKEN),env)).status,403);
+    assert.equal((await worker.fetch(request(path,ADMIN_TOKEN,{method:'POST'}),env)).status,405);
+    const result=await worker.fetch(request(path,ADMIN_TOKEN),env); assert.equal(result.status,200,await result.clone().text());
+    const payload=await result.json() as any;
+    assert.equal(payload.status,'VERIFIED_STORED'); assert.equal(payload.readOnly,true); assert.equal(payload.file.originalName,'native-source.txt');
+    assert.equal(payload.file.googleFileId,undefined); assert.equal(payload.file.folderId,undefined);
+    assert.equal(sql.exec('SELECT count(*) FROM preview_google_case_evidence')[0].values[0][0],0);
+    assert.equal(sql.exec('SELECT count(*) FROM preview_evidence_upload_locks')[0].values[0][0],1);
+    assert.equal(sql.exec('SELECT status FROM preview_google_case_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    const adminList=await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,ADMIN_TOKEN),env); assert.equal((await adminList.json() as any).storageChecks.length,1);
+    const staffList=await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,STAFF_TOKEN),env); assert.deepEqual((await staffList.json() as any).storageChecks,[]);
+    assert.equal((await upload(env,'native-source.txt','synthetic preserved source',STAFF_TOKEN,'REPORT_REFERENCE')).status,409);
+    assert.equal(state.uploads,1);
+    remote.appProperties.claimCenterCaseId='other-case';
+    assert.equal((await (await worker.fetch(request(path,ADMIN_TOKEN),env)).json() as any).status,'UNKNOWN');
+  } finally {sql.close();}
+});
+
+test('CF150 pre-file read failures are retryable while folder-write receipt loss stays protected', async()=>{
+  for (const stage of ['token', 'folder-get', 'folder-post', 'folder-post-json'] as const) {
+    const {sql,env}=await setup(); sql.exec(versionMigration); const state=await mockDrive(sql,env);
+    const fetcher=env.GOOGLE_TEST_FETCH!; let interrupted=false; let folderPosts=0;
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{
+      const url=new URL(String(input)); const method=init?.method??'GET';
+      if (!interrupted && (stage==='token' && url.hostname==='oauth2.googleapis.com'
+        || stage==='folder-get' && url.hostname==='www.googleapis.com' && method==='GET'
+        || stage.startsWith('folder-post') && url.hostname==='www.googleapis.com' && method==='POST')) {
+        interrupted=true;
+        if (stage.startsWith('folder-post')) { folderPosts++; await fetcher(input,init); }
+        if (stage==='folder-post-json') return new Response('unreadable folder receipt');
+        throw new Error('synthetic transport interruption');
+      }
+      return fetcher(input,init);
+    };
+    try {
+      const key=crypto.randomUUID();
+      const failed=await upload(env,'pre-file-source.txt','synthetic pre-file source',STAFF_TOKEN,'REPORT_REFERENCE',key);
+      const uncertain=stage.startsWith('folder-post');
+      assert.equal(failed.status,uncertain?503:504,await failed.clone().text());
+      assert.equal((await failed.json() as any).retryable,uncertain?undefined:true);
+      assert.equal(state.uploads,0); assert.equal(folderPosts,uncertain?1:0);
+      assert.equal(sql.exec('SELECT status FROM preview_google_case_operations')[0].values[0][0],uncertain?'RECONCILIATION_REQUIRED':'FAILED');
+      assert.equal(sql.exec('SELECT error_code FROM preview_google_case_operations')[0].values[0][0],
+        `${stage === 'folder-post-json' ? 'GOOGLE_MALFORMED_RESPONSE' : 'GOOGLE_TIMEOUT'}:${stage === 'token' ? 'TOKEN_REFRESH' : 'PROJECT_FOLDER'}:${stage === 'folder-post-json' ? 'BODY' : 'HEADERS'}`);
+      assert.equal(sql.exec('SELECT count(*) FROM preview_google_case_evidence')[0].values[0][0],0);
+      assert.equal(sql.exec('SELECT count(*) FROM preview_evidence_upload_locks')[0].values[0][0],0);
+      const replay=await upload(env,'pre-file-source.txt','synthetic pre-file source',STAFF_TOKEN,'REPORT_REFERENCE',key);
+      assert.equal(replay.status,409);
+      const replayPayload=await replay.json() as any;
+      assert.equal(replayPayload.code,uncertain?'RECONCILIATION_REQUIRED':'UPLOAD_RETRY_REQUIRED');
+      assert.equal(replayPayload.retryable,uncertain?undefined:true);
+      const retry=await upload(env,'pre-file-source.txt','synthetic pre-file source',STAFF_TOKEN,'REPORT_REFERENCE');
+      assert.equal(retry.status,uncertain?409:201,await retry.clone().text());
+      assert.equal(state.uploads,uncertain?0:1);
+    } finally { sql.close(); }
+  }
+});
+
+test('CF150 failed status must persist before a client may start a fresh upload', async()=>{
+  const {sql,env}=await setup(); sql.exec(versionMigration); const state=await mockDrive(sql,env);
+  const fetcher=env.GOOGLE_TEST_FETCH!;
+  env.GOOGLE_TEST_FETCH=async(input,init)=>{
+    if (new URL(String(input)).hostname==='oauth2.googleapis.com') throw new Error('synthetic token failure');
+    return fetcher(input,init);
+  };
+  const prepare=env.DB!.prepare.bind(env.DB);
+  env.DB!.prepare=(query:string)=>{
+    const statement=prepare(query);
+    if (query.startsWith('UPDATE preview_google_case_operations SET status=?')) statement.run=async()=>{throw new Error('synthetic status persistence failure');};
+    return statement;
+  };
+  try {
+    const key=crypto.randomUUID();
+    const response=await upload(env,'pre-file-status.txt','synthetic pre-file status',STAFF_TOKEN,'REPORT_REFERENCE',key);
+    assert.equal(response.status,503);
+    const payload=await response.json() as any;
+    assert.equal(payload.retryable,undefined); assert.equal(payload.code,'UPLOAD_STATUS_CHECK_REQUIRED');
+    assert.equal(sql.exec('SELECT status FROM preview_google_case_operations')[0].values[0][0],'PENDING');
+    const replay=await upload(env,'pre-file-status.txt','synthetic pre-file status',STAFF_TOKEN,'REPORT_REFERENCE',key);
+    assert.equal(replay.status,409); assert.equal((await replay.json() as any).retryable,undefined);
+    assert.equal(state.uploads,0);
+  } finally { sql.close(); }
+});
+
+test('CF32 stalled upload receipt expires and blocks duplicate uploads', {timeout:25_000}, async()=>{
+  const {sql,env}=await setup();
+  const state=await mockDrive(sql,env);
+  const fetcher=env.GOOGLE_TEST_FETCH!;
+  let aborted=false;
+  env.GOOGLE_TEST_FETCH=async(input,init)=>{
+    const response=await fetcher(input,init);
+    if (!new URL(String(input)).pathname.includes('/upload/')) return response;
+    return new Response(new ReadableStream({start(controller){
+      controller.enqueue(new TextEncoder().encode('{'));
+      init?.signal?.addEventListener('abort',()=>{aborted=true;controller.error(new Error('synthetic abort'));},{once:true});
+    }}));
+  };
+  const send=async(key:string)=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic stalled receipt'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+  };
+  try {
+    const failed=await send('cf32-stalled-receipt-0001');
+    assert.equal(failed.status,503);
+    assert.equal((await failed.json() as {code:string}).code,'RECONCILIATION_REQUIRED');
+    assert.equal(aborted,true);
+    assert.equal(sql.exec('SELECT status FROM preview_report_template_import_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    assert.equal((await send('cf32-stalled-receipt-0002')).status,409);
+    assert.equal(state.uploads,1);
+  } finally {sql.close();}
+});
+
+test('CF150 case upload storage check is admin-only, read-only and never releases uncertain locks', async()=>{
+  const {sql,env}=await setup(); sql.exec(versionMigration); const state=await mockDrive(sql,env);
+  const fetcher=env.GOOGLE_TEST_FETCH!; let remote:any=null;
+  env.GOOGLE_TEST_FETCH=async(input,init)=>{
+    const url=new URL(String(input));
+    if(url.pathname.includes('/upload/')){
+      const content=await (init?.body as Blob).text(); const metadata=JSON.parse(content.split('\r\n\r\n')[1].split('\r\n--')[0]);
+      const response=await fetcher(input,init); const receipt=await response.json() as any;
+      remote={...receipt,parents:metadata.parents,appProperties:metadata.appProperties,trashed:false};
+      return new Response('unreadable');
+    }
+    if(url.searchParams.get('q')?.includes("key='claimCenterCategory'"))return Response.json({files:remote?[remote]:[]});
+    const folder=state.folders.get(url.pathname.split('/').pop()!);
+    if(folder)return Response.json(folder);
+    return fetcher(input,init);
+  };
+  try {
+    const failed=await upload(env,'native-source.txt','synthetic preserved source',STAFF_TOKEN,'REPORT_REFERENCE');
+    assert.equal(failed.status,503);
+    const operation=sql.exec("SELECT id,status FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0];
+    const path=`/api/cases/${CASE_ID}/evidence/storage-check?operationId=${operation[0]}`;
+    assert.equal((await worker.fetch(request(path,STAFF_TOKEN),env)).status,403);
+    assert.equal((await worker.fetch(request(path,ADMIN_TOKEN,{method:'POST'}),env)).status,405);
+    const result=await worker.fetch(request(path,ADMIN_TOKEN),env); assert.equal(result.status,200,await result.clone().text());
+    const payload=await result.json() as any;
+    assert.equal(payload.status,'VERIFIED_STORED'); assert.equal(payload.readOnly,true); assert.equal(payload.file.originalName,'native-source.txt');
+    assert.equal(payload.file.googleFileId,undefined); assert.equal(payload.file.folderId,undefined);
+    assert.equal(sql.exec('SELECT count(*) FROM preview_google_case_evidence')[0].values[0][0],0);
+    assert.equal(sql.exec('SELECT count(*) FROM preview_evidence_upload_locks')[0].values[0][0],1);
+    assert.equal(sql.exec('SELECT status FROM preview_google_case_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    const adminList=await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,ADMIN_TOKEN),env); assert.equal((await adminList.json() as any).storageChecks.length,1);
+    const staffList=await worker.fetch(request(`/api/cases/${CASE_ID}/evidence`,STAFF_TOKEN),env); assert.deepEqual((await staffList.json() as any).storageChecks,[]);
+    assert.equal((await upload(env,'native-source.txt','synthetic preserved source',STAFF_TOKEN,'REPORT_REFERENCE')).status,409);
+    assert.equal(state.uploads,1);
+    remote.appProperties.claimCenterCaseId='other-case';
+    assert.equal((await (await worker.fetch(request(path,ADMIN_TOKEN),env)).json() as any).status,'UNKNOWN');
+  } finally {sql.close();}
+});
+
+test('CF150 pre-file read failures are retryable while folder-write receipt loss stays protected', async()=>{
+  for (const stage of ['token', 'folder-get', 'folder-post', 'folder-post-json'] as const) {
+    const {sql,env}=await setup(); sql.exec(versionMigration); const state=await mockDrive(sql,env);
+    const fetcher=env.GOOGLE_TEST_FETCH!; let interrupted=false; let folderPosts=0;
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{
+      const url=new URL(String(input)); const method=init?.method??'GET';
+      if (!interrupted && (stage==='token' && url.hostname==='oauth2.googleapis.com'
+        || stage==='folder-get' && url.hostname==='www.googleapis.com' && method==='GET'
+        || stage.startsWith('folder-post') && url.hostname==='www.googleapis.com' && method==='POST')) {
+        interrupted=true;
+        if (stage.startsWith('folder-post')) { folderPosts++; await fetcher(input,init); }
+        if (stage==='folder-post-json') return new Response('unreadable folder receipt');
+        throw new Error('synthetic transport interruption');
+      }
+      return fetcher(input,init);
+    };
+    try {
+      const key=crypto.randomUUID();
+      const failed=await upload(env,'pre-file-source.txt','synthetic pre-file source',STAFF_TOKEN,'REPORT_REFERENCE',key);
+      const uncertain=stage.startsWith('folder-post');
+      assert.equal(failed.status,uncertain?503:504,await failed.clone().text());
+      assert.equal((await failed.json() as any).retryable,uncertain?undefined:true);
+      assert.equal(state.uploads,0); assert.equal(folderPosts,uncertain?1:0);
+      assert.equal(sql.exec('SELECT status FROM preview_google_case_operations')[0].values[0][0],uncertain?'RECONCILIATION_REQUIRED':'FAILED');
+      assert.equal(sql.exec('SELECT count(*) FROM preview_google_case_evidence')[0].values[0][0],0);
+      assert.equal(sql.exec('SELECT count(*) FROM preview_evidence_upload_locks')[0].values[0][0],0);
+      const replay=await upload(env,'pre-file-source.txt','synthetic pre-file source',STAFF_TOKEN,'REPORT_REFERENCE',key);
+      assert.equal(replay.status,409);
+      const replayPayload=await replay.json() as any;
+      assert.equal(replayPayload.code,uncertain?'RECONCILIATION_REQUIRED':'UPLOAD_RETRY_REQUIRED');
+      assert.equal(replayPayload.retryable,uncertain?undefined:true);
+      const retry=await upload(env,'pre-file-source.txt','synthetic pre-file source',STAFF_TOKEN,'REPORT_REFERENCE');
+      assert.equal(retry.status,uncertain?409:201,await retry.clone().text());
+      assert.equal(state.uploads,uncertain?0:1);
+    } finally { sql.close(); }
+  }
+});
+
+test('CF150 failed status must persist before a client may start a fresh upload', async()=>{
+  const {sql,env}=await setup(); sql.exec(versionMigration); const state=await mockDrive(sql,env);
+  const fetcher=env.GOOGLE_TEST_FETCH!;
+  env.GOOGLE_TEST_FETCH=async(input,init)=>{
+    if (new URL(String(input)).hostname==='oauth2.googleapis.com') throw new Error('synthetic token failure');
+    return fetcher(input,init);
+  };
+  const prepare=env.DB!.prepare.bind(env.DB);
+  env.DB!.prepare=(query:string)=>{
+    const statement=prepare(query);
+    if (query.startsWith('UPDATE preview_google_case_operations SET status=?')) statement.run=async()=>{throw new Error('synthetic status persistence failure');};
+    return statement;
+  };
+  try {
+    const key=crypto.randomUUID();
+    const response=await upload(env,'pre-file-status.txt','synthetic pre-file status',STAFF_TOKEN,'REPORT_REFERENCE',key);
+    assert.equal(response.status,503);
+    const payload=await response.json() as any;
+    assert.equal(payload.retryable,undefined); assert.equal(payload.code,'UPLOAD_STATUS_CHECK_REQUIRED');
+    assert.equal(sql.exec('SELECT status FROM preview_google_case_operations')[0].values[0][0],'PENDING');
+    const replay=await upload(env,'pre-file-status.txt','synthetic pre-file status',STAFF_TOKEN,'REPORT_REFERENCE',key);
+    assert.equal(replay.status,409); assert.equal((await replay.json() as any).retryable,undefined);
+    assert.equal(state.uploads,0);
+  } finally { sql.close(); }
+});
+
+test('CF32 unreadable upload receipt blocks duplicate uploads across request keys',async()=>{
+  for (const receipt of ['not-json','null','[]']) {
+    const {sql,env}=await setup();
+    const state=await mockDrive(sql,env);
+    const fetcher=env.GOOGLE_TEST_FETCH!;
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{
+      const response=await fetcher(input,init);
+      return new URL(String(input)).pathname.includes('/upload/') ? new Response(receipt) : response;
+    };
+    const send=async(key:string)=>{
+      const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+      return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+    };
+    const failed=await send('cf32-unreadable-receipt-0001');
+    assert.equal(failed.status,503);
+    assert.equal((await failed.json() as {code:string}).code,'RECONCILIATION_REQUIRED');
+    assert.equal(sql.exec('SELECT status FROM preview_report_template_import_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    assert.equal((await send('cf32-unreadable-receipt-0002')).status,409);
+    assert.equal(state.uploads,1);
+    sql.close();
+  }
+});
+
+test('CF32 template Drive success followed by DB failure preserves reconciliation identity',async()=>{
+  const {sql,env}=await setup();
+  const state=await mockDrive(sql,env);
+  let batchCalls=0;
+  env.DB!.batch=async()=>{batchCalls++;throw new Error('synthetic template batch failure');};
+  const send=async(key='cf32-failed-after-upload-0001')=>{
+    const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+    return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+  };
+  const failed=await send();
+  assert.equal(failed.status,503);
+  assert.equal(batchCalls,1,'must reach the injected batch failure, not fail in an earlier trigger');
+  assert.equal((await failed.json() as {code:string}).code,'RECONCILIATION_REQUIRED');
+  assert.deepEqual(sql.exec('SELECT status,google_file_id FROM preview_report_template_import_operations')[0].values[0],['RECONCILIATION_REQUIRED','synthetic-file-1']);
+  assert.equal(state.uploads,1);
+  assert.equal((await send()).status,409);
+  assert.equal(state.uploads,1,'retry must not create another Drive file');
+  assert.equal((await send('cf32-new-key-after-reload-0002')).status,409);
+  assert.equal(state.uploads,1,'reloading the page and changing the request key must not duplicate an unresolved upload');
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_import_operations')[0].values[0][0],1);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_template_files')[0].values[0][0],0);
+  sql.close();
+});
+
+test('CF32 unreadable upload receipt blocks duplicate uploads across request keys',async()=>{
+  for (const receipt of ['not-json','null','[]']) {
+    const {sql,env}=await setup();
+    const state=await mockDrive(sql,env);
+    const fetcher=env.GOOGLE_TEST_FETCH!;
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{
+      const response=await fetcher(input,init);
+      return new URL(String(input)).pathname.includes('/upload/') ? new Response(receipt) : response;
+    };
+    const send=async(key:string)=>{
+      const form=new FormData();form.set('categoryCode','REF-07');form.set('file',new File(['%PDF-1.7\nsynthetic source'],'template.pdf',{type:'application/pdf'}));
+      return worker.fetch(new Request('https://preview.example/api/admin/report-templates/import',{method:'POST',headers:{'X-Session-Token':ADMIN_TOKEN,'Idempotency-Key':key},body:form}),env);
+    };
+    const failed=await send('cf32-unreadable-receipt-0001');
+    assert.equal(failed.status,503);
+    assert.equal((await failed.json() as {code:string}).code,'RECONCILIATION_REQUIRED');
+    assert.equal(sql.exec('SELECT status FROM preview_report_template_import_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    assert.equal((await send('cf32-unreadable-receipt-0002')).status,409);
+    assert.equal(state.uploads,1);
+    sql.close();
+  }
 });
 
 async function mockDrive(sql: Database, env: CloudflareEnv) {
@@ -338,6 +909,7 @@ test('CF104 Drive replacement archives remotely, streams downloads and retains f
   const failure=await upload(env,'v3.txt','third',STAFF_TOKEN,'MEETING_MINUTES',key,extra);
   assert.equal(failure.status,503);assert.equal((await failure.json() as any).code,'RECONCILIATION_REQUIRED');
   assert.equal(sql.exec("SELECT google_file_id FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0][0],'synthetic-file-3');
+  assert.match(String(sql.exec("SELECT error_code FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0][0]), /:RENAME(?::HEADERS)?$/);
   assert.equal((await list(env)).filter(f=>f.isLatest)[0].id,latest.id);
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_evidence_upload_locks')[0].values[0][0],1);
   assert.equal((await upload(env,'v3.txt','third',STAFF_TOKEN,'MEETING_MINUTES',key,extra)).status,409);assert.equal(state.uploads,3);
@@ -377,10 +949,11 @@ test('CF104 Drive upload followed by DB failure retains reconciliation identity 
   const failed=await upload(env,'uncommitted.txt','content');assert.equal(failed.status,503);
   assert.equal((await failed.json() as any).code,'RECONCILIATION_REQUIRED');
   assert.equal(sql.exec("SELECT google_file_id FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0][0],'synthetic-file-1');
+  assert.equal(sql.exec("SELECT error_code FROM preview_google_case_operations WHERE status='RECONCILIATION_REQUIRED'")[0].values[0][0], 'GOOGLE_OPERATION_FAILED:METADATA_COMMIT');
   assert.equal((await list(env)).length,0);assert.equal((await upload(env,'retry.txt','content')).status,409);assert.equal(state.uploads,1);sql.close();
 });
 
-test('CF104 document comparison extracts DOCX/HWPX/XLSX/TXT safely and enforces the 0.75 threshold',async()=>{
+test('CF147 document comparison extracts formats safely and requires revision identity instead of a similarity threshold',async()=>{
   const {zipSync,strToU8}=createRequire(resolve('apps/web/package.json'))('fflate');
   const docx=zipSync({'word/document.xml':strToU8('<w:document><w:t>회의 &amp; 일정</w:t></w:document>')});
   const hwpx=zipSync({'Contents/section0.xml':strToU8('<hp:p><hp:t>현장조사 내용</hp:t></hp:p>')});

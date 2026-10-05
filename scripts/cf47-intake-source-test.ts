@@ -129,6 +129,24 @@ test('CF47 extracts shared-string and numeric cells from lowercase HWP/Excel-pro
   assert.match(result.extractedText ?? '', /C1: 125000/u);
 });
 
+test('CF147 formatting-only Excel cells do not consume the source cell limit', async () => {
+  const bytes = xlsxZip([
+    { name: '[Content_Types].xml', text: '<Types><Override PartName="/xl/worksheets/sheet1.xml"/></Types>' },
+    { name: 'xl/worksheets/sheet1.xml', text: '<worksheet><sheetData><row>' + '<c s="1"/><c s="1"></c>'.repeat(10001) + '<c r="B2" t="inlineStr"><is><t>원문 회의 내용</t></is></c></row></sheetData></worksheet>' }
+  ]);
+  const result = await extractIntakeSource('서식회의록.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes);
+  assert.match(result.extractedText ?? '', /B2: 원문 회의 내용/u);
+});
+
+test('CF147 formatting-only Excel cells do not consume the source cell limit', async () => {
+  const bytes = xlsxZip([
+    { name: '[Content_Types].xml', text: '<Types><Override PartName="/xl/worksheets/sheet1.xml"/></Types>' },
+    { name: 'xl/worksheets/sheet1.xml', text: '<worksheet><sheetData><row>' + '<c s="1"/><c s="1"></c>'.repeat(10001) + '<c r="B2" t="inlineStr"><is><t>원문 회의 내용</t></is></c></row></sheetData></worksheet>' }
+  ]);
+  const result = await extractIntakeSource('서식회의록.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes);
+  assert.match(result.extractedText ?? '', /B2: 원문 회의 내용/u);
+});
+
 test('CF74 extracts namespace-prefixed cells from Excel meeting-minute workbooks', async () => {
   const bytes = xlsxZip([
     { name: '[Content_Types].xml', text: '<?xml version="1.0"?><x:Types xmlns:x="urn:types"><x:Override PartName="/xl/worksheets/sheet1.xml"/></x:Types>' },
@@ -212,7 +230,7 @@ test('CF92 carries the reviewed AI client name through D1 into the first proposa
   assert.equal(proposalResponse.status, 201, await proposalResponse.clone().text());
   const version = (await proposalResponse.json() as any).proposal.versions[0];
   assert.equal(JSON.parse(version.structuredInputsJson).clientName, '세교1구역 재건축조합');
-  assert.deepEqual(JSON.parse(version.missingFieldsJson), ['keyIssues']);
+  assert.deepEqual(JSON.parse(version.missingFieldsJson), ['keyIssues','planNotes']);
   sql.close();
 });
 
@@ -249,7 +267,9 @@ test('CF47 UI and Worker connect the generic source route to Drive, D1, Gemini, 
   const worker = readFileSync('apps/cloudflare/src/index.ts', 'utf8');
   const ui = readFileSync('apps/web/src/case-management/CaseManagement.tsx', 'utf8');
   for (const marker of ['intake-source|intake-audio', 'extractIntakeSource', 'INTAKE_SOURCE_SUMMARIZED', '프로젝트 의뢰 원본', "SET description=?", 'latestIntakeSourceSummary']) assert.match(worker, new RegExp(marker));
-  assert.match(worker, /clientName:caseRow\.clientName\?\.trim\(\)\|\|inputs\.clientName/u, 'server render must prefer the linked case client name over legacy placeholders');
+  const proposalRender=worker.slice(worker.indexOf('const doc={proposalId,versionId:version.id'),worker.indexOf('const doc={proposalId,versionId:version.id')+700);
+  assert.match(proposalRender, /clientName:inputs\.clientName/u, 'export must preserve the reviewed version client snapshot; cf42 verifies changed current case data cannot overwrite it');
+  assert.doesNotMatch(proposalRender, /clientName:caseRow/u);
   for (const marker of ['/intake-source/draft', "form.set('clientName', clientName)", 'setClientName(result.draft.clientName)', '.txt,.csv,.xlsx', '분석할 의뢰 자료 · 회의록 / 녹음 / TXT / CSV / Excel', 'AI 자동 작성', '3단계 · 자동작성 결과 검수', '확인 항목 전체 체크 · 검수 완료', 'useReviewedCaseDescription', 'timeoutMs:55_000', 'timeoutHintSeconds={45}', 'intakeStorage=pending']) assert.ok(ui.includes(marker), `missing UI marker: ${marker}`);
   const api = readFileSync('apps/web/src/api.ts','utf8'); assert.match(api,/!\(init\.body instanceof FormData\)/u);
 });

@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { registerHooks } from 'node:module';
 import test from 'node:test';
-import { ROUTES, canAccessRoute } from '../apps/web/src/routes/Router.js';
 import { sentProposalArchiveWorkbook } from '../apps/web/src/proposals/proposal-excel.js';
 
 const read = (path: string): string => readFileSync(join(process.cwd(), path), 'utf8');
 
-test('CF41 proposal sidebar separates authoring, sent projects and admin database ledger', () => {
+test('CF41 proposal sidebar separates authoring, sent projects and admin database ledger', async () => {
+  // Router imports real screens and their styles. CSS is verified in browser
+  // tests; ignore it only while loading the route/permission functions in Node.
+  const styles=registerHooks({load(url,context,nextLoad){return url.endsWith('.css')?{format:'module',source:'export default {};',shortCircuit:true}:nextLoad(url,context);}});
+  let routeModule:typeof import('../apps/web/src/routes/Router.js');
+  try{routeModule=await import('../apps/web/src/routes/Router.js');}finally{styles.deregister();}
+  const {ROUTES,canAccessRoute}=routeModule;
   const shell = read('apps/web/src/layout/AppShell.tsx');
   const router = read('apps/web/src/routes/Router.tsx');
   assert.match(shell, /label: '프로젝트 접수'/u);

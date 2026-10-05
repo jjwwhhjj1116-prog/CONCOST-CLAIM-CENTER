@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { EditorOptions, RhwpEditor } from '@rhwp/editor';
+import { loadNativeHwpEngine } from './native-hwp-runtime';
+import { captureReportNativeSource, assertReportNativePagesMatch } from './report-native-source';
 
 export interface RhwpEditorDialogProps {
   isOpen: boolean;
@@ -8,8 +10,11 @@ export interface RhwpEditorDialogProps {
   documentLabel: string;
   onClose: () => void;
   onApplyContent?: (content: string) => void | Promise<void>;
-  onApplyPages?: (pages: string[]) => void | Promise<void>;
+  onApplyPages?: (pages: string[], editedSource?: File, originalSource?: File) => void | Promise<void>;
+  preserveAppliedSource?: boolean;
+  applyDisabled?: boolean;
   applyLabel?: string;
+  applyProgress?: string;
 }
 
 type ExportFormat = 'hwp' | 'hwpx';
@@ -45,17 +50,19 @@ const textFromSvg = (svg: string): string => {
   return (document.documentElement.textContent ?? '').replace(/\s+/gu, ' ').trim();
 };
 
-export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, applyLabel = '현재 HWP 내용을 선택 챕터에 적용' }: RhwpEditorDialogProps): React.ReactElement | null {
+export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, preserveAppliedSource = false, applyDisabled = false, applyLabel = '현재 HWP 내용을 선택 챕터에 적용', applyProgress }: RhwpEditorDialogProps): React.ReactElement | null {
   const editorHostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<RhwpEditor | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const originalFileRef = useRef<File | null>(null);
   const [status, setStatus] = useState('HWP 편집기를 준비하고 있습니다…');
   const [error, setError] = useState('');
   const [activeFileName, setActiveFileName] = useState(sourceFile?.name ?? suggestedName);
   const [pageCount, setPageCount] = useState<number | null>(null);
-  const [hasImportedTemplate, setHasImportedTemplate] = useState(Boolean(sourceFile));
+  const [hasImportedTemplate, setHasImportedTemplate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  useEffect(() => { if (editorHostRef.current) editorHostRef.current.inert = busy; }, [busy]);
   const studioUrl = (globalThis as typeof globalThis & { __CLAIM_CENTER_RHWP_STUDIO_URL__?: string }).__CLAIM_CENTER_RHWP_STUDIO_URL__?.trim();
 
   useEffect(() => {
@@ -65,7 +72,9 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setError('');
     setStatus('rhwp 오픈소스 편집기를 연결하고 있습니다…');
     setPageCount(null);
-    setHasImportedTemplate(Boolean(sourceFile));
+    setHasImportedTemplate(false);
+    originalFileRef.current = null;
+    setBusy(true);
     const options: EditorOptions = {
       width: '100%', height: '100%', renderer: 'canvas2d', requestTimeoutMs: 90_000,
       ...(studioUrl ? { studioUrl } : {})
@@ -82,7 +91,9 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
           const result = await editor.loadFile(await sourceFile.arrayBuffer(), sourceFile.name, { suppressDialogs: true });
           if (!active) return;
           setPageCount(result.pageCount);
+          originalFileRef.current = sourceFile;
           setActiveFileName(sourceFile.name);
+          setHasImportedTemplate(true);
           setStatus(`${result.pageCount}페이지를 열었습니다. 편집 후 HWP 또는 HWPX로 내보내세요.`);
         } else {
           setActiveFileName(suggestedName);
@@ -93,7 +104,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         if (!active) return;
         setError(reason instanceof Error ? reason.message : 'HWP 편집기를 열지 못했습니다.');
         setStatus('');
-      });
+      }).finally(() => { if (active) setBusy(false); });
     return () => {
       active = false;
       if (editorRef.current === instance) editorRef.current = null;
@@ -109,10 +120,11 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
 
   const loadFile = async (file: File | undefined) => {
     if (!file || !editorRef.current) return;
-    setBusy(true); setError(''); setStatus(`${file.name} 파일을 여는 중입니다…`);
+    setBusy(true); setHasImportedTemplate(false); setError(''); setStatus(`${file.name} 파일을 여는 중입니다…`);
     try {
       const result = await editorRef.current.loadFile(await file.arrayBuffer(), file.name, { suppressDialogs: true });
       setPageCount(result.pageCount);
+      originalFileRef.current = file;
       setActiveFileName(file.name);
       setHasImportedTemplate(true);
       setStatus(`${result.pageCount}페이지를 열었습니다. 원본과 표·이미지 위치를 확인해 주세요.`);
@@ -134,18 +146,17 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     }
     setBusy(true); setError(''); setStatus(`${format.toUpperCase()} 파일을 생성하고 있습니다…`);
     try {
-      if (format === 'hwp') {
-        const verification = await editor.exportHwpVerify();
-        if (!verification.recovered || verification.pageCountBefore !== verification.pageCountAfter) {
-          throw new Error(`HWP 재열기 검증 실패: 저장 전 ${verification.pageCountBefore}쪽 / 재열기 ${verification.pageCountAfter}쪽`);
-        }
-      }
+      const before: string[] = [];
+      const count = await editor.pageCount();
+      for (let page = 0; page < count; page++) before.push(await editor.getPageSvg(page));
       const bytes = format === 'hwp' ? await editor.exportHwp() : await editor.exportHwpx();
       const fileName = `${safeBaseName(activeFileName || suggestedName)}.${format}`;
       const mime = format === 'hwp' ? 'application/x-hwp' : 'application/vnd.hancom.hwpx';
+      const snapshot = captureReportNativeSource(bytes, fileName, await loadNativeHwpEngine());
+      assertReportNativePagesMatch(before, snapshot.pages);
       downloadBlob(bytesToBlob(bytes, mime), fileName);
       try { await editor.notifySaved(fileName); } catch { /* Older hosted Studio can omit this capability. */ }
-      setStatus(`${fileName} 다운로드를 완료했습니다.${format === 'hwp' ? ' HWP 자기 재열기 검증도 통과했습니다.' : ''}`);
+      setStatus(`${fileName} 다운로드를 완료했습니다. 웹 엔진에서 저장 전·후 페이지 일치는 확인했지만, PC 한컴의 글꼴·여백·배치와 동일한지는 아직 검증되지 않았습니다. 제출 전 한컴에서 다시 열어 대조해 주세요.`);
       setConfirmClose(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : `${format.toUpperCase()} 파일 생성에 실패했습니다.`);
@@ -154,21 +165,35 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
 
   const applyCurrentDocument = async () => {
     const editor = editorRef.current;
-    if (!editor || (!onApplyContent && !onApplyPages)) return;
+    if (!editor || busy || applyDisabled || (!onApplyContent && !onApplyPages)) return;
     if (!hasImportedTemplate) {
       setError('적용할 HWP/HWPX 원본을 먼저 가져오세요.');
       return;
     }
     setBusy(true); setError(''); setStatus('현재 HWP 편집 내용을 읽고 있습니다…');
     try {
-      const count = pageCount ?? await editor.pageCount();
+      let editedSource: File | undefined;
       const pageSvgs: string[] = [];
-      for (let page = 0; page < count; page += 1) {
+      if (preserveAppliedSource && onApplyPages) {
+        const before: string[] = [];
+        const beforeCount = await editor.pageCount();
+        for (let page = 0; page < beforeCount; page++) before.push(await editor.getPageSvg(page));
+        const format = /\.hwp$/iu.test(activeFileName) ? 'hwp' : 'hwpx';
+        const bytes = format === 'hwp' ? await editor.exportHwp() : await editor.exportHwpx();
+        const Engine = await loadNativeHwpEngine();
+        const snapshot = captureReportNativeSource(bytes, `${safeBaseName(activeFileName).replace(/_편집본$/u, '')}_편집본.${format}`, Engine);
+        assertReportNativePagesMatch(before, snapshot.pages);
+        pageSvgs.push(...snapshot.pages);
+        editedSource = snapshot.file;
+      }
+      const count = editedSource ? pageSvgs.length : await editor.pageCount();
+      setPageCount(count);
+      for (let page = 0; !editedSource && page < count; page += 1) {
         pageSvgs.push(await editor.getPageSvg(page));
       }
       if(onApplyPages){
-        await onApplyPages(pageSvgs);
-        setStatus(`${count}페이지의 글꼴·표·이미지·여백이 보이는 모양을 작업본에 적용했습니다.`);
+        await onApplyPages(pageSvgs, editedSource, originalFileRef.current ?? undefined);
+        setStatus(`${count}페이지를 작업본에 적용했습니다. 보고서 저장 완료 여부를 확인해 주세요.`);
       }else{
         const content=pageSvgs.map(textFromSvg).map((page)=>page.trim()).filter(Boolean).join('\n\n').trim();
         if (!content) throw new Error('HWP에서 편집 가능한 텍스트를 찾지 못했습니다.');
@@ -178,6 +203,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       setConfirmClose(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '현재 HWP 내용을 보고서 작업본에 적용하지 못했습니다.');
+      setStatus('');
     } finally {
       setBusy(false);
     }
@@ -187,19 +213,19 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     <section className="rhwp-dialog" role="dialog" aria-modal="true" aria-labelledby="rhwp-dialog-title">
       <header className="rhwp-dialog__header">
         <div><span>HWP / HWPX OPEN-SOURCE EDITOR</span><h2 id="rhwp-dialog-title">{documentLabel} · 한글 문서 편집</h2><p>{activeFileName}{pageCount !== null ? ` · ${pageCount}페이지` : ''}</p></div>
-        <button type="button" aria-label="HWP 편집기 닫기" onClick={() => setConfirmClose(true)}>×</button>
+        <button type="button" disabled={busy} aria-label="HWP 편집기 닫기" onClick={() => setConfirmClose(true)}>×</button>
       </header>
       <nav className="rhwp-dialog__toolbar" aria-label="HWP 문서 도구">
         <input ref={importInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event) => void loadFile(event.target.files?.[0])} />
         <button type="button" className="rhwp-action-import" disabled={busy} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
-        <button type="button" className="rhwp-action-hwp" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 내보내기</button>
-        <button type="button" className="rhwp-action-hwpx" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 내보내기</button>
-        {(onApplyContent||onApplyPages) && <button type="button" className="rhwp-action-apply" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
-        <div className="rhwp-dialog__status" role="status">{busy && <i aria-hidden="true" />}{status}</div>
+        <button type="button" className="rhwp-action-hwp" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 다운로드만</button>
+        <button type="button" className="rhwp-action-hwpx" disabled={busy || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 다운로드만</button>
+        {(onApplyContent||onApplyPages) && <button type="button" className="rhwp-action-apply" disabled={busy || applyDisabled || !hasImportedTemplate} title={applyDisabled ? '원본 연결 또는 다른 저장이 끝난 뒤 적용할 수 있습니다.' : !hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
+        <div className="rhwp-dialog__status" role="status">{busy && <i aria-hidden="true" />}{busy && applyProgress ? applyProgress : status}</div>
       </nav>
       <aside className={`rhwp-dialog__format-note${hasImportedTemplate ? ' is-preserved' : ''}`}>
-        <strong>{hasImportedTemplate ? '✓ 원본 HWP 서식 유지' : '회사 기본서식 적용 방법'}</strong>
-        <span>{hasImportedTemplate ? `가져온 템플릿의 글꼴·글자크기·머리글·쪽 여백·표·이미지 배치를 그대로 편집하고 내보냅니다.${onApplyPages?' 현재 장 적용 시에도 텍스트만 추출하지 않고 페이지 모양을 그대로 보존합니다.':''}` : '이 편집기는 기존 HWP/HWPX의 서식을 유지하며 고치는 용도입니다. “HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열어야 편집·내보내기가 정상 작동합니다.'}</span>
+        <strong>{hasImportedTemplate ? '원본 HWP 서식 유지 여부 확인' : '회사 기본서식 적용 방법'}</strong>
+        <span>{hasImportedTemplate ? `원본의 글꼴·여백·표·사진·쪽번호를 대조해 주세요. 웹 렌더러가 지원하지 않는 서식은 차이가 날 수 있습니다.${onApplyPages?' 작업본 적용은 페이지 이미지 방식입니다. 문장·표는 이 HWP 편집기에서 수정하고 전체 페이지 적용을 눌러 보고서에 반영하세요. 다운로드 버튼은 파일만 내려받으며 보고서는 바꾸지 않습니다.':''}` : '이 편집기는 기존 HWP/HWPX의 서식을 유지하며 고치는 용도입니다. “HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열어야 편집·내보내기가 정상 작동합니다.'}</span>
       </aside>
       <details className="rhwp-dialog__claude-guide">
         <summary>✦ Claude로 HWP를 직접 고칠 수 있나요?</summary>

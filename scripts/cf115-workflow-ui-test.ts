@@ -5,7 +5,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 
 test('CF115 actual workflow UI imports automatically, preserves drafts and blocks stale results', async t => {
-  const { createServer } = await import('../apps/web/node_modules/vite/dist/node/index.js');
+  const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf115-workflow-ui-fixture',
     configureServer(server) { server.middlewares.use(async (request, response, next) => {

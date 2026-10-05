@@ -161,6 +161,7 @@
 .preview-settings .preview-drive-setup > div:first-child p { color:#334155; font-weight:650; }
 .preview-settings .preview-drive-status { border-color:#fda4af; background:#fff1f2; box-shadow:inset 4px 0 #e11d48; }
 .preview-settings .preview-drive-status strong { color:#881337; }
+.preview-settings .preview-drive-setup > .error-box { color:#881337; background:#fff1f2; border-color:#fda4af; }
 .preview-settings .preview-drive-steps article { border-color:#dbe5f0; background:#fff; }
 .preview-settings .preview-drive-steps article strong { color:#172033; }
 .preview-settings .preview-drive-steps article p { color:#52637a; }
@@ -185,6 +186,7 @@
 :root[data-theme='dark'] .preview-settings .preview-drive-setup > div:first-child p { color:#cbd5e1; }
 :root[data-theme='dark'] .preview-settings .preview-drive-status { border-color:#be123c; background:#3f1725; }
 :root[data-theme='dark'] .preview-settings .preview-drive-status strong { color:#fecdd3; }
+:root[data-theme='dark'] .preview-settings .preview-drive-setup > .error-box { color:#fecdd3; background:#3f1725; border-color:#be123c; }
 :root[data-theme='dark'] .preview-settings .preview-drive-steps article { border-color:#334155; background:#1e293b; }
 :root[data-theme='dark'] .settings-access-strip { border-color:#4338ca; background:#1e1b4b; }
 :root[data-theme='dark'] .settings-access-strip strong { color:#e0e7ff; }
