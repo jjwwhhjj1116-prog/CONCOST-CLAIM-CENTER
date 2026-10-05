@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input } from '@claim-studio/ui';
 import { apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 
 interface ReportListItem {
   id: string;
@@ -91,7 +92,7 @@ export function ReportList({ onNavigate }: { onNavigate: (path: string) => void 
               <article className="report-workspace-card" key={report.id}>
                 <header>
                   <div>
-                    <span className="report-case-number">{report.case.caseNumber} · {report.case.claimType}</span>
+                    <span className="report-case-number">{report.case.caseNumber} · {claimTypeLabel(report.case.claimType)}</span>
                     <h4 title={report.title}>{report.title}</h4>
                     <p>{report.case.title}</p>
                   </div>

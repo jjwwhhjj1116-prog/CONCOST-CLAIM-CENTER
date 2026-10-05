@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card } from '@claim-studio/ui';
 import { ApiError, apiDownload, apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 import type { UserRole } from '../routes/Router';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
 
@@ -847,7 +848,7 @@ export const ReportStudio: React.FC<ReportStudioProps> = ({ reportId, roles, onN
       <RhwpEditorDialog isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${report.case.caseNumber}_${report.title}.hwp`} documentLabel="프로젝트 보고서" onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <header className="p09-header">
         <div>
-          <p className="p09-eyebrow">{report.case.caseNumber} · {report.case.claimType} · P08 snapshot {report.reportInstance.snapshotSha256.slice(0, 12)}</p>
+          <p className="p09-eyebrow">{report.case.caseNumber} · {claimTypeLabel(report.case.claimType)} · P08 snapshot {report.reportInstance.snapshotSha256.slice(0, 12)}</p>
           <h3>{report.title}</h3>
         </div>
         <div className="p09-header-actions">

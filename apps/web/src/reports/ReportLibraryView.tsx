@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 import '../styles/CompactLibrary.css';
 
 interface ReportWorkspace {
@@ -66,7 +67,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
   const filtered = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase('ko-KR');
     if (!keyword) return workspaces;
-    return workspaces.filter((workspace) => [workspace.caseNumber, workspace.caseTitle, workspace.reportTitle, workspace.claimType, workspace.updatedByName]
+    return workspaces.filter((workspace) => [workspace.caseNumber, workspace.caseTitle, workspace.reportTitle, workspace.claimType, claimTypeLabel(workspace.claimType), workspace.updatedByName]
       .some((value) => value.toLocaleLowerCase('ko-KR').includes(keyword)));
   }, [query, workspaces]);
 
@@ -109,7 +110,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
         {filtered.map((workspace) => {
           const stepTitle = STEP_LABELS[Math.max(0, Math.min(4, workspace.wizardStep - 1))];
           return <article key={workspace.caseId} className="compact-record">
-            <div className="compact-record__main"><span>{workspace.caseNumber} · {workspace.claimType}</span><h3 title={`${workspace.caseTitle}\n${workspace.reportTitle}`}>{workspace.reportTitle}</h3><small>{workspace.updatedByName} · {dateLabel(workspace.updatedAt)} · v{workspace.version} · 본문 {workspace.contentLength.toLocaleString('ko-KR')}자</small></div>
+            <div className="compact-record__main"><span>{workspace.caseNumber} · {claimTypeLabel(workspace.claimType)}</span><h3 title={`${workspace.caseTitle}\n${workspace.reportTitle}`}>{workspace.reportTitle}</h3><small>{workspace.updatedByName} · {dateLabel(workspace.updatedAt)} · v{workspace.version} · 본문 {workspace.contentLength.toLocaleString('ko-KR')}자</small></div>
             <div className="compact-record__state"><em className="status-verified">STEP {workspace.wizardStep}</em><span>{stepTitle}</span></div>
             <div className="compact-record__actions"><button type="button" onClick={() => onNavigate(`/reports/studio?caseId=${encodeURIComponent(workspace.caseId)}`)}>저장 지점에서 이어쓰기</button></div>
           </article>;
@@ -121,7 +122,7 @@ export function ReportLibraryView({ mode, onNavigate }: { mode: 'projects' | 'da
         <div className="proposal-db-table" role="region" aria-label="보고서 데이터베이스 원장" tabIndex={0}>
           <table><thead><tr><th>프로젝트</th><th>보고서</th><th>진행 단계</th><th>버전·본문</th><th>최근 편집</th><th>작업</th></tr></thead><tbody>
             {filtered.map((workspace) => <tr key={workspace.caseId}>
-              <td><strong>{workspace.caseNumber}</strong><span>{workspace.caseTitle}</span><small>{workspace.claimType}</small></td>
+              <td><strong>{workspace.caseNumber}</strong><span>{workspace.caseTitle}</span><small>{claimTypeLabel(workspace.claimType)}</small></td>
               <td><strong>{workspace.reportTitle}</strong><span>{workspace.selectedChapterId ?? '선택 챕터 없음'}</span></td>
               <td><em className="status-verified">STEP {workspace.wizardStep}</em><span>{STEP_LABELS[Math.max(0, Math.min(4, workspace.wizardStep - 1))]}</span></td>
               <td><strong>v{workspace.version}</strong><span>{workspace.contentLength.toLocaleString('ko-KR')}자</span></td>

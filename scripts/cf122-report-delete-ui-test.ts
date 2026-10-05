@@ -42,7 +42,7 @@ test('CF122 report deletion and compact project lists UI', async t => {
   const longTitle = 'CF122 합성 장문 프로젝트 재건축 공사비 및 공기연장 클레임 기술검토 현장조사 물량산출 근거분석 보고서 검수';
   const workspaces = [1, 2, 3].map(n => ({
     caseId: `cf122-case-${n}`, caseNumber: `CF122-00${n}`, caseTitle: n === 1 ? longTitle : `CF122 합성 프로젝트 ${n}`,
-    claimType: 'TYPE-01', reportTitle: n === 1 ? `${longTitle} 보고서` : `CF122 합성 보고서 ${n}`, version: 4 - n,
+    claimType: `TYPE-0${n}`, reportTitle: n === 1 ? `${longTitle} 보고서` : `CF122 합성 보고서 ${n}`, version: 4 - n,
     wizardStep: n === 3 ? 5 : 3, selectedChapterId: 'CH-01', updatedAt: '2026-09-08T00:00:00Z', updatedByName: '합성 검수자', contentLength: 1234
   }));
   const proposals = workspaces.map((row, n) => ({
@@ -104,6 +104,32 @@ test('CF122 report deletion and compact project lists UI', async t => {
   const deleteButton = (page: Page) => targetRow(page).getByRole('button', { name: /삭제/ });
   const mutations = (state: Awaited<ReturnType<typeof load>>['state']) => state.calls.filter(call => call.method !== 'GET');
   try {
+    await t.test('CF177 report project and database views display and search type names without losing code search', async () => {
+      for (const mode of ['projects', 'database']) {
+        const { page, state, close } = await load({ mode });
+        const rows = page.locator(mode === 'projects' ? '.compact-record-list > article' : 'tbody tr');
+        await rows.first().waitFor();
+        assert.equal(await rows.count(), 3);
+        const labels = ['현장조사 및 수량산출 클레임', '분석 보고서 작성 클레임', '일반적인 클레임'];
+        for (const [index, label] of labels.entries()) {
+          const row = rows.filter({ hasText: workspaces[index].caseNumber });
+          assert.ok((await row.innerText()).includes(label), `${mode}: ${label} is visible`);
+          assert.ok(!(await row.innerText()).includes(workspaces[index].claimType), `${mode}: raw type code is not shown`);
+        }
+        const search = page.getByRole('textbox');
+        for (const query of ['일반적인 클레임', 'TYPE-03']) {
+          await search.fill(query);
+          await rows.filter({ hasText: 'CF122-001' }).waitFor({ state: 'detached' });
+          await rows.filter({ hasText: 'CF122-003' }).waitFor();
+          assert.equal(await rows.count(), 1, `${mode}: ${query} finds the matching report`);
+        }
+        await search.fill('');
+        await rows.filter({ hasText: 'CF122-001' }).waitFor();
+        assert.equal(await rows.count(), 3);
+        assert.equal(mutations(state).length, 0, 'label rendering and search never write to the API');
+        await close();
+      }
+    });
     await t.test('confirmation cancel never sends a mutation and preserves rows and counters', async () => {
       const { page, state, close } = await load();
       await deleteButton(page).waitFor();
@@ -207,7 +233,7 @@ test('CF122 report deletion and compact project lists UI', async t => {
           await disclosure.press('Enter');
         }
         await first.getByRole('button', { name: names[0], exact: true }).click();
-        const expectedPath = kind === 'reports' ? '/reports/studio?caseId=cf122-case-1' : kind === 'proposals' ? '/proposals/editor?caseId=cf122-case-1' : '/cases/new?caseId=cf122-case-1';
+        const expectedPath = kind === 'reports' ? '/reports/studio?caseId=cf122-case-1' : kind === 'proposals' ? '/proposals/editor?caseId=cf122-case-1' : '/cases/detail?caseId=cf122-case-1';
         assert.equal(await page.getByTestId('navigation').textContent(), expectedPath);
         const search = page.getByRole('textbox');
         await search.fill('CF122-002');
@@ -224,7 +250,7 @@ test('CF122 report deletion and compact project lists UI', async t => {
       }
     });
     await t.test('desktop and mobile compact rows, long titles and database actions fit their scroll regions', async () => {
-      mkdirSync('output/playwright/cf122', { recursive: true });
+      mkdirSync('output/playwright/cf177-type-labels', { recursive: true });
       const layouts: unknown[] = [];
       for (const kind of ['reports', 'proposals', 'intakes', 'database']) {
         const { page, close } = await load({ kind: kind === 'database' ? 'reports' : kind, mode: kind === 'database' ? 'database' : 'projects' });
@@ -247,7 +273,7 @@ test('CF122 report deletion and compact project lists UI', async t => {
             assert.ok(bounds.every(rect => rect.left >= 0 && rect.right <= viewport.width), `${kind}: actions fit viewport`);
           }
           layouts.push({ kind, viewport: viewport.width, ...geometry });
-          await page.locator(kind === 'database' ? '.report-db-card' : '.compact-record-list,.intake-record-list,.proposal-project-list').screenshot({ path: `output/playwright/cf122/${kind}-${viewport.width}.png` });
+          await page.locator(kind === 'database' ? '.report-db-card' : '.compact-record-list,.intake-record-list,.proposal-project-list').screenshot({ path: `output/playwright/cf177-type-labels/${kind}-${viewport.width}.png` });
         }
         await close();
       }

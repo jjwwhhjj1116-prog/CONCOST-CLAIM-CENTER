@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input } from '@claim-studio/ui';
 import { apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 
 type ReviewStatus = 'PENDING' | 'CHANGES_REQUESTED' | 'RESUBMITTED' | 'APPROVED';
 
@@ -115,7 +116,7 @@ export function ApprovalInbox({ onNavigate }: { onNavigate: (path: string) => vo
             return (
               <article className="approval-card" key={item.id}>
                 <header>
-                  <div><span>{item.case.caseNumber} · {item.case.claimType}</span><h4>{item.report.title}</h4><p>{item.case.title}</p></div>
+                  <div><span>{item.case.caseNumber} · {claimTypeLabel(item.case.claimType)}</span><h4>{item.report.title}</h4><p>{item.case.title}</p></div>
                   <strong className={`approval-status approval-status--${item.status.toLowerCase()}`}>{labels[item.status]}</strong>
                 </header>
                 <dl>
