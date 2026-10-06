@@ -14,6 +14,16 @@ test('CF177 report type labels preserve all six codes and unknown values', () =>
   assert.equal(claimTypeLabel(''), '');
 });
 
+test('CF178 chapter selectors show titles and report missing body anchors without rewriting markers', () => {
+  const source = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  assert.ok(!/label:\s*`\$\{chapter\.chapterCode\}/u.test(source), 'member-facing chapter selectors must show titles rather than internal CH codes');
+  assert.ok(!source.includes('<b>{chapter.chapterCode}</b>'), 'assignment labels must not repeat an internal CH badge');
+  assert.ok(!source.includes('<strong>{selectedChapterAssignment.chapterCode}'), 'the collaboration identity must show the actual title');
+  assert.ok(source.includes('moved === false && activeStep === 4'), 'a failed body jump must not be silently presented as successful');
+  assert.ok(source.includes("current === CHAPTER_JUMP_NOTICE ? '' : current"), 'a successful jump must clear only its own stale notice');
+  assert.ok(source.includes('<!-- AI-CHAPTER:${chapter.chapterCode}:START -->'), 'stable internal chapter markers remain intact');
+});
+
 test('CF177 report lists, search, and authoring hints use the shared type labels', () => {
   const library = read('apps/web/src/reports/ReportLibraryView.tsx');
   const list = read('apps/web/src/reports/ReportList.tsx');

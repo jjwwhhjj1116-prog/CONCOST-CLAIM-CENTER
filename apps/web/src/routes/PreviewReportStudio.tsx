@@ -120,6 +120,7 @@ function replaceReportChapterBlock(content: string, chapterCode: string, chapter
 
 const WHOLE_DOCUMENT_START = '<!-- MANUAL-WHOLE-DOCUMENT:START -->';
 const WHOLE_DOCUMENT_END = '<!-- MANUAL-WHOLE-DOCUMENT:END -->';
+const CHAPTER_JUMP_NOTICE = '선택한 목차에 해당하는 본문 제목이 없어 이동하지 않았습니다. 원형 HWP 문서는 연결된 편집본에서 해당 항목을 확인해 주세요.';
 
 export function reportDraftMethod(content: string, aiConnected: boolean): 'MANUAL' | 'AI' {
   const manual = content.includes('<!-- MANUAL-CHAPTER:') || (content.includes(WHOLE_DOCUMENT_START) && content.includes(WHOLE_DOCUMENT_END));
@@ -545,7 +546,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const changeSelectedChapter = (chapterId: string) => {
     const chapter = authoring?.chapters.find(item => item.id === chapterId);
-    if (chapter) reportBodyRef.current?.goToChapter(chapter.chapterCode);
+    if (chapter) {
+      const moved = reportBodyRef.current?.goToChapter(chapter.chapterCode);
+      if (moved === false && activeStep === 4) setOutlineSyncNotice(CHAPTER_JUMP_NOTICE);
+      if (moved === true) setOutlineSyncNotice((current) => current === CHAPTER_JUMP_NOTICE ? '' : current);
+    }
     if (chapterId === selectedChapterId) return;
     selectedChapterRef.current = chapterId;
     setSelectedChapterId(chapterId);
@@ -831,7 +836,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const exportReportExcel = () => {
     const chapterReview = activeStep === 4 && selectedChapter;
-    const exportTitle = chapterReview ? `${selectedChapter.chapterCode} ${outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title}` : title;
+    const exportTitle = chapterReview ? (outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title) : title;
     const exportContent = chapterReview ? reportChapterBlock(content, selectedChapter.chapterCode) : content;
     const bytes=reportStudioWorkbook(
       {reportTitle:exportTitle,reportContent:exportContent},
@@ -1425,7 +1430,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </div>
             <div className="report-draft-context">
             <div className="report-draft-chapter">
-              <Select label="초안을 작성할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title} · prompt v${chapter.promptVersion}` }))} />
+              <Select label="초안을 작성할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={!editable || generating || saving} options={authoring.chapters.map((chapter) => ({ value: chapter.id, label: `${outlineTitles[chapter.id] || chapter.title} · 작성 지침 v${chapter.promptVersion}` }))} />
               {draftMethod === 'AI' ? <div className="report-generation-actions">
                 <div><Button className="report-action-ai" onClick={() => void generateChapter()} disabled={Boolean(generationBlockedReason) || !selectedChapterId}>챕터별 자동작성(권장)</Button>
                 <Button variant="secondary" onClick={() => void generateChapter(true)} disabled={Boolean(generationBlockedReason) || authoring.chapters.every(ch => authoredChapterCodes.has(ch.chapterCode))}>전체 한 번에 작성</Button></div>
@@ -1464,7 +1469,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <h3 id="report-review-outline-heading">목차 제목 수정</h3>
               <p>검수 중에도 제목을 수정할 수 있습니다. 저장하면 2단계 목차와 본문·미리보기에 함께 반영됩니다.</p>
               <div className="report-review-outline__fields">
-                <Select label="수정할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} options={authoring.chapters.map(chapter => ({ value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title}` }))} />
+                <Select label="수정할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} options={authoring.chapters.map(chapter => ({ value: chapter.id, label: outlineTitles[chapter.id] || chapter.title }))} />
                 <Input label="챕터 제목" value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} maxLength={300} disabled={!editable || savingOutline || saving || outlineSyncPending} onChange={(event) => { setOutlineTitles(current => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); setOutlineSyncNotice(''); }} />
                 <Button disabled={!editable || savingOutline || saving || outlineSyncPending || !outlineDirty || !authoring.outlinePlan.persistenceAvailable} onClick={() => void saveOutline(outlineStatus)}>{savingOutline ? '목차·본문 저장 중…' : '목차·본문 제목 저장'}</Button>
               </div>
@@ -1475,14 +1480,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               <header><div><span>CHAPTER COLLABORATION · VERSIONED</span><h3 id="report-chapter-collaboration-title">챕터별 담당 지정·작성·검수</h3><p>담당 PM이 챕터별 회원을 지정합니다. 담당자는 배정된 챕터만 작성·검수하고, PM이 검수 완료본을 전체 보고서에 반영합니다.</p></div><em>{chapterCollaboration?.canManage ? 'PM · ASSIGNMENT CONTROL' : 'MY ASSIGNED CHAPTERS'}</em></header>
               {chapterCollaboration?.canManage && <div className="report-chapter-assignment-grid">{authoring?.chapters.map((chapter) => {
                 const assignment = chapterCollaboration.assignments.find((item) => item.chapterId === chapter.id);
-                return <label key={chapter.id}><span><b>{chapter.chapterCode}</b>{outlineTitles[chapter.id] || chapter.title}</span><select aria-label={`${chapter.chapterCode} 담당자`} value={assignment?.assigneeId ?? ''} disabled={Boolean(chapterBusy) || saving || savingOutline} onChange={(event) => void assignChapter(chapter.id, event.target.value)}><option value="">담당 미지정</option>{chapterCollaboration.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.roles.join('/')}</option>)}</select><small data-status={assignment?.status ?? 'UNASSIGNED'}>{assignment?.assigneeName ?? '담당 없음'} · {assignment?.status === 'READY' ? 'PM 반영 대기' : assignment?.status === 'APPLIED' ? '보고서 반영 완료' : assignment?.status === 'IN_PROGRESS' ? `작성 중 · v${assignment.version}` : '미지정'}</small></label>;
+                return <label key={chapter.id}><span>{outlineTitles[chapter.id] || chapter.title}</span><select aria-label={`${outlineTitles[chapter.id] || chapter.title} 담당자`} value={assignment?.assigneeId ?? ''} disabled={Boolean(chapterBusy) || saving || savingOutline} onChange={(event) => void assignChapter(chapter.id, event.target.value)}><option value="">담당 미지정</option>{chapterCollaboration.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.roles.join('/')}</option>)}</select><small data-status={assignment?.status ?? 'UNASSIGNED'}>{assignment?.assigneeName ?? '담당 없음'} · {assignment?.status === 'READY' ? 'PM 반영 대기' : assignment?.status === 'APPLIED' ? '보고서 반영 완료' : assignment?.status === 'IN_PROGRESS' ? `작성 중 · v${assignment.version}` : '미지정'}</small></label>;
               })}</div>}
               <div className="report-chapter-workbench">
                 <Select label="작성·검수할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} disabled={Boolean(chapterBusy) || saving || savingOutline} options={(authoring?.chapters ?? []).map((chapter) => {
                   const assignment = chapterCollaboration?.assignments.find((item) => item.chapterId === chapter.id);
-                  return { value: chapter.id, label: `${chapter.chapterCode} · ${outlineTitles[chapter.id] || chapter.title} · ${assignment?.assigneeName ?? '미지정'}` };
+                  return { value: chapter.id, label: `${outlineTitles[chapter.id] || chapter.title} · ${assignment?.assigneeName ?? '미지정'}` };
                 })} />
-                {selectedChapterAssignment ? <><div className="report-chapter-workbench__identity"><strong>{selectedChapterAssignment.chapterCode} · {outlineTitles[selectedChapterAssignment.chapterId] || selectedChapterAssignment.chapterTitle}</strong><span>담당 {selectedChapterAssignment.assigneeName ?? '미지정'} · v{selectedChapterAssignment.version}</span><em data-status={selectedChapterAssignment.status}>{selectedChapterAssignment.status === 'READY' ? '검수 완료·PM 반영 대기' : selectedChapterAssignment.status === 'APPLIED' ? '전체 보고서 반영 완료' : '작성·검수 중'}</em></div><label className="report-chapter-workbench__editor"><span>챕터 협업 원고{chaptersDirty ? " · 저장하지 않은 변경 있음" : ""}</span><textarea value={chapterDrafts[selectedChapterAssignment.chapterId] ?? ''} readOnly={!selectedChapterAssignment.canEdit || Boolean(chapterBusy)} onChange={(event) => setChapterDrafts((current) => ({ ...current, [selectedChapterAssignment.chapterId]: event.target.value }))} placeholder="현재 챕터의 사실·수치·근거를 검수하며 작성하세요." /></label><div className="report-chapter-workbench__actions">{selectedChapterAssignment.canEdit && <><Button variant="secondary" onClick={() => void saveChapterCollaboration('SAVE')} disabled={Boolean(chapterBusy) || saving || savingOutline}>챕터 중간 저장</Button><Button className="report-action-review" onClick={() => void saveChapterCollaboration('MARK_READY')} disabled={Boolean(chapterBusy) || !(chapterDrafts[selectedChapterAssignment.chapterId] ?? '').trim()}>담당자 검수 완료</Button></>}{chapterCollaboration?.canManage && selectedChapterAssignment.status === 'READY' && <Button className="report-action-confirm" onClick={() => void saveChapterCollaboration('APPLY')} disabled={Boolean(chapterBusy) || chaptersDirty || dirty || outlineDirty || saving || savingOutline || outlineSyncPending}>검수본을 전체 보고서에 반영</Button>}</div></> : <p className="empty-box">현재 챕터는 아직 담당자가 지정되지 않았습니다. 담당 PM 또는 관리자에게 배정을 요청하세요.</p>}
+                {selectedChapterAssignment ? <><div className="report-chapter-workbench__identity"><strong>{outlineTitles[selectedChapterAssignment.chapterId] || selectedChapterAssignment.chapterTitle}</strong><span>담당 {selectedChapterAssignment.assigneeName ?? '미지정'} · v{selectedChapterAssignment.version}</span><em data-status={selectedChapterAssignment.status}>{selectedChapterAssignment.status === 'READY' ? '검수 완료·PM 반영 대기' : selectedChapterAssignment.status === 'APPLIED' ? '전체 보고서 반영 완료' : '작성·검수 중'}</em></div><label className="report-chapter-workbench__editor"><span>챕터 협업 원고{chaptersDirty ? " · 저장하지 않은 변경 있음" : ""}</span><textarea value={chapterDrafts[selectedChapterAssignment.chapterId] ?? ''} readOnly={!selectedChapterAssignment.canEdit || Boolean(chapterBusy)} onChange={(event) => setChapterDrafts((current) => ({ ...current, [selectedChapterAssignment.chapterId]: event.target.value }))} placeholder="현재 챕터의 사실·수치·근거를 검수하며 작성하세요." /></label><div className="report-chapter-workbench__actions">{selectedChapterAssignment.canEdit && <><Button variant="secondary" onClick={() => void saveChapterCollaboration('SAVE')} disabled={Boolean(chapterBusy) || saving || savingOutline}>챕터 중간 저장</Button><Button className="report-action-review" onClick={() => void saveChapterCollaboration('MARK_READY')} disabled={Boolean(chapterBusy) || !(chapterDrafts[selectedChapterAssignment.chapterId] ?? '').trim()}>담당자 검수 완료</Button></>}{chapterCollaboration?.canManage && selectedChapterAssignment.status === 'READY' && <Button className="report-action-confirm" onClick={() => void saveChapterCollaboration('APPLY')} disabled={Boolean(chapterBusy) || chaptersDirty || dirty || outlineDirty || saving || savingOutline || outlineSyncPending}>검수본을 전체 보고서에 반영</Button>}</div></> : <p className="empty-box">현재 챕터는 아직 담당자가 지정되지 않았습니다. 담당 PM 또는 관리자에게 배정을 요청하세요.</p>}
               </div>
               {chapterNotice && <p className="notice-box" role="status">{chapterNotice}</p>}
             </details>
