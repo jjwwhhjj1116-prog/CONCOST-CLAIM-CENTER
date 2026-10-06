@@ -21,9 +21,11 @@
 | 구조형 표·쪽 나누기 | CF184 행 병합 자동 폭의 열 위치 오류, 긴 표 목록 번호 재시작, 셀 안 쪽나누기 무시를 수정. 실제 React 버튼·F4·Undo 불변 및 사진/본문 보존 검사 PASS | 합성 로컬 QA이며 PC 한컴 원형/업무 전구간 동일성 증명과 구분. 셀 내부 수동 쪽나누기는 지원하지 않고 표 밖으로 옮기도록 안내 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
-최신 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거와 다음 시작점은 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
+이전 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거는 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
 
-현재 CF183 제품 소스 `0bc942c58d231ed3d79bfbc99608857833234e7a`는 GitHub 정상 push 후 development `034d6a7d-39eb-4a75-ae94-5ce893a0685c`에만 반영했다. `--keep-vars`로 기존 환경값을 유지하고 DB/migration/가오픈은 변경하지 않았다. 공개 자산 대조와 지정 단신 Chrome 재열기 확인까지 완료했으며, 전체 A–Z·PC 한컴 동일성 합격과 구분한다.
+직전 CF183 제품 소스 `0bc942c58d231ed3d79bfbc99608857833234e7a`는 GitHub 정상 push 후 development `034d6a7d-39eb-4a75-ae94-5ce893a0685c`에만 반영했다. `--keep-vars`로 기존 환경값을 유지하고 DB/migration/가오픈은 변경하지 않았다. 공개 자산 대조와 지정 단신 Chrome 재열기 확인까지 완료했으며, 전체 A–Z·PC 한컴 동일성 합격과 구분한다.
+
+현재 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 검사 결과와 남은 범위를 그대로 유지한다.
 
 ### CF184 — 행 병합 자동 폭·긴 표 목록 번호·셀 내부 쪽나누기 보호
 
@@ -36,7 +38,7 @@
 - 실제 원본 독립 읽기 대조: inventory32 SHA 현재 유일 매칭/불변, CF183 r3 native16/855쪽 게이트와 source/engine/chain/loss/diff tamper5종 거부 확인. HWPX 3개 REF011/017/025의 동일형식 무편집 재저장에서 ordered 표 셀 주소/span/치수·그림 위치/ref/clip/rect/size canonical SHA와 BinData 전체 byte-multiset SHA 일치/loss0; 364/47/45쪽 그림423/90/48 및 빈 href0 확인. 이는 원시 데이터 보존 증거이며 실제 크롭·색상·배치·PC 한컴 동일성의 시각 PASS는 아니다. 기존 동일형식 기본 및 위험한 교차형식 제한 유지.
 - 지정 단신 Chrome은 세션마다 browser 숫자 ID가 달라져 extensionInstanceId `d9cb0cc6-3a2f-4c07-862e-d6441bda9044`/기존 탭839124063으로 식별. CF183 활성 화면 읽기 확인: CC6/4단계/저장13:11:19/편집17+visible출력17 모두1..17·loaded/natural1587×2244·editor/output URL 순서 exact·captured console0. 추가17 이미지는 hidden measurement이며 출력 중복 아님. 이번 초기 열람은 CF184 배포 후 확인과 구분한다. 새 로그인 요구·원고 입력·저장·다운로드0.
 - `cf:build` PASS, 신규 main `/assets/index-BtEgmOJA.js`, CSS 기존 index-8yhsWmje.css. 승인 runtime28/manifest452b06bd…/WASM bcc40a79…/binding ad01e939… 유지, 엔진 재빌드0. C 여유 약250MB를 실제 확인하고 기존 CF183 E rollback은 보존. CF184 빌드43파일/37,620,596B를 `E:\Codex-QA\claim-center-cf184-20261006\dist`에 SHA 전부 exact 보호 복사, Cdist도 유지. 기본 sandbox E 접근 거부는 공식 승인 실행으로 분리했으며 OS/ACL/서비스 변경0. 후보 복사의 폴더 옵션 오류는 빈 신규 폴더에만 발생, 원본·기존 자료 수정0. 공식 workspace dependency loader 무응답은 제한 대기 후 취소했으며 Word 실앱 검수 성공이라고 주장하지 않는다.
-- development 배포·원격 SHA·최종 지정 Chrome 확인은 이 기록 시점 대기. 검증된 정확 소스만 commit/push 후 `--keep-vars`로 development에 반영하며 가오픈은 승격하지 않는다. 다음은 원본↔PDF 전쪽 시각대조/PC Word·한컴→원형 의미별 목차·챕터→검토2.xlsx·A–Z·제안서4~12 실물 순. 전체 합격과 가이드 영상 제작은 아직 미완료다.
+- source5d70f62 정상 commit/push·development Worker b7a10bb4 반영·공개 entry3/runtime28 SHA대조 PASS. 지정 단신 Chrome의 기존 탭을1회 reload해 신규 index-BtEgmOJA.js·4단계·저장13:11:19·editor17+visible출력17 각각1..17/complete/natural1587×2244/17개src대응 exact·hidden측정17·captured console/alert/dialog0 확인. 새입력/저장/다운로드/출력/승인/단계이동/새탭0. v5 번호는 DOM에 없어 이번 재확인 PARTIAL: 이력 disclosure 클릭은 안전 검토에서 실제 실행 전 차단되어 재시도·우회0, 접힘 상태 유지. 이전 v5 저장 검사까지 취소하거나 이번 읽기를 새 저장 증명으로 확대하지 않는다. 기존 환경값을 `--keep-vars`로 보존하며 가오픈은 승격하지 않는다. 다음은 원본↔PDF 전쪽 시각대조/PC Word·한컴→원형 의미별 목차·챕터→검토2.xlsx·A–Z·제안서4~12 실물 순. 전체 합격과 가이드 영상 제작은 아직 미완료다.
 
 ### CF183 — 실제 원본 전수 안정성·A4 사전검사·병합 표 정렬
 
