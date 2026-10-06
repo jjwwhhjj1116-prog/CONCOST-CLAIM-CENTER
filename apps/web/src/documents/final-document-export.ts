@@ -383,7 +383,7 @@ export async function downloadFinalDocument(options: {
     const elements = await prepareExportPages(options.root);
     pageCount = elements.length;
     options.onProgress?.(containsSourcePages ? `${pageCount}개 A4 페이지를 DOCX로 변환합니다. 원본 페이지 이미지는 문장·표 개별 편집 불가입니다. 수정은 원본에서 해주세요.` : `${pageCount}개 A4 페이지의 문단·표·이미지를 편집 가능한 DOCX로 변환하고 있습니다.`);
-    bytes = await createEditableDocx(options.root, orientation);
+    bytes = await createEditableDocx(options.root, orientation, options.onProgress);
   } else if (options.format === 'hwp') {
     const elements = await prepareExportPages(options.root);
     const snapshot = options.reportNativeSnapshot;

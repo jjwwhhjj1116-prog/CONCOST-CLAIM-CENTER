@@ -24,7 +24,7 @@ test('CF182 real report UI exports unapproved saved DOCX PDF HWP with GET-only a
       res.end(await s.transformIndexHtml(req.url!, '<html><body><script>window.__CLAIM_API_ORIGIN__=window.location.origin;</script><div id="root"></div><script type="module" src="/admin-qa-entry.js"></script></body></html>'));
     }); },
     resolveId: id => id === '/admin-qa-entry.js' ? '\0admin-qa-entry' : undefined,
-    load: id => id === '\0admin-qa-entry' ? `import React from'react';import{createRoot}from'react-dom/client';import{PreviewReportStudio}from'/src/routes/PreviewReportStudio.tsx';import'/src/theme-system.css';import'/src/routes/PreviewReportStudio.css';import'/src/documents/StructuredDocumentEditor.css';import'/src/documents/DocumentReviewWorkspace.css';createRoot(document.getElementById('root')).render(React.createElement(PreviewReportStudio,{roles:[new URLSearchParams(location.search).get('role')||'admin'],onNavigate:()=>{}}));` : undefined
+    load: id => id === '\0admin-qa-entry' ? `import React from'react';import{createRoot}from'react-dom/client';import{PreviewReportStudio}from'/src/routes/PreviewReportStudio.tsx';import{createEditableDocx}from'/src/documents/editable-docx-export.ts';import'/src/theme-system.css';import'/src/routes/PreviewReportStudio.css';import'/src/documents/StructuredDocumentEditor.css';import'/src/documents/DocumentReviewWorkspace.css';window.qaDocxProgress=async()=>{const progress=[];await createEditableDocx(document.querySelector('.report-draft-qa-preview'),'portrait',message=>progress.push(message));return progress;};createRoot(document.getElementById('root')).render(React.createElement(PreviewReportStudio,{roles:[new URLSearchParams(location.search).get('role')||'admin'],onNavigate:()=>{}}));` : undefined
   }] });
   await server.listen();
   const origin = `http://127.0.0.1:${(server.httpServer!.address() as {port:number}).port}`;
@@ -56,11 +56,15 @@ test('CF182 real report UI exports unapproved saved DOCX PDF HWP with GET-only a
       }
     });
     await page.goto(origin + '/admin-qa.html?caseId=qa-case');
-    await page.getByRole('button',{name:'저장본 검수 미리보기 불러오기',exact:true}).click();
+    try { await page.getByRole('button',{name:'저장본 검수 미리보기 불러오기',exact:true}).click(); }
+    catch (error) { assert.deepEqual(errors, [], 'Browser startup errors before the QA button'); throw error; }
     const output = page.getByLabel('미승인 관리자 검수용 저장 보고서 미리보기',{exact:true});
     await output.locator('[data-export-page]').waitFor();
+    await output.locator('[data-export-page]').getByText('검수용 합성 저장 본문',{exact:true}).waitFor();
     assert.equal(await output.locator('[data-export-page]').count(),1);
     assert.match(await output.innerText(), /검수용 합성 저장 본문/);
+    const progress = await page.evaluate(() => (window as any).qaDocxProgress());
+    assert.deepEqual(progress, ['DOCX 1/1쪽의 문단·표·이미지를 변환하고 있습니다.', 'DOCX 1쪽을 파일로 묶고 있습니다.']);
     const generated:Record<string,Buffer> = {};
     for (const format of ['docx','pdf','hwp']) {
       const downloading = page.waitForEvent('download');

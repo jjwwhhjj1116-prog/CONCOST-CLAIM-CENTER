@@ -193,14 +193,15 @@ async function blocks(parent: Element): Promise<Block[]> {
 }
 
 /** Native paragraphs, tables and individual images; never a rasterized page. */
-export async function createEditableDocx(root: HTMLElement, orientation: 'portrait' | 'landscape'): Promise<Uint8Array> {
+export async function createEditableDocx(root: HTMLElement, orientation: 'portrait' | 'landscape', onProgress?: (message: string) => void): Promise<Uint8Array> {
   await root.ownerDocument.fonts?.ready;
   const candidates = root.matches('[data-export-page]') ? [root] : [...root.querySelectorAll<HTMLElement>('[data-export-page]')];
   const pages = candidates.filter(page => !ignored(page) && !page.parentElement?.closest('[data-export-page]'));
   if (!pages.length) throw new Error('편집 가능한 DOCX로 내보낼 페이지가 없습니다.');
   const sections = [];
   const coverFrames:Array<{left:number;top:number;width:number;height:number;color:string;stroke:number}|null>=[];
-  for (const page of pages) {
+  for (const [index, page] of pages.entries()) {
+    onProgress?.(`DOCX ${index + 1}/${pages.length}쪽의 문단·표·이미지를 변환하고 있습니다.`);
     const css = style(page);
     let children:Block[];
     let coverSignature:Table|undefined;
@@ -265,6 +266,7 @@ export async function createEditableDocx(root: HTMLElement, orientation: 'portra
     if(coverSignature)footerDistance=twips(px(css.paddingBottom)+px(css.borderBottomWidth));
     sections.push({ properties: { page: { size: { width: 11906, height: 16838, orientation: orientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT }, margin: { top: twips(px(css.paddingTop)), right: twips(px(css.paddingRight)), bottom: twips(px(css.paddingBottom)), left: twips(px(css.paddingLeft)), footer: footerDistance } } }, footers:{default:new Footer({children:footerChildren})}, children });
   }
+  onProgress?.(`DOCX ${pages.length}쪽을 파일로 묶고 있습니다.`);
   const archive=unzipSync(new Uint8Array(await Packer.toArrayBuffer(new Document({ sections }))));
   const xml=new DOMParser().parseFromString(strFromU8(archive['word/document.xml']),'application/xml');
   const ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main';

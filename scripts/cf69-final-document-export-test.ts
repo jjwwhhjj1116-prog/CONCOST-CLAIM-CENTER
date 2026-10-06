@@ -28,7 +28,7 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
 
   assert.match(exporter, /querySelectorAll<HTMLElement>\('\[data-export-page\]'\)/u);
   assert.match(exporter, /미리보기에 HTML 코드가 노출되어 내보내기를 중단/u);
-  assert.match(exporter, /createEditableDocx\(options\.root, orientation\)/u);
+  assert.match(exporter, /createEditableDocx\(options\.root, orientation, options\.onProgress\)/u);
   assert.match(editableDocx, /new Document\(/u);
   assert.match(editableDocx, /new TextRun\(/u);
   assert.match(editableDocx, /new Table\(/u);
