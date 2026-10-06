@@ -18,7 +18,7 @@
 | 관리자 기술 검수 | 미승인 저장본 3종 경로 및 변경 차단 구현. 실제 CC6 v5에서 각1회 다운로드: HWP 저장 작업본과 exact bytes/17쪽, DOCX17구역·17그림·A4, PDF17쪽 A4·전쪽 렌더 배치 PASS | DOCX는 페이지 그림이며 개별 본문/표 편집 불가. PC Word/한컴·전체32원본 대조는 별도. 직원 승인/배정을 기본 개발 QA의 선행조건으로 요구하지 않음 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
-현재 CF182 배포 제품 소스 `53db79d42a458b5633ecc38361bffea9afededd1`, development 버전 `81de46ae-b1f7-445c-b3a2-4cafa8810ea1`. 후속 쪽별 DOCX 진행 안내는 별도 회귀·빌드 후 development에만 반영한다. 상세 근거와 다음 시작점은 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
+최신 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거와 다음 시작점은 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
 
 ## CF161 보고서 업로드 안전 보완·실제 HWP 17쪽 저장·편집/출력 배율 일치 (2026-10-01, 최신)
 
@@ -707,3 +707,5 @@
 - DOCX에만 선택적 기존 onProgress 전달·실제 n/전체 쪽 변환·파일 묶기 단계 표시를 추가했다. 출력 문장/표/이미지/용지/원형 바이트 및 네트워크 순서를 변경하지 않는다. 실제 함수의 진행 순서 단언과 3종 정상 출력은 격리 localhost에서 PASS. PDF fixture와 동시 실행한 초기 화면15초 timeout1회는 원인 UNKNOWN으로 기록하고, 격리 재실행과 기존 문서 검사의 직렬 실행 범위로 분리한다. 이를 실서버 오류로 확대하거나 조용히 PASS로 덮지 않는다.
 - 후속 직렬 검사에서 조판 첫 프레임의 빈 페이지 틀을 실제 본문 완료로 간주해 `- 1 -`만 읽는 테스트 대기 경합도 확인했다. 테스트를 기대 문장 표시 완료까지 기다리도록 수정했고 해당 문장·표·실파일 단언은 그대로 유지했다. 운영 출력은 기존 prepareExportPages의 폰트/이미지 및 두 프레임 대기를 유지하며 새 blank bypass를 넣지 않았다.
 - 최신 진행 안내 후보는 수정 후 직렬 CF182/CF69/CF162 **18 PASS**, 별도 독립 CF182 browser **1 PASS** 및 전체 모노레포 typecheck/web tsc/cf:build PASS다. build의 기존 큰 번들/Node deprecation 경고와 pinned runtime28/WASM 불변은 유지한다. 이 마지막 후보를 development에만 반영하며 원고·키·DB·가오픈은 변경하지 않는다.
+- 후속 `b01695a46120635d734f614ff1e207419bbb0991` 정상 commit/push → development `55ca68ca-36db-407a-8567-f623726adcc8` --keep-vars 반영 완료. main index-4rk0rfPk.js SHA `fdf1f575ab8085044ae94bd86ded22434a500b6aa2a8fa837fde221e7c7e2ac0`, CSS index-8yhsWmje.css. public health/readiness200·entry3/runtime28 exact byte PASS. 코드 읽기 최종 독립 검토에서 출력 내용·이미지 요청순서·서식·압축·보호조건 변경0과 생략인자 호환 확인. 운영/가오픈·ENV·migration·승인 변경0, 기존 삭제 로그21/PDF1 unstaged 보존.
+- 최종 지정 단신 Chrome 읽기 reload1회 PASS: 실제 main module index-4rk0rfPk.js, CC6/4단계/원래 제목/저장13:11:19/관리자QA Card·초기 저장본 조회 버튼/오류0. 로컬 QA panel은 reload로 초기화됐으며 GET·다운로드·원고입력·저장·HWP재열기·검토요청·승인·배정0. 진행 안내 문구를 live 변환으로 재실행하지 않았고 localhost 실제 함수의 순서 단언 PASS와 구분한다. 다음 시작은 기존 원본 템플릿별 PC 한컴·Word 대조와 나머지 A–Z 미체크 항목이며 기본 개발 검수를 다시 직원 최종승인 대기로 막지 않는다.
