@@ -17,8 +17,8 @@ test('runtime staging accepts only the entire approved snapshot before any write
   const root=mkdtempSync(join(temporaryParent,'cf167-stage-'));
   assert.equal(dirname(root),resolve(temporaryParent));assert.ok(root.startsWith(join(temporaryParent,'cf167-stage-')));
   t.after(()=>rmSync(root,{recursive:true,force:true})); // Only this test-owned, resolved directory.
-  for(const name of ['approved','studio-js','font','wasm','binding','patch','layout-patch','manifest','config','write-failure','config-commit-failure','rollback-failure'])await t.test(name,subtest=>{
-    const candidate=join(root,name),studio=join(candidate,'studio'),pkg=join(candidate,'pkg'),web=join(candidate,'apps/web/dist');
+  for(const name of ['approved','external-output','studio-js','font','wasm','binding','patch','layout-patch','manifest','config','write-failure','config-commit-failure','rollback-failure'])await t.test(name,subtest=>{
+    const candidate=join(root,name),studio=join(candidate,'studio'),pkg=join(candidate,'pkg'),web=join(candidate,name==='external-output'?'external-build':'apps/web/dist');
     // Release each isolated fixture before copying the next full runtime.
     assert.equal(dirname(candidate),root);
     subtest.after(()=>rmSync(candidate,{recursive:true,force:true}));
@@ -50,9 +50,9 @@ fs.renameSync=(...args)=>{if(['config-commit-failure','rollback-failure'].includ
 syncBuiltinESMExports();`);
       args.push('--require',hook);
     }
-    const result=spawnSync(process.execPath,[...args,join(candidate,'scripts/cf146-stage-rhwp.mjs'),studio,'--approved-snapshot',pkg],{encoding:'utf8',timeout:20000});
+    const result=spawnSync(process.execPath,[...args,join(candidate,'scripts/cf146-stage-rhwp.mjs'),studio,'--approved-snapshot',pkg],{encoding:'utf8',timeout:20000,env:{...process.env,CF146_WEB_DIST:name==='external-output'?web:''}});
     assert.ifError(result.error);
-    if(name==='approved'){
+    if(name==='approved'||name==='external-output'){
       assert.equal(result.status,0,result.stderr);
       const staged=join(web,'rhwp');
       for(const file of approved.files)assert.equal(sha(readFileSync(join(staged,file.path))),file.sha256,file.path);

@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF184, 2026-10-06
+## 현재 판정 — CF185, 2026-10-06
 
 아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
@@ -19,13 +19,28 @@
 | 원본 전수 내부 안정성 | CF183 현재 원본32 지문 일치. HWP13/HWPX3의855쪽 무편집 2회 재저장·쪽수·전쪽 print SVG·컨트롤 사슬·loss 보고서 PASS, 원본 불변. PDF15의475쪽 용지 수치와 native271구역 읽기 확인 | 같은 파서 내부 자기대조이며 최초 파싱 누락·실제 편집·PC 한컴 동일성·PDF 전쪽 시각 대조는 별도. XLSX1은 목록 확인만 |
 | 원형 실제 용지·병합 표 | A3를 A4로 오인하던 비율 검사 보완: 가져오기와 출력이 실제 HU 치수 기준 공유, 확인/업로드/저장 이전 차단. 병합 헤더·행 병합의 자동 정렬 열 오류 FAIL→최소 수정→실제 편집/저장/재열기/출력 쪽 PASS | 기존 원형을 임의 A4로 축소하지 않음. 기존 v2 명시 정렬·값·폭·행높이 보존. 전체 업무·모든 표 기능 합격을 뜻하지 않음 |
 | 구조형 표·쪽 나누기 | CF184 행 병합 자동 폭의 열 위치 오류, 긴 표 목록 번호 재시작, 셀 안 쪽나누기 무시를 수정. 실제 React 버튼·F4·Undo 불변 및 사진/본문 보존 검사 PASS | 합성 로컬 QA이며 PC 한컴 원형/업무 전구간 동일성 증명과 구분. 셀 내부 수동 쪽나누기는 지원하지 않고 표 밖으로 옮기도록 안내 |
+| PDF 원본 용지 | CF185 실제 A3/A5·혼합 쪽이 비율만으로 A4에 통과하는 FAIL→실제 pt 치수 검사. 합성7+실제PDF15 검사 PASS, 원본 SHA 보존 | 원본14개 A4389쪽 허용, 세로/가로 혼합 PDF013은 기존처럼 전체 적용 전 거부. 한컴 HWP 동일성 증명과 구분 |
+| 원형 HWPX 실제 배치 | 대표017/018·025/026의 실제 인쇄 SVG/JPG/PDF를 대조해 표 뒤 세로 간격 누적 차이 확인. 01724쪽 원본 anchor 대비 +22.48px/+36.96px를 엔진 Square 표의 host spacing 계산까지 추적 | **원형 동일성 FAIL·수정 미완료.** 제품 래퍼/JPG 문제가 아니며 엔진의 paint·pagination 양쪽 수정/전체 회귀 필요. 일괄 좌표 이동·원본 축소로 숨기지 않음 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
 이전 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거는 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
 
 직전 CF183 제품 소스 `0bc942c58d231ed3d79bfbc99608857833234e7a`는 GitHub 정상 push 후 development `034d6a7d-39eb-4a75-ae94-5ce893a0685c`에만 반영했다. `--keep-vars`로 기존 환경값을 유지하고 DB/migration/가오픈은 변경하지 않았다. 공개 자산 대조와 지정 단신 Chrome 재열기 확인까지 완료했으며, 전체 A–Z·PC 한컴 동일성 합격과 구분한다.
 
-현재 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 검사 결과와 남은 범위를 그대로 유지한다.
+직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
+
+### CF185 — 실제 PDF 용지 검사·원형 배치 반례·C 공간 보호 정리
+
+- 시작 HEAD `01af0fcc26963e916fd771aaa593bad7f947e109`, branch `feat/CF123-es-v2`, repo AGENTS/기존 감사/보호 인수인계 대조. 총괄만 수정, 세 전문 읽기 검토 수렴. CC6 v5 원고·표식·3종 파일은 재입력/적용/저장/생성하지 않는다. 고객CC4/CC5, 직원 요청/배정/승인/납품/알림, DB/migration/서버ENV/API키/가오픈 변경0. ADMIN 기본 개발QA와 CEO/DIRECTOR 업무 최종승인·자기승인 차단 유지, 현장조사회의록 HOLD.
+- 확정 PDF 오류: `openPdfPageImages`가 종횡비만 검사해 실제 A3/A5 및 정상A4 뒤 A3인 혼합 파일도 통과. 표준210×297mm를 pt로 환산한 width/height±3pt 확인으로 수정. 실제 보관 Hancom PDF의593×840/595×841pt는 유지하며 A3/A5를 임의 A4로 축소하지 않는다. PDF.js가 입력 ArrayBuffer를 transfer해 호출자 byte가 detach되는 것도 실제 브라우저에서 확인→복사본만 전달. 표준A4에서 floating point의1588.000… ceil이1589px가 되는 것도 재현→width round1588로 수정, 세로는내용손실방지ceil유지. 업로드/본문 교체 이전에 전쪽 검사하는 기존 단일 호출 경로 유지.
+- 실제 검사: 합성7케이스+원본PDF15(부모포함23/23) PASS. 실제14개389쪽 A4 모두 허용/쪽수 기존 evidence와 일치, mixed PDF013(86쪽 중56세로/30가로)은 전체 적용 전 차단. 원본SHA 불변. 같은 실제 브라우저에서 옛 비율 검사만 메모리 복원한 음성 대조는 진짜 A3/A5/2쪽A3에서 예상 FAIL(4PASS/4FAIL,부모포함); 거짓합격 방지 확인. 초기 후보 검사는 입력detach/비율오인, 이후1pxceil 오류를 각각 검출 후 보완했으며 검사 약화0. 초기 ‘A3’ 합성변형이 실제A2 치수였던 명명 오류도 실제297×420mm 반례로 정정해 다시 음성 검증했다.
+- 원본32 현재 extension/size/SHA exact, native/PDF14쌍389쪽 쪽수 일치. PDF15/475쪽은 MediaBox=CropBox; 593×840pt10개는Hancom1.3.0.547/Hwp2024,595×841pt4개는1.3.0.404. 용지 차이를 CropBox 때문으로 단정할 수 없고, 같은stem이 동일 저장 시점 증거는 아니다. HWPX3의부분crop/flip/rotate는0이며 이들만으로 부분crop 보존 PASS를 주장하지 않는다.
+- 원형 실제 배치 FAIL: 지정print모드/clip=true는 제품SDK/getPageSvg/capture 경로와 일치. PDF추출과SVG/layout문자 수는 대표쪽 대체로 동일하나 사진·본문 좌표는 다름. E 비공개 `native-pdf-r1`에017의1/6/9/24/47,025의1/4/6/45 총9쌍을 실제상품hwpSvgPageForUpload 및Poppler로 렌더(18이미지)하고 원본4 SHA불변. 루트 육안0176쪽·0254쪽 대조에서017사진/표 간격과바닥글영역차이 확인. 9쌍 렌더를 전쪽 시각 PASS로 주장하지 않는다.
+- 원인: 01724쪽 첫표 rawheight14158HU/다음delta14724HU는 저장gap566HU를 증언하나 layout.rs의HWPX Square 표가host line_spacing2252를 가산해(2252−566)/75=22.48px 초과. 다음표1652간격은추가14.48px,누적36.96px로실제anchor/print측정 일치. typeset.rs에도동일host spacing branch가 있어paint·pagination공유보완 필요. 0176쪽 사진7개의PDF/native gap차이도누적,구형PDF대조군의본문차이는약0.1~0.6pt라모든차이를12pt guide로설명할수없음. 제품SVG→JPG wrapper의viewBox/clip수정·전체좌표translate는근거없어미실행.
+- C 공간: OS DriveInfo/CIM으로0바이트 확인. 기존E보호본과43개SHA대조 후C 생성dist만 제거, Vite 생성cache118파일/24,676,219B도E `vite-cache-cf184-backup`에전SHA보존후C사본만제거. 설치된node_modules 의존성·소스·Git·원본·DB·대화이력삭제0. 이후 임시브라우저/TEMP/TMP/Vitecache는작업프로세스에한해E지정. 빌드출력도새E폴더직접생성할수있게staging의선택적CF146_WEB_DIST만추가,기존기본값/승인28바이트/atomic rename/실패복구보호유지. default+external+부정staging15/15 및root전체typecheck PASS. 새검사mjs선언누락2건은정확3줄d.mts추가후통과,타입검사완화0.
+- 사용자가C생성물정리를추가승인한뒤큰파일메타데이터를조사. 업무DB2.4GB/도면/동영상/유효Gitpack/대화기록(이대화약3.63GB)은유지. 과거엔진다운로드임시 `.../work/p16-codex-review/tmp/cf146-rhwp-engine/.git/objects/pack/tmp_pack_8Vplp7`1개만미사용exclusive읽기/9월11일mtime/정확길이2,084,675,583B를확인해 `E:\Codex-QA\claim-center-cf185-20261006\C-space-backup\tmp_pack_8Vplp7`에복사·전후SHA `77c61d2a741b2ca8a9b01715cc7b4686f8adf8d92e0658368c799d109be88bd5`대조후C임시사본제거. 완전폐기아니며E에서복구가능. 제거직후C여유5,592,846,336B/후속9,522,532,352B관측;다른동시변화까지모두이번정리기여로계산하지않는다.
+- Rust 복원: 유효C Git객체는유지한채E에별도bare조회메타데이터생성→정확upstreamc3bc96a의Cargo/src/SDK필수파일1152개를새zip/사본으로복원(archiveSHAa9beaeb195e798009382f749db952b752522db209c94b6dd1e81b90a9ec911d0). 기존승인layoutpatch는성공,CF149axis는기본git apply검사7곳FAIL. 독립문맥13줄존재확인후minimal/unidiff-zero특성으로분리해기존패치3개만사본에적용/axis·print역방향검사PASS. 새로운엔진수정/컴파일/제품WASM교체0. 복원/patch검사만으로승인binary빌드동등성을확정하지않는다. hostcargo/rustc없음,설치DockerCLI는있지만linuxdaemon pipe 없음;Docker실행요청중.
+- `node ...vite build --outDir E:/Codex-QA/claim-center-cf185-20261006/dist --configLoader runner` 및승인snapshotstaging PASS. C빌드사본삭제상태유지, E43파일에서새main index-BRkdxuoG.js SHA bb15c6a6c696b79e5284b007722aaf3f4d5fe9d14d6bbc117c170b787a9d2542/CSS기존8yhsWmje·PDFchunkC-neTCHl. 큰bundle기존경고유지. privateQA출력은realpath+relative로Windows대소문자/원본내부보호,내부/동일루트음성false·별도경로true 확인. 개발반영/원격SHA검사는이기록시점대기. 다음최우선은HWPX표hostgap엔진보완→명시행높이/줄간격/수정후재조판보존→32원본·sameformat/crossformat/실물전수및독립검토. 전체A–Z·가오픈·가이드영상은여전히미완료다.
 
 ### CF184 — 행 병합 자동 폭·긴 표 목록 번호·셀 내부 쪽나누기 보호
 

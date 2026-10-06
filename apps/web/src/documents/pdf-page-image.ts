@@ -1,13 +1,16 @@
 /** Render the selected PDF itself; never infer that a same-named HWP is identical. */
 export async function openPdfPageImages(bytes: Uint8Array) {
   const { getDocumentProxy } = await import('unpdf');
-  const pdf = await getDocumentProxy(bytes, { useSystemFonts: false, stopAtErrors: true });
+  // PDF.js transfers its buffer; keep the caller's original bytes readable.
+  const pdf = await getDocumentProxy(bytes.slice(), { useSystemFonts: false, stopAtErrors: true });
   try {
     // Validate every page before any project upload or body replacement.
     for (let number = 1; number <= pdf.numPages; number++) {
       const page = await pdf.getPage(number);
       const { width, height } = page.getViewport({ scale: 1 });
-      if (!(height > width && Math.abs(width / height - 210 / 297) < .025)) throw new Error(`PDF ${number}쪽이 A4 세로가 아닙니다. 원본을 확인하세요. 기존 보고서는 유지합니다.`);
+      // Real Hancom A4 PDFs also use 593 x 840 pt. Allow their rounding,
+      // not another paper size with the same aspect ratio (A3/A5).
+      if (!(height > width && Math.abs(width - 210 * 72 / 25.4) <= 3 && Math.abs(height - 297 * 72 / 25.4) <= 3)) throw new Error(`PDF ${number}쪽이 A4 세로가 아닙니다. 원본을 확인하세요. 기존 보고서는 유지합니다.`);
       page.cleanup();
     }
     return {
@@ -17,7 +20,7 @@ export async function openPdfPageImages(bytes: Uint8Array) {
         const page = await pdf.getPage(index + 1);
         const viewport = page.getViewport({ scale: 1588 / page.getViewport({ scale: 1 }).width });
         const canvas = document.createElement('canvas');
-        canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+        canvas.width = Math.round(viewport.width); canvas.height = Math.ceil(viewport.height);
         try {
           const context = canvas.getContext('2d');
           if (!context) throw new Error('PDF 페이지를 표시할 캔버스를 만들지 못했습니다.');

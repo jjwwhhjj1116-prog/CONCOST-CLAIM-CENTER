@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 const repo=fileURLToPath(new URL('../',import.meta.url));
 const [distArg,engineArg,nativePkgArg]=process.argv.slice(2);
 assert.ok(distArg && engineArg && nativePkgArg,'Pass the /rhwp/ Studio dist, pinned engine source directory (or --approved-snapshot) and matching native pkg directory');
-const source=resolve(distArg),engine=resolve(engineArg),web=join(repo,'apps/web/dist'),target=join(web,'rhwp');
+const source=resolve(distArg),engine=resolve(engineArg),web=resolve(process.env.CF146_WEB_DIST || join(repo,'apps/web/dist')),target=join(web,'rhwp');
 const snapshot=engineArg==='--approved-snapshot';
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const approved=JSON.parse(readFileSync(join(repo,'scripts/fixtures/cf149-approved-runtime-manifest.json'),'utf8'));
