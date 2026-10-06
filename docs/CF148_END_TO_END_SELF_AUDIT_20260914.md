@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF178, 2026-10-06
+## 현재 판정 — CF179, 2026-10-06
 
 아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
@@ -10,12 +10,12 @@
 | 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내 | 원형 HWP의 의미별 챕터 매핑·자동 목차 갱신 미완료 |
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
-| 저장·재열기 | CC6 제목 자동저장→reload→원복→reload, 본문/JSON 보존 | 새 전체적용 저장완료 대기 변경은 격리 함수 검사 통과, 이번 원격 재적용은 미실행 |
+| 저장·재열기 | CC6 전체17쪽 적용→실제 저장→reload→HWP 재열기 PASS. 같은 파일 재적용은18개 중복 확인→0개, v4/본문/JSON/20개 자료 불변 | 문장·표 셀의 시험 문구 영구저장에 대한 구체적 승인 대기. 입력·적용·저장0 |
 | 원본·기존 이력 |124테이블 구조 동일,120테이블 값 동일,4테이블 변경은 CC6 제목 시험2회에만 대응 | CC5 UNKNOWN2건 유지, 무단 복구/재업로드하지 않음 |
-| 검토·최종 출력 | 자기승인·CEO/DIRECTOR 최종승인 규칙 유지, 사용자도 규칙 유지 확인 | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료; 사용자의 화면/파일 검수와 구분 |
+| 검토·최종 출력 | 자기승인·CEO/DIRECTOR 규칙 유지. 승인 snapshot과 연결 지문을 검증한 원형 HWP/HWPX 동일바이트 출력·A4 실제 크기·불일치 차단 구현/격리 검사 PASS | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료. 원형 없는 페이지그림 DOCX의 개별 문장·표 편집은 불가하며 안내를 정정 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
-최신 소스 `99970ab6763c5486d5bcb337fcaebc82261cd445`, development 버전 `138a8518-44ef-4cb7-a8a0-583892317fc6`. 상세 근거와 다음 시작점은 문서 하단 CF178 기록을 따른다.
+최신 소스 `e3186d1f786d1fc4ab7cfde89625a5d1d5f8f70f`, development 버전 `27c519e3-a2b5-4ee0-85ec-19977069e8d3`. 상세 근거와 다음 시작점은 문서 하단 CF179 기록을 따른다.
 
 ## CF161 보고서 업로드 안전 보완·실제 HWP 17쪽 저장·편집/출력 배율 일치 (2026-10-01, 최신)
 
@@ -644,3 +644,18 @@
 - 최종 development `138a8518-44ef-4cb7-a8a0-583892317fc6`에만 --keep-vars source deploy. 공개 smoke health/readiness200, entry assets3/runtime28 exact byte PASS. preview/베트남/DB migration/Drive 업로드/secret교체0. 초기 임시 development 버전0a7830aa,2454c5c7,f93acf8d는 이번 정상 검수 중간 이력이며 최신 버전으로 혼동하지 않는다. preview는 아직 미적용 migration과 다른 승인runtime을 갖고 있어 동일 서버 판정이 아니다.
 - 사용자는 유종욱 계정으로 화면·파일 검수를 하되 자기승인·최종승인(CEO/DIRECTOR) 규칙을 유지한다고 명시했다. 현재 PM/ADMIN 작성자 계정으로 승인하기 위해 역할을 변경하거나 다른 작성자를 만들어 기록하지 않았다. 실제 검토 요청·독립승인·최종확정/최종 DOCX/PDF 다운로드는 이번 미실행이다. 본문의 이름/타입 표시와 최종 법원제출 파일 검수를 구분한다.
 - 다음 시작: 새로운 전체적용의 실제 저장/실패·재진입 시험(시험 건 한정) → 독립 검토자가 확정한 파일의 실제 DOCX/PDF/HWP 대조 → 원본32개·엑셀 지적 전구간 체크리스트 → 전부 통과 후 preview 최신 정지/서명백업/실runner 리허설·같은소스 승격. embed17쪽 재열기를 다시 미완료로 되돌려 반복하지 않는다. 한컴 완전 원형, 원형 자동TOC/의미별 navigation, 전체 업무 A–Z/가이드영상 배포 가능 판정은 여전히 미합격이다.
+
+## CF179 전체 적용 실저장·원형 출력 연결 검증 — 2026-10-06
+
+- 시작 작업본/브랜치/HEAD는 `work/cf166-recovery`, `feat/CF123-es-v2`, `970fab5`. 기존 로그21개/PDF1개 삭제 상태는 unstaged 보존했다. Windows 설정/ACL/서비스 변경0. 단신 Chrome4의 기존 development CC6 탭839124063만 사용했고 새 인증·다른 프로필로 대체하지 않았다.
+- 기존 소스에서 같은 HWP17쪽 전체 적용1회+초기 확인1회+정확 중복18건 확인 후 실제 저장 성공(10:42:58 KST, v3→v4)→reload→원형 재열기 PASS. 제목·표지·목차 점선/쪽번호·8쪽4열 표·쪽 순서 유지, 복구 팝업/오류0. D1 독립 대조: 본문2220/SHA05769447… 원문 동일, v3/v4 JSON의 값·키·배열 순서 차이0(직렬화 키 순서 때문에 raw SHA만 변경). 파일/operation20→20, 모두 SUCCEEDED. 실제 최초 원본은44,544B/SHA803a7dac76f5dfb641d6ed09545bd8c3e1bc705e70fc3d6c313d9bdcc9a5862a, 연결 편집본35,840B/SHA bb73499b…이며 둘을 혼동하지 않는다.
+- 재현 수정3건: 최초 원본 체인이 없는 과거 연결본의 첫 원본 참조 누락을 previous fallback으로 보존; import가 명시적으로 reuseExact를 요청하고 서버가 정확한 중복을 확인한 경우만 반복 확인창 생략(일반 자료실·다른 버전·AI 비교·취소 보호 유지); truthy draft:{}·잘못된 사건/본문/JSON/버전/날짜/단계/챕터 응답을 저장 성공으로 처리하던 actual saveNow를 요청 snapshot과 대조. 정확 no-op 같은 버전은 허용한다. 실패 시 작업 원고를 유지하며 전체 적용 대신 저장 PUT만 다시 시도하도록 안내.
+- 첫 소스 `864a656d4cbf179ce26ceea2d21d549eaf09dbc6` 정상 commit/push 및 development318edfe1만 반영. 실제 새 소스에서 같은17쪽 재적용1회+초기 확인1회 후 중복 확인창0/추가 확인 클릭0, 명시 저장완료/자동닫힘 PASS. reload→편집17+미리보기17 각각1..17→HWP 재열기→표지/목차/표 확인 후 저장 없이 닫았다. D1 v4/10:42:58/본문 SHA05769447…/JSON SHA6faabcc4… 완전 불변, operation/evidence20 그대로다. 이는 무편집 exact no-op의 실제 검증이다.
+- 최종 HWP가 native pointer를 무시하고 페이지그림을 다시 생성하는 별도 결함을 확인했다. 가져올 때 `bindingVersion:1/bodySha256`을 versioned JSON에 기록한다. native case/id/url/name/SHA/bytes와 나머지 본문·출력 설정의 canonical 값을 결합하고 proof 자체·old original chain은 제외한다. 객체 키 순서는 무관하지만 페이지 배열/주소/크기/문단/표지/머리글 변화는 거부한다. client 변경 감지 지문이지 서버 서명이나 PC 한컴 일치 인증은 아니다.
+- 최종 출력은 승인·확정 API의 해당 snapshot과 finalization case/version만 사용한다. 해당 사건 evidence ID/SHA/size→실제 다운로드 바이트 SHA/size→승인 엔진 pageCount→모든 section의 HWPUNIT A4 실제 치수/세로 및 page SVG 방향→다운로드 직전 현재 선택을 확인한다. 검증된 HWP/HWPX 원형 바이트를 재작성 없이 내려받고 HWPX는 .hwpx/MIME/ZIP 서명으로 구분한다. 어느 실패도 이미지 HWP로 자동 대체하지 않는다. 과거 binding 없는 native 승인본은 자동 retrofit하지 않고 원형 재적용·재검토·확정 필요를 안내한다. 일반 구조형 HWP·native 없는 기존 변환·PDF/DOCX/제안서 경로는 유지한다.
+- 실제 승인 binding의 getPageDef/getSectionCount 공개 getter2개만 optional 타입에 추가했다. 기존 비율만 검사하면 A3 세로가 통과하는 오류를 genuine A3 파일로 재현(FAIL)했고 실제 치수 검사 후 차단 PASS. 기존 converter와 같은75HU/96DPIpx 및 A4 반올림1px 범위를 사용한다. 보호 사본의 실제 값59528×84188HU/landscape false/DPI96을 읽기 확인. pinned WASM/runtime 파일 재빌드·변경0.
+- 납품센터도 선택한 finalization의 사건/버전에 snapshot을 고정하고 늦은 다른 사건 응답·출력·진행 안내를 차단했다. 페이지그림 DOCX를 ‘문장·표 개별 편집 가능’이라고 보고하던 성공 문구를 정정했다. 서버 HWP 출력 원장은 여전히 기존 DOCX/PDF 형식만 지원하며 HWP 원장 등록을 구현했다고 말하지 않는다. 현재 출력은 로컬 다운로드이고 실제 납품본 수동 Drive 보관은 기존 별도 경로다. 사용자 자기승인/CEO·DIRECTOR 승인·최종확정 규칙 변경0.
+- 검증: 초기 저장/중복 CF83+CF14617, CF16114모드+부모15 PASS. 최종 계약/합성 승인 보호37 PASS(기존 CF08 중복2개 포함); actual final handler의 승인 snapshot/확정/preview 없음·busy4모드 export0. 최종 native browser15모드+부모16 PASS: 실제 pinned 엔진 HWP/HWPX exact bytes→재열기→문단 삽입·재저장→기존 표 셀/123원 보존. missing-proof/본문/사건/늦은 선택/자료/해시/크기/네트워크/A3/쪽수/확장자 실패에서 다운로드0, 의도된 요청 경계, raster fallback0. 12개 binding 음성+키 순서 정상 검사 포함. 합성 API/localhost/격리 headless이며 실제 독립승인이나 회사 Drive 검수와 구분한다. 초기 localhost 차단은 공식 승인 실행으로 해결했고 테스트 API3001 기본 주소·SVG 글자별 출력 기대는 harness만 바로잡았다. 제품 데이터·보안 설정을 바꾸지 않았다.
+- 최종 전체 타입검사·웹 타입검사/build PASS, layout/type detector0. 큰 번들/Node deprecation 경고는 기존대로 남는다. 최종 소스 `e3186d1f786d1fc4ab7cfde89625a5d1d5f8f70f` 정상 commit/push; development27c519e3만 --keep-vars 배포. JSindex-GohGViF8.js/SHA7456c50807456ea26652fe84ef7406c9153f92ae48fd6b6a6f6e2cd17c210d79, CSSindex-BHPAGR5g.css, dist43 digest46ac665b3a289d2318407c6930bab8fb1dd9c7469d70a0f56da3ede848db46fe. 공개 health/readiness200/entry3/runtime28 exact SHA PASS. DB migration/비밀키/가오픈/preview 변경0.
+- 현재 후속: 새 소스의 CC6 재조회·17쪽 원형 열기/원제목/10:42:58/복구·오류0 확인. 문장·표 셀의 ‘검수’ 표식 입력은 구체적 텍스트·위치·영구저장 승인 필요로 실행 전 안전검토에서 중단됐다. 실제 입력·표 셀 변경·전체 적용·Drive/초안 저장0, 다른 입력 API로 우회하지 않았다. 사용자의 ‘CC6 표지 제목 끝+8쪽 표 텍스트 셀에 각각 검수2자 추가·새 작업본 저장’ 승인을 비동기 요청했다. 단신Chrome4/839124063의 연결 HWP 편집기는 입력 없이 열려 있다. 승인 후 해당 두 입력→17쪽 전체 적용1회→실저장→reload→연결본 재열기만 이어간다. 최초 원본·고객 CC4·CC5 UNKNOWN2는 변경하지 않는다. 완료한 무편집 no-op을 미완료로 되돌리거나 인증을 반복하지 않는다.
+- 남은 게이트: 위 실제 수정본 저장, 실제 독립승인 후 최종3종 대조, 원본32종 및 PC 한컴 형식·전 카테고리 A–Z/엑셀 지적·제안서4~12장 실제 이미지/가이드 영상 준비. 현장조사 회의록 개편 HOLD. 모든 게이트 통과 전 preview 승격·전체100% 선언은 하지 않는다.
