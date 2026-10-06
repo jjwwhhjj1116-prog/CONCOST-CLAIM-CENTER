@@ -1,6 +1,23 @@
 import type { Editor, JSONContent } from '@tiptap/core';
 import { closeHistory } from '@tiptap/pm/history';
-import type { NativeHwpEngine } from './editable-hwp-export';
+import type { NativeHwpDocument, NativeHwpEngine } from './editable-hwp-export';
+
+/** Check real HWPUNIT dimensions, not only the A-series aspect ratio of a preview. */
+export function assertReportNativeA4Portrait(document: NativeHwpDocument): void {
+  const sections = document.getSectionCount?.();
+  const unknown = '원형 한글의 실제 용지 크기를 확인하지 못했습니다. 기존 보고서와 원본 파일은 유지됩니다.';
+  if (!Number.isSafeInteger(sections) || !sections || sections < 1 || !document.getPageDef) throw new Error(unknown);
+  for (let section = 0; section < sections; section++) {
+    let paper: { width: number; height: number; landscape: boolean };
+    try { paper = JSON.parse(document.getPageDef(section)); }
+    catch { throw new Error(unknown); }
+    // 75 HWPUNIT per 96-DPI pixel; allow the existing one-pixel A4 rounding.
+    if (!paper || paper.landscape !== false || !Number.isFinite(paper.width) || !Number.isFinite(paper.height)
+      || Math.abs(paper.width - 794 * 75) > 75 || Math.abs(paper.height - 1123 * 75) > 75) {
+      throw new Error(`원형 한글 ${section + 1}구역의 실제 용지가 A4 세로가 아니어서 처리를 중단했습니다. 한글에서 용지를 A4 세로(210 × 297mm)로 확인한 뒤 다시 적용하세요. 기존 보고서와 원본 파일은 유지됩니다.`);
+    }
+  }
+}
 
 export function captureReportNativeSource(bytes: Uint8Array, name: string, Engine: NativeHwpEngine): { pages: string[]; file: File } {
   const snapshot = new Engine(bytes);

@@ -1,9 +1,30 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { transpileModule, ScriptTarget } from 'typescript';
 import { inferredTableColumnWeight, normalizeColumnWidths } from '../apps/web/src/documents/structured-document-layout';
 
 const read = (path: string): string => readFileSync(path, 'utf8');
+
+test('CF183 table migration aligns merged header logical columns and preserves explicit saved alignment', () => {
+  const editor = read('apps/web/src/documents/StructuredDocumentEditor.tsx');
+  const source = editor.slice(editor.indexOf('const rightAlignedTableHeader ='), editor.indexOf('export const normalizeStructuredDocumentHtml =')).replace('export const normalizeA4TableJson', 'const normalizeA4TableJson');
+  const compiled = transpileModule(source + '\nnormalizeA4TableJson;', { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  const normalize = runInNewContext(compiled, { inferredTableColumnWeight, normalizeColumnWidths });
+  const cell = (text: string, attrs = {}) => ({ type: 'tableCell', attrs, content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
+  const row = (cells: unknown[]) => ({ type: 'tableRow', content: cells });
+  const table = { type: 'table', attrs: { documentDefaultsVersion: 1 }, content: [row([cell('설명', { colspan: 2 }), cell('금액')]), row([cell('첫 설명'), cell('둘째 설명'), cell('미산정')])] };
+  const before = JSON.stringify(table), result = normalize(table);
+  assert.deepEqual(Array.from(result.content[1].content, (value: any) => value.attrs.horizontalAlignment), ['center', 'center', 'right']);
+  assert.equal(JSON.stringify(table), before, 'Normalizing must not mutate the caller document');
+  const spanning = { type: 'table', attrs: { documentDefaultsVersion: 1 }, content: [row([cell('구분', { rowspan: 2 }), cell('금액', { colspan: 2 })]), row([cell('미산정A'), cell('미산정B')]), row([cell('항목'), cell('미산정C'), cell('미산정D')])] };
+  const aligned = normalize(spanning);
+  assert.deepEqual(Array.from(aligned.content[1].content, (value: any) => value.attrs.horizontalAlignment), ['right', 'right']);
+  assert.deepEqual(Array.from(aligned.content[2].content, (value: any) => value.attrs.horizontalAlignment), ['center', 'right', 'right']);
+  const explicit = { ...table, attrs: { documentDefaultsVersion: 2 }, content: [table.content[0], row([cell('첫 설명', { horizontalAlignment: 'left' }), cell('둘째 설명', { horizontalAlignment: 'right' }), cell('미산정', { horizontalAlignment: 'center' })])] };
+  assert.deepEqual(Array.from(normalize(explicit).content[1].content, (value: any) => value.attrs.horizontalAlignment), ['left', 'right', 'center']);
+});
 
 test('CF94 infers practical widths for an unmeasured chapter 9 result table', () => {
   const headers = ['No', '발주자·현장 법무법인', '현장명', '연면적(㎡)', '업무내용'];

@@ -7,7 +7,7 @@ import { createNativeHwp, type NativeHwpPage } from './editable-hwp-export';
 import { collectNativeHwpPages } from './native-hwp-pages';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
 import { apiDownload, apiRequest } from '../api';
-import { readBoundReportNativeSource, reportSourceSha256 } from './report-native-source';
+import { assertReportNativeA4Portrait, readBoundReportNativeSource, reportSourceSha256 } from './report-native-source';
 import type { JSONContent } from '@tiptap/core';
 
 export type FinalDocumentFormat = 'docx' | 'pdf' | 'hwp';
@@ -406,16 +406,7 @@ export async function downloadFinalDocument(options: {
       try {
         pageCount = native.pageCount();
         if (pageCount !== elements.length) throw new Error(options.purpose === 'ADMIN_QA' ? '검수용 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.' : '확정 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.');
-        const sections = native.getSectionCount?.();
-        if (!Number.isSafeInteger(sections) || !sections || sections < 1 || !native.getPageDef) throw new Error('원형 한글의 실제 용지 크기를 확인하지 못했습니다.');
-        for (let section = 0; section < sections; section++) {
-          const paper = JSON.parse(native.getPageDef(section)) as { width: number; height: number; landscape: boolean };
-          // The pinned engine returns HWPUNIT, as in editable-hwp-export:
-          // 75 HU per 96-DPI screen pixel. Allow one pixel of A4 rounding only.
-          const a4 = pageLayout('portrait');
-          if (paper.landscape !== false || !Number.isFinite(paper.width) || !Number.isFinite(paper.height)
-            || Math.abs(paper.width - a4.widthPx * 75) > 75 || Math.abs(paper.height - a4.heightPx * 75) > 75) throw new Error('원형 한글의 실제 용지가 A4 세로가 아니어서 출력을 중단했습니다.');
-        }
+        assertReportNativeA4Portrait(native);
         for (let page = 0; page < pageCount; page++) {
           if (!svgOrientationMatches(native.renderPageSvg(page), 'portrait')) throw new Error(`원형 한글 ${page + 1}쪽이 A4 세로가 아니어서 출력을 중단했습니다.`);
         }

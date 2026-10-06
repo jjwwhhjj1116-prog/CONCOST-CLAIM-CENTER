@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF182, 2026-10-06
+## 현재 판정 — CF183, 2026-10-06
 
 아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
@@ -16,9 +16,27 @@
 | 원본·기존 이력 | 이번 CC6 v1~v5 보존, 최초 원본44,544B/SHA 불변, 15쪽 자료 참조와 모든 페이지 속성 불변. 새 작업본+변경1·8쪽만 추가해23건 SUCCEEDED | 전체DB 복제는 승인 범위 밖으로 거절·미실행. 과거124/120테이블 대조를 이번 전수 결과로 확대하지 않음. CC5 복구/재업로드0 |
 | 검토·최종 출력 | 자기승인·CEO/DIRECTOR 규칙 유지. 승인 snapshot과 연결 지문을 검증한 원형 HWP/HWPX 동일바이트 출력·A4 실제 크기·불일치 차단 구현/격리 검사 PASS | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료. 원형 없는 페이지그림 DOCX의 개별 문장·표 편집은 불가하며 안내를 정정 |
 | 관리자 기술 검수 | 미승인 저장본 3종 경로 및 변경 차단 구현. 실제 CC6 v5에서 각1회 다운로드: HWP 저장 작업본과 exact bytes/17쪽, DOCX17구역·17그림·A4, PDF17쪽 A4·전쪽 렌더 배치 PASS | DOCX는 페이지 그림이며 개별 본문/표 편집 불가. PC Word/한컴·전체32원본 대조는 별도. 직원 승인/배정을 기본 개발 QA의 선행조건으로 요구하지 않음 |
+| 원본 전수 내부 안정성 | CF183 현재 원본32 지문 일치. HWP13/HWPX3의855쪽 무편집 2회 재저장·쪽수·전쪽 print SVG·컨트롤 사슬·loss 보고서 PASS, 원본 불변. PDF15의475쪽 용지 수치와 native271구역 읽기 확인 | 같은 파서 내부 자기대조이며 최초 파싱 누락·실제 편집·PC 한컴 동일성·PDF 전쪽 시각 대조는 별도. XLSX1은 목록 확인만 |
+| 원형 실제 용지·병합 표 | A3를 A4로 오인하던 비율 검사 보완: 가져오기와 출력이 실제 HU 치수 기준 공유, 확인/업로드/저장 이전 차단. 병합 헤더·행 병합의 자동 정렬 열 오류 FAIL→최소 수정→실제 편집/저장/재열기/출력 쪽 PASS | 기존 원형을 임의 A4로 축소하지 않음. 기존 v2 명시 정렬·값·폭·행높이 보존. 전체 업무·모든 표 기능 합격을 뜻하지 않음 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
 최신 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거와 다음 시작점은 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
+
+CF183의 두 제품 수정과 전수 검사 도구는 아래 근거로 검증했으며 development 반영 준비를 마쳤다. 배포 버전·공개 자산 대조는 반영 완료 후 아래 기록에 추가한다. 현재 이 문장만으로 신규 배포 완료를 주장하지 않는다.
+
+### CF183 — 실제 원본 전수 안정성·A4 사전검사·병합 표 정렬
+
+- 시작 branch `feat/CF123-es-v2`/HEAD `87fbe462d4e48f61c3756b90f793542d44f352b7`. repo AGENTS와 기존 감사 이력을 대조하고 총괄만 수정, 세 전문 독립 읽기 검토 수렴. 사용자 삭제 로그21개/PDF1개 unstaged 유지. CC6 v5 두 표식·저장·3종 다운로드는 이미 통과했으므로 재입력/재적용/재저장/재생성하지 않았다. 직원 요청·접근 배정·승인·납품·알림·ENV/DB/migration/가오픈 변경0.
+- 지정 단신 Chrome4 실제 라이브러리에서 REF01~09를 모두 펼쳐 회사 Drive 등록32/32(6/2/2/1/1/14/2/2/2), invalid filename/등록·업로드 실패/alert0 확인 후 CC6 4단계·저장13:11:19·편집/미리보기17쪽으로 돌아왔다. 열람 목록 확인을 Drive 바이트 대조나 한컴 동일성으로 확대하지 않았다.
+- 실제 로컬32를 익명화된 inventory filename이 아닌 extension+size+SHA로 각각 유일하게 매칭. 새 read-only gate는 파일별 별도 프로세스·60초 상한·기존 결과 보호·원문/실명 로그 제외·원본 전후SHA 보존. 최종 `tmp/cf183-source-gate-20261006-r3/results.json`: HWP13/HWPX3 총855쪽, 동일 형식 무편집 두 번 재저장 쪽수/전체 print SVG 동일·전체 ordered control chain 3회 SHA 동일·동일 export 객체의 contentLoss 2회 모두0·원본32 SHA 불변 PASS. r1/r2는 삭제하지 않으며 최종 강화 기준은 r3이다.
+- 게이트의 exit0만 믿는 거짓 합격, 0쪽 빈 루프 합격, 상충 fingerprint를 claim=true로 수락하는 결함도 부정 실행 후 보완. 부모는 evidence/source·engineSHA/양의 쪽수/3개 chain actual값/2개 loss 보고서를 직접 검증하고 subprocess error/signal·손상 JSON을 거부한다. PDF15는 metadata만 PASS, XLSX1은 INVENTORY_ONLY로 분리. 최초 파싱의 누락이나 PC 한컴 편집 보존을 스스로 증명하는 도구가 아니다.
+- 독립 원본 읽기: native16 전체271구역은 landscape=false, 원본 HU59528×84188(025만84186)로 기존 ±75HU A4 기준 안에 있다. PDF15/475쪽 치수를 전수 읽었고, raw stem13쌍·끝 공백 제거 후14쌍/389쪽은 native/PDF 쪽수차0. PDF는593×840 또는595×841pt라 native595.28×841.88pt와 수치상 동일하지 않으며 원인은 UNKNOWN. PDF013은86쪽에 세로/가로 혼합이다. 수치 대조를 PDF 전쪽 시각 합격으로 표시하지 않는다.
+- 제품 결함1: 실제 A3 세로 바이트도 SVG 비율만 보고 다음 적용 단계에 들어가는 것을 원래 handler VM으로 재현. 기존 final의 실제 getSectionCount/getPageDef HU·세로·±75 기준을 공유해 가져오기 확인창/업로드/저장 이전 검사로 이동. 실제 native 쪽수와 미리보기 개수도 대조하고 검사 중 사건/본문/표지/머리글 변경은 차단한다. generic HWP 열기·원형 파일 다운로드는 막지 않고 원본을 임의 축소하지 않는다.
+- 제품 결함2: 설명 colspan2 뒤 금액 열에 대한 자동 정렬이 cell 순번을 써 `[center,right,center]`가 되는 것을 VM과 실제 React 브라우저에서 FAIL 재현. JSON은 펼쳐진 헤더 논리 열, HTML은 기존 occupiedUntil/columnIndex 순회를 써 `[center,center,right]`로 수정. 금액 colspan2+rowspan, v2 명시 정렬, 값/원문/폭/행높이 보존을 확인했다. 실제 편집→저장→reload→인쇄 대상 페이지 정렬 PASS. 숨김 조판 측정용 표를 인쇄표로 잘못 중복 집계한 테스트는 `[data-export-page]`로 바로잡고 실제 표시 대기, 표 개수1/값/정렬 단언은 유지했다.
+- root 관련 CF83/CF148 26/26, CF94 4/4, gate3/3, 최종 직렬 CF149/CF182/CF69/CF162 22/22 PASS. 별도 CF179 실제 export18모드+부모19 PASS(앞서 함께 실행한 CF1491은 중복 합산하지 않음). 독립 CF94 4/4·신규 실제 preflight1·gate 부정검사 및 원본32/r3 대조 PASS. 모든 실제 browser fixture는 localhost 합성/격리 검사이며 고객 자료 실저장 검사가 아니다.
+- default sandbox의 Vite realpath EPERM/localhost ACCESS_DENIED 및 의존성 타입 export 누락 검사 실패는 기록 후 공식 승인 실행으로 재확인했다. 실제 브라우저 재현/회귀와 전체 monorepo typecheck, 웹 tsc/cf:build PASS. 전역 설정/ACL/계정/서비스/의존성 교체0. 기존 큰 번들·Node deprecation 경고 유지, approved runtime28/WASM 불변·engine rebuild0. UI 스킬은 기존 구성과 명시 정렬을 보존한 오류 안내·입력 경계에만 적용했고 detector0건이다.
+- 추가 CF167 회귀는 C 실제 여유0바이트(CIM/DriveInfo/PSDrive 확인)로 임시 snapshot 복사에서8 PASS/6 FAIL. 자기 생성 폴더는 기존 after hook으로 정리됐으며 다른 폴더를 청소하지 않았다. 파일시스템 권한 승인 후 이번 빌드43파일을 `E:\Codex-QA\claim-center-cf183-20261006\dist`에 복사·전파일SHA대조한 경우에만 C의 `apps/web/dist` 산출물 제거, 소스/Git/DB/원본/검수지문 기록은 보존. CF167은 항목별 자기 복사본 정리와 optional CF167_TEMP_ROOT만 추가→승인E 임시 경로14/14 PASS. smoke는 optional CF149_DIST로 같은 보존 산출물을 읽는다. C 여유는 당시371,306,496B로 여전히 적으며 전체 디스크 정리/시스템 복구 완료를 뜻하지 않는다. 다음 검사에서 Cdist 부재는 의도된 산출물 이동이며 소스 삭제가 아니다.
+- PC Word/한컴 검수용 공식 native 도구 초기화는 `failed to write kernel assets ... os error 3`가 reset 후에도 동일 재현됐다. 원인 경로 UNKNOWN이며 시스템 오류로 단정/수리/다른 UI 자동화 우회하지 않았다. 최초 원형 파싱↔원본PDF 전쪽 시각 대조·PC 재열기, 의미별 HWP 챕터/자동 목차 갱신, 전체 A–Z/검토2.xlsx 잔여·제안서4~12 실물·가이드영상은 미완료다. 현장조사 회의록 HOLD/자기승인·CEO/DIRECTOR 업무 최종승인 규칙 유지. 기본 관리자 개발 QA를 직원 최종승인 대기로 막지 않는다.
 
 ## CF161 보고서 업로드 안전 보완·실제 HWP 17쪽 저장·편집/출력 배율 일치 (2026-10-01, 최신)
 

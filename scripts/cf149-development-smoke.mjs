@@ -2,11 +2,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const base = new URL(process.argv[2]);
 assert.equal(base.protocol, 'https:');
 assert.match(base.hostname, /^concost-claim-center-development\./);
-const dist = new URL('../apps/web/dist/', import.meta.url);
+const dist = process.env.CF149_DIST ? pathToFileURL(resolve(process.env.CF149_DIST) + sep) : new URL('../apps/web/dist/', import.meta.url);
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 async function compare(path) {
   const local = readFileSync(new URL(path.replace(/^\//, ''), dist));

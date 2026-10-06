@@ -232,6 +232,27 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     assert.equal(await page.locator('.tiptap').evaluate(el=>getComputedStyle(el).padding),normalPadding,'Changing the document key uses the new model, not a previous editor snapshot');
     assert.equal(await page.locator('.tiptap img').count(),0);
     assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.actual())).attrs.reportNativeSource,null);
+    for (const { html, expected } of [
+      { html: '<table><tr><th colspan="2">설명</th><th>금액</th></tr><tr><td>첫 설명</td><td>둘째 설명</td><td>미산정</td></tr></table>', expected: [['center','center'],['center','center','right']] },
+      { html: '<table><tr><th rowspan="2">구분</th><th colspan="2">금액</th></tr><tr><td>미산정A</td><td>미산정B</td></tr><tr><td>항목</td><td>미산정C</td><td>미산정D</td></tr></table>', expected: [['center','center'],['right','right'],['center','right','right']] },
+      { html: '<table data-document-defaults-version="2"><tr><th colspan="2">설명</th><th>금액</th></tr><tr><td data-cell-horizontal-align="left">첫 설명</td><td data-cell-horizontal-align="right">둘째 설명</td><td data-cell-horizontal-align="center">미산정</td></tr></table>', expected: [['center','center'],['left','right','center']] }
+    ]) {
+      await page.evaluate(value=>(globalThis as any).cf149Editing.useOrdinary(value), html);
+      await page.locator('.tiptap table').getByText('미산정' + (expected.length === 3 ? 'D' : ''), { exact: true }).waitFor();
+      assert.deepEqual(await page.locator('.tiptap table tr').evaluateAll(rows=>rows.map(row=>[...row.querySelectorAll(':scope > th, :scope > td')].map(cell=>(cell as HTMLElement).dataset.cellHorizontalAlign))), expected, 'HTML import and actual editor must align logical columns, not DOM cell indices');
+      const actual = await page.evaluate(()=>(globalThis as any).cf149Editing.actual());
+      const bodyTable = actual.content.find((node:any)=>node.type==='table');
+      assert.deepEqual(bodyTable.content.map((row:any)=>row.content.map((cell:any)=>cell.attrs.horizontalAlignment)), expected);
+      assert.match(JSON.stringify(actual), /미산정/u, 'Alignment must not rewrite table values');
+      const savedTable = page.waitForResponse(response=>response.url()===origin+'/draft'&&response.request().method()==='PUT');
+      await page.getByRole('button',{name:'저장',exact:true}).click(); await savedTable;
+      await page.reload(); await page.locator('.tiptap table').waitFor();
+      assert.deepEqual(await page.locator('.tiptap table tr').evaluateAll(rows=>rows.map(row=>[...row.querySelectorAll(':scope > th, :scope > td')].map(cell=>(cell as HTMLElement).dataset.cellHorizontalAlign))), expected, 'Saved merged-table alignment must survive actual React re-entry');
+      const printedTables = page.locator('[aria-label="확정 보고서 전체 미리보기"] [data-export-page] table');
+      await printedTables.getByText('미산정' + (expected.length === 3 ? 'D' : ''), { exact: true }).waitFor();
+      assert.equal(await printedTables.count(), 1, 'A small merged table must print once; exclude the non-export measurement tree');
+      assert.deepEqual(await printedTables.locator('tr').evaluateAll(rows=>rows.map(row=>[...row.querySelectorAll(':scope > th, :scope > td')].map(cell=>(cell as HTMLElement).dataset.cellHorizontalAlign))), expected, 'Print preview must keep the same merged-table alignment');
+    }
     assert.deepEqual(errors,[]);
   }finally{await browser.close();await server.close();}
 });

@@ -1,16 +1,61 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { transpileModule, ScriptTarget } from 'typescript';
 import { claimTypeLabel } from '../apps/web/src/claim-types.js';
 import { generateProposalDocx, generateProposalPdf, type ProposalExportDocument } from '../apps/cloudflare/src/proposal-docx.js';
 import { meetingMinutesWorkbook } from '../apps/web/src/proposals/proposal-excel.js';
-import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, reportNativeBodySha256, readBoundReportNativeSource, type ReportNativeSource } from '../apps/web/src/documents/report-native-source.js';
+import { assertReportNativeA4Portrait, readReportNativeSource, readReportOriginalSource, reportSourceSha256, reportNativeBodySha256, readBoundReportNativeSource, type ReportNativeSource } from '../apps/web/src/documents/report-native-source.js';
+import { createNativeHwp } from '../apps/web/src/documents/editable-hwp-export.js';
 import { ApiError } from '../apps/web/src/api.js';
 import { joinReportPresentation } from '../packages/document-engine/src/report-presentation.js';
 
 const read = (path: string): string => readFileSync(path, 'utf8');
+
+test('CF183 actual HWP application rejects A3 or mixed paper before confirmation/upload/save and rejects preflight races', async () => {
+  const pkg = resolve('pinned-runtime/pkg');
+  const engine = await import(pathToFileURL(resolve(pkg, 'rhwp.js')).href);
+  await engine.default({ module_or_path: readFileSync(resolve(pkg, 'rhwp_bg.wasm')) });
+  const source = { html: '<p>합성 용지 검수</p>', text: '합성 용지 검수', tables: 0, images: 0, width: 794, height: 1123, margins: { top: 40, right: 40, bottom: 40, left: 40 } };
+  const a4 = createNativeHwp([source], engine.HwpDocument);
+  const a3 = createNativeHwp([{ ...source, width: 1123, height: 1588 }], engine.HwpDocument);
+  const mixed = createNativeHwp([source, { ...source, width: 1123, height: 1588 }], engine.HwpDocument);
+  const native = new engine.HwpDocument(a4), hwpx = native.exportHwpx(); native.free();
+  const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const expression = studio.slice(studio.indexOf('const applyHwpPagesToReport ='), studio.indexOf('const restoreRevision =')).trim().replace(/^const applyHwpPagesToReport = /u, '').replace(/;$/u, '');
+  const compiled = transpileModule(`(${expression})`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  for (const scenario of ['hwp', 'hwpx', 'a3', 'mixed', 'page-count', 'case-race', 'body-race', 'front-race', 'header-race']) {
+    const bytes = scenario === 'a3' ? a3 : scenario === 'mixed' ? mixed : scenario === 'hwpx' ? hwpx : a4;
+    const doc = new engine.HwpDocument(bytes);
+    const pages = Array.from({ length: doc.pageCount() }, (_, index) => doc.renderPageSvgWithProfile(index, 'print'));
+    doc.free();
+    if (scenario === 'page-count') pages.push(pages[0]);
+    let applications = 0;
+    const context = {
+      linkingHwpRef: { current: false }, selectedCaseRef: { current: 'test' }, selectedCaseId: 'test', loadedCaseId: 'test',
+      contentRef: { current: 'preserved body' }, editorJsonRef: { current: { type: 'doc' } }, reportFrontMatterRef: { current: { enabled: false } }, reportHeaderRef: { current: { text: '' } },
+      Uint8Array, assertReportNativeA4Portrait,
+      DOMParser: class { parseFromString(svg: string) { return { documentElement: { getAttribute: (name: string) => svg.match(new RegExp(`\\b${name}="([^"]*)"`, 'u'))?.[1] ?? null } }; } },
+      loadNativeHwpEngine: async () => {
+        if (scenario === 'case-race') context.selectedCaseRef.current = 'other';
+        if (scenario === 'body-race') context.contentRef.current = 'changed body';
+        if (scenario === 'front-race') context.reportFrontMatterRef.current.enabled = true;
+        if (scenario === 'header-race') context.reportHeaderRef.current.text = 'changed header';
+        return engine.HwpDocument;
+      },
+      hwpSvgPageForUpload: () => { throw new Error('Must not convert before the application boundary'); },
+      applySourcePagesToReport: async () => { applications++; }
+    };
+    const apply = runInNewContext(compiled, context) as (pages: string[], file: File) => Promise<void>;
+    const file = new File([Uint8Array.from(bytes)], scenario === 'hwpx' ? 'synthetic.hwpx' : 'synthetic.hwp');
+    if (scenario === 'hwp' || scenario === 'hwpx') { await apply(pages, file); assert.equal(applications, 1); }
+    else { await assert.rejects(apply(pages, file), /A4 세로|쪽수가 일치하지|원고가 변경/u); assert.equal(applications, 0, scenario + ': no confirmation, uploads or saves'); }
+    assert.deepEqual(new Uint8Array(await file.arrayBuffer()), bytes, 'Preflight never rewrites native source bytes');
+  }
+});
 
 test('CF177 report type labels preserve all six codes and unknown values', () => {
   const labels = ['현장조사 및 수량산출 클레임', '분석 보고서 작성 클레임', '일반적인 클레임', '재건축·재개발 공사비 협상', '사감정보고서', '물가변동'];

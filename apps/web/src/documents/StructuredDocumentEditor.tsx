@@ -411,7 +411,7 @@ export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     const requiresA4Migration = Number(next.attrs?.documentDefaultsVersion ?? 1) < 2;
     const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth, inferredWeights, requiresA4Migration);
     const normalizedWidths = normalizedColumns.widths.map((width) => Math.max(1, Math.round(width)));
-    const rightColumns = new Set(firstCells.flatMap((cell, index) => rightAlignedTableHeader.test(jsonText(cell)) ? [index] : []));
+    const rightColumns = new Set(headers.flatMap((header, index) => rightAlignedTableHeader.test(header) ? [index] : []));
     const occupiedUntil: number[] = [];
     rows.forEach((row, rowIndex) => {
       if (requiresA4Migration) row.attrs = { ...row.attrs, rowHeightMm: null };
@@ -483,6 +483,8 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
       });
     }
     // PM reads colwidth attributes, not CSS percentages. Supply the same complete grid to every path.
+    const headerCells = [...(table.rows[0]?.cells ?? [])].flatMap(cell => Array.from({ length: cell.colSpan || 1 }, () => cell));
+    const rightColumns = new Set(headerCells.flatMap((cell, index) => rightAlignedTableHeader.test(cell.textContent ?? '') ? [index] : []));
     const occupiedUntil: number[] = [];
     const pixelWidths = columns.map(column => Math.max(1, Math.round(Number.parseFloat(column.style.width) * 676 * requestedWidth / 10000)));
     [...table.rows].forEach((row, rowIndex) => {
@@ -490,17 +492,13 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
       [...row.cells].forEach(cell => {
         while ((occupiedUntil[columnIndex] ?? 0) > rowIndex) columnIndex++;
         cell.setAttribute('colwidth', pixelWidths.slice(columnIndex, columnIndex + cell.colSpan).join(','));
+        cell.dataset.cellVerticalAlign ||= 'middle';
+        const shouldRightAlign = rowIndex > 0 && (rightColumns.has(columnIndex) || rightAlignedTableValue.test(cell.textContent ?? ''));
+        cell.dataset.cellHorizontalAlign ||= shouldRightAlign ? 'right' : 'center';
         for (let index = columnIndex; index < columnIndex + cell.colSpan; index++) occupiedUntil[index] = rowIndex + cell.rowSpan;
         columnIndex += cell.colSpan;
       });
     });
-    const headerCells = [...(table.rows[0]?.cells ?? [])];
-    const rightColumns = new Set(headerCells.flatMap((cell, index) => rightAlignedTableHeader.test(cell.textContent ?? '') ? [index] : []));
-    [...table.rows].forEach((row, rowIndex) => [...row.cells].forEach((cell, cellIndex) => {
-      cell.dataset.cellVerticalAlign ||= 'middle';
-      const shouldRightAlign = rowIndex > 0 && (rightColumns.has(cellIndex) || rightAlignedTableValue.test(cell.textContent ?? ''));
-      cell.dataset.cellHorizontalAlign ||= shouldRightAlign ? 'right' : 'center';
-    }));
   });
   return parsed.querySelector('main')?.innerHTML ?? html;
 };

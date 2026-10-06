@@ -13,12 +13,15 @@ const approved=JSON.parse(readFileSync(join(repo,'scripts/fixtures/cf149-approve
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 test('runtime staging accepts only the entire approved snapshot before any writes',async t=>{
-  const temporaryParent=join(repo,'tmp');mkdirSync(temporaryParent,{recursive:true});
+  const temporaryParent=resolve(process.env.CF167_TEMP_ROOT||join(repo,'tmp'));mkdirSync(temporaryParent,{recursive:true});
   const root=mkdtempSync(join(temporaryParent,'cf167-stage-'));
   assert.equal(dirname(root),resolve(temporaryParent));assert.ok(root.startsWith(join(temporaryParent,'cf167-stage-')));
   t.after(()=>rmSync(root,{recursive:true,force:true})); // Only this test-owned, resolved directory.
-  for(const name of ['approved','studio-js','font','wasm','binding','patch','layout-patch','manifest','config','write-failure','config-commit-failure','rollback-failure'])await t.test(name,()=>{
+  for(const name of ['approved','studio-js','font','wasm','binding','patch','layout-patch','manifest','config','write-failure','config-commit-failure','rollback-failure'])await t.test(name,subtest=>{
     const candidate=join(root,name),studio=join(candidate,'studio'),pkg=join(candidate,'pkg'),web=join(candidate,'apps/web/dist');
+    // Release each isolated fixture before copying the next full runtime.
+    assert.equal(dirname(candidate),root);
+    subtest.after(()=>rmSync(candidate,{recursive:true,force:true}));
     mkdirSync(web,{recursive:true});mkdirSync(join(candidate,'scripts/fixtures'),{recursive:true});mkdirSync(join(candidate,'scripts/licenses'),{recursive:true});mkdirSync(join(candidate,'patches'),{recursive:true});
     cpSync(source,studio,{recursive:true});cpSync(nativePkg,pkg,{recursive:true});
     for(const file of ['scripts/cf146-stage-rhwp.mjs','scripts/fixtures/cf149-approved-runtime-manifest.json','scripts/licenses/NotoSerifKR-OFL.txt','patches/cf149-hwpx-edited-axis.patch','patches/cf149-rhwp-print-profile.patch','patches/cf146-rhwp-layout.patch'])copyFileSync(join(repo,file),join(candidate,file));

@@ -9,7 +9,8 @@ import { loadCaseOptions } from '../case-options';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
 import { confirmReportPages } from '../documents/confirm-report-pages';
-import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, reportNativeBodySha256, type ReportNativeSource } from '../documents/report-native-source';
+import { assertReportNativeA4Portrait, readReportNativeSource, readReportOriginalSource, reportSourceSha256, reportNativeBodySha256, type ReportNativeSource } from '../documents/report-native-source';
+import { loadNativeHwpEngine } from '../documents/native-hwp-runtime';
 import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
@@ -1059,6 +1060,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const applyHwpPagesToReport = async (pages: string[], editedSource?: File, originalSource?: File) => {
     if (linkingHwpRef.current || selectedCaseRef.current !== selectedCaseId || loadedCaseId !== selectedCaseId) throw new Error('프로젝트 원본 연결이 끝난 뒤 다시 적용해 주세요.');
     if (!editedSource) throw new Error('수정 원본이 없어 적용하지 않았습니다. HWP 편집기를 다시 열어 주세요.');
+    const before = contentRef.current, beforeJson = JSON.stringify(editorJsonRef.current);
+    const beforeFront = JSON.stringify(reportFrontMatterRef.current), beforeHeader = JSON.stringify(reportHeaderRef.current);
     for (let index = 0; index < pages.length; index++) {
       const svg = new DOMParser().parseFromString(pages[index], 'image/svg+xml');
       const vb = (svg.documentElement.getAttribute('viewBox') ?? '').split(/[ ,]+/u).map(Number);
@@ -1066,6 +1069,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const height = vb[3] || Number.parseFloat(svg.documentElement.getAttribute('height') ?? '0');
       if (!(width > 0 && height > width && Math.abs(width / height - 210 / 297) < .025)) throw new Error(`${index + 1}쪽이 A4 세로가 아니어서 가져오기를 중단했습니다. HWP에서 용지를 확인해 주세요.`);
     }
+    const bytes = await editedSource.arrayBuffer();
+    const Engine = await loadNativeHwpEngine(), native = new Engine(new Uint8Array(bytes));
+    try {
+      assertReportNativeA4Portrait(native);
+      if (!pages.length || native.pageCount() !== pages.length) throw new Error('원형 한글과 적용할 미리보기의 쪽수가 일치하지 않아 적용하지 않았습니다. 기존 보고서는 유지됩니다.');
+    } finally { native.free(); }
+    if (linkingHwpRef.current || selectedCaseRef.current !== selectedCaseId || loadedCaseId !== selectedCaseId || contentRef.current !== before || JSON.stringify(editorJsonRef.current) !== beforeJson
+      || JSON.stringify(reportFrontMatterRef.current) !== beforeFront || JSON.stringify(reportHeaderRef.current) !== beforeHeader) throw new Error('용지를 확인하는 동안 프로젝트 또는 원고가 변경되어 적용하지 않았습니다. 다시 확인해 주세요.');
     await applySourcePagesToReport(pages.length, 'HWP', index => hwpSvgPageForUpload(pages[index], `report-hwp-page-${index + 1}.jpg`), editedSource, originalSource);
   };
 

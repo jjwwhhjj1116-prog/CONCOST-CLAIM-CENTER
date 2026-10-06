@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { exportNativeWithReport } from './cf183-template-source-gate.mjs';
 
 const [engineDirectory, sourceFile] = process.argv.slice(2);
 assert.ok(engineDirectory && sourceFile, 'Usage: node scripts/cf149-hwpx-edit-roundtrip.mjs <engine pkg directory> <source.hwpx>');
@@ -14,7 +15,19 @@ const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const sourceHash = hash(source);
 const expectedPages = Number(process.env.CF149_EXPECTED_PAGES || 0);
 const outputFormat = process.env.CF149_EXPORT_FORMAT === 'hwp' ? 'hwp' : 'hwpx';
-const exportBytes = document => outputFormat === 'hwp' ? document.exportHwp() : document.exportHwpx();
+const exportReports = [];
+const exportBytes = document => {
+  if (process.env.CF149_REQUIRE_CONTENT_LOSS !== '1') return outputFormat === 'hwp' ? document.exportHwp() : document.exportHwpx();
+  const result = exportNativeWithReport(document, outputFormat);
+  exportReports.push(result.report);
+  return result.bytes;
+};
+const controlChain = document => {
+  const controls = JSON.parse(document.getControls());
+  assert.ok(Array.isArray(controls));
+  // Compare the entire ordered chain, including locations/props; no guessed global IDs.
+  return { count: controls.length, sha256: hash(JSON.stringify(controls)) };
+};
 console.log(JSON.stringify({ sourceSha256: sourceHash, engineSha256: hash(readFileSync(resolve(engineDirectory, 'rhwp_bg.wasm'))), outputFormat }));
 let failures = 0;
 const results = [];
@@ -50,8 +63,12 @@ for (const text of cases) {
       if (document.renderPageSvgWithProfile(page, 'print') !== reopened.renderPageSvgWithProfile(page, 'print')) differentPages.push(page + 1);
       if (page < reopenedAgain.pageCount() && reopened.renderPageSvgWithProfile(page, 'print') !== reopenedAgain.renderPageSvgWithProfile(page, 'print')) secondSaveDifferentPages.push(page + 1);
     }
-    const pass = inserted && retained && count === reopened.pageCount() && count === reopenedAgain.pageCount() && !differentPages.length && !secondSaveDifferentPages.length;
-    const result = { inputLength: text.length, inserted, retained, markerPageBefore, markerPageAfter, pagesBefore: count, pagesAfter: reopened.pageCount(), differentPages, secondSaveDifferentPages, pass };
+    const controlChains = process.env.CF149_REQUIRE_CONTENT_LOSS === '1' ? [document, reopened, reopenedAgain].map(controlChain) : [];
+    const controlChainsMatch = controlChains.length === 0 ? null : controlChains.every(chain => chain.sha256 === controlChains[0].sha256);
+    const reports = exportReports.splice(0);
+    const contentLossVerified = process.env.CF149_REQUIRE_CONTENT_LOSS !== '1' ? null : reports.length === 2 && reports.every(report => report.count === 0 && report.lossRecords === 0);
+    const pass = Number.isSafeInteger(count) && count > 0 && inserted && retained && count === reopened.pageCount() && count === reopenedAgain.pageCount() && !differentPages.length && !secondSaveDifferentPages.length && contentLossVerified !== false && controlChainsMatch !== false;
+    const result = { inputLength: text.length, inserted, retained, markerPageBefore, markerPageAfter, pagesBefore: count, pagesAfter: reopened.pageCount(), pagesAfterSecond: reopenedAgain.pageCount(), differentPages, secondSaveDifferentPages, controlChains, controlChainsMatch, exportReports: reports, contentLossVerified, pass };
     if (text && !inserted && process.env.CF149_DIAGNOSE === '1') {
       const firstLength = document.getParagraphLength(0, 0);
       console.log(JSON.stringify({ firstParagraphLength: firstLength,
