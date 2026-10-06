@@ -22,9 +22,11 @@
 
 최신 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거와 다음 시작점은 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
 
-CF183의 두 제품 수정과 전수 검사 도구는 아래 근거로 검증했으며 development 반영 준비를 마쳤다. 배포 버전·공개 자산 대조는 반영 완료 후 아래 기록에 추가한다. 현재 이 문장만으로 신규 배포 완료를 주장하지 않는다.
+현재 CF183 제품 소스 `0bc942c58d231ed3d79bfbc99608857833234e7a`는 GitHub 정상 push 후 development `034d6a7d-39eb-4a75-ae94-5ce893a0685c`에만 반영했다. `--keep-vars`로 기존 환경값을 유지하고 DB/migration/가오픈은 변경하지 않았다. 공개 자산 대조와 지정 단신 Chrome 재열기 확인까지 완료했으며, 전체 A–Z·PC 한컴 동일성 합격과 구분한다.
 
 ### CF183 — 실제 원본 전수 안정성·A4 사전검사·병합 표 정렬
+
+- 제품 commit/push `0bc942c58d231ed3d79bfbc99608857833234e7a`, development Worker `034d6a7d-39eb-4a75-ae94-5ce893a0685c` 배포 완료. E 보존 빌드를 `--assets`로 지정, `--keep-vars` 유지. main `/assets/index-C-HFnGrp.js` SHA `3ec3f962c6e0e37fd99c4cd4589d9e613246d007829627dcdfec04fc0f0378fc`, CSS index-8yhsWmje.css. health/readiness200·entry3/runtime28 exact SHA PASS. 지정 단신 Chrome ID4/탭839124063 재열기1회 후 최신 module/CC6/4단계/원제목/저장13:11:19/편집17+출력17 각각1..17/794×1123/alert0 확인. 초기 UI locator 대기는 짧은 deadline으로 실패했지만 fresh AX에서 정상 로드와 로그인 유지 확인, 재reload/입력/저장/다운로드/승인0. 신규 A3 오류·병합 정렬은 localhost 실제 handler/React 검사 근거이며 고객 원고에 음성 자료를 업로드하지 않았다.
 
 - 시작 branch `feat/CF123-es-v2`/HEAD `87fbe462d4e48f61c3756b90f793542d44f352b7`. repo AGENTS와 기존 감사 이력을 대조하고 총괄만 수정, 세 전문 독립 읽기 검토 수렴. 사용자 삭제 로그21개/PDF1개 unstaged 유지. CC6 v5 두 표식·저장·3종 다운로드는 이미 통과했으므로 재입력/재적용/재저장/재생성하지 않았다. 직원 요청·접근 배정·승인·납품·알림·ENV/DB/migration/가오픈 변경0.
 - 지정 단신 Chrome4 실제 라이브러리에서 REF01~09를 모두 펼쳐 회사 Drive 등록32/32(6/2/2/1/1/14/2/2/2), invalid filename/등록·업로드 실패/alert0 확인 후 CC6 4단계·저장13:11:19·편집/미리보기17쪽으로 돌아왔다. 열람 목록 확인을 Drive 바이트 대조나 한컴 동일성으로 확대하지 않았다.
