@@ -103,6 +103,9 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
     }
   };
   const splitTable = (table: HTMLTableElement) => {
+    // A cell-local manual break cannot split the table grid safely. Preserve
+    // the entire source and block output instead of silently ignoring it.
+    if (table.querySelector('[data-document-page-break]')) { appendAtomic(table); overflow = true; return; }
     const rows = [...table.rows]; // Direct table rows, not nested table rows.
     const headers = rows.filter((row, index) => row.parentElement?.tagName === 'THEAD' || (index === 0 && [...row.cells].every(cell => cell.tagName === 'TH')));
     const bodyRows = rows.filter(row => !headers.includes(row));
@@ -125,6 +128,7 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
         current = shell(); tester.append(current); return false;
       };
       let remaining = [...row.cells].map(cell => cell.cloneNode(true) as HTMLTableCellElement);
+      remaining.forEach(retainListOrdinals);
       const meaningful = (cell: HTMLTableCellElement) => Boolean(cell.textContent?.length || cell.querySelector('br'));
       for (let page = 0; page < 200; page++) {
         const part = row.cloneNode(false) as HTMLTableRowElement;
@@ -156,15 +160,22 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
           const fragment = (at: number, tail = false) => {
             const range = document.createRange(); range.selectNodeContents(cell);
             let [container, offset] = positions[at];
+            const continuation: HTMLElement[] = [];
             if (tail) {
               while (container !== cell && offset === (container.nodeType === Node.TEXT_NODE ? (container.textContent ?? '').length : container.childNodes.length)) {
                 const parent = container.parentNode!;
                 offset = Array.prototype.indexOf.call(parent.childNodes, container) + 1; container = parent;
               }
               range.setStart(container, offset);
+              for (let ancestor = container.nodeType === Node.ELEMENT_NODE ? container as HTMLElement : container.parentElement; ancestor && ancestor !== cell; ancestor = ancestor.parentElement) {
+                if (ancestor.tagName === 'LI') { ancestor.setAttribute('data-report-list-continuation', 'true'); continuation.push(ancestor); }
+              }
             } else range.setEnd(container, offset);
             const copy = cell.cloneNode(false) as HTMLTableCellElement;
-            copy.append(range.cloneContents()); return copy;
+            copy.append(range.cloneContents());
+            for (const item of copy.querySelectorAll<HTMLElement>('[data-report-list-continuation]')) { item.style.listStyleType = 'none'; item.removeAttribute('data-report-list-continuation'); }
+            continuation.forEach(item => item.removeAttribute('data-report-list-continuation'));
+            return copy;
           };
           let low = 0, high = positions.length - 1, best = -1;
           while (low <= high) {
@@ -232,6 +243,7 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
       // Tiptap's block image conversion may leave empty paragraph wrappers.
       // Ignore those only for an otherwise all-native page document.
       if (nativeOnly && node instanceof HTMLElement && node.matches('p') && !node.textContent?.trim() && !node.querySelector(':not(br)')) continue;
+      if (node instanceof HTMLElement && node.querySelector('table [data-document-page-break]')) { appendAtomic(node); overflow = true; continue; }
       if (node instanceof HTMLElement) {
         const nativePage = node.matches('img[data-report-source-page="true"]') ? node : !node.textContent?.trim() && node.querySelector('img[data-report-source-page="true"]');
         if (nativePage && node.querySelectorAll('img').length <= 1) { commit(); pages.push(nativePage.outerHTML); continue; }

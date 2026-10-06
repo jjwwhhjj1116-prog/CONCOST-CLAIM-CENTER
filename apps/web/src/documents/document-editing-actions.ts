@@ -102,6 +102,7 @@ export const documentActionLabel = (action: RepeatableDocumentAction) => ({
 export function applyDocumentAction(editor: Editor, action: RepeatableDocumentAction): boolean {
   if (!editor.isEditable || editor.isDestroyed) return false;
   const selection = editor.state.selection;
+  if (action.kind === 'pageBreak' && editor.isActive('table')) return false;
   if (['insertSpacer', 'spacing', 'deleteSpacing', 'table'].includes(action.kind) && selection instanceof CellSelection) return false;
   // Each explicit action (including F4) is one undo step, even in rapid succession.
   editor.view.dispatch(closeHistory(editor.state.tr));

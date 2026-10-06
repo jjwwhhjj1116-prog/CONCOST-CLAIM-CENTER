@@ -26,7 +26,7 @@ import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import * as Y from 'yjs';
 import { structuredDocumentContentSignature } from './structured-document-sync';
-import { fitImageDimensions, inferredTableColumnWeight, normalizeColumnWidths } from './structured-document-layout';
+import { fitImageDimensions, inferredTableColumnWeight, normalizeColumnWidths, tableCellColumnIndexes } from './structured-document-layout';
 import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
 import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
 import { DocumentReviewPages } from './DocumentPreviewPane';
@@ -336,16 +336,19 @@ export class DocumentTableView extends TableView {
     this.table.style.tableLayout = 'fixed';
     const columns = [...this.table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
     if (columns.length) {
+      const rows: ProseMirrorNode[][] = [];
+      node.forEach(row => { const cells: ProseMirrorNode[] = []; row.forEach(cell => cells.push(cell)); rows.push(cells); });
+      const columnIndexes = tableCellColumnIndexes(rows.map(row => row.map(cell => cell.attrs)));
       const storedWidths: number[] = [], weights: number[] = [];
       node.firstChild?.forEach(cell => {
         for (let index = 0; index < cell.attrs.colspan; index++) {
           storedWidths.push(Number(cell.attrs.colwidth?.[index]) || 0);
           let longest = cell.textContent.length;
           const columnIndex = storedWidths.length - 1;
-          node.forEach(row => { let column = 0; row.forEach(value => {
+          rows.forEach((row, rowIndex) => { row.forEach((value, cellIndex) => {
+            const column = columnIndexes[rowIndex][cellIndex];
             const span = Number(value.attrs.colspan) || 1;
             if (column <= columnIndex && columnIndex < column + span) longest = Math.max(longest, Math.ceil(value.textContent.length / span));
-            column += span;
           }); });
           weights.push(inferredTableColumnWeight(cell.textContent, longest));
         }
@@ -382,6 +385,7 @@ export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     const next: JSONContent = { ...node, ...(node.attrs ? { attrs: { ...node.attrs } } : {}), ...(node.content ? { content: node.content.map(visit) } : {}) };
     if (next.type !== 'table' || !next.content?.length) return next;
     const rows = next.content.filter((row) => row.type === 'tableRow');
+    const columnIndexes = tableCellColumnIndexes(rows.map(row => (row.content ?? []).map(cell => cell.attrs ?? {})));
     const firstCells = rows[0]?.content ?? [];
     const columnCount = firstCells.reduce((sum, cell) => sum + Math.max(1, Number(cell.attrs?.colspan) || 1), 0);
     if (!columnCount) return next;
@@ -394,15 +398,14 @@ export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     const headers = Array.from({ length: columnCount }, () => '');
     const longestValues = Array.from({ length: columnCount }, () => 0);
     rows.forEach((row, rowIndex) => {
-      let columnIndex = 0;
-      row.content?.forEach((cell) => {
+      row.content?.forEach((cell, cellIndex) => {
+        const columnIndex = columnIndexes[rowIndex][cellIndex];
         const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
         const text = jsonText(cell).trim();
         for (let index = 0; index < span && columnIndex + index < columnCount; index += 1) {
           if (rowIndex === 0) headers[columnIndex + index] = text;
           else longestValues[columnIndex + index] = Math.max(longestValues[columnIndex + index], text.length);
         }
-        columnIndex += span;
       });
     });
     const inferredWeights = headers.map((header, index) => inferredTableColumnWeight(header, longestValues[index]));
@@ -412,12 +415,10 @@ export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
     const normalizedColumns = normalizeColumnWidths(rawWidths, availableWidth, inferredWeights, requiresA4Migration);
     const normalizedWidths = normalizedColumns.widths.map((width) => Math.max(1, Math.round(width)));
     const rightColumns = new Set(headers.flatMap((header, index) => rightAlignedTableHeader.test(header) ? [index] : []));
-    const occupiedUntil: number[] = [];
     rows.forEach((row, rowIndex) => {
       if (requiresA4Migration) row.attrs = { ...row.attrs, rowHeightMm: null };
-      let columnIndex = 0;
-      row.content?.forEach((cell) => {
-        while ((occupiedUntil[columnIndex] ?? 0) > rowIndex) columnIndex++;
+      row.content?.forEach((cell, cellIndex) => {
+        const columnIndex = columnIndexes[rowIndex][cellIndex];
         const span = Math.max(1, Number(cell.attrs?.colspan) || 1);
         const cellText = jsonText(cell);
         cell.attrs = {
@@ -428,8 +429,6 @@ export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
             horizontalAlignment: rowIndex > 0 && (rightColumns.has(columnIndex) || rightAlignedTableValue.test(cellText)) ? 'right' : 'center'
           } : {})
         };
-        for (let index = columnIndex; index < columnIndex + span; index++) occupiedUntil[index] = rowIndex + Math.max(1, Number(cell.attrs.rowspan) || 1);
-        columnIndex += span;
       });
     });
     next.attrs = { ...next.attrs, documentDefaultsVersion: 2 };
@@ -459,10 +458,16 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
     table.dataset.tableWidth = String(requestedWidth);
     table.style.width = `${requestedWidth}%`;
     table.style.tableLayout = 'fixed';
+    const tableRows = [...table.rows].map(row => [...row.cells]);
+    const columnIndexes = tableCellColumnIndexes(tableRows.map(row => row.map(cell => ({ colspan: cell.colSpan, rowspan: cell.rowSpan }))));
     let columns = [...table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
     if (!columns.length && table.rows[0]?.cells.length) {
       const headerCells = [...table.rows[0].cells].flatMap(cell => Array.from({ length: cell.colSpan || 1 }, () => cell));
-      const longestValues = headerCells.map((_cell, columnIndex) => [...table.rows].slice(1).reduce((longest, row) => Math.max(longest, row.cells[columnIndex]?.textContent?.trim().length ?? 0), 0));
+      const longestValues = headerCells.map(() => 0);
+      tableRows.slice(1).forEach((row, index) => row.forEach((cell, cellIndex) => {
+        const column = columnIndexes[index + 1][cellIndex];
+        for (let offset = 0; offset < cell.colSpan && column + offset < longestValues.length; offset++) longestValues[column + offset] = Math.max(longestValues[column + offset], cell.textContent?.trim().length ?? 0);
+      }));
       const inferredWeights = headerCells.map((cell, index) => inferredTableColumnWeight(cell.textContent ?? '', longestValues[index]));
       const inferredWidths = normalizeColumnWidths(Array.from({ length: headerCells.length }, () => 0), 100, inferredWeights).widths;
       const colgroup = parsed.createElement('colgroup');
@@ -485,18 +490,14 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
     // PM reads colwidth attributes, not CSS percentages. Supply the same complete grid to every path.
     const headerCells = [...(table.rows[0]?.cells ?? [])].flatMap(cell => Array.from({ length: cell.colSpan || 1 }, () => cell));
     const rightColumns = new Set(headerCells.flatMap((cell, index) => rightAlignedTableHeader.test(cell.textContent ?? '') ? [index] : []));
-    const occupiedUntil: number[] = [];
     const pixelWidths = columns.map(column => Math.max(1, Math.round(Number.parseFloat(column.style.width) * 676 * requestedWidth / 10000)));
-    [...table.rows].forEach((row, rowIndex) => {
-      let columnIndex = 0;
-      [...row.cells].forEach(cell => {
-        while ((occupiedUntil[columnIndex] ?? 0) > rowIndex) columnIndex++;
+    tableRows.forEach((row, rowIndex) => {
+      row.forEach((cell, cellIndex) => {
+        const columnIndex = columnIndexes[rowIndex][cellIndex];
         cell.setAttribute('colwidth', pixelWidths.slice(columnIndex, columnIndex + cell.colSpan).join(','));
         cell.dataset.cellVerticalAlign ||= 'middle';
         const shouldRightAlign = rowIndex > 0 && (rightColumns.has(columnIndex) || rightAlignedTableValue.test(cell.textContent ?? ''));
         cell.dataset.cellHorizontalAlign ||= shouldRightAlign ? 'right' : 'center';
-        for (let index = columnIndex; index < columnIndex + cell.colSpan; index++) occupiedUntil[index] = rowIndex + cell.rowSpan;
-        columnIndex += cell.colSpan;
       });
     });
   });
@@ -916,7 +917,10 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   };
 
   const runAction = (action: RepeatableDocumentAction) => {
-    if (!editor || !applyDocumentAction(editor, action)) return false;
+    if (!editor || !applyDocumentAction(editor, action)) {
+      if (action.kind === 'pageBreak' && editor?.isActive('table')) setRepeatStatus('표 셀 안에서는 쪽을 나눌 수 없습니다. 표 앞이나 뒤의 본문에서 쪽 나누기를 사용하세요.');
+      return false;
+    }
     editor.view.focus();
     lastActionRef.current = action;
     setRepeatLabel(documentActionLabel(action));
@@ -926,7 +930,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const repeatAction = () => {
     const action = lastActionRef.current;
     if (!editor || !action || !applyDocumentAction(editor, action)) {
-      setRepeatStatus(action ? '이 작업을 적용할 위치를 먼저 선택하세요.' : '먼저 서식이나 삽입 작업을 하세요.');
+      setRepeatStatus(action?.kind === 'pageBreak' && editor?.isActive('table') ? '표 셀 안에서는 쪽을 나눌 수 없습니다. 표 앞이나 뒤의 본문에서 쪽 나누기를 사용하세요.' : action ? '이 작업을 적용할 위치를 먼저 선택하세요.' : '먼저 서식이나 삽입 작업을 하세요.');
       return;
     }
     setRepeatStatus(`${documentActionLabel(action)} 반복 완료`);

@@ -371,6 +371,40 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
       assert.ok(result.heights.every(page=>page.height<=401&&page.width<=601),JSON.stringify(result.heights));
       assert.ok(result.headers.every(header=>header==='원문확인'));assert.ok(result.cols.every(count=>count===2));
     });
+    await t.test('CF184 tall table lists retain reversed explicit numbers and hide only continued item markers',async()=>{
+      const result=await page.evaluate(async()=>{
+        const {paginateReport}=await import('/src/documents/report-pagination.ts' as string) as typeof import('../apps/web/src/documents/report-pagination');
+        const cases=[Array.from({length:200},(_,i)=>'<li>항목'+i+'</li>').join(''), '<li value="7">'+('긴 목록 근거 123,456원. ').repeat(300)+'</li><li value="8">다음 항목</li>'];
+        return cases.map((items,index)=>{
+          const root=document.createElement('div');root.style.cssText='position:absolute;left:-2000px;width:400px;font-size:14px;line-height:24px';
+          root.innerHTML='<table><tbody><tr><td><ol'+(index===0?' reversed start="200"':' start="7"')+'>'+items+'</ol></td></tr></tbody></table>';document.body.append(root);
+          const before=root.innerHTML,expected=root.textContent;
+          try{const layout=paginateReport(root,240);const docs=layout.pages.map(html=>new DOMParser().parseFromString(html,'text/html'));
+            return{overflow:layout.overflow,pages:layout.pages.length,unchanged:root.innerHTML===before,text:docs.map(doc=>doc.querySelector('td')?.textContent??'').join(''),expected,
+              visible:docs.flatMap(doc=>[...doc.querySelectorAll<HTMLLIElement>('li')]).filter(item=>item.style.listStyleType!=='none').map(item=>Number(item.getAttribute('value')))};
+          }finally{root.remove();}
+        });
+      });
+      for(const item of result){assert.equal(item.overflow,false);assert.ok(item.pages>1);assert.equal(item.unchanged,true);assert.equal(item.text,item.expected);}
+      assert.deepEqual(result[0].visible,Array.from({length:200},(_,i)=>200-i));
+      assert.deepEqual(result[1].visible,[7,8],'Continuation must not restart a partially consumed list item');
+    });
+    await t.test('CF184 cell-local manual page breaks preserve short, tall and image-only tables',async()=>{
+      const result=await page.evaluate(async()=>{
+        const {paginateReport}=await import('/src/documents/report-pagination.ts' as string) as typeof import('../apps/web/src/documents/report-pagination');
+        const image='<img data-report-source-page="true" src="data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600"><rect width="400" height="600" fill="white"/></svg>')+'">';
+        const table='<table><tr><td>'+image+'<div data-document-page-break="true"></div></td></tr></table>';
+        const cases=[...([1,100].map(count=>'<table><tr><td><p>'+('앞 내용 '.repeat(count))+'</p><div data-document-page-break="true"></div><p>뒤 내용</p></td></tr></table>')),table,'<figure>'+table+'</figure>',image];
+        return cases.map((html,index)=>{
+          const root=document.createElement('div');root.style.cssText='position:absolute;left:-2000px;width:400px;font-size:14px;line-height:24px';
+          root.innerHTML=html;document.body.append(root);
+          const before=root.innerHTML,text=root.textContent;
+          try{const layout=paginateReport(root,240);const printed=new DOMParser().parseFromString(layout.pages.join(''),'text/html');return{blocked:index<4,overflow:layout.overflow,unchanged:root.innerHTML===before,tables:printed.querySelectorAll('table').length,markers:printed.querySelectorAll('[data-document-page-break]').length,text:printed.body.textContent,expected:text,images:printed.querySelectorAll('img').length,expectedImages:root.querySelectorAll('img').length};}
+          finally{root.remove();}
+        });
+      });
+      for(const item of result){assert.equal(item.overflow,item.blocked);assert.equal(item.unchanged,true);assert.equal(item.tables,item.blocked?1:0);assert.equal(item.markers,item.blocked?1:0);assert.equal(item.text,item.expected);assert.equal(item.images,item.expectedImages);}
+    });
     await t.test('the portrait preview paginates long table evidence without hiding export pages',async()=>{
       const expected=('긴 계약 원문과 적용 근거 123,456원. ').repeat(220);
       await page.evaluate(text=>{

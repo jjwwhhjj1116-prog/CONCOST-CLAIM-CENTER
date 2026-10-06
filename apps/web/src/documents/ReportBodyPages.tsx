@@ -38,7 +38,7 @@ export function ReportBodyPages({ html, header, contents = false, tocTitle = '�
     {layout.toc.map((page, index) => <section className="report-final-body report-final-toc report-paginated-sheet" key={`toc-${index}`} data-export-page data-export-page-policy="fit" data-page-fit-overflow={!layout.ready || layout.overflow} data-page-number={index + 2}>
       <h2>{index === 0 ? tocTitle : `${tocTitle} (계속)`}</h2><article className="report-toc-content" dangerouslySetInnerHTML={{ __html: page }}/><footer className="report-page-number">- 목차 {index + 1} -</footer>
     </section>)}
-    {layout.overflow && <p className="error-box" role="alert">한 페이지보다 큰 표 행·이미지 또는 머리글이 있습니다. 크기를 줄여 주세요. 내용은 보존되며, 잘린 상태로 출력하지 않습니다.</p>}
+    {layout.overflow && <p className="error-box" role="alert">한 쪽에 담을 수 없는 표 행·이미지·머리글 또는 표 셀 안 쪽 나누기가 있습니다. 크기를 조정하거나 셀 안 쪽 나누기를 표 밖으로 옮겨 주세요. 내용은 보존되며, 문제가 해결될 때까지 출력하지 않습니다.</p>}
     {layout.pages.map((page, index) => <section className={`report-final-body report-paginated-sheet${page.includes('data-report-source-page="true"') ? ' report-native-sheet' : ''}`} key={index} data-export-page data-export-page-policy="fit" data-page-fit-overflow={!layout.ready || layout.overflow} data-page-number={index + layout.toc.length + 2} data-report-body-page={index + 1}>
       {header}<article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: page }}/>
       {!page.includes('data-report-source-page="true"') && <footer className="report-page-number">- {index + 1} -</footer>}

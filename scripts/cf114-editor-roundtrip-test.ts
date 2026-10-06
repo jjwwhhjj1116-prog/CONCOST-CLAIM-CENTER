@@ -22,12 +22,14 @@ test('CF114 real editor preserves formatting and emits changes only for document
       import React, { useState, createRef } from 'react';
       import { createRoot } from 'react-dom/client';
       import { StructuredDocumentEditor } from '/src/documents/StructuredDocumentEditor.tsx';
+      import { tableEditingContracts } from '/qa/table-editing-contracts.ts';
+      import '/src/documents/StructuredDocumentEditor.css';
       const ref = createRef(); let changes = 0;
       function Harness() {
         const [readOnly, setReadOnly] = useState(false);
         const [value, setValue] = useState('검수 원문');
         const [editorJson, setEditorJson] = useState(undefined);
-        globalThis.cf114EditorTest = { ref, setReadOnly, changes: () => changes };
+        globalThis.cf114EditorTest = { ref, setReadOnly, changes: () => changes, tableContracts: tableEditingContracts };
         return React.createElement(StructuredDocumentEditor, { ref, label: 'CF114 합성 편집기', value, editorJson, readOnly,
           onChange: (markdown, json) => { changes++; setValue(markdown); setEditorJson(json); } });
       }
@@ -95,6 +97,31 @@ test('CF114 real editor preserves formatting and emits changes only for document
       const replaced = await read();
       assert.equal(accepted, true); assert.ok(replaced.changes > typed.changes);
       assert.match(replaced.markdown, /검수 수정 추가 입력/u); assert.doesNotMatch(replaced.markdown, /검수 원문|지연된 AI 응답/u);
+    });
+    await t.test('CF184 actual table schema and node view preserve merged width and reject cell-local breaks',async()=>{
+      const results=await page.evaluate(()=>(globalThis as any).cf114EditorTest.tableContracts()) as string[];
+      assert.ok(results.length>=11);
+      assert.deepEqual(results.filter(result=>result.startsWith('FAIL')),[]);
+      assert.ok(results.some(result=>result.includes('CF184 행 병합 폭')));
+      assert.ok(results.some(result=>result.includes('CF184 표 안 쪽나누기')));
+    });
+    await t.test('CF184 real toolbar and F4 explain rejected table page breaks without editing the document',async()=>{
+      const read=()=>page.evaluate(()=>{const api=(globalThis as any).cf114EditorTest;return{json:api.ref.current.getJSON(),changes:api.changes()};});
+      await page.locator('.tiptap > p').first().click();
+      await page.getByRole('button',{name:'현재 위치에서 다음 A4 쪽 시작',exact:true}).click();
+      assert.ok(JSON.stringify((await read()).json).includes('documentPageBreak'),'Outside-table page breaks remain supported');
+      await page.evaluate(()=>(globalThis as any).cf114EditorTest.ref.current.insertHtml('<table><tr><td>셀 안 검수</td><td>123,456원</td></tr></table>'));
+      await page.locator('.tiptap td').getByText('셀 안 검수',{exact:true}).click();
+      const before=await read();
+      const message='표 셀 안에서는 쪽을 나눌 수 없습니다. 표 앞이나 뒤의 본문에서 쪽 나누기를 사용하세요.';
+      await page.getByRole('button',{name:'현재 위치에서 다음 A4 쪽 시작',exact:true}).click();
+      await page.getByText(message,{exact:true}).waitFor();assert.deepEqual(await read(),before);
+      await page.getByRole('button',{name:/^F4 반복:/u}).click();
+      await page.getByText(message,{exact:true}).waitFor();assert.deepEqual(await read(),before);
+      await page.locator('.tiptap td').getByText('셀 안 검수',{exact:true}).click();
+      await page.keyboard.press('F4');
+      await page.getByText(message,{exact:true}).waitFor();assert.deepEqual(await read(),before);
+      assert.deepEqual(browserErrors,[]);
     });
   } finally { await browser.close(); await server.close(); }
 });

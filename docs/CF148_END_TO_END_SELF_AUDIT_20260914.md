@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF183, 2026-10-06
+## 현재 판정 — CF184, 2026-10-06
 
 아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
@@ -18,11 +18,25 @@
 | 관리자 기술 검수 | 미승인 저장본 3종 경로 및 변경 차단 구현. 실제 CC6 v5에서 각1회 다운로드: HWP 저장 작업본과 exact bytes/17쪽, DOCX17구역·17그림·A4, PDF17쪽 A4·전쪽 렌더 배치 PASS | DOCX는 페이지 그림이며 개별 본문/표 편집 불가. PC Word/한컴·전체32원본 대조는 별도. 직원 승인/배정을 기본 개발 QA의 선행조건으로 요구하지 않음 |
 | 원본 전수 내부 안정성 | CF183 현재 원본32 지문 일치. HWP13/HWPX3의855쪽 무편집 2회 재저장·쪽수·전쪽 print SVG·컨트롤 사슬·loss 보고서 PASS, 원본 불변. PDF15의475쪽 용지 수치와 native271구역 읽기 확인 | 같은 파서 내부 자기대조이며 최초 파싱 누락·실제 편집·PC 한컴 동일성·PDF 전쪽 시각 대조는 별도. XLSX1은 목록 확인만 |
 | 원형 실제 용지·병합 표 | A3를 A4로 오인하던 비율 검사 보완: 가져오기와 출력이 실제 HU 치수 기준 공유, 확인/업로드/저장 이전 차단. 병합 헤더·행 병합의 자동 정렬 열 오류 FAIL→최소 수정→실제 편집/저장/재열기/출력 쪽 PASS | 기존 원형을 임의 A4로 축소하지 않음. 기존 v2 명시 정렬·값·폭·행높이 보존. 전체 업무·모든 표 기능 합격을 뜻하지 않음 |
+| 구조형 표·쪽 나누기 | CF184 행 병합 자동 폭의 열 위치 오류, 긴 표 목록 번호 재시작, 셀 안 쪽나누기 무시를 수정. 실제 React 버튼·F4·Undo 불변 및 사진/본문 보존 검사 PASS | 합성 로컬 QA이며 PC 한컴 원형/업무 전구간 동일성 증명과 구분. 셀 내부 수동 쪽나누기는 지원하지 않고 표 밖으로 옮기도록 안내 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
 최신 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거와 다음 시작점은 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
 
 현재 CF183 제품 소스 `0bc942c58d231ed3d79bfbc99608857833234e7a`는 GitHub 정상 push 후 development `034d6a7d-39eb-4a75-ae94-5ce893a0685c`에만 반영했다. `--keep-vars`로 기존 환경값을 유지하고 DB/migration/가오픈은 변경하지 않았다. 공개 자산 대조와 지정 단신 Chrome 재열기 확인까지 완료했으며, 전체 A–Z·PC 한컴 동일성 합격과 구분한다.
+
+### CF184 — 행 병합 자동 폭·긴 표 목록 번호·셀 내부 쪽나누기 보호
+
+- 시작 branch `feat/CF123-es-v2`, HEAD `2a405ec0708c51521665f951278aedb569ee7b79`. 현재 프로젝트 AGENTS 및 기존 감사/보호 인수인계를 대조하고 총괄만 수정, 세 전문 읽기 전용 검토 결과 수렴. 사용자 삭제 로그21/PDF1은 스테이징하지 않는다. CC6 v5의 두 표식·원고·다운로드·이력은 이미 검증된 상태여서 다시 입력/적용/저장/생성하지 않는다. 고객 CC4/CC5, 직원 검토요청·접근배정·승인·납품·이메일, DB/migration/ENV/API키, 가오픈 변경0. 기본 QA는 관리자 유종욱, 업무 최종승인 CEO/DIRECTOR 및 자기승인 차단 유지.
+- 확정 결함1: `No` 행 병합 아래 긴 본문이 번호 열의 문자열로 오인되어 실제 normalize 폭 `[490,186]`으로 출력되고 기대 `[118,558]`에 FAIL. 공유 `tableCellColumnIndexes`를 JSON/HTML/실제 Table NodeView에 연결해 자동 폭·치수·정렬의 논리 열 위치를 통일. 수정 후 해당 기대값 PASS, 입력 불변·idempotent·정규화/HTML 재진입 폭 유지. 독립 실제 ProseMirror TableMap와 고정 seed 200개 유효 병합 grid의 열 위치 전부 일치. 기존 v2 24/652 폭·좌/중앙 정렬·bottom·18 행높이·원문 JSON exact 보존. 새 단위검사에 다중 rowspan/colspan 연결 및 잘못된 span의 기존 1 fallback 포함. 업무 금액·산출식 변경0.
+- 확정 결함2: 긴 표 셀 안 ordered list는 쪽별 range 복제로 번호가 다시 시작되고 분할된 동일 항목의 marker가 중복됨. 렌더링 사본에서 원래 ordinal을 유지하고 이어지는 LI의 marker만 숨김. 실제 Chrome의 reversed200 항목 200→1, 명시7/다음8, 긴 항목의 다음 쪽 이어짐, nested/emoji/금액/헤더·colspan·inline 근거 보존 PASS. 원본 DOM·저장 JSON에는 임시 continuation marker를 남기지 않는다.
+- 확정 결함3: 표 셀 안 수동 쪽나누기가 입력되지만 출력에서 조용히 무시됨. 실제 편집 action의 history/dispatch 이전에 거부하고 버튼/F4 동일 안내 제공. 실제 React에서 표 밖 쪽나누기 성공 후 셀 안 버튼·반복 버튼·F4 키 거부 및 문서 JSON/onChange/Undo depth 불변 PASS. 이미 가져온 내부 marker는 표·문장·사진·marker를 보존하고 overflow로 출력 차단, 표 밖 이동 안내. 추가 독립 부정검사에서 이미지 전용 표가 native-page 바로가기 때문에 guard를 우회하는 FAIL을 실제 루트 CF146에 재현→guard를 바로가기 전으로 이동→짧은/긴/이미지-only/figure-wrapped 표 보존+차단, 단독 원본쪽 이미지는 그대로 통과 PASS. 셀 내부 쪽 나눔을 지원하는 것처럼 표시하지 않는다.
+- 실행: root CF94/CF99 8/8, CF114 실제 편집기5/5(부모 포함), 마지막 CF114/CF146/CF149 묶음26/26, 별도 `CF146_EXPORT_QA=1` 실제 출력22/22(부모 포함), CF96/CF98/CF146 contract/CF69 관련15/15, CF167 staging14/14 PASS. 반복/부모 숫자를 실제 업무 시나리오 수로 합산하지 않는다. 새 테스트 dynamic import의 타입 누락6개 및 동적 F4 접근성 라벨 locator 오류는 후보 단계에 검출·수정 후 공식 root `pnpm typecheck`/workspace 검사 PASS. 제품 기준 검사를 완화하거나 파일을 제외하지 않는다. Impeccable layout detector `[]`, diff-check PASS.
+- 합성 실제 다운로드: 표지→자동목차→본문→2열×3행 사진6개, 캡션·병합 표·개별 DOCX 텍스트/사진 보존. 긴 표 실제 PDF/DOCX 쪽수=미리보기·원문 exact. Poppler 합성 PDF4쪽/595.28×841.89pt/rotation0 확인, 실제 PDF 사진대지4쪽과 미리보기 PNG 육안 확인(자르기·누락·캡션 겹침 없음). 원본 사진이 아닌 합성 PHOTO fixture이며 전체 실무 템플릿 시각 합격으로 확대하지 않는다. DOCX ZIP/내용·치수 검사는 Word 실앱 렌더 검수와 구분.
+- 실제 원본 독립 읽기 대조: inventory32 SHA 현재 유일 매칭/불변, CF183 r3 native16/855쪽 게이트와 source/engine/chain/loss/diff tamper5종 거부 확인. HWPX 3개 REF011/017/025의 동일형식 무편집 재저장에서 ordered 표 셀 주소/span/치수·그림 위치/ref/clip/rect/size canonical SHA와 BinData 전체 byte-multiset SHA 일치/loss0; 364/47/45쪽 그림423/90/48 및 빈 href0 확인. 이는 원시 데이터 보존 증거이며 실제 크롭·색상·배치·PC 한컴 동일성의 시각 PASS는 아니다. 기존 동일형식 기본 및 위험한 교차형식 제한 유지.
+- 지정 단신 Chrome은 세션마다 browser 숫자 ID가 달라져 extensionInstanceId `d9cb0cc6-3a2f-4c07-862e-d6441bda9044`/기존 탭839124063으로 식별. CF183 활성 화면 읽기 확인: CC6/4단계/저장13:11:19/편집17+visible출력17 모두1..17·loaded/natural1587×2244·editor/output URL 순서 exact·captured console0. 추가17 이미지는 hidden measurement이며 출력 중복 아님. 이번 초기 열람은 CF184 배포 후 확인과 구분한다. 새 로그인 요구·원고 입력·저장·다운로드0.
+- `cf:build` PASS, 신규 main `/assets/index-BtEgmOJA.js`, CSS 기존 index-8yhsWmje.css. 승인 runtime28/manifest452b06bd…/WASM bcc40a79…/binding ad01e939… 유지, 엔진 재빌드0. C 여유 약250MB를 실제 확인하고 기존 CF183 E rollback은 보존. CF184 빌드43파일/37,620,596B를 `E:\Codex-QA\claim-center-cf184-20261006\dist`에 SHA 전부 exact 보호 복사, Cdist도 유지. 기본 sandbox E 접근 거부는 공식 승인 실행으로 분리했으며 OS/ACL/서비스 변경0. 후보 복사의 폴더 옵션 오류는 빈 신규 폴더에만 발생, 원본·기존 자료 수정0. 공식 workspace dependency loader 무응답은 제한 대기 후 취소했으며 Word 실앱 검수 성공이라고 주장하지 않는다.
+- development 배포·원격 SHA·최종 지정 Chrome 확인은 이 기록 시점 대기. 검증된 정확 소스만 commit/push 후 `--keep-vars`로 development에 반영하며 가오픈은 승격하지 않는다. 다음은 원본↔PDF 전쪽 시각대조/PC Word·한컴→원형 의미별 목차·챕터→검토2.xlsx·A–Z·제안서4~12 실물 순. 전체 합격과 가이드 영상 제작은 아직 미완료다.
 
 ### CF183 — 실제 원본 전수 안정성·A4 사전검사·병합 표 정렬
 

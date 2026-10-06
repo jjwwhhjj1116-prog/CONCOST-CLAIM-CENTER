@@ -116,5 +116,21 @@ export function tableEditingContracts():string[]{
     assert(!selectTableCells(editor.view,'table')&&!applyDocumentAction(editor,{kind:'measurements',width:null,height:30}),'읽기전용 명령');
     gesture(editor,'row',24);assert(JSON.stringify(editor.getJSON())===before,'읽기전용 드래그');
   });
+  check('CF184 행 병합 폭 추론은 생략 셀의 실제 논리 열을 사용',editor=>{
+    const html='<table><tr><th rowspan="2">No</th><th>금액</th></tr><tr><td>'+('미산정'.repeat(30))+'</td></tr></table>';
+    const normalized=markdownToEditorHtml(html);
+    editor.commands.setContent(normalized);
+    const first=widths(editor);assert(first[1]>first[0]*3,'내용 열 대신 번호 열을 넓힘');
+    const saved=normalizeA4TableJson(editor.getJSON());
+    editor.commands.setContent(saved);assert(equalWidths(first,widths(editor)),'JSON 재진입 폭 변경');
+    editor.commands.setContent(renderStructuredDocumentHtml(saved,{pageMode:'a4-portrait'}));
+    assert(equalWidths(first,widths(editor)),'HTML 재진입 폭 변경');
+    assert(editor.getText().includes('미산정'.repeat(30)),'원문 변경');
+  });
+  check('CF184 표 안 쪽나누기 거부는 문서와 Undo 기록을 바꾸지 않음',editor=>{
+    choose(editor);const before=JSON.stringify(editor.getJSON()),depth=undoDepth(editor.state);
+    assert(!applyDocumentAction(editor,{kind:'pageBreak'}),'표 안 쪽나누기 허용');
+    assert(JSON.stringify(editor.getJSON())===before&&undoDepth(editor.state)===depth,'거부했지만 문서/history 변경');
+  });
   return results;
 }

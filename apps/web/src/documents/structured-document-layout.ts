@@ -1,3 +1,19 @@
+/** Logical start columns; later rows omit cells already occupied by a rowspan. */
+export const tableCellColumnIndexes = (rows: ReadonlyArray<ReadonlyArray<{ colspan?: unknown; rowspan?: unknown }>>): number[][] => {
+  const occupiedUntil: number[] = [];
+  const span = (value: unknown) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : 1;
+  return rows.map((cells, rowIndex) => {
+    let column = 0;
+    return cells.map(cell => {
+      while ((occupiedUntil[column] ?? 0) > rowIndex) column++;
+      const start = column, width = span(cell.colspan), height = span(cell.rowspan);
+      for (let index = column; index < column + width; index++) occupiedUntil[index] = rowIndex + height;
+      column += width;
+      return start;
+    });
+  });
+};
+
 export const inferredTableColumnWeight = (header: string, longestValueLength: number): number => {
   // A numeric/status label must not force a long value into a one-character column.
   const textWeight = Math.min(2.5, Math.sqrt(Math.min(100, Math.max(header.length * 2, longestValueLength))) / 4);

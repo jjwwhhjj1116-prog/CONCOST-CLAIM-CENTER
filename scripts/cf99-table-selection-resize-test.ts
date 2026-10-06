@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { normalizeColumnWidths } from '../apps/web/src/documents/structured-document-layout';
+import { normalizeColumnWidths, tableCellColumnIndexes } from '../apps/web/src/documents/structured-document-layout';
+
+test('CF184 logical columns respect connected row/column spans without mutating input',()=>{
+  const rows=[[{colspan:2,rowspan:3},{colspan:2}],[{rowspan:2},{}],[{}],[{},{}]];
+  const before=JSON.stringify(rows);
+  assert.deepEqual(tableCellColumnIndexes(rows),[[0,2],[2,3],[3],[0,1]]);
+  assert.equal(JSON.stringify(rows),before);
+  assert.deepEqual(tableCellColumnIndexes([[{colspan:Infinity},{colspan:1.5,rowspan:-1},{rowspan:NaN}],[{}]]),[[0,1,2],[0]]);
+});
 
 test('CF99 current complete column widths preserve intentional narrow proportions',()=>{
   for(const widths of [[24,652],[30,646],[48,628],[24,24,628],[10,30],[19,19,19,19,19,19,19,19,19,19,19,19]]){
