@@ -76,12 +76,16 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     originalFileRef.current = null;
     setBusy(true);
     const options: EditorOptions = {
-      width: '100%', height: '100%', renderer: 'canvas2d', requestTimeoutMs: 90_000,
-      ...(studioUrl ? { studioUrl } : {})
+      width: '100%', height: '100%', renderer: 'canvas2d', requestTimeoutMs: 90_000
     };
     const host = editorHostRef.current;
     void import('@rhwp/editor')
-      .then(({ createEditor }) => createEditor(host, options))
+      .then(({ createEditor }) => {
+        const runtimeUrl = new URL(studioUrl || 'https://edwardkim.github.io/rhwp/', document.baseURI);
+        // Embedded host documents skip startup recovery UI without deleting drafts.
+        runtimeUrl.searchParams.set('chrome', 'embed');
+        return createEditor(host, { ...options, studioUrl: runtimeUrl.href });
+      })
       .then(async (editor) => {
         if (!active) { editor.destroy(); return; }
         instance = editor;

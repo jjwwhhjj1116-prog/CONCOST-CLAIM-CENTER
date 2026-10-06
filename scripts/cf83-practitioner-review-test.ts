@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { transpileModule, ScriptTarget } from 'typescript';
 import { claimTypeLabel } from '../apps/web/src/claim-types.js';
 import { generateProposalDocx, generateProposalPdf, type ProposalExportDocument } from '../apps/cloudflare/src/proposal-docx.js';
 import { meetingMinutesWorkbook } from '../apps/web/src/proposals/proposal-excel.js';
@@ -39,6 +41,69 @@ test('CF177 report lists, search, and authoring hints use the shared type labels
   assert.ok(delivery.includes('{claimTypeLabel(selected.claimType)}'), 'final delivery project must show the shared type name');
   assert.ok(previewStudio.includes('프로젝트 유형 {authoring.typeGuideline?.typeName || claimTypeLabel(authoring.claimType)}'), 'AI authoring hint must use the approved type name with the shared fallback');
   for (const source of [list, nativeStudio]) assert.ok(!source.includes('{report.case.claimType}'), 'raw stored type codes must not replace member-facing report labels');
+});
+
+test('CF178 explicit HWP sources use embedded mode without deleting recovery drafts', () => {
+  const dialog = read('apps/web/src/documents/RhwpEditorDialog.tsx');
+  assert.ok(dialog.includes("runtimeUrl.searchParams.set('chrome', 'embed')"), 'an explicitly linked document must not be replaced by startup recovery UI');
+  assert.ok(dialog.includes('studioUrl: runtimeUrl.href'), 'the SDK must receive the embedded URL');
+  assert.ok(!dialog.includes('indexedDB.deleteDatabase') && !dialog.includes('localStorage.clear'), 'recovery data must not be deleted to hide the prompt');
+});
+
+test('CF178 whole document application confirms report persistence before closing the editor', () => {
+  const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const apply = studio.slice(studio.indexOf('const applySourcePagesToReport ='), studio.indexOf('const applyHwpPagesToReport ='));
+  const changed = apply.indexOf('setEditorJson(parsed)');
+  const saved = apply.indexOf("if (!await saveNow('MANUAL', false, true))", changed);
+  const closed = apply.indexOf('setHwpEditorOpen(false)', changed);
+  assert.ok(changed >= 0 && saved > changed && closed > saved, 'closing an imported editor must wait for the exact new draft save');
+  assert.ok(apply.includes('appliedToWorkspace ?'), 'a draft save failure must not falsely claim the local working body was unchanged');
+});
+
+test('CF178 actual application function waits for save and retains unsaved imports on failure', async () => {
+  const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const expression = studio.slice(studio.indexOf('const applySourcePagesToReport ='), studio.indexOf('const applyHwpPagesToReport =')).trim().replace(/^const applySourcePagesToReport = /u, '').replace(/;$/u, '');
+  const compiled = transpileModule(`(${expression})`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  for (const succeeds of [true, false]) {
+    let releaseSave!: (saved: boolean) => void;
+    let savedRequest!: () => void;
+    const requested = new Promise<void>(resolve => { savedRequest = resolve; });
+    const response = new Promise<boolean>(resolve => { releaseSave = resolve; });
+    const contentRef = { current: 'original body' };
+    const editorJsonRef: { current: unknown } = { current: { type: 'doc', content: [] } };
+    const frontRef = { current: { enabled: true } };
+    const closed: boolean[] = [], errors: string[] = [];
+    const noOp = () => undefined;
+    const context = {
+      AbortController, pageImportInFlight: { current: false }, pageImportAbort: { current: null }, editable: true, saving: false,
+      chapterSaveInFlight: { current: false }, outlineSaveInFlight: { current: false }, generationInFlight: { current: false },
+      selectedCaseId: 'synthetic-case', selectedCaseRef: { current: 'synthetic-case' }, dirty: false, contentRef, editorJsonRef, reportFrontMatterRef: frontRef,
+      confirmReportPages: async () => true, setLinkingHwp: noOp, setError: (message: string) => errors.push(message), setMemoryNotice: noOp,
+      reportUploads: { upload: async () => ({ downloadUrl: '/synthetic-page' }) },
+      document: { createElement: () => ({ src: '', alt: '', dataset: { reportSourcePage: '' }, get outerHTML() { return '<img src="/synthetic-page" data-report-source-page="true">'; } }) },
+      wholeReportDocument: (body: string) => `<!-- MANUAL-WHOLE-DOCUMENT:START -->${body}<!-- MANUAL-WHOLE-DOCUMENT:END -->`,
+      parseStructuredDocumentMarkdown: () => ({ type: 'doc', content: [{ attrs: { reportSourcePage: true } }] }),
+      setContent: noOp, setEditorJson: (value: unknown) => { editorJsonRef.current = value; },
+      setReportFrontMatter: (value: { enabled: boolean }) => { frontRef.current = value; }, setDraftMethod: noOp, setDirty: noOp,
+      saveNow: async (...args: unknown[]) => { assert.deepEqual(args, ['MANUAL', false, true]); savedRequest(); return response; },
+      setHwpEditorOpen: (open: boolean) => closed.push(open), setHwpSourceFile: noOp, setShowTemplatePreview: noOp
+    };
+    const apply = runInNewContext(compiled, context) as (count: number, source: string, readPage: () => Promise<File>) => Promise<void>;
+    const pending = apply(1, 'PDF', async () => new File(['synthetic'], 'page.jpg'));
+    await requested;
+    assert.deepEqual(closed, [], 'The editor must remain open while the report save is pending');
+    assert.match(contentRef.current, /synthetic-page/u);
+    releaseSave(succeeds);
+    if (succeeds) { await pending; assert.deepEqual(closed, [false]); }
+    else {
+      await assert.rejects(pending, /저장 완료를 확인하지 못했습니다/u);
+      assert.deepEqual(closed, [], 'Failed persistence must retain the source editor');
+      assert.match(contentRef.current, /synthetic-page/u, 'The unsaved imported working body must remain available');
+      assert.match(errors.at(-1) ?? '', /가져온 내용은 현재 작업 화면에 유지/u);
+      assert.doesNotMatch(errors.at(-1) ?? '', /HWP 편집기/u, 'PDF import failures must not refer to a nonexistent HWP editor');
+      assert.doesNotMatch(errors.at(-1) ?? '', /현재 원고는 변경하지 않습니다/u);
+    }
+  }
 });
 
 test('CF83 project lists, evidence, and authoring screens follow the practitioner access contract', () => {

@@ -958,6 +958,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     if (dirty && !await saveNow('MANUAL', false, true)) throw new Error('현재 원고를 먼저 저장하지 못해 가져오기를 중단했습니다.');
     assertCurrent();
     setLinkingHwp(true); setError('');
+    let appliedToWorkspace = false;
     try {
       let nativeSource: ReportNativeSource | undefined;
       if (editedSource) {
@@ -999,12 +1000,15 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       if (nativeSource) parsed.attrs = { ...parsed.attrs, reportNativeSource: nativeSource };
       contentRef.current = imported; setContent(imported); setEditorJson(parsed);
       setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: false });
-      setDraftMethod('MANUAL'); setDirty(true); setHwpEditorOpen(false); setHwpSourceFile(null);
+      setDraftMethod('MANUAL'); setDirty(true); appliedToWorkspace = true;
+      setMemoryNotice(`${source} ${count}쪽 보고서를 저장하고 있습니다. 저장 응답을 확인한 뒤 편집기를 닫습니다.`);
+      if (!await saveNow('MANUAL', false, true)) throw new Error('가져온 보고서의 저장 완료를 확인하지 못했습니다.');
+      setHwpEditorOpen(false); setHwpSourceFile(null);
       setShowTemplatePreview(false);
-      setMemoryNotice(`${source} ${count}쪽을 페이지 이미지로 가져왔습니다. 문장·표 수정은 원본에서 한 뒤 다시 가져오세요. 원본 대조 검수 후 저장하세요.${source === 'HWP' ? ' 웹 HWP 변환은 쪽 나눔·표 배치가 원본과 다를 수 있습니다.' : ' HWP 재변환 없이 선택한 PDF의 쪽 순서를 사용했습니다.'}`);
+      setMemoryNotice(`${source} ${count}쪽을 페이지 이미지로 가져와 보고서 저장을 완료했습니다. 문장·표 수정은 원본에서 한 뒤 다시 가져오세요.${source === 'HWP' ? ' 웹 HWP 변환은 쪽 나눔·표 배치가 원본과 다를 수 있습니다.' : ' HWP 재변환 없이 선택한 PDF의 쪽 순서를 사용했습니다.'}`);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : `${source} 페이지 적용 실패`;
-      setError(`${message} 현재 원고는 변경하지 않습니다. 이미 보관된 페이지는 프로젝트 자료실에 남습니다.`); throw reason;
+      setError(appliedToWorkspace ? `${message} 가져온 내용은 현재 작업 화면에 유지됩니다.${source === 'HWP' ? ' HWP 편집기도 열려 있습니다.' : ''} 이미 보관된 자료를 다시 업로드하지 말고 보고서 저장 상태를 확인해 주세요.` : `${message} 현재 원고는 변경하지 않습니다. 이미 보관된 페이지는 프로젝트 자료실에 남습니다.`); throw reason;
     } finally { setLinkingHwp(false); }
     } finally { pageImportInFlight.current = false; pageImportAbort.current = null; }
   };
