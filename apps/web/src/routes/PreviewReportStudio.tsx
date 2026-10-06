@@ -408,7 +408,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, editorJson: requestEditorJson, expectedVersion: requestVersion, wizardStep: requestWizardStep, selectedChapterId: requestChapterId, saveKind })
       });
       if (selectedCaseRef.current !== requestCaseId) return false;
-      if (!result.draft) throw new Error('저장 완료 응답을 확인하지 못했습니다. 화면의 편집 내용은 유지됩니다. 저장을 다시 시도해 주세요.');
+      if (!result.draft || result.draft.caseId !== requestCaseId
+        || !Number.isSafeInteger(result.draft.version) || result.draft.version < Math.max(1, requestVersion) || result.draft.version > requestVersion + 1
+        || typeof result.draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(result.draft.updatedAt))
+        || result.draft.title !== requestTitle.trim() || result.draft.content !== requestContent
+        || result.draft.wizardStep !== requestWizardStep || result.draft.selectedChapterId !== requestChapterId
+        || JSON.stringify(result.draft.editorJson) !== JSON.stringify(requestEditorJson)) {
+        throw new Error('저장 완료 응답을 확인하지 못했습니다. 화면의 편집 내용은 유지됩니다. 저장을 다시 시도해 주세요.');
+      }
       setVersion(result.draft.version);
       setSavedAt(result.draft.updatedAt);
       setBackups(result.backups ?? []);
@@ -973,7 +980,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           assertCurrent();
           const previous = readReportNativeSource(editorJsonRef.current, requestCaseId);
           if (previous?.sha256 === originalHash) {
-            nativeSource.originalSource = readReportOriginalSource(editorJsonRef.current, requestCaseId) ?? undefined;
+            nativeSource.originalSource = readReportOriginalSource(editorJsonRef.current, requestCaseId) ?? previous;
           } else {
             setMemoryNotice('가져온 HWP 원본을 회사 Drive에 보존하고 있습니다. 기존 원본은 유지합니다.');
             const stored = await reportUploads.upload(requestCaseId, originalFile, isCurrent);
@@ -1002,7 +1009,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: false });
       setDraftMethod('MANUAL'); setDirty(true); appliedToWorkspace = true;
       setMemoryNotice(`${source} ${count}쪽 보고서를 저장하고 있습니다. 저장 응답을 확인한 뒤 편집기를 닫습니다.`);
-      if (!await saveNow('MANUAL', false, true)) throw new Error('가져온 보고서의 저장 완료를 확인하지 못했습니다.');
+      if (!await saveNow('MANUAL', false, true)) throw new Error(`가져온 보고서의 저장 완료를 확인하지 못했습니다. ${source === 'HWP' ? 'HWP 편집기를 닫은 뒤 ' : ''}보고서 저장 오류의 “저장 다시 시도”를 사용하세요. 전체 페이지 적용을 다시 실행할 필요는 없습니다.`);
       setHwpEditorOpen(false); setHwpSourceFile(null);
       setShowTemplatePreview(false);
       setMemoryNotice(`${source} ${count}쪽을 페이지 이미지로 가져와 보고서 저장을 완료했습니다. 문장·표 수정은 원본에서 한 뒤 다시 가져오세요.${source === 'HWP' ? ' 웹 HWP 변환은 쪽 나눔·표 배치가 원본과 다를 수 있습니다.' : ' HWP 재변환 없이 선택한 PDF의 쪽 순서를 사용했습니다.'}`);

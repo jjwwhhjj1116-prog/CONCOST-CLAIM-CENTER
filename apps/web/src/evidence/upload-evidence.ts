@@ -62,11 +62,15 @@ export async function fetchEvidenceUpload(url: string, init: RequestInit, option
       continue;
     }
     if (response.status !== 409 || !['DUPLICATE_EXACT', 'VERSION_CONFLICT_CONFIRMATION'].includes(payload.status ?? '')) return response;
-    const choice = await confirmVersion(payload as UploadConflict);
     if (payload.status === 'DUPLICATE_EXACT') {
-      // Import tools may continue working with an already stored original; the API still returns 409 and writes nothing.
-      return options.reuseExact && payload.file && isCurrent() ? Response.json({ file: payload.file, reusedExisting: true }) : response;
+      // Import callers explicitly allow exact-file reuse. Reuse
+      // this exact stored file without another modal; callers verify its receipt.
+      // Ordinary library uploads still display the duplicate notice. No API write.
+      if (options.reuseExact && payload.file && isCurrent()) return Response.json({ file: payload.file, reusedExisting: true });
+      await confirmVersion(payload as UploadConflict);
+      return response;
     }
+    const choice = await confirmVersion(payload as UploadConflict);
     if (!choice || !isCurrent()) return Response.json({ error: '파일 저장을 취소했습니다.', code: 'UPLOAD_CANCELLED' }, { status: 409 });
     init.body.set('reviewId', payload.reviewId!); init.body.set('versionChoice', choice);
   }

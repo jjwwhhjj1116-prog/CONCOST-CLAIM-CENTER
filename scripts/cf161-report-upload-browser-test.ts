@@ -20,7 +20,7 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
     configureServer(s) { s.middlewares.use(async (req, res, next) => {
       if (req.url !== '/report-upload-test') return next();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(await s.transformIndexHtml(req.url, '<html lang="ko"><body><script type="module">import{createReportEvidenceUploader}from"/src/evidence/report-evidence-upload.ts";window.uploader=createReportEvidenceUploader();window.current=true;window.send=(caseId,name="sample.hwp")=>window.uploader.upload(caseId,new File(["hello"],name),()=>window.current).then(()=>"saved",e=>e.message);</script></body></html>'));
+      res.end(await s.transformIndexHtml(req.url, '<html lang="ko"><body><script type="module">import{createReportEvidenceUploader}from"/src/evidence/report-evidence-upload.ts";window.uploader=createReportEvidenceUploader();window.current=true;window.send=(caseId,name="sample.hwp")=>window.uploader.upload(caseId,new File(["hello"],name),()=>window.current).then(()=>"saved",e=>e.message).then(result=>{window.lastResult=result;return result;});</script></body></html>'));
     }); }
   }] });
   await server.listen();
@@ -72,9 +72,15 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
       });
       await page.goto(origin + '/report-upload-test'); await page.waitForFunction(() => Boolean((window as any).uploader));
       const request = page.evaluate(id => (window as any).send(id), caseId);
-      await page.getByRole('dialog').waitFor();
-      if (mode === 'conflict' || mode === 'comparison') await page.evaluate(() => { (window as any).current = false; });
-      await page.getByRole('button', { name: mode === 'comparison' ? 'AI 비교 없이 별도 저장' : mode === 'duplicate' ? '확인' : mode === 'cancel' ? '취소' : '최신본으로 대체 · v2', exact: true }).click();
+      request.catch(() => undefined);
+      if (mode === 'duplicate') {
+        await page.waitForFunction(() => Boolean((window as any).lastResult) || Boolean(document.querySelector('dialog')));
+        assert.equal(await page.getByRole('dialog').count(), 0, 'Exact duplicates in import tools must be reused without a per-page acknowledgement');
+      } else {
+        await page.getByRole('dialog').waitFor();
+        if (mode === 'conflict' || mode === 'comparison') await page.evaluate(() => { (window as any).current = false; });
+        await page.getByRole('button', { name: mode === 'comparison' ? 'AI 비교 없이 별도 저장' : mode === 'cancel' ? '취소' : '최신본으로 대체 · v2', exact: true }).click();
+      }
       const result = await request;
       assert.equal(keys.length, 1, 'stale/cancelled confirmation must not issue the second POST');
       assert.equal(await page.evaluate(id => (window as any).uploader.isBlocked(id), caseId), false);
