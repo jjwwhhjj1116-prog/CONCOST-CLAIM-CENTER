@@ -1,16 +1,22 @@
 import { useMemo } from 'react';
+import { Button } from '@claim-studio/ui';
 import type { ReportFrontMatter } from '../../../../packages/document-engine/src/report-presentation';
 import { prepareReportPrint } from './report-print-structure';
 
-export function ReportFrontMatterEditor({ title, caseTitle, html, value, disabled, onTitle, onChange }: {
+export function ReportFrontMatterEditor({ title, caseTitle, html, value, disabled, onTitle, onChange, onEditNative }: {
   title: string; caseTitle: string; html: string; value: ReportFrontMatter; disabled: boolean;
   onTitle: (title: string) => void; onChange: (next: ReportFrontMatter) => void;
+  onEditNative?: () => void;
 }) {
   const headings = useMemo(() => {
     const source = document.createElement('div'); source.innerHTML = html;
     return prepareReportPrint(source);
   }, [html]);
-  if (!value.enabled) return null;
+  if (!value.enabled) return onEditNative ? <section className="notice-box" aria-label="원형 HWP 표지·목차 편집">
+    <strong>원형 HWP 표지·목차 편집</strong>
+    <p>가져온 HWP의 페이지 모양을 유지하도록 자동 표지·목차를 추가하지 않습니다. 원본에 있는 표지·목차와 문장·표·사진은 HWP 편집기에서 수정하고, “수정 원본 보존·전체 페이지 적용”을 눌러 보고서에 반영하세요. 다운로드만으로는 보고서가 갱신되지 않습니다.</p>
+    <Button type="button" variant="secondary" disabled={disabled} onClick={onEditNative}>표지·목차·표를 HWP 편집기에서 수정</Button>
+  </section> : null;
   return <div className="report-frontmatter-edit report-final-document">
     <section className="report-frontmatter-cover" aria-label="표지 편집">
       <div className="report-cover-heading">

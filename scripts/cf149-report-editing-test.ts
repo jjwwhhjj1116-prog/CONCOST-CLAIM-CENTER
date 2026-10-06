@@ -36,7 +36,7 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
           React.createElement('button',{onClick:()=>ref.current.goToChapter('CH-02')},'산정으로 이동'),
           React.createElement('button',{onClick:async()=>{await fetch('/draft',{method:'PUT',body:JSON.stringify({title,content,json:joinReportPresentation(json,{enabled:false,text:null},front)})});document.querySelector('#saved').textContent='저장 완료';}},'저장'),React.createElement('span',{id:'saved'}),
           React.createElement(StructuredDocumentEditor,{ref,reportMode:true,label:'시험 보고서 편집',value:content,editorJson:json,onChange:(text,doc)=>{changes.current++;setContent(text);setJson(doc);},
-            beforeContent:React.createElement(ReportFrontMatterEditor,{title,caseTitle:'사건명',html:renderStructuredDocumentHtml(json),value:front,disabled:false,onTitle:setTitle,onChange:setFront}),
+            beforeContent:React.createElement(ReportFrontMatterEditor,{title,caseTitle:'사건명',html:renderStructuredDocumentHtml(json),value:front,disabled:false,onTitle:setTitle,onChange:setFront,onEditNative:()=>{globalThis.cf149NativeOpened=(globalThis.cf149NativeOpened??0)+1;}}),
             previewContent:React.createElement(ReportFinalDocumentPreview,{title,caseTitle:'사건명',caseNumber:'QA',content,editorJson:joinReportPresentation(json,{enabled:false,text:null},front)})}));
       }createRoot(document.getElementById('root')).render(React.createElement(App));
     `:undefined
@@ -93,6 +93,12 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     await page.evaluate(value=>(globalThis as any).cf149Editing.use(value),nativeDocument);
     await page.locator('[data-export-page]').nth(16).waitFor();
     const nativeBefore=await page.evaluate(()=>(globalThis as any).cf149Editing.get());
+    const nativeEditButton=page.getByRole('button',{name:'표지·목차·표를 HWP 편집기에서 수정',exact:true});
+    assert.equal(await nativeEditButton.count(),1,'Imported native pages need an explicit cover/TOC editing action in the editing pane');
+    assert.equal(await page.getByLabel('표지 제목 편집',{exact:true}).count(),0,'Do not inject a duplicate generated cover into an imported original');
+    await nativeEditButton.click();
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149NativeOpened),1);
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),nativeBefore,'Opening the native editor must not rewrite the report body');
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:1000});
       // Responsive scale updates on animation frames. Wait for the unchanged
