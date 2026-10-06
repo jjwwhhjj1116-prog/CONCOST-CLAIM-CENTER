@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF179, 2026-10-06
+## 현재 판정 — CF180, 2026-10-06
 
 아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
@@ -10,12 +10,13 @@
 | 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내 | 원형 HWP의 의미별 챕터 매핑·자동 목차 갱신 미완료 |
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
+| 원형 편집 안정성 | 실제 React/Tiptap에서 끝 마커 뒤 자동 빈 문단, 전체 교체와 첫 편집의 Undo 병합, 문서 전환 시 이전 여백 유지 FAIL→최소 수정→PASS. 일반 표·사진·빈 문단·서식 Undo·문서 키 전환 보존 | 합성 localhost 검사. 실제 HWP 수정본의 영구저장·Yjs 다중 사용자 Undo·한컴 전수 대조와 별개 |
 | 저장·재열기 | CC6 전체17쪽 적용→실제 저장→reload→HWP 재열기 PASS. 같은 파일 재적용은18개 중복 확인→0개, v4/본문/JSON/20개 자료 불변 | 문장·표 셀의 시험 문구 영구저장에 대한 구체적 승인 대기. 입력·적용·저장0 |
 | 원본·기존 이력 |124테이블 구조 동일,120테이블 값 동일,4테이블 변경은 CC6 제목 시험2회에만 대응 | CC5 UNKNOWN2건 유지, 무단 복구/재업로드하지 않음 |
 | 검토·최종 출력 | 자기승인·CEO/DIRECTOR 규칙 유지. 승인 snapshot과 연결 지문을 검증한 원형 HWP/HWPX 동일바이트 출력·A4 실제 크기·불일치 차단 구현/격리 검사 PASS | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료. 원형 없는 페이지그림 DOCX의 개별 문장·표 편집은 불가하며 안내를 정정 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
-최신 소스 `e3186d1f786d1fc4ab7cfde89625a5d1d5f8f70f`, development 버전 `27c519e3-a2b5-4ee0-85ec-19977069e8d3`. 상세 근거와 다음 시작점은 문서 하단 CF179 기록을 따른다.
+최신 소스 `8c80a659e784a6bba1df5633a812d3b6ffa0037d`, development 버전 `fb7ecb13-d7f3-4e13-a8de-555b89676df0`. 상세 근거와 다음 시작점은 문서 하단 CF180 기록을 따른다.
 
 ## CF161 보고서 업로드 안전 보완·실제 HWP 17쪽 저장·편집/출력 배율 일치 (2026-10-01, 최신)
 
@@ -659,3 +660,17 @@
 - 최종 전체 타입검사·웹 타입검사/build PASS, layout/type detector0. 큰 번들/Node deprecation 경고는 기존대로 남는다. 최종 소스 `e3186d1f786d1fc4ab7cfde89625a5d1d5f8f70f` 정상 commit/push; development27c519e3만 --keep-vars 배포. JSindex-GohGViF8.js/SHA7456c50807456ea26652fe84ef7406c9153f92ae48fd6b6a6f6e2cd17c210d79, CSSindex-BHPAGR5g.css, dist43 digest46ac665b3a289d2318407c6930bab8fb1dd9c7469d70a0f56da3ede848db46fe. 공개 health/readiness200/entry3/runtime28 exact SHA PASS. DB migration/비밀키/가오픈/preview 변경0.
 - 현재 후속: 새 소스의 CC6 재조회·17쪽 원형 열기/원제목/10:42:58/복구·오류0 확인. 문장·표 셀의 ‘검수’ 표식 입력은 구체적 텍스트·위치·영구저장 승인 필요로 실행 전 안전검토에서 중단됐다. 실제 입력·표 셀 변경·전체 적용·Drive/초안 저장0, 다른 입력 API로 우회하지 않았다. 사용자의 ‘CC6 표지 제목 끝+8쪽 표 텍스트 셀에 각각 검수2자 추가·새 작업본 저장’ 승인을 비동기 요청했다. 단신Chrome4/839124063의 연결 HWP 편집기는 입력 없이 열려 있다. 승인 후 해당 두 입력→17쪽 전체 적용1회→실저장→reload→연결본 재열기만 이어간다. 최초 원본·고객 CC4·CC5 UNKNOWN2는 변경하지 않는다. 완료한 무편집 no-op을 미완료로 되돌리거나 인증을 반복하지 않는다.
 - 남은 게이트: 위 실제 수정본 저장, 실제 독립승인 후 최종3종 대조, 원본32종 및 PC 한컴 형식·전 카테고리 A–Z/엑셀 지적·제안서4~12장 실제 이미지/가이드 영상 준비. 현장조사 회의록 개편 HOLD. 모든 게이트 통과 전 preview 승격·전체100% 선언은 하지 않는다.
+
+## CF180 실제 편집기 모델·Undo·전환 여백 보완 — 2026-10-06
+
+- 시작은 같은 `work/cf166-recovery`/`feat/CF123-es-v2`, HEAD55130ae. 연결된 단신 Chrome4/탭839124063을 유지했다. 기존 삭제 로그21개/PDF1개는 unstaged 보존. 별도 인증·전역 ACL·서비스·파일 삭제·초기화0.
+- 기존 CF149는 React의 저장용 JSON만 검사하므로 실제 Tiptap 모델의 원형 지문 불일치를 놓쳤다. `ref.getJSON()`을 추가하자 MANUAL-WHOLE-DOCUMENT:END 뒤 자동 paragraph 추가가 실제 FAIL했다. StarterKit3.30.3의 TrailingNode가 원인이며 `notAfter:['aiChapterMarker']`로 비출력 마커 뒤의 자동 문단만 막았다. 일반 image/table 뒤의 입력 paragraph 및 사용자가 작성한 빈 문단은 그대로 둔다. proof·해시 검사를 느슨하게 하거나 저장 때 지문을 다시 만드는 방식은 사용하지 않았다.
+- 그 수정 후 임시 문단→Undo가 새 원형 대신 이전 일반 원고로 돌아가는 별도 FAIL을 재현했다. 원형 source 속성과 `setContent`가 별도 transaction이고 앞뒤 이력이 병합되는 것이 원인이다. 기존 sync helper의 선택적 content 인자 경로에서 source와 본문을 같은 chain에 넣고 기존 ProseMirror closeHistory로 앞뒤 경계를 구분했다. metadata-only 기존 호출은 그대로이며 collaboration의 undoRedo:false도 유지한다.
+- mixed 본문 전환에서는 실제 모델이 일반 문서여도 `has-source-pages`가 남아 여백 복원 대기 timeout이 발생했다. 설치된 Tiptap React는 transaction의 기본 재렌더가 꺼져 있고 setContent emitUpdate:false의 뒤 렌더도 보장되지 않았다. useEditorState의 boolean 구독으로 실제 모델을 따라가며 초기 null/이전 editor snapshot만 현재 editor.getJSON()으로 계산한다. 초기 mount에 false 고정 시632×894 FAIL도 확인 후 null/identity fallback으로 수정했다. JSON·미리보기 소스·CSS·일반 제안서의 용지 설정 변경0.
+- 기존 CF149를 확장했다. 실제 JSON과 원형 입력의 동일성/최초 원본+proof 보존, 임시 편집 proof 거부→Undo 정확 복원, onChange→localhost PUT→reload, 전체 본문 교체 pointer 해제→Undo 원형 복원, 17이미지 순서/794×1123 및1440/390 양쪽 배율, mixed 여백 복원, 일반 표·사진 trailing 입력 문단, 작성 빈 문단, 일반 bold→Undo, documentKey 양방향 전환, pageerror0를 검사한다. proof는 fixture 최초 생성 때만 만들고 Undo/저장/재열기에서 재생성하지 않는다. 가짜 native reference는 합성 모델 경계이며 실제 회사 파일·원격 DB 저장을 증명하지 않는다.
+- 최종 root 회귀12 PASS(CF149 실제 React1 + CF60/CF61/CF93 정적 계약11), 독립 CF1491 PASS. 별도 독립 CF83/CF146계약19 PASS, CF146 metadata reset 지정 자식1 PASS(부모 포함2), CF179 native browser15모드 PASS(부모 포함16). 동일 테스트 반복을 새 시나리오처럼 합산하지 않는다. CF61의 영어 UI marker 검사 FAIL은 기존 HEAD에서도 영어없음/한국어있음으로 확인해 현재 한국어 문구와 collaborationSession 활성 조건으로 테스트만 정정했다. 연결·인증·token·runtime URL 조건은 완화하지 않았다. Yjs의 별도 UndoManager 다중 사용자 실검수는 이번 비협업 fixture로 합격 처리하지 않는다.
+- 최종 전체 타입검사/웹 tsc/cf:build PASS. 기존 큰 번들/Node url.parse deprecation 경고는 남는다. source `8c80a659e784a6bba1df5633a812d3b6ffa0037d`의4파일만 정상 commit/push. development `fb7ecb13-d7f3-4e13-a8de-555b89676df0`에만 --keep-vars 반영했다. JSindex-RQ5kt0vW.js/SHA57adecef40377af4c6f5b4177d2c2e4253ca21dfb5706678e2152528426eba4a, CSSindex-BHPAGR5g.css, dist43 canonical SHA e163ff444c017c6318d8d2299fb741cfbb8eff8163f22bb4bf98fd96a1010caa. health/readiness200, entry3/runtime28 exact byte PASS. 승인 WASM bcc40a79… 불변/engine 재빌드0. DB migration·secret·preview·가오픈·베트남 변경0.
+- 배포 후 D1 읽기 대조 PASS: CC6v4/2026-10-06T01:42:58.772Z/step4/본문2220 SHA05769447…/JSON6faabcc4… 불변. operation20 SUCCEEDED, REPORT_REFERENCE19+TAKEOFF_SOURCE1 유지. 최초 원본44,544B/803a7dac…와 연결 편집본35,840B/bb73499b… 보존. 과거v4는 bodySha256이 없는 legacy 연결본 그대로이며 자동 retrofit/재저장하지 않았다. CC5 RECONCILIATION_REQUIRED2 유지. 이번 새 전체 DB 백업·전 테이블 재대조를 했다고 보고하지 않는다.
+- 기존 CC6 표지 제목 끝·8쪽 표 텍스트 셀 각 ‘검수’2자 영구저장은 일반 ‘계속’ 답으로 한 번 재개했으나 입력 전에 안전검토가 다시 거절했다. 실제 입력/적용/업로드/저장0, 다른API·profile로 우회하지 않았다. 구체적 두 위치/텍스트/새 작업본·쪽이미지·초안 저장에 대한 승인을 다시 비동기 요청했다. 답이 없으면 화면 보기·로컬 합성검사만 진행하며 원본/고객 원고/가오픈을 변경하지 않는다.
+- 최종 실제 단신 Chrome4 읽기 검수 PASS: 저장하지 않고 닫기→reload1회→공개 main `index-RQ5kt0vW.js` locator 속성 일치, CC6/4단계/원제목/10:42:58 유지, 편집17+출력17 각각1..17/794×1123px A4세로·나란히맞춤71%, 보이는 CH-prefix0/alert0. 연결 HWP 열기1회로17쪽·표지·3쪽 목차 리더/쪽번호·8쪽4열표를 screenshot로 확인, 복구창0. 입력/전체적용/저장/업로드/다운로드/검토승인0, iframeURL eval·다른profile 우회0. 마지막 저장하지 않고 닫기 후 dialog닫힘/images34/시간 유지. 실제 UI는v4를 표시하지 않으므로 D1근거와 구분한다. 이 읽기 검수 후 D1 최종 대조도v4/시간/본문·JSON지문/operation20 동일 PASS.
+- UI 스킬은 기존 화면을 유지한 전환 여백/원형·일반 편집 상태 안정성에만 적용했다. 전체 A–Z·32원본/PC한컴·실제 독립승인/최종3종·제안서4~12장 실물·영상 배포 준비는 여전히 미합격이다. 현장조사 회의록 HOLD와 자기승인·CEO/DIRECTOR 최종승인 규칙 유지. 다음은 구체적으로 승인된 CC6 두 입력의 실저장→재열기 대조이며, 승인 없이는 영구 입력 시험을 시작하지 않는다.
