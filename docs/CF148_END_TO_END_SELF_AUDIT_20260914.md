@@ -1,5 +1,22 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## 현재 판정 — CF178, 2026-10-06
+
+아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+
+| 구간 | 이번 확인 | 남은 범위 |
+|---|---|---|
+| 연결·배포 | 지정 단신 Chrome 로그인, 원 Git 이력 정상 push, development 최신 소스·승인 runtime28/28 일치 | 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
+| 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내 | 원형 HWP의 의미별 챕터 매핑·자동 목차 갱신 미완료 |
+| 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
+| 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
+| 저장·재열기 | CC6 제목 자동저장→reload→원복→reload, 본문/JSON 보존 | 새 전체적용 저장완료 대기 변경은 격리 함수 검사 통과, 이번 원격 재적용은 미실행 |
+| 원본·기존 이력 |124테이블 구조 동일,120테이블 값 동일,4테이블 변경은 CC6 제목 시험2회에만 대응 | CC5 UNKNOWN2건 유지, 무단 복구/재업로드하지 않음 |
+| 검토·최종 출력 | 자기승인·CEO/DIRECTOR 최종승인 규칙 유지, 사용자도 규칙 유지 확인 | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료; 사용자의 화면/파일 검수와 구분 |
+| 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
+
+최신 소스 `99970ab6763c5486d5bcb337fcaebc82261cd445`, development 버전 `138a8518-44ef-4cb7-a8a0-583892317fc6`. 상세 근거와 다음 시작점은 문서 하단 CF178 기록을 따른다.
+
 ## CF161 보고서 업로드 안전 보완·실제 HWP 17쪽 저장·편집/출력 배율 일치 (2026-10-01, 최신)
 
 - 원인: 보고서의 HWP 편집본·원본·페이지/PDF 자료 전송 4곳이 CaseEvidencePanel의 미확정 업로드 차단을 거치지 않고 새 요청키를 생성했음. 공통 report-evidence-upload를 추가해 파일명·크기·SHA별 요청키, 사건별 미확정 보조 잠금, 명시적 retryable 실패/취소만 재시도, 정확한 저장 응답 ID·URL·SHA·크기 검증을 적용. 늦은 성공은 원래 사건에 보존하되 새 원고에 적용하지 않으며, 확인창 중 사건/원고 변경 시 다음 POST를 막음. 컴포넌트 생존 범위 보조 잠금이며 새로고침/다른 탭 안전은 기존 서버 원장이 담당. HWP 팝업에는 편집본·원본 보존 및 페이지별 전송 진행 문구를 연결함.
@@ -607,3 +624,23 @@
 - Git 원 이력 보존 bundle `tmp/cf168-release/claim-studio-e98011d-20261005.bundle`(8,057,549B, SHA256 `b05372423934157073b6ae08fe4d756bfb61961d65a6b3d342ac2677d19b2513`) 생성·verify PASS. 새 격리 bare 사본 `tmp/cf168-release/cf177-git-restore`에서 clone/fsck PASS, HEAD e98011d·tree `2b41356d63dec258fc6cfc5a002f04c65c35e576`·원 이력331개가 동일하다. Github API 재작성으로 다른 커밋 SHA/이력을 만들어 대체하지 않았다. 원격 feature branch는 없고 GitHub CLI 저장 인증은 invalid다.
 - Wrangler CLI는 미인증이다. `login --browser false`의 공식 링크만 기존 Chrome3의 Cloudflare 탭에 열고 사용자 로그인/허용을 기다렸으나 authorization code 대기시간이 만료됐다. 로그인 입력/Allow 자동 클릭, 다른 Chrome/profile/인앱 전환, 키 출력/교체는 하지 않았다. 준비됐다는 사용자 답변 후 공식 연결을 다시 시작한다. 실제 deploy/remote DB·Drive·secret 변경0이다.
 - 남은 필수 검수: 인증 후 개발 최신 DB 상태와 백업 보존 대조 → 승인된 개발 수정본 반영 → CC6 실제 저장·재열기·독립 검토·최종 출력 → 외부 한컴 원형/원본32개/엑셀 지적 전체 A~Z 검수 → 전체 통과 후 preview 최신 점검·서명 백업·실제 runner 리허설 및 동일 소스/자산 승격. 기존 고객 CC4/CC5 UNKNOWN2를 보존하고 현장조사 회의록 개편 HOLD다. 현재 전체 합격/배포 완료로 보고하지 않는다.
+
+## CF178 실제 연결 복구·development 반영·HWP 편집 진입 및 저장 경계 — 2026-10-06
+
+- 실제 작업본 `work/cf166-recovery`, 브랜치 `feat/CF123-es-v2`. 이 PC의 Git 소유자 차이는 확인된 이 저장소에만 명령별 safe.directory를 사용했다. 전역 safe.directory/ACL/Windows 서비스/보안 설정 변경0. 기존 로그21개/PDF1개 삭제 상태는 미스테이징 보존했다. 현재 사용자가 확인한 단신 Chrome ID4/개발 탭839124063만 사용했고 다른 프로필·인앱 전환을 하지 않았다.
+- Wrangler 공식 OAuth 연결·대상 계정 확인과 원 Git 이력 native push 성공. `860c53b`(납품 유형명/백업 schema literal), `ae98557`(목차 표시/실패 이동 안내), `30135d3`(원형 표지·목차 편집 진입), `99970ab6763c5486d5bcb337fcaebc82261cd445`(embed/저장 확인)을 정상 commit/push했다. 강제push/API 커밋 재작성/키 출력·교체0. 최종 readonly ls-remote는 마지막 소스 커밋과 일치했다. 과거 CLI 인증 invalid/branch 부재 기록은 이번 정상 native push를 부정하지 않는다.
+- 일반 서명 백업도 CF148과 같은 schema SQL whitespace 압축 결함이 남아 있어 `SQL_LITERAL_V2` 원문 fingerprint로 수정했다. 문자열 리터럴 `'A  B'`와 `'A B'`를 구분한다. 기존 서명·독립 pin·원 SQL SHA를 먼저 검증한 뒤에만 legacy schema 해시를 허용하여 과거 백업을 보존한다. 새 일반 백업 검사는 수정 전 FAIL→후 PASS, CF168 최종4 PASS다. CF104의0058 전용 preflight/compare를 최신0066 DB에 실행하지 않았다.
+- development 최신 migration ledger66와 기대7개 객체를 읽기 전용 확인, 추가 migration0. 최초 source-only 반영 전 SQL `tmp/cf178-development-release-20261006/development-before.sql` 30,871,870B/SHA `a97c58ff0a3a4c03252b407a8a8c3e735252912014df38b7811d65f643aff25b`, V2 서명 manifest 독립 pin `9f966f329690193cb8b5fba27e64caf5b579e29db5c4de2c01c4cb72b435c0ab` 검증 PASS. 개인서명키/임시 export URL/SQL/customer 원문은 Git에 넣지 않았다. 유지보수 전환·쓰기 정지 없는 일관 export로서 migration용 정지 백업/실복원 증거와 구분한다.
+- 최초 source-only 반영 직후124테이블 구조·모든 값 변화0. CC6 제목 자동저장 시험 후 `development-after-verification.sql` SHA `3811046c6c93c094eff142ededc800aed36e17b1656a48f3f733bc2b7e6941b5`:124테이블/475schema 객체 원문 동일, 양쪽 integrity ok/FK0,120테이블 정렬 행 SHA 동일. 나머지4테이블은 CC6 draft version/updated_at, 새 revision2행/REPORT_AUTOSAVED 활동2행/hourly backup1행으로 정확히 대응한다. 기존 이력 수정·삭제·예상 외 변화0. AI/Google/OAuth credential4테이블 불변. CC4·CC5의 case_id 직접 관련53테이블 보존, CC5 UNKNOWN2건 그대로다.
+- 실제 CC6 제목에 임시 검수 표시→09:36:18 저장→reload 확인→원래 제목 복원→09:37:24 저장→reload 확인 PASS. 본문2220자 SHA `057694479664254db0df13bc8399a4042e4e7e99b72008051f47592456c26f50`, editor JSON SHA `1871494bfc878dbb88883cd8fe670d094fe1b09c6a39376632b0f13773151e40` 불변. v1→v3은 이 제목2회 시험이며 실제 HWP 본문 저장 왕복 증거로 확대하지 않는다.
+- 실제 연결 편집본 HWP 다운로드는1회만 실행했다. SDK download 관측은45초 timeout이었으나 실제 Downloads의 새 파일35,840B/SHA `bb73499bbdb2c9a47fca39164425a5c873ebb2e7e1faec94f3340363d88c5743`를 발견하고 최신 보호SQL의 CC6 evidence 정확1건과 독립 대조했다. 브라우저 중복 접미사 `(1)`만 다른 파일명이며 바이트/SHA 완전 동일. 승인 WASM으로17쪽 모두 A4세로/text 존재를 확인했다. 파일 재다운로드·원본 덮어쓰기0.
+- 같은 실제 HWP에 기존 cf149 edit/cell 진단을 재사용하여 메모리 안에서 문단19자→HWP save/reopen/re-save, 표 셀5자→HWPX save/reopen, 같은 셀→HWP save/reopen3건 PASS. 모두17쪽, 전쪽 print SVG 차이0, marker 유지, 원본/산출파일/Drive/DB 쓰기0. 실제 Chrome HWP17쪽의 표지·제출문·목차(점선/쪽번호)·본문 표도 직접 관찰했다. 목차 문단에 `CF178`5자 입력→표시 확인→Ctrl+Z→원문 복원 후 서버 적용 없이 닫았다. 이것은 실제 iframe 입력/Undo 증거이며 PC 한컴 동일성은 아니다.
+- 목차 선택3곳·협업 제목/담당 라벨·단일 챕터 Excel 제목에서 raw CH prefix를 제거했다. 내부 ID/CH marker/API/RBAC는 그대로다. goToChapter false를 안내하고, 이후 정상 이동이면 자기 실패 안내만 제거하여 실제 저장 동기화 안내를 보존한다. 원형 이미지 문서의 의미별 챕터 매핑을 새로 구현한 것은 아니다.
+- ReportFrontMatterEditor의 구조형 폼을 유지하고, 원형+유효한 현재 사건 연결일 때 왼쪽에 표지·목차·표의 HWP 편집 버튼을 추가했다. 기존 SHA/size 검증 재열기만 호출하며 자동 표지/목차·본문 데이터를 주입하지 않는다. 관련 실제 React 편집기 검사에서 버튼 부재 FAIL→수정 후 PASS. 기존 표지·목차/표 열너비·저장/17쪽1440·390 크기·순서·JSON 불변도 같은 검사로 확인했다. UI 스킬은 편집 위치와 반영/다운로드 차이를 명확히 하는 최소 변경에만 사용했다.
+- 실제 재열기에서 로컬 자동복구 popup을 추가 발견했다. 원인은 독립 full 모드의 startup recovery 조회와 SDK loadFile 경합이며 suppressDialogs는 폰트/검증 안내만 제어한다. 복구/삭제는 누르지 않고 나중에만 눌러 현재 연결본을 확인했다. runtime에 이미 있는 `chrome=embed`를 host SDK URL에 설정하여 초기 복구 picker·별도 문서교체 명령을 제외했다. 복구 저장소·자동저장·dirty guard·본문/표 편집·load/export는 유지하고 승인 runtime/WASM 바이트를 고치거나 재빌드하지 않았다. URL 구성 오류도 기존 Promise catch/finally로 처리한다.
+- 최종138a8518 반영 뒤 실제 단신 Chrome에서 미저장 닫기→reload→왼쪽 편집 버튼1회→복구 창 없이 같은17쪽 연결본 열림/1쪽 표지/문단·표 편집 도구/입력 영역 유지/alert0를 확인했다. 원 제목·보고서 저장09:37:24 유지, 복구·삭제·새입력·적용·다운로드·검토 요청0. iframe URL 속성 읽기는 기존 eval 금지 범위와 충돌해 안전검토에서 거절되어 실제 URL 파라미터 확인은 UNKNOWN이다. 우회하지 않았으며 소스/공개asset 일치와 실제 무팝업 동작을 별도 증거로 기록한다.
+- HWP/PDF 전체 페이지 적용이 refs를 바꾼 뒤 즉시 닫고3초 자동저장을 기다리던 구간을 보완했다. 최신 refs의 `saveNow('MANUAL',false,true)` 성공 응답과 미저장 변경 없음 확인 후에만 닫는다. 저장 실패 시 작업 원고/편집기는 유지하며 PDF에는 존재하지 않는 HWP 편집기를 안내하지 않는다. 실제 handler를 transpile+VM 실행한 저장 응답 지연/성공/실패 회귀 PASS(합성 upload/save/DOM,PDF1쪽). 실제 원격 재적용·장애 주입 PASS로 확대하지 않는다. 저장 확인 전 notifySaved/복구 삭제를 호출하지 않았다.
+- 최종 CF83 10 PASS, CF146 contract5 PASS(15건, 반복 실행 중복 합산하지 않음), CF149 실제 로컬 React 편집기1 PASS, 전체 harness typecheck·최종 cf:build PASS. 기존 번들 크기/Node deprecation 경고 유지. 최종 JS `index-Bk6OK3uI.js`, CSS `index-BHPAGR5g.css`, dist43 canonical digest `d327bf812317e13e98bb7436518fa73e178b2cd81354510e2952c3a5a8f503f2`. 승인 runtime28/28, manifest `452b06bd8aa4a4161a09f87fc5a54e6558bdab587179438f7ddb2410280fb5c3`, WASM `bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44` 동일.
+- 최종 development `138a8518-44ef-4cb7-a8a0-583892317fc6`에만 --keep-vars source deploy. 공개 smoke health/readiness200, entry assets3/runtime28 exact byte PASS. preview/베트남/DB migration/Drive 업로드/secret교체0. 초기 임시 development 버전0a7830aa,2454c5c7,f93acf8d는 이번 정상 검수 중간 이력이며 최신 버전으로 혼동하지 않는다. preview는 아직 미적용 migration과 다른 승인runtime을 갖고 있어 동일 서버 판정이 아니다.
+- 사용자는 유종욱 계정으로 화면·파일 검수를 하되 자기승인·최종승인(CEO/DIRECTOR) 규칙을 유지한다고 명시했다. 현재 PM/ADMIN 작성자 계정으로 승인하기 위해 역할을 변경하거나 다른 작성자를 만들어 기록하지 않았다. 실제 검토 요청·독립승인·최종확정/최종 DOCX/PDF 다운로드는 이번 미실행이다. 본문의 이름/타입 표시와 최종 법원제출 파일 검수를 구분한다.
+- 다음 시작: 새로운 전체적용의 실제 저장/실패·재진입 시험(시험 건 한정) → 독립 검토자가 확정한 파일의 실제 DOCX/PDF/HWP 대조 → 원본32개·엑셀 지적 전구간 체크리스트 → 전부 통과 후 preview 최신 정지/서명백업/실runner 리허설·같은소스 승격. embed17쪽 재열기를 다시 미완료로 되돌려 반복하지 않는다. 한컴 완전 원형, 원형 자동TOC/의미별 navigation, 전체 업무 A–Z/가이드영상 배포 가능 판정은 여전히 미합격이다.
