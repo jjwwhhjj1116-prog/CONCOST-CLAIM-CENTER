@@ -51,8 +51,8 @@ test('CF179 approved native output keeps actual HWP/HWPX bytes and rejects misma
       res.end(await s.transformIndexHtml(req.url!, `<html><body><script>window.__CLAIM_API_ORIGIN__=window.location.origin;</script><div id="root" data-export-document-kind="REPORT"><article data-export-page style="width:794px;height:1123px"><img src="/page.svg" data-report-source-page="true" style="width:794px;height:1123px"></article></div><script type="module">
       import{downloadFinalDocument}from'/src/documents/final-document-export.ts';import{reportNativeBodySha256}from'/src/documents/report-native-source.ts';
       window.runNative=async(mode,source)=>{window.nativeProgress=[];window.current=true;const json={type:'doc',attrs:{reportNativeSource:{...source,bindingVersion:1},reportFrontMatter:{enabled:false,date:'',author:''},reportHeader:{enabled:false,text:null}},content:[{type:'image',attrs:{src:'/page.svg',reportSourcePage:true,width:794,height:1123}}]};json.attrs.reportNativeSource.bodySha256=await reportNativeBodySha256(json);
-      if(mode==='missing-binding')delete json.attrs.reportNativeSource.bodySha256;if(mode==='stale-body')json.content[0].attrs.width=700;if(mode==='other-case')source.caseId='another-case';if(mode==='changed-case')window.current=false;
-      try{return{result:await downloadFinalDocument({root:document.getElementById('root'),format:'hwp',fileName:'확정_검수',reportNativeSnapshot:{document:json,caseId:source.caseId,isCurrent:()=>window.current},onProgress:message=>window.nativeProgress.push(message)})};}catch(error){return{error:error.message};}};</script></body></html>`));
+      if(mode==='missing-binding')delete json.attrs.reportNativeSource.bodySha256;if(mode.endsWith('stale-body'))json.content[0].attrs.width=700;if(mode==='other-case')source.caseId='another-case';if(mode==='changed-case')window.current=false;
+      try{return{result:await downloadFinalDocument({root:document.getElementById('root'),format:'hwp',fileName:mode.startsWith('qa-')?'미승인_관리자검수용_v5':'확정_검수',purpose:mode.startsWith('qa-')?'ADMIN_QA':'FINAL',reportNativeSnapshot:{document:json,caseId:source.caseId,isCurrent:()=>window.current},onProgress:message=>window.nativeProgress.push(message)})};}catch(error){return{error:error.message};}};</script></body></html>`));
     }); }
   }] });
   await server.listen();
@@ -61,14 +61,14 @@ test('CF179 approved native output keeps actual HWP/HWPX bytes and rejects misma
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     const origin = `http://127.0.0.1:${(server.httpServer!.address() as { port: number }).port}`;
-    for (const scenario of ['hwp', 'hwpx', 'missing-binding', 'stale-body', 'other-case', 'changed-case', 'late-case', 'missing-evidence', 'wrong-evidence', 'hash', 'size', 'network', 'a3', 'page-count', 'wrong-extension']) await t.test(scenario, async () => {
+    for (const scenario of ['hwp', 'hwpx', 'missing-binding', 'stale-body', 'other-case', 'changed-case', 'late-case', 'missing-evidence', 'wrong-evidence', 'hash', 'size', 'network', 'a3', 'page-count', 'wrong-extension', 'qa-hwp', 'qa-stale-body', 'qa-late-case']) await t.test(scenario, async () => {
       mode = scenario; requests = [];
       const page = await browser.newPage({ acceptDownloads: true });
       let downloads = 0; page.on('download', () => downloads++);
       await page.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
-      if(scenario==='late-case')await page.route('**/api/cases/evidence/native/download',async route=>{await page.evaluate(()=>{(window as any).current=false;});await route.continue();});
+      if(scenario.endsWith('late-case'))await page.route('**/api/cases/evidence/native/download',async route=>{await page.evaluate(()=>{(window as any).current=false;});await route.continue();});
       await page.goto(origin + '/native-final.html'); await page.waitForFunction(() => Boolean((window as any).runNative));
-      const success = scenario === 'hwp' || scenario === 'hwpx';
+      const success = scenario === 'hwp' || scenario === 'hwpx' || scenario === 'qa-hwp';
       const download = success ? page.waitForEvent('download') : null;
       download?.catch(() => undefined);
       const result = await page.evaluate(({ mode, source }) => (window as any).runNative(mode, source), { mode, source: metadata() });
@@ -77,7 +77,7 @@ test('CF179 approved native output keeps actual HWP/HWPX bytes and rejects misma
         const file = await download!, stream = await file.createReadStream(); assert.ok(stream);
         const chunks: Buffer[] = []; for await (const chunk of stream) chunks.push(Buffer.from(chunk));
         assert.deepEqual(Buffer.concat(chunks), Buffer.from(bytes()), 'The exported file must contain the exact native bytes, not page pictures');
-        assert.equal(file.suggestedFilename(), `확정_검수.${scenario}`);
+        assert.equal(file.suggestedFilename(), scenario === 'qa-hwp' ? '미승인_관리자검수용_v5.hwp' : `확정_검수.${scenario}`);
         const reopened = new module.HwpDocument(Buffer.concat(chunks));
         try {
           assert.equal(reopened.pageCount(), 1); verifyNativeHwpContent(reopened.exportHwpx(), [sourcePage]);
@@ -88,9 +88,10 @@ test('CF179 approved native output keeps actual HWP/HWPX bytes and rejects misma
         assert.deepEqual(requests, ['evidence', 'bytes']);
       } else {
         assert.ok(result.error, scenario); assert.equal(downloads, 0);
-        assert.deepEqual(requests, ['missing-binding','stale-body','other-case','changed-case'].includes(scenario) ? [] : ['missing-evidence','wrong-evidence'].includes(scenario) ? ['evidence'] : ['evidence','bytes'], 'The negative case must reach its intended verification boundary');
+        assert.deepEqual(requests, ['missing-binding','stale-body','qa-stale-body','other-case','changed-case'].includes(scenario) ? [] : ['missing-evidence','wrong-evidence'].includes(scenario) ? ['evidence'] : ['evidence','bytes'], 'The negative case must reach its intended verification boundary');
         assert.ok(!(await page.evaluate(() => (window as any).nativeProgress)).some((message: string) => message.includes('편집 가능한 HWP로 변환')), 'A failed native receipt must never fall back to raster conversion');
       }
+      if (scenario.startsWith('qa-')) assert.ok(!(await page.evaluate(() => (window as any).nativeProgress)).some((message: string) => message.includes('확정 당시')), 'Admin QA must not claim a business approval snapshot');
       await page.close();
     });
   } finally { await browser.close(); await server.close(); }

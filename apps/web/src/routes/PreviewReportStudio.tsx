@@ -139,11 +139,11 @@ function reportPreviewHtml(content: string, editorJson: import('@tiptap/core').J
   });
 }
 
-export function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, content, editorJson }: { caseNumber: string; caseTitle: string; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null }): React.ReactElement {
+export function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, content, editorJson, label = '확정 보고서 전체 미리보기' }: { caseNumber: string; caseTitle: string; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null; label?: string }): React.ReactElement {
   const presentation = splitReportPresentation(editorJson);
   const html = reportPreviewHtml(content, presentation.body);
 
-  return <article className="report-final-document" aria-label="확정 보고서 전체 미리보기" data-export-document-title={title} data-export-document-kind="REPORT" data-export-orientation="portrait">
+  return <article className="report-final-document" aria-label={label} data-export-document-title={title} data-export-document-kind="REPORT" data-export-orientation="portrait">
     {presentation.frontMatter.enabled && <section className="report-final-cover" data-export-page data-export-page-policy="fit" data-page-number="1">
       <div className="report-cover-heading"><h1>{title || '보고서'}</h1>{(presentation.frontMatter.subtitle ?? (caseTitle !== title ? caseTitle : '')) && <p>{presentation.frontMatter.subtitle ?? caseTitle}</p>}</div><div className="report-cover-signature">{presentation.frontMatter.date && <p>{presentation.frontMatter.date}</p>}{presentation.frontMatter.author && <p>{presentation.frontMatter.author}</p>}</div>
     </section>}
@@ -153,6 +153,9 @@ export function ReportFinalDocumentPreview({ caseNumber, caseTitle, title, conte
 
 export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; onNavigate: (path: string) => void }): React.ReactElement {
   const [cases, setCases] = useState<CaseSummary[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsError, setProjectsError] = useState('');
+  const [projectsRetry, setProjectsRetry] = useState(0);
   const [selectedCaseId, setSelectedCaseId] = useState('');
   const [loadedCaseId, setLoadedCaseId] = useState('');
   const [title, setTitle] = useState('');
@@ -179,9 +182,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [submittingReview, setSubmittingReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirtyState] = useState(false);
+  const dirtyRef = useRef(false);
+  const setDirty = useCallback((next: boolean) => { dirtyRef.current = next; setDirtyState(next); }, []);
   const [error, setError] = useState('');
-  const [saveError, setSaveError] = useState('');
+  const [saveError, setSaveErrorState] = useState('');
+  const saveErrorRef = useRef('');
+  const setSaveError = useCallback((next: string) => { saveErrorRef.current = next; setSaveErrorState(next); }, []);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [authoring, setAuthoring] = useState<AuthoringConfig | null>(null);
   const [selectedChapterId, setSelectedChapterId] = useState('');
@@ -213,12 +220,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [outlineVersion, setOutlineVersion] = useState(0);
   const [outlineNotes, setOutlineNotes] = useState<Record<string, string>>({});
   const [outlineTitles, setOutlineTitles] = useState<Record<string, string>>({});
-  const [outlineDirty, setOutlineDirty] = useState(false);
+  const [outlineDirty, setOutlineDirtyState] = useState(false);
+  const outlineDirtyRef = useRef(false);
+  const setOutlineDirty = useCallback((next: boolean) => { outlineDirtyRef.current = next; setOutlineDirtyState(next); }, []);
   const [showGuide, setShowGuide] = useState(true);
   const [showTemplatePreview, setShowTemplatePreview] = useState(false);
   const [previewTemplateCategoryCode, setPreviewTemplateCategoryCode] = useState('');
   const [activeStep, setActiveStep] = useState<ReportWizardStep>(1);
-  const [workspaceDirty, setWorkspaceDirty] = useState(false);
+  const [workspaceDirty, setWorkspaceDirtyState] = useState(false);
+  const workspaceDirtyRef = useRef(false);
+  const setWorkspaceDirty = useCallback((next: boolean) => { workspaceDirtyRef.current = next; setWorkspaceDirtyState(next); }, []);
   const [savedWorkspaces, setSavedWorkspaces] = useState<ReportWorkspace[]>([]);
   const [showResumePicker, setShowResumePicker] = useState(false);
   const [resumeSearch, setResumeSearch] = useState('');
@@ -253,6 +264,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [chapterBusy, setChapterBusy] = useState('');
   const [chapterNotice, setChapterNotice] = useState('');
   const [finalExportMessage, setFinalExportMessage] = useState('');
+  const [qaSnapshot, setQaSnapshot] = useState<{ caseId: string; document: FinalReportSnapshot; loadSequence: number; wizardStep: number; selectedChapterId: string | null } | null>(null);
+  const qaSnapshotRef = useRef(qaSnapshot);
+  const qaPreviewRef = useRef<HTMLDivElement | null>(null);
+  const [qaExportBusy, setQaExportBusy] = useState(false);
+  const qaExportInFlight = useRef(false);
+  const [qaExportMessage, setQaExportMessage] = useState('');
+  const [qaExportError, setQaExportError] = useState('');
   const [caseLawSources, setCaseLawSources] = useState<CaseLawSource[]>([]);
   const [caseLawCitations, setCaseLawCitations] = useState<CaseLawCitation[]>([]);
   const [caseLawIssues, setCaseLawIssues] = useState<string[]>([]);
@@ -279,6 +297,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const selectedChapterRef = useRef('');
   const roleEditable = roles.some((role) => EDIT_ROLES.includes(role));
   const editable = roleEditable && Boolean(chapterCollaboration?.canManage || roles.includes('admin'));
+  const qaReady = roles.includes('admin') && Boolean(selectedCaseId) && loadedCaseId === selectedCaseId && version > 0 && Boolean(content.trim())
+    && !loading && !dirty && !workspaceDirty && !saveError && !saving && !outlineDirty && !chaptersDirty && !outlineSyncPending
+    && !generating && !improving && !linkingHwp && !chapterBusy && !submittingReview;
+  const qaReadyRef = useRef(qaReady);
+  qaReadyRef.current = qaReady;
   const selectedCase = useMemo(() => cases.find((record) => record.id === selectedCaseId) ?? null, [cases, selectedCaseId]);
   const selectedWorkflowProject = useMemo(() => WORKFLOW_PROJECTS.find((project) => project.caseId === selectedCaseId) ?? null, [selectedCaseId]);
   const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
@@ -310,6 +333,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     outlineProposalSequence.current++;
     setOutlineProposal(null); setOutlineProposalError(''); setGeneratingOutline(false); setEditingOutlineChapterId(null);
     setLoading(true); setError(''); setLoadedCaseId('');
+    qaSnapshotRef.current = null; setQaSnapshot(null); setQaExportError(''); setQaExportMessage('');
     try {
       const [result, reviewResult, finalizationResult, authoringResult, collaborationResult] = await Promise.all([
         apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
@@ -369,21 +393,26 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [cases]);
 
   useEffect(() => {
+    let active = true;
+    setProjectsLoading(true); setProjectsError('');
     void (async () => {
       try {
         const [result, workspaces] = await Promise.all([
           loadCaseOptions<CaseSummary>('/api/cases?scope=project-work&limit=100&q='),
           loadSavedWorkspaces()
         ]);
+        if (!active) return;
         setCases(result.cases);
         const requestedCaseId = new URLSearchParams(window.location.search).get('caseId') ?? '';
         const resumableCaseId = workspaces.find((workspace) => result.cases.some((record) => record.id === workspace.caseId))?.caseId ?? '';
         const first = result.cases.some((record) => record.id === requestedCaseId) ? requestedCaseId : resumableCaseId || result.cases[0]?.id || '';
         selectedCaseRef.current = first;
         setSelectedCaseId(first);
-      } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); }
+      } catch (reason) { if (active) { setProjectsError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); } }
+      finally { if (active) setProjectsLoading(false); }
     })();
-  }, [loadSavedWorkspaces]);
+    return () => { active = false; };
+  }, [loadSavedWorkspaces, projectsRetry]);
 
   useEffect(() => { if (selectedCaseId) void loadDraft(selectedCaseId); else setLoading(false); }, [selectedCaseId, loadDraft]);
 
@@ -1205,6 +1234,59 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     finally { setSubmittingReview(false); }
   };
 
+  const qaCanReadSavedDraft = (): boolean => qaReadyRef.current && !dirtyRef.current && !workspaceDirtyRef.current && !outlineDirtyRef.current && !saveErrorRef.current
+    && !draftSaveInFlight.current && !outlineSaveInFlight.current && !outlineSyncPendingRef.current
+    && !pageImportInFlight.current && !generationInFlight.current && !chapterSaveInFlight.current && !linkingHwpRef.current
+    && !(chapterCollaboration?.assignments ?? []).some(item => item.canEdit && (chapterDraftsRef.current[item.chapterId] ?? '') !== (chapterSavedRef.current[item.chapterId] ?? ''));
+  const qaDraftIsCurrent = (snapshot: NonNullable<typeof qaSnapshot>): boolean => {
+    const presentation = splitReportPresentation(snapshot.document.editorJson);
+    return qaCanReadSavedDraft()
+      && selectedCaseRef.current === snapshot.caseId && versionRef.current === snapshot.document.version
+      && loadSequence.current === snapshot.loadSequence && activeStepRef.current === snapshot.wizardStep
+      && (selectedChapterRef.current || null) === snapshot.selectedChapterId
+      && titleRef.current.trim() === snapshot.document.title && contentRef.current === snapshot.document.content
+      && JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current))
+        === JSON.stringify(joinReportPresentation(presentation.body, presentation.header, presentation.frontMatter));
+  };
+  const loadQaSnapshot = async () => {
+    if (!qaCanReadSavedDraft() || qaExportInFlight.current || !selectedCase) return;
+    const caseId = selectedCaseId, sequence = loadSequence.current;
+    const caseNumber = selectedCase.caseNumber, caseTitle = selectedCase.title;
+    qaExportInFlight.current = true; setQaExportBusy(true); setQaExportError(''); setQaExportMessage('');
+    qaSnapshotRef.current = null; setQaSnapshot(null);
+    try {
+      const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`);
+      if (!result.draft || result.draft.caseId !== caseId || !Number.isSafeInteger(result.draft.version) || result.draft.version < 1
+        || typeof result.draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(result.draft.updatedAt))
+        || typeof result.draft.title !== 'string' || typeof result.draft.content !== 'string'
+        || (result.draft.editorJson !== null && (typeof result.draft.editorJson !== 'object' || Array.isArray(result.draft.editorJson)))) throw new Error('해당 사건의 저장본과 버전을 확인하지 못했습니다.');
+      const snapshot = { caseId, loadSequence: sequence, wizardStep: result.draft.wizardStep, selectedChapterId: result.draft.selectedChapterId,
+        document: { caseNumber, caseTitle, title: result.draft.title, content: result.draft.content, editorJson: result.draft.editorJson, version: result.draft.version } };
+      if (!qaDraftIsCurrent(snapshot)) throw new Error('현재 원고와 저장본이 다릅니다. 변경사항을 저장하고 최신본을 확인한 뒤 다시 검수해 주세요.');
+      qaSnapshotRef.current = snapshot; setQaSnapshot(snapshot);
+      setQaExportMessage(`저장본 v${snapshot.document.version}을 불러왔습니다. 미승인 관리자 검수용이며 제출·납품용이 아닙니다.`);
+    } catch (reason) { if (selectedCaseRef.current === caseId) setQaExportError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { qaExportInFlight.current = false; setQaExportBusy(false); }
+  };
+  const downloadQaReport = async (format: FinalDocumentFormat) => {
+    const snapshot = qaSnapshotRef.current;
+    if (!snapshot || qaExportInFlight.current || !qaPreviewRef.current) return;
+    if (!qaDraftIsCurrent(snapshot)) { setQaExportError('미저장 변경 또는 저장 버전 변경이 있습니다. 저장본을 다시 불러와 검수해 주세요.'); return; }
+    const root = qaPreviewRef.current;
+    const isCurrent = () => qaSnapshotRef.current === snapshot && qaPreviewRef.current === root && qaDraftIsCurrent(snapshot);
+    qaExportInFlight.current = true; setQaExportBusy(true); setQaExportError(''); setQaExportMessage('');
+    try {
+      const result = await downloadFinalDocument({
+        root, format, orientation: 'portrait', purpose: 'ADMIN_QA',
+        fileName: `${snapshot.document.caseNumber}_미승인_관리자검수용_v${snapshot.document.version}_${snapshot.document.title}`,
+        reportNativeSnapshot: { document: snapshot.document.editorJson, caseId: snapshot.caseId, isCurrent },
+        onProgress: message => { if (isCurrent()) setQaExportMessage(message); }
+      });
+      if (isCurrent()) setQaExportMessage(`미승인 관리자 검수용 ${result.fileName.endsWith('.hwpx') ? 'HWPX' : format.toUpperCase()} · v${snapshot.document.version} · ${result.pageCount}쪽 내려받기 완료. 제출·납품용이 아닙니다.${format === 'docx' && root.querySelector('img[data-report-source-page="true"]') ? ' DOCX의 원형 페이지는 그림이며 문장·표 개별 편집은 HWP에서 확인하세요.' : ''}`);
+    } catch (reason) { if (selectedCaseRef.current === snapshot.caseId) setQaExportError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { qaExportInFlight.current = false; setQaExportBusy(false); }
+  };
+
   const importSavedReportTemplate = async (file: TemplateLibraryFile) => {
     if (!editable || saving || linkingHwp || generationInFlight.current || outlineSaveInFlight.current || chapterSaveInFlight.current) return;
     if (!['hwp', 'hwpx', 'pdf'].includes(file.fileExtension.toLowerCase())) return;
@@ -1317,6 +1399,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     </header>;
   };
 
+  if (projectsLoading) return <StatusFeedbackState type="loading" title="프로젝트 조회 중" message="보고서에 연결할 프로젝트와 저장한 작업을 불러오고 있습니다." />;
+  if (projectsError) return <StatusFeedbackState type="error" title="프로젝트를 불러오지 못했습니다" message={projectsError} actionLabel="프로젝트 다시 조회" onAction={() => setProjectsRetry(value => value + 1)} />;
   if (!loading && cases.length === 0) return <StatusFeedbackState type="empty" title="보고서를 연결할 프로젝트가 없습니다" message="먼저 프로젝트 의뢰를 등록하면 프로젝트별 보고서 작업공간이 자동으로 준비됩니다." actionLabel="프로젝트 의뢰 등록" onAction={() => onNavigate('/cases/new')} />;
 
   const outlineFeedback = <>
@@ -1520,6 +1604,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           </fieldset>
           <details id="report-backups" className="report-revision-history"><summary>시간별 백업 불러오기 · 최근 {backups.length}건</summary>{backups.length ? <ul className="dashboard-work-list">{backups.map((backup) => <li key={backup.id}><span><strong>{backup.backupHour.replace('T',' ')}시 백업 · {backup.title}</strong><small>보고서 v{backup.version} · {new Date(backup.savedAt).toLocaleString('ko-KR')} · {backup.savedBy.name} · 무결성 확인 {backup.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(backup)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">첫 자동 저장 때 백업이 생성되고, 이후 변경된 작업은 1시간 단위로 안전하게 보관됩니다.</p>}</details>
         </Card>
+        {roles.includes('admin') && (activeStep === 4 || activeStep === 5) && <Card title="관리자 출력 검수 · 미승인">
+          <p>최종 승인 없이 저장본의 화면·파일을 검수합니다. 업무 승인·납품 기록이나 직원 알림은 생성하지 않습니다. 파일명에 검수용을 표시하며 원형 HWP 내부는 변경하지 않습니다.</p>
+          <div className="action-row"><Button variant="secondary" onClick={() => void loadQaSnapshot()} disabled={!qaReady || qaExportBusy}>{qaExportBusy ? '검수 처리 중…' : '저장본 검수 미리보기 불러오기'}</Button>{!qaReady && <span className="muted">변경사항과 저장 오류를 먼저 해결해 주세요.</span>}</div>
+          {qaSnapshot && <>
+            <p className="notice-box"><strong>미승인 관리자 검수용 · v{qaSnapshot.document.version}</strong><br/>제출·납품용이 아닙니다. 아래 저장본만 출력하며 이후 편집한 내용은 포함하지 않습니다.</p>
+            <div className="action-row final-export-actions" aria-label="미승인 관리자 검수 파일 내려받기">
+              {(['docx', 'pdf', 'hwp'] as const).map(format => <Button key={format} className={`final-export-button is-${format}`} aria-label={`미승인 관리자 검수용 ${format.toUpperCase()} 내려받기`} onClick={() => void downloadQaReport(format)} disabled={qaExportBusy || !qaDraftIsCurrent(qaSnapshot)}><FileFormatIcon format={format}/><span>{format === 'docx' ? 'Word DOCX' : format.toUpperCase()}</span></Button>)}
+            </div>
+            <div ref={qaPreviewRef} className="report-final-export-source report-draft-qa-preview"><ReportFinalDocumentPreview {...qaSnapshot.document} label="미승인 관리자 검수용 저장 보고서 미리보기"/></div>
+          </>}
+          {qaExportMessage && <p className="notice-box" role="status">{qaExportMessage}</p>}
+          {qaExportError && <p role="alert">{qaExportError}</p>}
+        </Card>}
         <Card title="" className="report-step-card report-step-card--5 report-stage-card">
           {renderStageHeader(5)}
           <div className="form-stack">

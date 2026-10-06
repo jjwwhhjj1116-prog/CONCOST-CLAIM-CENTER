@@ -78,7 +78,7 @@ export async function reportNativeBodySha256(document: JSONContent | null | unde
 export async function readBoundReportNativeSource(document: JSONContent | null, caseId: string): Promise<ReportNativeSource> {
   const source = readReportNativeSource(document, caseId);
   if (!source || !document || !source.bodySha256 || source.bodySha256 !== await reportNativeBodySha256(document)) {
-    throw new Error('확정 본문과 원형 HWP의 연결 검증이 일치하지 않습니다. 원형을 다시 적용하고 검토·확정한 뒤 출력하세요. 기존 파일은 유지됩니다.');
+    throw new Error('보고서 본문과 원형 HWP의 연결 검증이 일치하지 않습니다. 변경한 원형을 다시 적용하고 저장한 뒤 출력하세요. 제출·납품용은 별도 검토·확정이 필요합니다. 기존 파일은 유지됩니다.');
   }
   return source;
 }

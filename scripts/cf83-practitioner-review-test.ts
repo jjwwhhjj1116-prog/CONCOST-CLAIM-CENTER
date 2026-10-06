@@ -273,7 +273,7 @@ test('CF179 native output binding rejects stale bodies, presentation and file po
 
 test('CF179 actual final report handler does not export without its approved snapshot', async () => {
   const source = read('apps/web/src/routes/PreviewReportStudio.tsx');
-  const expression = source.slice(source.indexOf('const downloadFinalReport ='), source.indexOf('const importSavedReportTemplate =')).trim().replace(/^const downloadFinalReport = /u, '').replace(/;$/u, '');
+  const expression = source.slice(source.indexOf('const downloadFinalReport ='), source.indexOf('const qaCanReadSavedDraft =')).trim().replace(/^const downloadFinalReport = /u, '').replace(/;$/u, '');
   const compiled = transpileModule(`(${expression})`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
   for (const mode of ['no-finalization', 'no-approved-snapshot', 'no-preview', 'busy']) {
     let exports = 0;
