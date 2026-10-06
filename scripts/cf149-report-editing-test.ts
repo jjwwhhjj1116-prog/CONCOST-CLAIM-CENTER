@@ -173,6 +173,10 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     await page.setViewportSize({width:1600,height:1000});
     await page.getByRole('button',{name:'본문 미리보기',exact:true}).click();
     assert.deepEqual(await page.locator('.report-edit-canvas>.structured-editor__preview img').first().evaluate(el=>[el.clientWidth,el.clientHeight]),[794,1123]);
+    await sourcePageNavigation.selectOption('9');
+    assert.equal(await sourcePageNavigation.inputValue(),'9');
+    assert.equal(await page.locator('.document-review-pages__source-nav [role="status"]').innerText(),'편집·출력 미리보기를 원본 9쪽으로 이동했습니다.');
+    assert.ok(await page.locator('.document-review-pages__side').evaluateAll(panes=>panes.every(pane=>pane.scrollTop>0)),'Read-only body preview also supports paired source-page navigation');
     assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),nativeBefore);
     await page.getByRole('button',{name:'본문 미리보기',exact:true}).click();
     await page.evaluate(()=>(globalThis as any).cf149Editing.insertTemporary());
