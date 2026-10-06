@@ -11,6 +11,8 @@ export interface NativeHwpDocument {
   setShapeProperties(section:number,paragraph:number,control:number,options:string):string;
   renderPageSvg(page:number):string;
   renderPageSvgWithProfile?(page:number,profile:string):string;
+  getPageDef?(section:number):string;
+  getSectionCount?():number;
   free(): void;
 }
 export interface NativeHwpEngine { new(bytes: Uint8Array): NativeHwpDocument }

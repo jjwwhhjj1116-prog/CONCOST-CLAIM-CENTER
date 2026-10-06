@@ -6,6 +6,9 @@ import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 import { createNativeHwp, type NativeHwpPage } from './editable-hwp-export';
 import { collectNativeHwpPages } from './native-hwp-pages';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
+import { apiDownload, apiRequest } from '../api';
+import { readBoundReportNativeSource, reportSourceSha256 } from './report-native-source';
+import type { JSONContent } from '@tiptap/core';
 
 export type FinalDocumentFormat = 'docx' | 'pdf' | 'hwp';
 export type FinalDocumentOrientation = 'landscape' | 'portrait';
@@ -365,12 +368,14 @@ export async function downloadFinalDocument(options: {
   fileName: string;
   orientation?: FinalDocumentOrientation;
   onProgress?: (message: string) => void;
+  reportNativeSnapshot?: { document: JSONContent | null; caseId: string; isCurrent: () => boolean };
 }): Promise<FinalDocumentExportResult> {
   const report = options.root.matches('[data-export-document-kind="REPORT"]') || options.root.querySelector('[data-export-document-kind="REPORT"]');
   const orientation = report ? 'portrait' : options.orientation ?? 'landscape';
   const baseName = fileSafe(options.fileName.replace(/\.(?:docx|pdf|hwp)$/iu, ''));
   let bytes: Uint8Array;
   let pageCount: number;
+  let nativeExtension: 'hwp' | 'hwpx' | undefined;
   const containsSourcePages = Boolean(options.root.querySelector('img[data-report-source-page="true"]'));
   if (options.format === 'docx') {
     const elements = await prepareExportPages(options.root);
@@ -378,10 +383,48 @@ export async function downloadFinalDocument(options: {
     options.onProgress?.(containsSourcePages ? `${pageCount}개 A4 페이지를 DOCX로 변환합니다. 원본 페이지 이미지는 문장·표 개별 편집 불가입니다. 수정은 원본에서 해주세요.` : `${pageCount}개 A4 페이지의 문단·표·이미지를 편집 가능한 DOCX로 변환하고 있습니다.`);
     bytes = await createEditableDocx(options.root, orientation);
   } else if (options.format === 'hwp') {
-    await prepareExportPages(options.root);
-    const pages = await collectNativeHwpPages(options.root, orientation);
-    pageCount = pages.length;
-    bytes = await createHwp(pages, orientation, options.onProgress, containsSourcePages);
+    const elements = await prepareExportPages(options.root);
+    const snapshot = options.reportNativeSnapshot;
+    if (report && snapshot?.document?.attrs?.reportNativeSource) {
+      const assertCurrent = () => { if (!snapshot.isCurrent() || !options.root.isConnected) throw new Error('확정본 선택이 변경되어 출력을 중단했습니다.'); };
+      assertCurrent();
+      const source = await readBoundReportNativeSource(snapshot.document, snapshot.caseId);
+      assertCurrent();
+      options.onProgress?.('확정 당시 원형 한글 파일의 본문 연결·크기·해시를 검증하고 있습니다.');
+      const evidence = await apiRequest<{ files: Array<{ id: string; sha256: string; byteSize: number }> }>(`/api/cases/${encodeURIComponent(snapshot.caseId)}/evidence?category=REPORT_REFERENCE&evidenceId=${encodeURIComponent(source.evidenceId)}`);
+      if (!Array.isArray(evidence.files) || !evidence.files.some(file => file.id === source.evidenceId && file.sha256 === source.sha256 && file.byteSize === source.byteSize)) throw new Error('확정 원형 파일이 해당 사건 자료와 일치하지 않아 출력을 중단했습니다.');
+      assertCurrent();
+      const result = await apiDownload(source.downloadUrl);
+      const payload = await result.blob.arrayBuffer();
+      if (payload.byteLength !== source.byteSize || await reportSourceSha256(payload) !== source.sha256) throw new Error('확정 원형 한글 파일의 크기·해시가 일치하지 않아 출력을 중단했습니다.');
+      assertCurrent();
+      bytes = new Uint8Array(payload);
+      nativeExtension = /\.hwpx$/iu.test(source.name) ? 'hwpx' : 'hwp';
+      const Engine = await loadNativeHwpEngine(), native = new Engine(bytes);
+      try {
+        pageCount = native.pageCount();
+        if (pageCount !== elements.length) throw new Error('확정 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.');
+        const sections = native.getSectionCount?.();
+        if (!Number.isSafeInteger(sections) || !sections || sections < 1 || !native.getPageDef) throw new Error('원형 한글의 실제 용지 크기를 확인하지 못했습니다.');
+        for (let section = 0; section < sections; section++) {
+          const paper = JSON.parse(native.getPageDef(section)) as { width: number; height: number; landscape: boolean };
+          // The pinned engine returns HWPUNIT, as in editable-hwp-export:
+          // 75 HU per 96-DPI screen pixel. Allow one pixel of A4 rounding only.
+          const a4 = pageLayout('portrait');
+          if (paper.landscape !== false || !Number.isFinite(paper.width) || !Number.isFinite(paper.height)
+            || Math.abs(paper.width - a4.widthPx * 75) > 75 || Math.abs(paper.height - a4.heightPx * 75) > 75) throw new Error('원형 한글의 실제 용지가 A4 세로가 아니어서 출력을 중단했습니다.');
+        }
+        for (let page = 0; page < pageCount; page++) {
+          if (!svgOrientationMatches(native.renderPageSvg(page), 'portrait')) throw new Error(`원형 한글 ${page + 1}쪽이 A4 세로가 아니어서 출력을 중단했습니다.`);
+        }
+      } finally { native.free(); }
+      assertCurrent();
+      options.onProgress?.('검증된 확정 원형을 재변환 없이 내려받습니다. 원래 문장·표·사진 구조를 유지합니다.');
+    } else {
+      const pages = await collectNativeHwpPages(options.root, orientation);
+      pageCount = pages.length;
+      bytes = await createHwp(pages, orientation, options.onProgress, containsSourcePages);
+    }
   } else {
     const revision = options.root.querySelector<HTMLElement>('[data-export-document-revision]')?.dataset.exportDocumentRevision?.trim() ?? '';
     const imageSignature = [...options.root.querySelectorAll('img')].map((image) => `${image.currentSrc || image.src}:${image.naturalWidth}x${image.naturalHeight}`).join('|');
@@ -396,7 +439,7 @@ export async function downloadFinalDocument(options: {
     options.onProgress?.(`${pageCount}개 A4 페이지를 ${options.format.toUpperCase()}로 묶고 있습니다.`);
     bytes = createPdf(pages, orientation);
   }
-  const expectedSignature = options.format === 'docx'
+  const expectedSignature = options.format === 'docx' || nativeExtension === 'hwpx'
     ? [0x50, 0x4b, 0x03, 0x04]
     : options.format === 'pdf'
       ? [0x25, 0x50, 0x44, 0x46, 0x2d]
@@ -404,10 +447,11 @@ export async function downloadFinalDocument(options: {
   if (bytes.byteLength <= 512 || expectedSignature.some((value, index) => bytes[index] !== value)) {
     throw new Error(`${options.format.toUpperCase()} 확정본의 파일 형식 검증에 실패했습니다. 다운로드를 중단했습니다.`);
   }
-  const extension = options.format;
+  const extension = nativeExtension ?? options.format;
   const fileName = `${baseName}.${extension}`;
   const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   const digest = await sha256(bytes);
-  downloadBlob(new Blob([payload], { type: options.format === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : options.format === 'pdf' ? 'application/pdf' : 'application/x-hwp' }), fileName);
+  if (options.reportNativeSnapshot && (!options.reportNativeSnapshot.isCurrent() || !options.root.isConnected)) throw new Error('확정본 선택이 변경되어 출력을 중단했습니다.');
+  downloadBlob(new Blob([payload], { type: options.format === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : options.format === 'pdf' ? 'application/pdf' : nativeExtension === 'hwpx' ? 'application/vnd.hancom.hwpx' : 'application/x-hwp' }), fileName);
   return { byteSize: bytes.byteLength, fileName, pageCount, sha256: digest };
 }

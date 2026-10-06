@@ -9,7 +9,7 @@ import { loadCaseOptions } from '../case-options';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
 import { confirmReportPages } from '../documents/confirm-report-pages';
-import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, type ReportNativeSource } from '../documents/report-native-source';
+import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, reportNativeBodySha256, type ReportNativeSource } from '../documents/report-native-source';
 import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
@@ -957,8 +957,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const before = contentRef.current;
     const originalJson = JSON.stringify(editorJsonRef.current);
     const originalFrontMatter = JSON.stringify(reportFrontMatterRef.current);
+    const originalHeader = JSON.stringify(reportHeaderRef.current);
     const controller = new AbortController(); pageImportAbort.current = controller;
-    const isCurrent = () => !controller.signal.aborted && selectedCaseRef.current === requestCaseId && contentRef.current === before && JSON.stringify(editorJsonRef.current) === originalJson && JSON.stringify(reportFrontMatterRef.current) === originalFrontMatter;
+    const isCurrent = () => !controller.signal.aborted && selectedCaseRef.current === requestCaseId && contentRef.current === before && JSON.stringify(editorJsonRef.current) === originalJson && JSON.stringify(reportFrontMatterRef.current) === originalFrontMatter && JSON.stringify(reportHeaderRef.current) === originalHeader;
     const assertCurrent = () => { if (!isCurrent()) throw new Error('프로젝트 또는 원고가 변경되어 적용하지 않았습니다. 다시 확인해 주세요.'); };
     if (!await confirmReportPages(count, source, controller.signal)) throw new Error('기존 보고서를 유지했습니다.');
     assertCurrent();
@@ -1004,9 +1005,15 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const imported = wholeReportDocument(html.join('\n\n'));
       const parsed = parseStructuredDocumentMarkdown(imported);
       if ((JSON.stringify(parsed).match(/reportSourcePage/g) ?? []).length !== count) throw new Error('원본 페이지 수를 보존하지 못해 적용하지 않았습니다.');
-      if (nativeSource) parsed.attrs = { ...parsed.attrs, reportNativeSource: nativeSource };
+      const importedFrontMatter = { ...reportFrontMatterRef.current, enabled: false };
+      if (nativeSource) {
+        parsed.attrs = { ...parsed.attrs, reportNativeSource: nativeSource };
+        nativeSource.bindingVersion = 1;
+        nativeSource.bodySha256 = await reportNativeBodySha256(joinReportPresentation(parsed, reportHeaderRef.current, importedFrontMatter));
+        assertCurrent();
+      }
       contentRef.current = imported; setContent(imported); setEditorJson(parsed);
-      setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: false });
+      setReportFrontMatter(importedFrontMatter);
       setDraftMethod('MANUAL'); setDirty(true); appliedToWorkspace = true;
       setMemoryNotice(`${source} ${count}쪽 보고서를 저장하고 있습니다. 저장 응답을 확인한 뒤 편집기를 닫습니다.`);
       if (!await saveNow('MANUAL', false, true)) throw new Error(`가져온 보고서의 저장 완료를 확인하지 못했습니다. ${source === 'HWP' ? 'HWP 편집기를 닫은 뒤 ' : ''}보고서 저장 오류의 “저장 다시 시도”를 사용하세요. 전체 페이지 적용을 다시 실행할 필요는 없습니다.`);
@@ -1135,6 +1142,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const currentReview = loadedCaseId === selectedCaseId ? reviews.find((review) => review.reportVersion === version) ?? null : null;
   const currentFinalization = currentReview ? finalizations.find((entry) => entry.caseId === selectedCaseId && entry.reviewId === currentReview.id) ?? null : null;
   const finalSnapshotId = currentFinalization?.id ?? '';
+  const finalSnapshotIdRef = useRef(finalSnapshotId); finalSnapshotIdRef.current = finalSnapshotId;
   const finalSnapshotVersion = currentFinalization?.reportVersion;
   const approvedDocument = finalSnapshot?.id === finalSnapshotId ? finalSnapshot.document : null;
   useEffect(() => {
@@ -1188,9 +1196,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         root: finalReportPreviewRef.current,
         format, orientation: 'portrait',
         fileName: `${approvedDocument.caseNumber}_${approvedDocument.title}_v${approvedDocument.version}`,
+        reportNativeSnapshot: { document: approvedDocument.editorJson, caseId: currentFinalization.caseId, isCurrent: () => selectedCaseRef.current === currentFinalization.caseId && finalSnapshotIdRef.current === currentFinalization.id },
         onProgress: setFinalExportMessage
       });
-      setFinalExportMessage(format === 'docx' ? `미리보기 ${result.pageCount}쪽의 문단·표·이미지를 편집 가능한 DOCX로 내려받았습니다. 제출 전 Word에서 쪽 배치를 확인하세요.` : `${format.toUpperCase()} 확정본 ${result.pageCount}페이지 내려받기 완료 · 화면 미리보기와 동일한 A4 출력본입니다.`);
+      const sourcePages = Boolean(finalReportPreviewRef.current?.querySelector('img[data-report-source-page="true"]'));
+      setFinalExportMessage(format === 'docx' ? sourcePages ? `미리보기 ${result.pageCount}쪽을 DOCX로 내려받았습니다. 원본 페이지 그림은 문장·표 개별 편집이 불가합니다. 수정은 연결된 HWP 편집본에서 해주세요.` : `미리보기 ${result.pageCount}쪽의 문단·표·이미지를 편집 가능한 DOCX로 내려받았습니다. 제출 전 Word에서 쪽 배치를 확인하세요.` : `${result.fileName.endsWith('.hwpx') ? 'HWPX' : format.toUpperCase()} 확정본 ${result.pageCount}페이지 내려받기 완료 · 화면 미리보기와 동일한 A4 출력본입니다.`);
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSubmittingReview(false); }
   };

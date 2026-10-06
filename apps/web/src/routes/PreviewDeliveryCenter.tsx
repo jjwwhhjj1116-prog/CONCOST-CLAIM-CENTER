@@ -29,25 +29,30 @@ export function PreviewDeliveryCenter({ onNavigate }:{ onNavigate:(path:string)=
   const [retry,setRetry]=useState(0);
   const [finalizations,setFinalizations]=useState<Finalization[]>([]);
   const [selectedCaseId,setSelectedCaseId]=useState(queryCaseId);
+  const selectedCaseIdRef=useRef(selectedCaseId); selectedCaseIdRef.current=selectedCaseId;
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState('');
   const [snapshot,setSnapshot]=useState<FinalSnapshot | null>(null);
+  const snapshotSourceRef=useRef<{id:string;caseId:string;version:number}|null>(null);
   const [outputBusy,setOutputBusy]=useState(false);
   const [outputMessage,setOutputMessage]=useState('');
   const outputRef=useRef<HTMLDivElement>(null);
   const openSnapshot=async(item:Finalization)=>{
+    if(item.caseId!==selectedCaseIdRef.current)return;
+    const source={id:item.id,caseId:item.caseId,version:item.reportVersion}; snapshotSourceRef.current=source; setSnapshot(null);
     setOutputBusy(true); setError(''); setOutputMessage('');
-    try { const result=await apiRequest<{document:FinalSnapshot}>(`/api/report-finalizations/${encodeURIComponent(item.id)}/document`); setSnapshot(result.document); }
-    catch(reason) { setError(reason instanceof Error?reason.message:'확정본을 불러오지 못했습니다.'); }
-    finally { setOutputBusy(false); }
+    try { const result=await apiRequest<{document:FinalSnapshot}>(`/api/report-finalizations/${encodeURIComponent(item.id)}/document`); if(snapshotSourceRef.current!==source||selectedCaseIdRef.current!==source.caseId)return; if(!result.document||result.document.version!==source.version)throw new Error('확정 버전이 일치하지 않아 출력을 중단했습니다.'); setSnapshot(result.document); }
+    catch(reason) { if(snapshotSourceRef.current===source)setError(reason instanceof Error?reason.message:'확정본을 불러오지 못했습니다.'); }
+    finally { if(snapshotSourceRef.current===source)setOutputBusy(false); }
   };
   const exportSnapshot=async(format:FinalDocumentFormat)=>{
     const root=outputRef.current?.querySelector<HTMLElement>('.report-final-document');
-    if(!snapshot||!root||outputBusy)return;
+    const source=snapshotSourceRef.current;
+    if(!snapshot||!source||source.caseId!==selectedCaseIdRef.current||snapshot.version!==source.version||!root||outputBusy)return;
     setOutputBusy(true); setOutputMessage('');
-    try { await downloadFinalDocument({root,format,orientation:'portrait',fileName:`${snapshot.title}-v${snapshot.version}`,onProgress:setOutputMessage}); setOutputMessage('확정 당시 본문·서식으로 파일을 내려받았습니다. 실제 납품 파일은 아래 회사 Drive에 보관해 주세요.'); }
-    catch(reason) { setOutputMessage(reason instanceof Error?reason.message:'출력하지 못했습니다.'); }
-    finally { setOutputBusy(false); }
+    try { await downloadFinalDocument({root,format,orientation:'portrait',fileName:`${snapshot.title}-v${snapshot.version}`,reportNativeSnapshot:{document:snapshot.editorJson,caseId:source.caseId,isCurrent:()=>snapshotSourceRef.current===source&&selectedCaseIdRef.current===source.caseId},onProgress:message=>{if(snapshotSourceRef.current===source)setOutputMessage(message);}}); setOutputMessage('확정 당시 본문·서식으로 파일을 내려받았습니다. 실제 납품 파일은 아래 회사 Drive에 보관해 주세요.'); }
+    catch(reason) { if(snapshotSourceRef.current===source)setOutputMessage(reason instanceof Error?reason.message:'출력하지 못했습니다.'); }
+    finally { if(snapshotSourceRef.current===source)setOutputBusy(false); }
   };
 
   useEffect(()=>{
@@ -76,6 +81,7 @@ export function PreviewDeliveryCenter({ onNavigate }:{ onNavigate:(path:string)=
 
   useEffect(()=>{
     if(!selectedCaseId)return;
+    snapshotSourceRef.current=null; setSnapshot(null); setOutputBusy(false); setOutputMessage('');
     let active=true;
     setLoading(true);setError('');setSelectedCase(null);
     Promise.all([

@@ -6,7 +6,7 @@ import { transpileModule, ScriptTarget } from 'typescript';
 import { claimTypeLabel } from '../apps/web/src/claim-types.js';
 import { generateProposalDocx, generateProposalPdf, type ProposalExportDocument } from '../apps/cloudflare/src/proposal-docx.js';
 import { meetingMinutesWorkbook } from '../apps/web/src/proposals/proposal-excel.js';
-import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, type ReportNativeSource } from '../apps/web/src/documents/report-native-source.js';
+import { readReportNativeSource, readReportOriginalSource, reportSourceSha256, reportNativeBodySha256, readBoundReportNativeSource, type ReportNativeSource } from '../apps/web/src/documents/report-native-source.js';
 import { ApiError } from '../apps/web/src/api.js';
 import { joinReportPresentation } from '../packages/document-engine/src/report-presentation.js';
 
@@ -80,7 +80,7 @@ test('CF178 actual application function waits for save and retains unsaved impor
     const context = {
       AbortController, pageImportInFlight: { current: false }, pageImportAbort: { current: null }, editable: true, saving: false,
       chapterSaveInFlight: { current: false }, outlineSaveInFlight: { current: false }, generationInFlight: { current: false },
-      selectedCaseId: 'synthetic-case', selectedCaseRef: { current: 'synthetic-case' }, dirty: false, contentRef, editorJsonRef, reportFrontMatterRef: frontRef,
+      selectedCaseId: 'synthetic-case', selectedCaseRef: { current: 'synthetic-case' }, dirty: false, contentRef, editorJsonRef, reportFrontMatterRef: frontRef, reportHeaderRef: { current: { enabled: false, text: null } },
       confirmReportPages: async () => true, setLinkingHwp: noOp, setError: (message: string) => errors.push(message), setMemoryNotice: noOp,
       reportUploads: { upload: async () => ({ downloadUrl: '/synthetic-page' }) },
       document: { createElement: () => ({ src: '', alt: '', dataset: { reportSourcePage: '' }, get outerHTML() { return '<img src="/synthetic-page" data-report-source-page="true">'; } }) },
@@ -119,20 +119,20 @@ test('CF179 import persistence keeps the first HWP original without reuploading 
     const previous: ReportNativeSource = { caseId: 'synthetic-case', evidenceId: 'previous', name: original.name, byteSize: original.size, sha256: sourceSha, downloadUrl: '/api/cases/evidence/previous/download' };
     const first = { ...previous, evidenceId: 'first', downloadUrl: '/api/cases/evidence/first/download' };
     if (hasOriginalChain) previous.originalSource = first;
-    const json: { current: Parameters<typeof readReportNativeSource>[0] } = { current: { type: 'doc', attrs: { reportNativeSource: previous }, content: [] } };
-    const content = { current: 'preserved body' }, front = { current: { enabled: true } }, uploaded: string[] = [], closed: boolean[] = [];
+    const json: { current: NonNullable<Parameters<typeof readReportNativeSource>[0]> } = { current: { type: 'doc', attrs: { reportNativeSource: previous }, content: [] } };
+    const content = { current: 'preserved body' }, front = { current: { enabled: true, date: '', author: '' } }, uploaded: string[] = [], closed: boolean[] = [];
     const noOp = () => undefined;
     const context = {
       AbortController, pageImportInFlight: { current: false }, pageImportAbort: { current: null }, editable: true, saving: false, dirty: false,
       chapterSaveInFlight: { current: false }, outlineSaveInFlight: { current: false }, generationInFlight: { current: false },
-      selectedCaseId: 'synthetic-case', selectedCaseRef: { current: 'synthetic-case' }, contentRef: content, editorJsonRef: json, reportFrontMatterRef: front,
+      selectedCaseId: 'synthetic-case', selectedCaseRef: { current: 'synthetic-case' }, contentRef: content, editorJsonRef: json, reportFrontMatterRef: front, reportHeaderRef: { current: { enabled: false, text: null } },
       confirmReportPages: async () => true, setLinkingHwp: noOp, setError: noOp, setMemoryNotice: noOp,
-      reportSourceSha256, readReportNativeSource, readReportOriginalSource,
+      reportSourceSha256, reportNativeBodySha256, joinReportPresentation, readReportNativeSource, readReportOriginalSource,
       reportUploads: { upload: async (_caseId: string, file: File) => { uploaded.push(file.name); const id = `stored-${uploaded.length}`; return { id, downloadUrl: `/api/cases/evidence/${id}/download` }; } },
       document: { createElement: () => ({ src: '', alt: '', dataset: { reportSourcePage: '' }, get outerHTML() { return '<img data-report-source-page="true">'; } }) },
       wholeReportDocument: (html: string) => html,
       parseStructuredDocumentMarkdown: () => ({ type: 'doc', content: [1, 2].map(() => ({ type: 'image', attrs: { reportSourcePage: true } })) }),
-      setContent: noOp, setEditorJson: (value: typeof json.current) => { json.current = value; }, setReportFrontMatter: (value: { enabled: boolean }) => { front.current = value; },
+      setContent: noOp, setEditorJson: (value: typeof json.current) => { json.current = value; }, setReportFrontMatter: (value: typeof front.current) => { front.current = value; },
       setDraftMethod: noOp, setDirty: noOp, saveNow: async () => true, setHwpEditorOpen: (value: boolean) => closed.push(value), setHwpSourceFile: noOp, setShowTemplatePreview: noOp
     };
     const apply = runInNewContext(compiled, context) as (count: number, source: string, readPage: (index: number) => Promise<File>, native: File, original: File) => Promise<void>;
@@ -140,6 +140,8 @@ test('CF179 import persistence keeps the first HWP original without reuploading 
     const stored = readReportNativeSource(json.current, 'synthetic-case');
     assert.equal(stored?.sha256, await reportSourceSha256(await edited.arrayBuffer()));
     assert.equal(stored?.byteSize, edited.size);
+    assert.equal(stored?.bindingVersion, 1);
+    await readBoundReportNativeSource(joinReportPresentation(json.current, context.reportHeaderRef.current, front.current), 'synthetic-case');
     assert.deepEqual(readReportOriginalSource(json.current, 'synthetic-case'), hasOriginalChain ? first : previous, 'The first linked original must remain reachable after editing');
     assert.deepEqual(uploaded, ['edited.hwp', 'page-0.jpg', 'page-1.jpg'], 'Existing originals must be referenced, not uploaded again');
     assert.deepEqual(closed, [false]);
@@ -201,6 +203,42 @@ test('CF179 import persistence uses actual saveNow handling for conflicts and un
     if (mode === 'conflict') assert.match(errors.at(-1) ?? '', /버전이 변경되어 저장하지 않았습니다/u);
     if (['missing-draft', 'malformed-draft', 'invalid-version', 'wrong-case', 'wrong-content', 'wrong-json', 'missing-date', 'wrong-step', 'wrong-chapter'].includes(mode)) assert.match(errors.at(-1) ?? '', /저장 완료 응답을 확인하지 못했습니다/u, mode);
     if (mode === 'transport') assert.match(errors.at(-1) ?? '', /Synthetic uncertain/u);
+  }
+});
+
+test('CF179 native output binding rejects stale bodies, presentation and file pointers', async () => {
+  const source: ReportNativeSource = { caseId: 'synthetic-case', evidenceId: 'native', name: 'approved.hwp', downloadUrl: '/api/cases/evidence/native/download', byteSize: 1024, sha256: 'a'.repeat(64), bindingVersion: 1 };
+  const json = { type: 'doc', attrs: { reportNativeSource: source, reportFrontMatter: { enabled: false, date: '', author: '' }, reportHeader: { enabled: false, text: null } }, content: [1, 2].map(page => ({ type: 'image', attrs: { src: `/page-${page}`, reportSourcePage: true, width: 794, height: 1123 } })) };
+  source.bodySha256 = await reportNativeBodySha256(json);
+  // Reorder each object's keys without filtering nested fields.
+  const reverseKeys = (value: any): any => Array.isArray(value) ? value.map(reverseKeys) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reverseKeys(item)])) : value;
+  await readBoundReportNativeSource(reverseKeys(json), 'synthetic-case');
+  for (const mode of ['missing-proof', 'version', 'page-order', 'page-width', 'page-url', 'mixed-body', 'cover', 'header', 'file-sha', 'file-size', 'file-id', 'other-case']) {
+    const changed = structuredClone(json);
+    if (mode === 'missing-proof') delete changed.attrs.reportNativeSource.bodySha256;
+    if (mode === 'version') delete changed.attrs.reportNativeSource.bindingVersion;
+    if (mode === 'page-order') changed.content.reverse();
+    if (mode === 'page-width') changed.content[0].attrs.width = 700;
+    if (mode === 'page-url') changed.content[0].attrs.src = '/another-page';
+    if (mode === 'mixed-body') (changed.content as any[]).push({ type: 'paragraph', content: [{ type: 'text', text: 'Additional approved text' }] });
+    if (mode === 'cover') changed.attrs.reportFrontMatter.enabled = true;
+    if (mode === 'header') changed.attrs.reportHeader.text = 'New header' as any;
+    if (mode === 'file-sha') changed.attrs.reportNativeSource.sha256 = 'b'.repeat(64);
+    if (mode === 'file-size') changed.attrs.reportNativeSource.byteSize++;
+    if (mode === 'file-id') { changed.attrs.reportNativeSource.evidenceId = 'another'; changed.attrs.reportNativeSource.downloadUrl = '/api/cases/evidence/another/download'; }
+    await assert.rejects(readBoundReportNativeSource(changed, mode === 'other-case' ? 'another-case' : 'synthetic-case'), /연결 검증이 일치하지 않습니다/u, mode);
+  }
+});
+
+test('CF179 actual final report handler does not export without its approved snapshot', async () => {
+  const source = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const expression = source.slice(source.indexOf('const downloadFinalReport ='), source.indexOf('const importSavedReportTemplate =')).trim().replace(/^const downloadFinalReport = /u, '').replace(/;$/u, '');
+  const compiled = transpileModule(`(${expression})`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  for (const mode of ['no-finalization', 'no-approved-snapshot', 'no-preview', 'busy']) {
+    let exports = 0;
+    const context = { currentFinalization: mode === 'no-finalization' ? null : {}, approvedDocument: mode === 'no-approved-snapshot' ? null : {}, finalReportPreviewRef: { current: mode === 'no-preview' ? null : {} }, submittingReview: mode === 'busy', downloadFinalDocument: async () => exports++, setSubmittingReview: () => assert.fail('No output work may start'), setError: () => undefined, setFinalExportMessage: () => undefined };
+    const download = runInNewContext(compiled, context) as (format: string) => Promise<void>;
+    await download('hwp'); assert.equal(exports, 0, mode);
   }
 });
 
