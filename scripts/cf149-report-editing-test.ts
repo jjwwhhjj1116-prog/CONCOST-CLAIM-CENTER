@@ -99,6 +99,8 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     const actualNativeBefore=await page.evaluate(()=>(globalThis as any).cf149Editing.actual());
     assert.deepEqual(actualNativeBefore,nativeBefore.json,'The real Tiptap document must match the imported body, not silently append invisible paragraphs');
     assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true,'The original native binding must also validate against actual ref.getJSON()');
+    const sourcePageNavigation=page.getByRole('combobox',{name:'원형 보고서 쪽 이동',exact:true});
+    assert.equal(await sourcePageNavigation.count(),1,'Whole-document source pages need an explicit page navigator without guessed chapter mapping');
     const nativeEditButton=page.getByRole('button',{name:'표지·목차·표를 HWP 편집기에서 수정',exact:true});
     assert.equal(await nativeEditButton.count(),1,'Imported native pages need an explicit cover/TOC editing action in the editing pane');
     assert.equal(await page.getByLabel('표지 제목 편집',{exact:true}).count(),0,'Do not inject a duplicate generated cover into an imported original');
@@ -133,7 +135,41 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
       assert.deepEqual(await page.locator('.tiptap img').evaluateAll(images=>images.map(img=>[img.clientWidth,img.clientHeight])),Array(17).fill([794,1123]));
       assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),nativeBefore,'Resizing must not mutate the saved native source or generate document changes');
       assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),actualNativeBefore,'Resizing must not change the actual editor model');
+      await sourcePageNavigation.scrollIntoViewIfNeeded();
+      const outerScroll=await page.evaluate(()=>window.scrollY);
+      for(const destination of [1,9,17]){
+        await sourcePageNavigation.selectOption(String(destination));
+        await page.waitForFunction(pageNumber=>[...document.querySelectorAll<HTMLElement>('.document-review-pages__side')].every(pane=>{
+          const image=pane.querySelectorAll<HTMLImageElement>(pane.classList.contains('document-review-pages__output')?'[data-export-page] img[data-report-source-page="true"]':'img[data-report-source-page="true"]')[pageNumber-1];
+          if(!image)return false;
+          const imageRect=image.getBoundingClientRect(),paneRect=pane.getBoundingClientRect();
+          const padding=Number.parseFloat(getComputedStyle(pane).paddingTop);
+          const top=imageRect.top-paneRect.top-pane.clientTop;
+          const aligned=Math.abs(top-padding)<2;
+          const clampedAtEnd=Math.abs(pane.scrollTop-(pane.scrollHeight-pane.clientHeight))<2&&top>=padding&&imageRect.bottom<=paneRect.bottom-padding+2;
+          return aligned||clampedAtEnd;
+        }),destination).catch(async error=>{
+          console.error(JSON.stringify({width,destination,panes:await page.locator('.document-review-pages__side').evaluateAll((panes,pageNumber)=>panes.map(pane=>{const images=pane.querySelectorAll(pane.classList.contains('document-review-pages__output')?'[data-export-page] img[data-report-source-page="true"]':'img[data-report-source-page="true"]');const image=images[pageNumber-1];return{images:images.length,top:image?image.getBoundingClientRect().top-pane.getBoundingClientRect().top:null,padding:getComputedStyle(pane).paddingTop,scrollTop:pane.scrollTop,scrollHeight:pane.scrollHeight,clientHeight:pane.clientHeight};}),destination)}));
+          throw error;
+        });
+        assert.equal(await page.evaluate(()=>window.scrollY),outerScroll,'Navigation scrolls only the two panes, not the whole browser page');
+        assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),nativeBefore,'Page navigation must not edit or auto-save the manuscript');
+        assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),actualNativeBefore);
+        assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true);
+      }
     }
+    const navigationScrollBefore=await page.locator('.document-review-pages__side').evaluateAll(panes=>panes.map(pane=>pane.scrollTop));
+    await page.locator('[data-export-page] img').first().evaluate(image=>image.removeAttribute('data-report-source-page'));
+    await sourcePageNavigation.selectOption('1');
+    await page.getByText('쪽 미리보기를 준비 중입니다. 잠시 후 다시 이동해 주세요.',{exact:true}).waitFor();
+    assert.deepEqual(await page.locator('.document-review-pages__side').evaluateAll(panes=>panes.map(pane=>pane.scrollTop)),navigationScrollBefore,'Incomplete preview must not move only one pane');
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),actualNativeBefore);
+    await page.locator('[data-export-page] img').first().evaluate(image=>image.setAttribute('data-report-source-page','true'));
+    await sourcePageNavigation.selectOption('1');
+    await sourcePageNavigation.focus();await page.keyboard.press('End');
+    await page.waitForFunction(()=>document.querySelector<HTMLSelectElement>('[aria-label="원형 보고서 쪽 이동"]')?.value==='17');
+    await page.getByRole('button',{name:'선택한 원형 쪽으로 이동',exact:true}).press('Enter');
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),nativeBefore,'Keyboard navigation is read-only too');
     await page.setViewportSize({width:1600,height:1000});
     await page.getByRole('button',{name:'본문 미리보기',exact:true}).click();
     assert.deepEqual(await page.locator('.report-edit-canvas>.structured-editor__preview img').first().evaluate(el=>[el.clientWidth,el.clientHeight]),[794,1123]);
@@ -168,6 +204,7 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
       await page.evaluate(value=>(globalThis as any).cf149Editing.use(value),mixed);
       await page.waitForFunction(()=>getComputedStyle(document.querySelector('.tiptap')!).padding!=='0px');
       assert.equal(await page.locator('.tiptap').evaluate(el=>getComputedStyle(el).padding),normalPadding,'Text, empty tables and ordinary attached photos retain document margins');
+      assert.equal(await sourcePageNavigation.count(),0,'Ordinary text, tables and photos must not expose a source-page navigator');
       assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.actual())).content.at(-1).type,'paragraph','Ordinary tables and photos retain their trailing input paragraph');
     }
     const explicitBlank=nativeDocument.replace('<!-- MANUAL-WHOLE-DOCUMENT:END -->','<p></p>\n<!-- MANUAL-WHOLE-DOCUMENT:END -->');

@@ -109,34 +109,68 @@ test('CF178 actual application function waits for save and retains unsaved impor
   }
 });
 
-test('CF179 import persistence keeps the first HWP original without reuploading it', async () => {
+test('CF179 import persistence keeps the first HWP original and waits for actual save ACK without reuploading it', { timeout: 15000 }, async () => {
   const studio = read('apps/web/src/routes/PreviewReportStudio.tsx');
   const expression = studio.slice(studio.indexOf('const applySourcePagesToReport ='), studio.indexOf('const applyHwpPagesToReport =')).trim().replace(/^const applySourcePagesToReport = /u, '').replace(/;$/u, '');
   const compiled = transpileModule(`(${expression})`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
+  const saveStart = studio.indexOf('const saveNow = useCallback(') + 'const saveNow = useCallback('.length;
+  const saveEnd = studio.indexOf('}, [activeStep, content, dirty', saveStart) + 1;
+  assert.ok(saveEnd > saveStart);
+  const compiledSave = transpileModule(`(${studio.slice(saveStart, saveEnd)})`, { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText;
   const original = new File(['synthetic original'], 'original.hwp'), edited = new File(['synthetic edited'], 'edited.hwp');
   const sourceSha = await reportSourceSha256(await original.arrayBuffer());
-  for (const hasOriginalChain of [true, false]) {
+  for (const { hasOriginalChain, succeeds } of [{ hasOriginalChain: true, succeeds: true }, { hasOriginalChain: false, succeeds: true }, { hasOriginalChain: true, succeeds: false }]) {
     const previous: ReportNativeSource = { caseId: 'synthetic-case', evidenceId: 'previous', name: original.name, byteSize: original.size, sha256: sourceSha, downloadUrl: '/api/cases/evidence/previous/download' };
     const first = { ...previous, evidenceId: 'first', downloadUrl: '/api/cases/evidence/first/download' };
     if (hasOriginalChain) previous.originalSource = first;
     const json: { current: NonNullable<Parameters<typeof readReportNativeSource>[0]> } = { current: { type: 'doc', attrs: { reportNativeSource: previous }, content: [] } };
     const content = { current: 'preserved body' }, front = { current: { enabled: true, date: '', author: '' } }, uploaded: string[] = [], closed: boolean[] = [];
+    const requests: any[] = [], errors: string[] = [], dirty: boolean[] = [], clearedSources: unknown[] = [];
+    let requestReached!: () => void, releaseAck!: () => void;
+    const reached = new Promise<void>(resolve => { requestReached = resolve; });
+    const ack = new Promise<void>(resolve => { releaseAck = resolve; });
+    const versionRef = { current: 3 }, draftSaveInFlight = { current: false };
     const noOp = () => undefined;
     const context = {
       AbortController, pageImportInFlight: { current: false }, pageImportAbort: { current: null }, editable: true, saving: false, dirty: false,
+      ApiError, saveError: '', workspaceDirty: false, loadedCaseId: 'synthetic-case', draftSaveInFlight,
+      outlineSyncPendingRef: { current: false }, titleRef: { current: 'Imported working copy' }, versionRef,
+      activeStepRef: { current: 4 }, selectedChapterRef: { current: '' }, setSaving: noOp,
       chapterSaveInFlight: { current: false }, outlineSaveInFlight: { current: false }, generationInFlight: { current: false },
       selectedCaseId: 'synthetic-case', selectedCaseRef: { current: 'synthetic-case' }, contentRef: content, editorJsonRef: json, reportFrontMatterRef: front, reportHeaderRef: { current: { enabled: false, text: null } },
-      confirmReportPages: async () => true, setLinkingHwp: noOp, setError: noOp, setMemoryNotice: noOp,
+      confirmReportPages: async () => true, setLinkingHwp: noOp, setError: (message: string) => errors.push(message), setMemoryNotice: noOp,
       reportSourceSha256, reportNativeBodySha256, joinReportPresentation, readReportNativeSource, readReportOriginalSource,
       reportUploads: { upload: async (_caseId: string, file: File) => { uploaded.push(file.name); const id = `stored-${uploaded.length}`; return { id, downloadUrl: `/api/cases/evidence/${id}/download` }; } },
       document: { createElement: () => ({ src: '', alt: '', dataset: { reportSourcePage: '' }, get outerHTML() { return '<img data-report-source-page="true">'; } }) },
       wholeReportDocument: (html: string) => html,
       parseStructuredDocumentMarkdown: () => ({ type: 'doc', content: [1, 2].map(() => ({ type: 'image', attrs: { reportSourcePage: true } })) }),
       setContent: noOp, setEditorJson: (value: typeof json.current) => { json.current = value; }, setReportFrontMatter: (value: typeof front.current) => { front.current = value; },
-      setDraftMethod: noOp, setDirty: noOp, saveNow: async () => true, setHwpEditorOpen: (value: boolean) => closed.push(value), setHwpSourceFile: noOp, setShowTemplatePreview: noOp
+      setDraftMethod: noOp, setDirty: (value: boolean) => dirty.push(value), saveNow: null as unknown,
+      setHwpEditorOpen: (value: boolean) => closed.push(value), setHwpSourceFile: (value: unknown) => clearedSources.push(value), setShowTemplatePreview: noOp,
+      apiRequest: async (_url: string, init: { method: string; body: string }) => {
+        assert.equal(init.method, 'PUT');
+        const payload = JSON.parse(init.body); requests.push(payload); requestReached();
+        await ack;
+        if (!succeeds) throw new ApiError(409, 'Synthetic version conflict');
+        return { draft: { ...JSON.parse(init.body), caseId: 'synthetic-case', version: 4, updatedAt: '2026-10-06T00:00:00Z' } };
+      },
+      setVersion: (value: number) => { versionRef.current = value; }, setSavedAt: noOp, setBackups: noOp,
+      setSaveError: (message: string) => errors.push(message), setWorkspaceDirty: noOp, setOutlineSyncPending: noOp, loadSavedWorkspaces: async () => []
     };
+    context.saveNow = runInNewContext(compiledSave, context);
     const apply = runInNewContext(compiled, context) as (count: number, source: string, readPage: (index: number) => Promise<File>, native: File, original: File) => Promise<void>;
-    await apply(2, 'HWP', async index => new File([String(index)], `page-${index}.jpg`), edited, original);
+    const pending = apply(2, 'HWP', async index => new File([String(index)], `page-${index}.jpg`), edited, original);
+    await reached;
+    assert.equal(requests.length, 1);
+    assert.deepEqual(closed, [], 'The actual save must be acknowledged before closing the source editor');
+    assert.deepEqual(clearedSources, [], 'The source file must remain available while ACK is pending');
+    assert.equal(requests[0].content, content.current, 'Actual save uses the newly imported content ref, not the old render body');
+    assert.equal(JSON.stringify(requests[0].editorJson), JSON.stringify(joinReportPresentation(json.current, context.reportHeaderRef.current, front.current)));
+    await readBoundReportNativeSource(requests[0].editorJson, 'synthetic-case');
+    const workingBeforeAck = JSON.stringify(json.current);
+    releaseAck();
+    if (succeeds) await pending;
+    else await assert.rejects(pending, /저장 완료를 확인하지 못했습니다/u);
     const stored = readReportNativeSource(json.current, 'synthetic-case');
     assert.equal(stored?.sha256, await reportSourceSha256(await edited.arrayBuffer()));
     assert.equal(stored?.byteSize, edited.size);
@@ -144,7 +178,14 @@ test('CF179 import persistence keeps the first HWP original without reuploading 
     await readBoundReportNativeSource(joinReportPresentation(json.current, context.reportHeaderRef.current, front.current), 'synthetic-case');
     assert.deepEqual(readReportOriginalSource(json.current, 'synthetic-case'), hasOriginalChain ? first : previous, 'The first linked original must remain reachable after editing');
     assert.deepEqual(uploaded, ['edited.hwp', 'page-0.jpg', 'page-1.jpg'], 'Existing originals must be referenced, not uploaded again');
-    assert.deepEqual(closed, [false]);
+    assert.deepEqual(closed, succeeds ? [false] : []);
+    assert.deepEqual(clearedSources, succeeds ? [null] : []);
+    assert.equal(JSON.stringify(json.current), workingBeforeAck, 'Neither ACK nor conflict may discard the imported working JSON/proof');
+    assert.equal(requests.length, 1, 'Conflict must not retry PUT or reupload automatically');
+    assert.equal(versionRef.current, succeeds ? 4 : 3);
+    assert.deepEqual(dirty, succeeds ? [true, false] : [true]);
+    assert.equal(draftSaveInFlight.current, false); assert.equal(context.pageImportInFlight.current, false);
+    if (!succeeds) { assert.match(errors.join('\n'), /버전이 변경되어 저장하지 않았습니다/u); assert.match(errors.at(-1) ?? '', /가져온 내용은 현재 작업 화면에 유지/u); }
   }
 });
 

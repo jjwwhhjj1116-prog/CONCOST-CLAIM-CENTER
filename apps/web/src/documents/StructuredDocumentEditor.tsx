@@ -367,7 +367,7 @@ const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
 const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
-const isReportPageDocument = (source: JSONContent | undefined): boolean => {
+const reportSourcePageCount = (source: JSONContent | undefined): number => {
   let pages = 0;
   const visit = (node: JSONContent): boolean => {
     if (node.type === 'image') { if (node.attrs?.reportSourcePage !== true) return false; pages++; return true; }
@@ -375,7 +375,7 @@ const isReportPageDocument = (source: JSONContent | undefined): boolean => {
     if (node.type === 'text') return !node.text?.trim();
     return ['aiChapterMarker', 'documentPageBreak', 'hardBreak'].includes(node.type ?? '');
   };
-  return Boolean(source && visit(source) && pages > 0);
+  return source && visit(source) ? pages : 0;
 };
 export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
@@ -1142,7 +1142,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const availableFontSizes = fontSize && !FONT_SIZES.some(size => size === fontSize) ? [...FONT_SIZES, fontSize] : FONT_SIZES;
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
   // setContent can suppress onUpdate; page margins still follow the actual model.
-  const nativePages = useEditorState({ editor, selector: ({ editor: activeEditor }) => activeEditor && activeEditor === editor ? reportMode && isReportPageDocument(activeEditor.getJSON()) : null }) ?? (reportMode && isReportPageDocument(editor?.getJSON()));
+  const sourcePageCount = useEditorState({ editor, selector: ({ editor: activeEditor }) => activeEditor && activeEditor === editor ? (reportMode ? reportSourcePageCount(activeEditor.getJSON()) : 0) : null }) ?? (reportMode ? reportSourcePageCount(editor?.getJSON()) : 0);
+  const nativePages = sourcePageCount > 0;
 
   return <>
     {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{runAction({ kind: 'table', rows: tableRows, columns: tableColumns });setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
@@ -1280,7 +1281,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
     <span className="structured-editor__repeat-status" role="status">{repeatStatus}</span>
     </div>
-    <DocumentReviewPages previewContent={previewContent} width={previewWidth}>
+    <DocumentReviewPages previewContent={previewContent} width={previewWidth} sourcePageCount={sourcePageCount}>
     <div className={`structured-editor__canvas${reportMode ? ' report-edit-canvas' : ''}`}>
       {beforeContent}
       {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: (() => { const html = DOMPurify.sanitize(normalizeStructuredDocumentHtml(editor?.getHTML() ?? '')); if (!reportMode) return html; const source = document.createElement('div'); source.innerHTML = html; prepareReportPrint(source); return source.innerHTML; })() }} /> : <>
