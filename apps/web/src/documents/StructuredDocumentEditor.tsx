@@ -11,7 +11,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import { TableKit, TableView } from '@tiptap/extension-table';
 import TextAlign from '@tiptap/extension-text-align';
 import { Extension, Mark, Node, generateHTML, generateJSON, mergeAttributes, type JSONContent } from '@tiptap/core';
-import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { DOMParser as ProseMirrorDOMParser, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection } from '@tiptap/pm/state';
@@ -792,7 +792,12 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const editor = useEditor({
     extensions: [
       ...(reportMode ? [ReportChapterDecoration] : []),
-      StarterKit.configure(collaborationSession ? { undoRedo: false, link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } } : { link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
+      StarterKit.configure({
+        ...(collaborationSession ? { undoRedo: false } : {}),
+        link: { openOnClick: false, autolink: true, defaultProtocol: 'https' },
+        // Non-printing chapter/end markers must not create an invisible body change.
+        trailingNode: { notAfter: ['aiChapterMarker'] }
+      }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TableKit.configure({ table: { resizable: true, lastColumnResizable: false, allowTableNodeSelection: false, View: DocumentTableView } }),
@@ -881,14 +886,12 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const desiredSignature = structuredDocumentContentSignature(value, editorJson);
     if (desiredSignature === lastAppliedContentSignature.current) return;
     lastAppliedContentSignature.current = desiredSignature;
-    syncReportNativeSource(editor, editorJson);
-    editor.commands.setContent(editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), { emitUpdate: false });
+    syncReportNativeSource(editor, editorJson, editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), false);
   }, [collaborationSession, editor, editorJson, pageMode, value]);
 
   useEffect(() => {
     if (!collaborationSession || !collaborationSynced || !editor?.isInitialized || editor.isDestroyed || !editor.isEmpty || !value.trim()) return;
-    syncReportNativeSource(editor, editorJson);
-    editor.commands.setContent(editorJson ?? markdownToEditorHtml(value));
+    syncReportNativeSource(editor, editorJson, editorJson ?? markdownToEditorHtml(value));
   }, [collaborationSession, collaborationSynced, editor, editorJson, value]);
 
   useEffect(() => {
@@ -1138,7 +1141,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const wordCount = editor?.getText().trim().split(/\s+/u).filter(Boolean).length ?? 0;
   const availableFontSizes = fontSize && !FONT_SIZES.some(size => size === fontSize) ? [...FONT_SIZES, fontSize] : FONT_SIZES;
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
-  const nativePages = reportMode && isReportPageDocument(editor?.getJSON());
+  // setContent can suppress onUpdate; page margins still follow the actual model.
+  const nativePages = useEditorState({ editor, selector: ({ editor: activeEditor }) => activeEditor && activeEditor === editor ? reportMode && isReportPageDocument(activeEditor.getJSON()) : null }) ?? (reportMode && isReportPageDocument(editor?.getJSON()));
 
   return <>
     {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{runAction({ kind: 'table', rows: tableRows, columns: tableColumns });setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}

@@ -17,8 +17,9 @@ test('CF61 activates Yjs and Hocuspocus only when the private runtime URL exists
     'flushDelay: 250',
     "'/api/collaboration/token'",
     'credentials: \'include\'',
-    'Yjs + Hocuspocus CRDT'
+    '실시간 공동편집 연결'
   ]) assert.ok(editor.includes(marker), `missing collaboration bridge marker: ${marker}`);
+  assert.match(editor, /collaborationSession \? '실시간 공동편집 연결' : 'Ctrl\+Z/u);
   assert.match(editor, /if \(collaboration && collaborationUrl\)/u);
   assert.match(editor, /claim-center:\$\{runtime\.__CLAIM_CENTER_SESSION_USER__\?\.organizationId \?\? 'unknown'\}:\$\{implicitDocumentKey\}/u);
   assert.ok(editor.includes("replace(/^report-step(?:3|4)-/u, 'report-')"));

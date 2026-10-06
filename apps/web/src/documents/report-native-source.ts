@@ -1,4 +1,5 @@
 import type { Editor, JSONContent } from '@tiptap/core';
+import { closeHistory } from '@tiptap/pm/history';
 import type { NativeHwpEngine } from './editable-hwp-export';
 
 export function captureReportNativeSource(bytes: Uint8Array, name: string, Engine: NativeHwpEngine): { pages: string[]; file: File } {
@@ -82,6 +83,15 @@ export async function readBoundReportNativeSource(document: JSONContent | null, 
   return source;
 }
 /** Tiptap setContent replaces children, not root attributes. Clear stale links on replacement. */
-export function syncReportNativeSource(editor: Editor, document: JSONContent | null | undefined): void {
-  editor.view.dispatch(editor.state.tr.setDocAttribute('reportNativeSource', document?.attrs?.reportNativeSource ?? null).setMeta('preventUpdate', true));
+export function syncReportNativeSource(editor: Editor, document: JSONContent | null | undefined, content?: JSONContent | string, emitUpdate = true): void {
+  const source = document?.attrs?.reportNativeSource ?? null;
+  if (content === undefined) {
+    editor.view.dispatch(editor.state.tr.setDocAttribute('reportNativeSource', source).setMeta('preventUpdate', true));
+    return;
+  }
+  // Keep the replacement body and its source reference in one undo event.
+  // Neither the preceding manuscript nor the next edit may merge into it.
+  editor.chain().command(({ tr }) => { closeHistory(tr); tr.setDocAttribute('reportNativeSource', source); return true; })
+    .setContent(content, { emitUpdate }).run();
+  editor.view.dispatch(closeHistory(editor.state.tr));
 }
