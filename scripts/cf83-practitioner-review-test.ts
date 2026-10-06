@@ -20,11 +20,13 @@ test('CF177 report lists, search, and authoring hints use the shared type labels
   const nativeStudio = read('apps/web/src/reports/ReportStudio.tsx');
   const inbox = read('apps/web/src/reports/ApprovalInbox.tsx');
   const previewStudio = read('apps/web/src/routes/PreviewReportStudio.tsx');
+  const delivery = read('apps/web/src/routes/PreviewDeliveryCenter.tsx');
   assert.ok(library.includes('workspace.claimType, claimTypeLabel(workspace.claimType)'), 'library search must accept both preserved type codes and visible Korean labels');
   assert.equal((library.match(/\{claimTypeLabel\(workspace\.claimType\)\}/gu) ?? []).length, 2, 'both project and database lists must show type names');
   assert.ok(list.includes('{claimTypeLabel(report.case.claimType)}'), 'native report list must show type names');
   assert.ok(nativeStudio.includes('{claimTypeLabel(report.case.claimType)}'), 'native report studio must show type names');
   assert.ok(inbox.includes('{claimTypeLabel(item.case.claimType)}'), 'native review inbox must show type names');
+  assert.ok(delivery.includes('{claimTypeLabel(selected.claimType)}'), 'final delivery project must show the shared type name');
   assert.ok(previewStudio.includes('프로젝트 유형 {authoring.typeGuideline?.typeName || claimTypeLabel(authoring.claimType)}'), 'AI authoring hint must use the approved type name with the shared fallback');
   for (const source of [list, nativeStudio]) assert.ok(!source.includes('{report.case.claimType}'), 'raw stored type codes must not replace member-facing report labels');
 });

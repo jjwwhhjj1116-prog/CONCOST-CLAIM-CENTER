@@ -1,6 +1,7 @@
 import { Button, Card, Dialog, Input, Select } from '@claim-studio/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../api';
+import { claimTypeLabel } from '../claim-types';
 import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
 import { ReportFinalDocumentPreview } from './PreviewReportStudio';
 import { DocumentPreviewPane } from '../documents/DocumentPreviewPane';
@@ -106,7 +107,7 @@ export function PreviewDeliveryCenter({ onNavigate }:{ onNavigate:(path:string)=
       {snapshot&&<><p>현재 편집본이 아닌, 승인·확정한 버전의 본문과 서식을 출력합니다.</p><div className="action-row">{(['docx','pdf','hwp'] as const).map(format=><Button key={format} disabled={outputBusy} onClick={()=>void exportSnapshot(format)}>{format.toUpperCase()} 내려받기</Button>)}</div>{outputMessage&&<p role="status">{outputMessage}</p>}<div ref={outputRef}><DocumentPreviewPane width={794} title="확정 버전 출력 미리보기"><ReportFinalDocumentPreview {...snapshot}/></DocumentPreviewPane></div></>}
     </Dialog>
     <header className="quality-center-hero"><div><span>FINAL DELIVERY LOCATOR</span><h2 id="delivery-center-title">프로젝트별 최종 결과물과<br/>보관 위치를 바로 찾습니다.</h2><p>사람 승인을 거쳐 확정된 DOCX·PDF와 회사 Google Drive에 올린 최종 납품본을 한 프로젝트에서 확인합니다.</p></div><div><strong>{finalizations.length}</strong><span>확정 이력</span></div></header>
-    <Card title="납품 프로젝트 선택"><div className="inline-form"><Input label="전체 프로젝트 검색" type="search" value={caseQuery} maxLength={200} placeholder="프로젝트 번호·이름" onChange={event=>setCaseQuery(event.target.value)}/><Select label="프로젝트" value={selectedCaseId} onChange={(event)=>setSelectedCaseId(event.target.value)} options={caseOptions.map((entry)=>({value:entry.id,label:`${entry.caseNumber} · ${entry.title}`}))}/>{selected&&<span className="preview-pill">{selected.claimType} · {selected.status}</span>}</div><p role="status">검색 결과 {caseTotal}건{caseTotal>100?' · 최신 100건 표시. 프로젝트 번호나 이름으로 검색 범위를 좁혀 주세요.':''}</p></Card>
+    <Card title="납품 프로젝트 선택"><div className="inline-form"><Input label="전체 프로젝트 검색" type="search" value={caseQuery} maxLength={200} placeholder="프로젝트 번호·이름" onChange={event=>setCaseQuery(event.target.value)}/><Select label="프로젝트" value={selectedCaseId} onChange={(event)=>setSelectedCaseId(event.target.value)} options={caseOptions.map((entry)=>({value:entry.id,label:`${entry.caseNumber} · ${entry.title}`}))}/>{selected&&<span className="preview-pill">{claimTypeLabel(selected.claimType)} · {selected.status}</span>}</div><p role="status">검색 결과 {caseTotal}건{caseTotal>100?' · 최신 100건 표시. 프로젝트 번호나 이름으로 검색 범위를 좁혀 주세요.':''}</p></Card>
     {loading&&<p className="quality-feedback">납품본 위치를 확인하는 중입니다.</p>}{error&&<div className="error-box" role="alert">{error}<Button size="sm" onClick={()=>{setError('');setRetry(value=>value+1);}}>다시 조회</Button></div>}
     {!loading&&selected&&<div className="quality-center-grid">
       <article className="quality-center-card"><header><div><span>IMMUTABLE FINAL OUTPUT</span><h3>시스템 승인·확정본</h3></div><em>{selectedFinalizations.length}건</em></header>

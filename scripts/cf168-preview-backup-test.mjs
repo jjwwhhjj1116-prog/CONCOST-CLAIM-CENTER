@@ -1,10 +1,41 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+
+test('CF178 general backup preserves schema literals and verifies legacy signed backups', () => {
+  mkdirSync('tmp', { recursive: true });
+  const folder=mkdtempSync(path.resolve('tmp/cf178-general-backup-'));
+  const run=(mode,backup,manifest,pin)=>spawnSync(process.execPath,['scripts/cf104-d1-release-check.mjs',mode,backup,manifest,...(pin?[pin]:[])],{encoding:'utf8'});
+  const backups=['A  B','A B'].map((value,index)=>{
+    const backup=path.join(folder,`before-${index}.sql`),manifest=path.join(folder,`manifest-${index}.json`);
+    writeFileSync(backup,`CREATE TABLE schema_literals(value TEXT CHECK(value='${value}'));`,{flag:'wx'});
+    const result=run('sign',backup,manifest);assert.equal(result.status,0,result.stderr);
+    return {backup,manifest,envelope:JSON.parse(readFileSync(manifest,'utf8')),metadata:JSON.parse(result.stdout)};
+  });
+  assert.notEqual(backups[0].envelope.manifest.schemaSha256,backups[1].envelope.manifest.schemaSha256,'different CHECK literals must have different schema fingerprints');
+  for(const item of backups){
+    assert.equal(item.envelope.manifest.schemaHashVersion,'SQL_LITERAL_V2');
+    assert.equal(run('verify',item.backup,item.manifest,item.metadata.publicKeySha256).status,0);
+  }
+  const item=backups[0],db=new DatabaseSync(':memory:');
+  db.exec(readFileSync(item.backup,'utf8'));
+  const legacySchema=db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all().map(row=>Object.values(row).map(value=>typeof value==='string'?value.replace(/\s+/g,' ').trim():value));
+  db.close();
+  const manifest={...item.envelope.manifest,schemaSha256:createHash('sha256').update(JSON.stringify(legacySchema)).digest('hex')};
+  delete manifest.schemaHashVersion;
+  const {publicKey,privateKey}=generateKeyPairSync('ed25519');
+  const envelope={manifest,publicKey:publicKey.export({type:'spki',format:'pem'}),signature:sign(null,Buffer.from(JSON.stringify(manifest)),privateKey).toString('base64')};
+  const legacyFile=path.join(folder,'legacy-manifest.json');
+  writeFileSync(legacyFile,JSON.stringify(envelope),{flag:'wx'});
+  const pin=createHash('sha256').update(envelope.publicKey).digest('hex');
+  assert.equal(run('verify',item.backup,legacyFile,pin).status,0,'legacy schema hashes remain verifiable with the original signed SQL bytes');
+  assert.equal(run('verify',backups[1].backup,legacyFile,pin).status,1,'even legacy verification must reject changed SQL bytes');
+  assert.equal(run('verify',item.backup,legacyFile,'0'.repeat(64)).status,1,'an untrusted signer is rejected');
+});
 
 test('CF168 preview retry migration verifies signed populated backup without authorizing an upload', async t => {
   mkdirSync('tmp', { recursive: true });

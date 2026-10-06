@@ -18,12 +18,13 @@ const table=(db,name)=>{
   return {count:records.length,sha256:digest(JSON.stringify([result?.columns??rows(db,`PRAGMA table_info(${quoted(name)})`).map(row=>row[1]),records]))};
 };
 const inventory=db=>Object.fromEntries(rows(db,"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").map(([name])=>[name,table(db,name)]));
-const schema=db=>rows(db,"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").map(row=>row.map(value=>typeof value==='string'?value.replace(/\s+/g,' ').trim():value));
+// Legacy hashes are read only for authenticated old SQL backups, never new comparisons.
+const schema=(db,legacy=false)=>rows(db,"SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").map(row=>row.map(value=>typeof value==='string'?(legacy?value.replace(/\s+/g,' '):value).trim():value));
 const integrity=db=>{assert.equal(rows(db,'PRAGMA integrity_check')[0]?.[0],'ok','integrity check');assert.equal(rows(db,'PRAGMA foreign_key_check').length,0,'foreign keys');};
 
 if(mode==='sign'){
   const db=load(beforePath);integrity(db);
-  const manifest={kind:'CF104_D1_SQL_BACKUP',database:'16d1f25b-60c8-4489-95ed-4fa7de161c9f',createdAt:new Date().toISOString(),sqlSha256:digest(readFileSync(beforePath)),tables:inventory(db),schemaSha256:digest(JSON.stringify(schema(db)))};
+  const manifest={kind:'CF104_D1_SQL_BACKUP',database:'16d1f25b-60c8-4489-95ed-4fa7de161c9f',createdAt:new Date().toISOString(),sqlSha256:digest(readFileSync(beforePath)),tables:inventory(db),schemaHashVersion:'SQL_LITERAL_V2',schemaSha256:digest(JSON.stringify(schema(db)))};
   const payload=JSON.stringify(manifest);const {publicKey,privateKey}=generateKeyPairSync('ed25519');
   const envelope={manifest,publicKey:publicKey.export({type:'spki',format:'pem'}),signature:sign(null,Buffer.from(payload),privateKey).toString('base64')};
   assert.ok(verify(null,Buffer.from(payload),publicKey,Buffer.from(envelope.signature,'base64')));
@@ -35,7 +36,8 @@ if(mode==='sign'){
   assert.equal(digest(envelope.publicKey),pinnedPublicKeyHash,'pinned public key fingerprint');
   assert.ok(verify(null,Buffer.from(JSON.stringify(envelope.manifest)),envelope.publicKey,Buffer.from(envelope.signature,'base64')),'signature');
   assert.equal(digest(readFileSync(beforePath)),envelope.manifest.sqlSha256,'backup SQL hash');
-  const db=load(beforePath);integrity(db);assert.deepEqual(inventory(db),envelope.manifest.tables);assert.equal(digest(JSON.stringify(schema(db))),envelope.manifest.schemaSha256);db.close();
+  assert.ok(envelope.manifest.schemaHashVersion===undefined || envelope.manifest.schemaHashVersion==='SQL_LITERAL_V2','supported schema hash version');
+  const db=load(beforePath);integrity(db);assert.deepEqual(inventory(db),envelope.manifest.tables);assert.equal(digest(JSON.stringify(schema(db,envelope.manifest.schemaHashVersion===undefined))),envelope.manifest.schemaSha256);db.close();
   console.log(JSON.stringify({valid:true,sqlSha256:envelope.manifest.sqlSha256,publicKeySha256:digest(envelope.publicKey)}));
 }else if(mode==='preflight'){
   const db=load(beforePath);integrity(db);const original=inventory(db);
