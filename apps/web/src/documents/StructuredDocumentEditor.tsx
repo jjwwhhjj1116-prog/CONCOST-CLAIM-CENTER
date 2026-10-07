@@ -1180,6 +1180,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   // first transaction. Re-entry still has to use the actual imported model.
   const sourceState = useEditorState({ editor, selector: ({ editor: activeEditor }) => activeEditor && activeEditor === editor ? readSourceState(activeEditor) : null }) ?? readSourceState(editor);
   const nativePages = sourcePageCount > 0;
+  const separateNativeControls = Boolean(previewContent && sourceState.native);
 
   return <>
     {tableDialogOpen && createPortal(<div className="structured-editor__table-dialog-backdrop" role="presentation" onMouseDown={()=>setTableDialogOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="structured-table-dialog-title" className="structured-editor__table-dialog" onMouseDown={(event)=>event.stopPropagation()}><h2 id="structured-table-dialog-title">표 크기 설정</h2><p>커서를 표가 들어갈 위치에 둔 뒤 필요한 행과 열 수를 지정하세요. 첫 번째 행은 제목 행으로 생성됩니다.</p><div><label><span>행 수</span><input type="number" min="2" max="30" value={tableRows} onChange={(event)=>setTableRows(Math.min(30,Math.max(2,Number(event.target.value)||2)))}/></label><b>×</b><label><span>열 수</span><input type="number" min="2" max="12" value={tableColumns} onChange={(event)=>setTableColumns(Math.min(12,Math.max(2,Number(event.target.value)||2)))}/></label></div><small>행 2~30개, 열 2~12개까지 만들 수 있습니다.</small><footer><button type="button" onClick={()=>setTableDialogOpen(false)}>취소</button><button type="button" className="is-primary" onClick={()=>{runAction({ kind: 'table', rows: tableRows, columns: tableColumns });setTableDialogOpen(false);}}>▦ {tableRows}행 × {tableColumns}열 표 만들기</button></footer></section></div>,document.body)}
@@ -1318,9 +1319,9 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     <span className="structured-editor__repeat-status" role="status">{repeatStatus}</span>
     </div>
     <DocumentReviewPages ref={reviewPagesRef} previewContent={previewContent} width={previewWidth} sourcePageCount={sourcePageCount} sourceNavigationKey={sourceState?.key} sourcePageUrls={sourceState?.urls}
-      sourceNavigation={sourceChapterLinks && sourceState?.native && <ReportSourceChapterLinks {...sourceChapterLinks} disabled={sourceChapterLinks.disabled || readOnly || Boolean(collaborationSession)} sourceKey={sourceState.key} pageCount={sourcePageCount} connections={sourceState.native.confirmedChapterPages?.entries ?? []} onPreview={page => reviewPagesRef.current?.goToSourcePage(page) ?? false}/> }>
+      sourceNavigation={<>{separateNativeControls && beforeContent}{sourceChapterLinks && nativePages && sourceState?.native && <ReportSourceChapterLinks {...sourceChapterLinks} disabled={sourceChapterLinks.disabled || readOnly || Boolean(collaborationSession)} sourceKey={sourceState.key} pageCount={sourcePageCount} connections={sourceState.native.confirmedChapterPages?.entries ?? []} onPreview={page => reviewPagesRef.current?.goToSourcePage(page) ?? false}/>}</>}>
     <div className={`structured-editor__canvas${reportMode ? ' report-edit-canvas' : ''}`}>
-      {beforeContent}
+      {!separateNativeControls && beforeContent}
       {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: (() => { const html = DOMPurify.sanitize(normalizeStructuredDocumentHtml(editor?.getHTML() ?? '')); if (!reportMode) return html; const source = document.createElement('div'); source.innerHTML = html; prepareReportPrint(source); return source.innerHTML; })() }} /> : <>
         {editor && <BubbleMenu
           editor={editor}

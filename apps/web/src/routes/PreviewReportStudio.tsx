@@ -739,7 +739,11 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setSavingOutline(true); setError(''); setOutlineSyncNotice('');
     try {
       const structured = editorJsonRef.current;
-      const sync = structured ? renameStructuredReportTitles(structured, changes) : renameUnstructuredReportTitles(contentRef.current, changes);
+      const native = readReportNativeSource(structured, requestCaseId);
+      // Planning titles are not editable native HWP runs. Preserve the source,
+      // including a body with a stale binding, instead of guessing a rewrite.
+      const sync = native ? {matched: [], unmatched: changes.map(change => change.chapterCode)}
+        : structured ? renameStructuredReportTitles(structured, changes) : renameUnstructuredReportTitles(contentRef.current, changes);
       const nextJson = sync.matched.length && 'document' in sync ? sync.document : null;
       const rendered = nextJson ? renderStructuredDocumentHtml(nextJson) : '';
       if (nextJson && !rendered.trim()) throw new Error('본문 서식을 안전하게 읽을 수 없어 목차 저장을 중단했습니다. 기존 본문은 변경하지 않았습니다.');
@@ -757,7 +761,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setOutlineStatus(result.outlinePlan.status); setOutlineVersion(result.outlinePlan.version); setOutlineDirty(false);
       setOutlineTitles(Object.fromEntries(result.outlinePlan.items.map(item => [item.chapterId, item.chapterTitle])));
       setAuthoring((current) => current ? { ...current, outlinePlan: result.outlinePlan } : current);
-      if (changes.length && contentRef.current.trim()) {
+      if (native) setOutlineSyncNotice('작업 목차 제목을 저장했습니다. 원형 HWP의 표지·인쇄 목차·본문 제목·쪽수는 변경하지 않았습니다. 연결된 HWP 편집기에서 수정한 뒤 전체 페이지를 적용하고 보고서 저장 상태를 확인하세요.');
+      else if (changes.length && contentRef.current.trim()) {
         if (sync.matched.length) {
           contentRef.current = nextContent; setContent(nextContent); setEditorJson(nextJson); setDirty(true);
           outlineSyncPendingRef.current = true; setOutlineSyncPending(true);
@@ -1441,10 +1446,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setMemoryNotice(`AI 코드블록 ${repaired}개를 제목·표 서식으로 복구했습니다. 문장·수치의 정확성을 검증한 것은 아닙니다. 내부 데이터 표현과 근거를 대조해 주세요.${skippedNotice}`);
   };
   const renderReportHeaderControls = (_step: 3 | 4) => <div className="report-header-controls">
-    <strong>A4 세로 · 갑지 → 목차 → 본문 · 하단 쪽번호</strong><Button variant="secondary" disabled={!editable || saving || generating} onClick={() => setEvidenceInsertOpen(true)}>사진·근거자료 넣기</Button><Button variant="secondary" disabled={!editable || saving || generating} onClick={repairAiFormatting}>AI Markdown 서식 복구</Button>
-    <label><input type="checkbox" checked={reportFrontMatter.enabled} disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: event.target.checked }); setDirty(true); }}/>갑지·목차 자동 구성</label>
-    {reportFrontMatter.enabled && <><label>갑지 작성일<input aria-label="갑지 작성일" value={reportFrontMatter.date} maxLength={80} placeholder="예: 2026. 9." disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, date: event.target.value }); setDirty(true); }}/></label><label>갑지 작성자·기관<input aria-label="갑지 작성자·기관" value={reportFrontMatter.author} maxLength={200} placeholder="확인한 작성자·기관명" disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, author: event.target.value }); setDirty(true); }}/></label></>}
-    <small>본문은 유지하고 반복 머리글·회사 꼬리말은 출력하지 않습니다. 이미 갑지·목차가 있는 전체 문서를 가져왔다면 자동 구성을 해제하세요. 목차는 실제 본문의 제목과 쪽 위치로 작성합니다.</small>
+    <strong>{linkedNative ? '원형 HWP의 표지·목차·본문·쪽번호 유지' : 'A4 세로 · 갑지 → 목차 → 본문 · 하단 쪽번호'}</strong><Button variant="secondary" disabled={!editable || saving || generating} onClick={() => setEvidenceInsertOpen(true)}>사진·근거자료 넣기</Button><Button variant="secondary" disabled={!editable || saving || generating} onClick={repairAiFormatting}>AI Markdown 서식 복구</Button>
+    <label><input type="checkbox" checked={reportFrontMatter.enabled} disabled={!editable || saving || Boolean(linkedNative && !reportFrontMatter.enabled)} onChange={event => { if (event.target.checked && readReportNativeSource(editorJsonRef.current, selectedCaseId)) return; setReportFrontMatter({ ...reportFrontMatterRef.current, enabled: event.target.checked }); setDirty(true); }}/>갑지·목차 자동 구성</label>
+    {reportFrontMatter.enabled && !linkedNative && <><label>갑지 작성일<input aria-label="갑지 작성일" value={reportFrontMatter.date} maxLength={80} placeholder="예: 2026. 9." disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, date: event.target.value }); setDirty(true); }}/></label><label>갑지 작성자·기관<input aria-label="갑지 작성자·기관" value={reportFrontMatter.author} maxLength={200} placeholder="확인한 작성자·기관명" disabled={!editable || saving} onChange={event => { setReportFrontMatter({ ...reportFrontMatterRef.current, author: event.target.value }); setDirty(true); }}/></label></>}
+    <small>{linkedNative ? '원형에는 웹용 갑지·목차를 중복 추가하지 않습니다. 표지·인쇄 목차 수정은 연결 HWP 편집기에서 하고 전체 페이지 적용·보고서 저장을 확인하세요. 작업 목차 저장이나 파일 다운로드만으로 원형은 바뀌지 않습니다.' : '본문은 유지하고 반복 머리글·회사 꼬리말은 출력하지 않습니다. 이미 갑지·목차가 있는 전체 문서를 가져왔다면 자동 구성을 해제하세요. 목차는 실제 본문의 제목과 쪽 위치로 작성합니다.'}</small>
   </div>;
 
   const renderStageHeader = (stepId: ReportWizardStep) => {
@@ -1565,7 +1570,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
                     : <button type="button" className="report-outline-edit-title" aria-label={`${chapter.chapterCode} 목차 제목 직접 수정`} disabled={outlineEditingBlocked} onClick={() => setEditingOutlineChapterId(chapter.id)}><strong>{outlineTitles[chapter.id] ?? chapter.title}</strong><span>직접 수정</span></button>}
                   </div>
                 </li>)}</ol>
-                <p className="report-outline-help">저장하면 검수·미리보기의 챕터 제목도 함께 반영됩니다. 본문·표·이미지는 유지됩니다.</p>
+                <p className="report-outline-help">{linkedNative ? '원형 HWP에서는 내부 작업 목차만 저장합니다. 인쇄 목차·본문 제목·쪽수는 연결 HWP 편집기에서 수정하고 전체 페이지 적용·보고서 저장을 확인하세요.' : '저장하면 검수·미리보기의 챕터 제목도 함께 반영됩니다. 본문·표·이미지는 유지됩니다.'}</p>
               </section>
               <section className="report-outline-column report-outline-suggestions" aria-labelledby="report-outline-suggestions-title" aria-busy={generatingOutline}>
                 <header><h4 id="report-outline-suggestions-title">AI 목차 제안</h4><p>제안은 먼저 오른쪽에 표시됩니다. 적용한 제목만 왼쪽 목차로 옮겨집니다.</p></header>
@@ -1628,14 +1633,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           {renderStageHeader(4)}
           <fieldset className="form-stack report-review-fields" disabled={savingOutline || Boolean(chapterBusy)}>
             {authoring?.available && selectedChapter && <section className="report-review-outline" aria-labelledby="report-review-outline-heading">
-              <h3 id="report-review-outline-heading">목차 제목 수정</h3>
-              <p>검수 중에도 제목을 수정할 수 있습니다. 저장하면 2단계 목차와 본문·미리보기에 함께 반영됩니다.</p>
+              <h3 id="report-review-outline-heading">{linkedNative ? '내부 작업 목차 제목 수정' : '목차 제목 수정'}</h3>
+              <p>{linkedNative ? '이곳에서는 작업·탐색용 제목만 저장합니다. 원형 HWP의 인쇄 목차와 본문 제목은 연결 HWP 편집기에서 수정한 뒤 전체 페이지를 적용하세요.' : '검수 중에도 제목을 수정할 수 있습니다. 저장하면 2단계 목차와 본문·미리보기에 함께 반영됩니다.'}</p>
               <div className="report-review-outline__fields">
                 <Select label="수정할 챕터" value={selectedChapterId} onChange={(event) => changeSelectedChapter(event.target.value)} options={authoring.chapters.map(chapter => ({ value: chapter.id, label: outlineTitles[chapter.id] || chapter.title }))} />
                 <Input label="챕터 제목" value={outlineTitles[selectedChapter.id] ?? selectedChapter.title} maxLength={300} disabled={!editable || savingOutline || saving || outlineSyncPending} onChange={(event) => { setOutlineTitles(current => ({ ...current, [selectedChapter.id]: event.target.value })); setOutlineDirty(true); setOutlineSyncNotice(''); }} />
-                <Button disabled={!editable || savingOutline || saving || outlineSyncPending || !outlineDirty || !authoring.outlinePlan.persistenceAvailable} onClick={() => void saveOutline(outlineStatus)}>{savingOutline ? '목차·본문 저장 중…' : '목차·본문 제목 저장'}</Button>
+                <Button disabled={!editable || savingOutline || saving || outlineSyncPending || !outlineDirty || !authoring.outlinePlan.persistenceAvailable} onClick={() => void saveOutline(outlineStatus)}>{savingOutline ? '목차 저장 중…' : linkedNative ? '작업 목차 제목 저장' : '목차·본문 제목 저장'}</Button>
               </div>
-              <small>본문 내용·표·이미지·서식은 유지됩니다. 제목 수정 권한은 기존 보고서 편집 권한과 같습니다.</small>
+              <small>{linkedNative ? '원형 HWP·페이지 그림·지문은 유지합니다. 이 작업은 HWP 인쇄 목차 자동 갱신이 아닙니다.' : '본문 내용·표·이미지·서식은 유지됩니다. 제목 수정 권한은 기존 보고서 편집 권한과 같습니다.'}</small>
               {outlineFeedback}
             </section>}
             <details className="report-chapter-collaboration report-advanced-panel" open={!editable || undefined}><summary>챕터별 협업 · 담당 지정·원고 검수{chaptersDirty ? " · 미저장" : ""}</summary>

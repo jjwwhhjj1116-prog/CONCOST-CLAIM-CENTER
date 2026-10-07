@@ -26,7 +26,7 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
       import{ReportFrontMatterEditor}from'/src/documents/ReportFrontMatterEditor.tsx';
       import{ReportFinalDocumentPreview}from'/src/routes/PreviewReportStudio.tsx';
       import{joinReportPresentation,splitReportPresentation}from'/@fs/${presentationPath}';
-      import{reportNativeBodySha256,readBoundReportNativeSource,reportNativeChapterPage,updateReportNativeChapterPage}from'/src/documents/report-native-source.ts';
+      import{reportNativeBodySha256,readBoundReportNativeSource,readReportNativeSource,reportNativeChapterPage,updateReportNativeChapterPage}from'/src/documents/report-native-source.ts';
       import'/src/documents/StructuredDocumentEditor.css';import'/src/documents/DocumentReviewWorkspace.css';
       const original='<!-- AI-CHAPTER:CH-01:START -->\\n## CH-01 개요\\n# 개요\\n'+Array(25).fill('검토 원문 보존.').join('\\n\\n')+'\\n<!-- AI-CHAPTER:CH-01:END -->\\n<!-- AI-CHAPTER:CH-02:START -->\\n## CH-02 산정\\n# 산정\\n<table data-document-defaults-version="2"><colgroup><col style="width:10%"><col style="width:80%"><col style="width:10%"></colgroup><tr><th>번호</th><th>내용</th><th>판단상태</th></tr><tr><td>1</td><td>근거 확인</td><td>UNREVIEWABLE 자료확인전까지검토할수없음</td></tr></table>\\n<!-- AI-CHAPTER:CH-02:END -->';
       function App(){const ref=useRef(null);const[documentKey,setDocumentKey]=useState('cf149-1');const[title,setTitle]=useState('시험 보고서');const[content,setContent]=useState(original);const[json,setJson]=useState(parseStructuredDocumentMarkdown(original));const[front,setFront]=useState({enabled:true,date:'2026.9',author:'작성자'});const[ready,setReady]=useState(false);const changes=useRef(0);
@@ -40,13 +40,15 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
         globalThis.cf149Editing.jumpSourceChapter=async(id)=>{const body=ref.current.getJSON(),joined=joinReportPresentation(body,{enabled:false,text:null},front);const source=await readBoundReportNativeSource(joined,'40000000-0000-4000-8000-000000000010');const page=reportNativeChapterPage(body,source.caseId,id,sourceChapters.map(x=>x.id));return page!==null&&ref.current.goToSourcePage(page,source);};
         globalThis.cf149Editing.jumpExpectedSource=(page,source)=>ref.current.goToSourcePage(page,source);
         globalThis.cf149Editing.remount=(key)=>setDocumentKey(key);
+        globalThis.cf149Editing.setFront=(next)=>setFront(next);
+        globalThis.cf149Editing.front=()=>front;
         if(!ready)return null;
         return React.createElement(React.Fragment,null,
           React.createElement('button',{onClick:()=>ref.current.goToChapter('CH-02')},'산정으로 이동'),
           React.createElement('button',{onClick:()=>{globalThis.cf187Jump=ref.current.goToChapter('CH-02','공사비 산정');}},'제목으로 산정 이동'),
           React.createElement('button',{onClick:async()=>{await fetch('/draft',{method:'PUT',body:JSON.stringify({title,content,json:joinReportPresentation(json,{enabled:false,text:null},front)})});document.querySelector('#saved').textContent='저장 완료';}},'저장'),React.createElement('span',{id:'saved'}),
           React.createElement(StructuredDocumentEditor,{ref,documentKey,reportMode:true,label:'시험 보고서 편집',value:content,editorJson:json,sourceChapterLinks:{chapters:sourceChapters,disabled:false,onConfirm:confirmSourceChapter},onChange:(text,doc)=>{changes.current++;setContent(text);setJson(doc);},
-            beforeContent:React.createElement(ReportFrontMatterEditor,{title,caseTitle:'사건명',html:renderStructuredDocumentHtml(json),value:front,disabled:false,onTitle:setTitle,onChange:setFront,onEditNative:()=>{globalThis.cf149NativeOpened=(globalThis.cf149NativeOpened??0)+1;}}),
+            beforeContent:React.createElement(ReportFrontMatterEditor,{title,caseTitle:'사건명',html:renderStructuredDocumentHtml(json),value:front,disabled:false,onTitle:setTitle,onChange:setFront,onEditNative:readReportNativeSource(json,'40000000-0000-4000-8000-000000000010')?()=>{globalThis.cf149NativeOpened=(globalThis.cf149NativeOpened??0)+1;}:undefined}),
             previewContent:React.createElement(ReportFinalDocumentPreview,{title,caseTitle:'사건명',caseNumber:'QA',content,editorJson:joinReportPresentation(json,{enabled:false,text:null},front)})}));
       }createRoot(document.getElementById('root')).render(React.createElement(App));
     `:undefined
@@ -115,6 +117,23 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     await nativeEditButton.click();
     assert.equal(await page.evaluate(()=>(globalThis as any).cf149NativeOpened),1);
     assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),nativeBefore,'Opening the native editor must not rewrite the report body');
+    await page.evaluate(()=>(globalThis as any).cf149Editing.setFront({enabled:true,date:'보존 날짜',author:'보존 기관',tocTitles:{'legacy':'기존 목차 문구'}}));
+    await page.getByRole('button',{name:'원형에 추가된 웹 표지·목차 해제',exact:true}).waitFor();
+    assert.equal(await nativeEditButton.count(),1,'Legacy generated-cover settings cannot hide the native editing action');
+    assert.equal(await page.getByLabel('표지 제목 편집',{exact:true}).count(),0,'An imported native document never becomes the ordinary cover form');
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:1000});
+      const geometry=await page.getByRole('button',{name:'원형에 추가된 웹 표지·목차 해제',exact:true}).evaluate(el=>({height:el.getBoundingClientRect().height,minHeight:getComputedStyle(el).minHeight,parent:el.parentElement?.className,canvas:Boolean(el.closest('.report-edit-canvas'))}));
+      assert.ok(geometry.height>=44,JSON.stringify({width,...geometry}));assert.equal(geometry.canvas,false,'Native controls belong outside scaled paper');
+      if(process.env.CF189_QA_OUTPUT_DIR){const snapshot=resolve(process.env.CF189_QA_OUTPUT_DIR,`native-frontmatter-${width}.png`);assert.equal(existsSync(snapshot),false);await page.locator('.report-native-frontmatter').scrollIntoViewIfNeeded();await page.screenshot({path:snapshot});}
+    }
+    assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,false,'A legacy web-only cover must not acquire a regenerated native proof');
+    await page.getByRole('button',{name:'원형에 추가된 웹 표지·목차 해제',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),actualNativeBefore,'Explicitly disabling the extra web cover preserves the whole original model');
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.front()),{enabled:false,date:'보존 날짜',author:'보존 기관',tocTitles:{legacy:'기존 목차 문구'}},'Explicit disable retains all other saved properties exactly');
+    assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,false,'Other saved front-matter properties are retained, not silently discarded');
+    await page.evaluate(()=>(globalThis as any).cf149Editing.setFront({enabled:false}));
+    assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true);
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:1000});
       // Responsive scale updates on animation frames. Wait for the unchanged

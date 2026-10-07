@@ -81,7 +81,7 @@ export const DocumentReviewPages = forwardRef<DocumentReviewPagesHandle, {
       <button type="button" aria-label="선택한 원형 쪽으로 이동" onClick={() => moveToSourcePage(sourcePage)}>이동</button>
       <span role="status">{navigationNotice || '편집·출력 미리보기를 같은 원본 쪽으로 이동합니다.'}</span>
     </div>}
-    {sourcePageCount > 0 && sourceNavigation}
+    {sourceNavigation}
     <div className="document-review-pages__spread">
       <div className="document-review-pages__side">{children}</div>
       <div className="document-review-pages__side document-review-pages__output" aria-label="출력 미리보기"><div className="document-review-pages__paper">{previewContent}</div></div>

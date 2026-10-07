@@ -1,8 +1,8 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF188, 2026-10-07
+## 현재 판정 — CF189, 2026-10-07
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186 엔진 후보·CF187 일반 제목 이동·CF188 확인된 원형 챕터↔쪽 연결은 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186 엔진 후보·CF187 일반 제목 이동·CF188 확인된 원형 챕터↔쪽 연결・CF189 원형 중복 표지/목차 보호는 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
@@ -31,6 +31,16 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF189 — 원형 중복 표지·목차 및 작업 목차의 잘못된 자동 반영 보호
+
+- 시작 HEAD `c2f4d193e4aa582d9e83b78151f192f79b18aeac`, 같은 저장소/브랜치. 세 전문이 실제 저장/SDK 경로·화면·회귀를 읽기 확인했고 총괄만 최소 수정했다. 원형 페이지인데 웹 자동 표지·목차를 켤 수 있었고, 내부 작업 목차 저장을 HWP 인쇄 목차까지 바뀌는 것처럼 표시했다. 원형은 신규 자동 구성 체크+이벤트를 차단하고 HWP CTA를 enabled값과 무관하게 유지한다. 기존 enabled=true는 강제로 변경하지 않으며 해제는 사용자 클릭으로 enabled만 변경한다.
+- 원형 조작부는 배율 적용된 문서 밖으로 이동했다(미리보기 없는 독립 편집기는 기존 위치 유지). 출력 `[data-export-page]`·본문 모델/이미지 크기/쪽 순서/여백에는 넣지 않는다. 조작 버튼44px 보장은 공통 버튼32px CSS가 덮는 실제 FAIL을 확인하고 좁은 native 영역 선택자로 보완했다. 일반 표지·목차 폼과 종이 배율은 유지한다.
+- 원형 참조가 유효하면 `saveOutline`은 body proof가 오래된 혼합 원고라도 웹 heading rename을 건너뛰고 내부 작업 목차만 저장한다. 단계2/4·저장 알림을 인쇄 목차와 분리하며, 원형 문구·쪽수 수정은 HWP 편집→전체 페이지 적용→보고서 저장으로 안내한다. Rhwp 열기/닫기 안내는 `preserveAppliedSource && onApplyPages`의 보고서 연결에만 제한해 제안서 안내를 바꾸지 않는다.
+- 최종 관련22/22, root/web tsc exit0, diffcheck PASS. CF149는 legacy 자동구성 true에서도 native CTA1/일반 갑지 필드0, 명시 해제 뒤 날짜·기관·tocTitles exact 보존 및 body JSON 불변/지문 불일치 차단 유지, 1440/390px 실제44px을 검사한다. actual-route는 작업 목차 저장 뒤 draft JSON/content/version/저장횟수 불변, 유효 원형 포인터+실제 CH heading+stale proof의 혼합 원고도 동일하게 보호한다. 시험에서만 이전 native guard를 무효화한 음성 대조는 예상 **추가 저장7≠6 FAIL**, 정상 코드22PASS. 고객 원고/실제 D1/한컴 검증으로 확대하지 않는다.
+- `E:\Codex-QA\claim-center-cf189-20261007\dist` production build43파일/37,633,258B. main index-BE5XoP0C.js SHA `fd7a48f25d682c288964014ad50c84016f9d492bf2b62fe1fd54e05ba4f44fb1`, CSSindex-D8CHNiNT. 승인 runtime28자산 전SHA 일치(+manifest1), WASMbcc40a79.../기존 원형 엔진 유지. 합성 native-frontmatter1440/390 화면 확인. 기존 E 빌드/원본 덮어쓰기·추가 C 정리·실제 CC6/고객 자료/DB/ENV/API키/가오픈 변경0.
+- 원형 자동 목차 갱신은 **아직 미구현**이다. 설치 SDK0.8.4 wrapper에는 목차 갱신이 없고, pinned Studio에 raw 문장/focus RPC가 있지만 현재 client가 필요한 capability를 협상하지 않는다. raw 명령도 전체 body paragraph만 허용하고 필드/컨트롤/혼합서식 및 TAB/LF를 거부하므로 표·점선탭 목차의 일반 해법이 아니다. SDK/협상/타입을 우회하거나 production 엔진을 변경하지 않았다. 직접 engine 편집을 구현하려면 확인된 문단/셀/치환 범위·원문/서식·필드 지문을 보존하고 인쇄 pageNumber(재시작 가능)를 대조해야 한다. CF188의 물리 쪽을 인쇄 번호로 대입하지 않는다.
+- 자동 구성 해제는 기존 지문 복구를 보장하지 않는다. 다른 저장 속성이 다르면 원형 출력/연결은 계속 거부하며, 연결 편집본을 다시 열어 전체 페이지 적용이 필요하다고 안내한다. proof 자동 재생성·메타정보 자동삭제0. 전체 원형/자동 목차·A–Z·가오픈·가이드 영상 합격은 여전히 미완료다. Docker 기동/외부 전송 승인 대기와 실제 미구현을 구분한다.
 
 ### CF188 — 확인된 원형 챕터·쪽 연결 저장과 재진입/탐색 안전성
 

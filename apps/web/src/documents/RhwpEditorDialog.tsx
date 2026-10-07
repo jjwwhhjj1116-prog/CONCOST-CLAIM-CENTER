@@ -98,7 +98,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
           originalFileRef.current = sourceFile;
           setActiveFileName(sourceFile.name);
           setHasImportedTemplate(true);
-          setStatus(`${result.pageCount}페이지를 열었습니다. 편집 후 HWP 또는 HWPX로 내보내세요.`);
+          setStatus(preserveAppliedSource && onApplyPages ? `${result.pageCount}페이지를 열었습니다. 수정 후 전체 페이지를 적용하고 보고서 저장 상태를 확인하세요. 다운로드만으로 보고서가 갱신되지는 않습니다.` : `${result.pageCount}페이지를 열었습니다. 편집 후 HWP 또는 HWPX로 내보내세요.`);
         } else {
           setActiveFileName(suggestedName);
           setStatus('rhwp는 빈 HWP 생성 API를 제공하지 않습니다. 편집할 HWP/HWPX 원본을 먼저 가져오세요.');
@@ -240,7 +240,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       </aside>}
       {error && <p className="rhwp-dialog__error" role="alert">{error}</p>}
       <div className="rhwp-dialog__editor" ref={editorHostRef} aria-label="rhwp 한글 문서 편집 영역" />
-      {confirmClose && <div className="rhwp-dialog__confirm" role="alertdialog" aria-modal="true" aria-label="편집기 닫기 확인"><div><h3>편집기를 닫을까요?</h3><p>내보내지 않은 수정 내용은 사라질 수 있습니다. 먼저 HWP 또는 HWPX로 내려받는 것을 권장합니다.</p><div><button type="button" onClick={() => setConfirmClose(false)}>계속 편집</button><button type="button" className="is-danger" onClick={onClose}>저장하지 않고 닫기</button></div></div></div>}
+      {confirmClose && <div className="rhwp-dialog__confirm" role="alertdialog" aria-modal="true" aria-label="편집기 닫기 확인"><div><h3>편집기를 닫을까요?</h3><p>{preserveAppliedSource && onApplyPages ? '전체 페이지를 적용하지 않은 수정 내용은 보고서에 반영되지 않습니다. 먼저 전체 페이지 적용과 보고서 저장 완료를 확인하세요. 파일 다운로드만으로는 보고서가 갱신되지 않습니다.' : '내보내지 않은 수정 내용은 사라질 수 있습니다. 먼저 HWP 또는 HWPX로 내려받는 것을 권장합니다.'}</p><div><button type="button" onClick={() => setConfirmClose(false)}>계속 편집</button><button type="button" className="is-danger" onClick={onClose}>저장하지 않고 닫기</button></div></div></div>}
     </section>
   </div>;
 }

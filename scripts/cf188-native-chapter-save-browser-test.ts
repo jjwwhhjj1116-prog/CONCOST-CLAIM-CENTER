@@ -11,6 +11,14 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
   const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: resolve('apps/web'), ...(process.env.CF149_CACHE_ROOT ? {cacheDir: process.env.CF149_CACHE_ROOT} : {}), server: {host: '127.0.0.1', port: 0, hmr: false}, logLevel: 'error', plugins: [{
     name: 'cf188-report-route',
+    enforce: 'pre',
+    transform(source,id) {
+      if (process.env.CF189_LEGACY_NATIVE_PLANNING === '1' && id.endsWith('/PreviewReportStudio.tsx')) {
+        const guard = 'const native = readReportNativeSource(structured, requestCaseId);';
+        assert.ok(source.includes(guard));
+        return source.replace(guard, "const native = new URL(window.location.href).searchParams.has('mixed') ? null : readReportNativeSource(structured, requestCaseId);");
+      }
+    },
     configureServer(server) { server.middlewares.use(async (req, res, next) => {
       if (/^\/page-[12]\.svg$/u.test(req.url ?? '')) {res.setHeader('Content-Type', 'image/svg+xml'); res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="794" height="1123"><rect width="794" height="1123" fill="white"/><text x="80" y="180">${req.url}</text></svg>`); return;}
       if (!req.url?.startsWith('/native-nav.html')) return next();
@@ -24,10 +32,11 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
       import{reportNativeBodySha256}from'/src/documents/report-native-source.ts';
       import{joinReportPresentation}from'/@fs/${presentationPath}';
       import'/src/preview-theme.css';import'/src/theme-system.css';
-      const content='<!-- MANUAL-WHOLE-DOCUMENT:START -->\\n\\n'+[1,2].map(p=>'<img src="'+location.origin+'/page-'+p+'.svg" alt="합성 원본 '+p+'쪽" data-report-source-page="true">').join('\\n\\n')+'\\n\\n<!-- MANUAL-WHOLE-DOCUMENT:END -->';
+      let content='<!-- MANUAL-WHOLE-DOCUMENT:START -->\\n\\n'+[1,2].map(p=>'<img src="'+location.origin+'/page-'+p+'.svg" alt="합성 원본 '+p+'쪽" data-report-source-page="true">').join('\\n\\n')+'\\n\\n<!-- MANUAL-WHOLE-DOCUMENT:END -->';
       const body=parseStructuredDocumentMarkdown(content);body.attrs={...body.attrs,reportNativeSource:{caseId:'${caseId}',evidenceId:'synthetic-native',downloadUrl:'/api/cases/evidence/synthetic-native/download',name:'synthetic.hwp',byteSize:128,sha256:'a'.repeat(64),bindingVersion:1,originalSource:{caseId:'${caseId}',evidenceId:'first-original',downloadUrl:'/api/cases/evidence/first-original/download',name:'synthetic-first.hwp',byteSize:256,sha256:'b'.repeat(64)}}};
       const editorJson=joinReportPresentation(body,{enabled:false,text:null},{enabled:false});editorJson.attrs.reportNativeSource.bodySha256=await reportNativeBodySha256(editorJson);
-      globalThis.cf188InitialDraft={caseId:'${caseId}',title:'합성 검수 보고서',content,editorJson,version:1,wizardStep:4,selectedChapterId:'${ids[0]}',updatedAt:'2026-10-07T00:00:00Z',updatedBy:{id:'qa',name:'합성 검수자'}};
+      const mixed=new URL(location.href).searchParams.has('mixed');if(mixed){editorJson.content.push(...parseStructuredDocumentMarkdown('# CH-02 감정자료 목록\\n\\n혼합 본문 보존').content);content+='\\n\\n# CH-02 감정자료 목록\\n\\n혼합 본문 보존';}
+      globalThis.cf188InitialDraft={caseId:'${caseId}',title:'합성 검수 보고서',content,editorJson,version:1,wizardStep:4,selectedChapterId:mixed?'${ids[1]}':'${ids[0]}',updatedAt:'2026-10-07T00:00:00Z',updatedBy:{id:'qa',name:'합성 검수자'}};
       createRoot(document.getElementById('root')).render(React.createElement(PreviewReportStudio,{roles:new URL(location.href).searchParams.has('readonly')?['staff']:['admin'],onNavigate:()=>{}}));
     ` : undefined,
   }] });
@@ -41,10 +50,16 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
     let draft: any = null, failure: 'HTTP503' | 'CONFLICT' | 'WRONG_ACK' | null = null, saves = 0, readOnly = false;
     const requests: any[] = [];
     const chapters = ids.map((id, i) => ({id, chapterCode: `CH-0${i + 1}`, title: ['대상·개요', '감정자료 목록'][i], agentCode: 'QA', ordinal: i + 1, promptVersion: 1}));
+    let outlinePlan = {status: 'CONFIRMED', version: 1, persistenceAvailable: true, items: chapters.map(c => ({chapterId: c.id, chapterCode: c.chapterCode, chapterTitle: c.title, planningNote: '', promptVersion: 1}))};
     await page.route('**/*', async route => {
       const url = new URL(route.request().url()), method = route.request().method();
       if (!url.pathname.startsWith('/api/')) return url.origin === origin ? route.continue() : route.abort();
       const send = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      if (url.pathname === '/api/report-authoring/outline' && method === 'PUT') {
+        const body = route.request().postDataJSON(); assert.equal(body.caseId, caseId); assert.equal(body.expectedVersion, outlinePlan.version);
+        outlinePlan = {...outlinePlan, status: body.status, version: outlinePlan.version + 1, items: body.items};
+        return send({outlinePlan});
+      }
       if (url.pathname === '/api/report-drafts' && method === 'PUT') {
         const body = route.request().postDataJSON(); requests.push(body); saves++;
         assert.equal(body.expectedVersion, draft.version);
@@ -65,7 +80,7 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
         case '/api/report-drafts': draft ??= await page.evaluate(() => (globalThis as any).cf188InitialDraft); return send({draft, revisions: [], backups: []});
         case '/api/report-reviews': return send({reviews: []});
         case '/api/report-finalizations': return send({finalizations: []});
-        case '/api/report-authoring/config': return send({available: true, claimType: 'TYPE03', aiConnected: false, assistantConnected: false, outlineAiConnected: false, chapters, templateLibrary: [], templates: [], sourceGroups: [], typeGuideline: null, outlinePlan: {status: 'CONFIRMED', version: 1, persistenceAvailable: true, items: chapters.map(c => ({chapterId: c.id, chapterCode: c.chapterCode, chapterTitle: c.title, planningNote: '', promptVersion: 1}))}});
+        case '/api/report-authoring/config': return send({available: true, claimType: 'TYPE03', aiConnected: false, assistantConnected: false, outlineAiConnected: false, chapters, templateLibrary: [], templates: [], sourceGroups: [], typeGuideline: null, outlinePlan});
         case '/api/report-chapter-collaboration': return send({assignments: [], members: [], canManage: !readOnly, currentUserId: 'qa'});
         case '/api/report-authoring/case-law': return send({sources: [], citations: [], apiConfigured: false});
         default: assert.fail('Unexpected isolated API: ' + url.pathname);
@@ -73,6 +88,8 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
     });
     await page.goto(origin + '/native-nav.html?caseId=' + caseId);
     const links = page.locator('.document-review-pages__source-links'), nav = page.getByRole('combobox', {name: '원형 보고서 쪽 이동', exact: true});
+    const autoFront = page.getByRole('checkbox', {name: '갑지·목차 자동 구성', exact: true});
+    await autoFront.waitFor(); assert.equal(await autoFront.isChecked(), false); assert.equal(await autoFront.isDisabled(), true, 'Native page reports cannot acquire a duplicate web cover/TOC');
     await links.locator('summary').click();
     await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>('.document-review-pages__side img[data-report-source-page]')].filter(i => i.closest('.tiptap') || i.closest('[data-export-page]')).length === 4 && [...document.querySelectorAll<HTMLImageElement>('.document-review-pages__side img[data-report-source-page]')].every(i => i.complete && i.naturalWidth > 0));
     const original = structuredClone(draft);
@@ -127,11 +144,27 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
     await retried; await page.getByText(/저장 완료 응답을 확인하지 못했습니다/u).waitFor({state:'hidden'});
     assert.equal(draft.version, 3); assert.equal(draft.editorJson.attrs.reportNativeSource.confirmedChapterPages, undefined);
     assert.deepEqual(draft.editorJson.content, original.editorJson.content); assert.equal(draft.content, original.content);
+    const beforePlan = structuredClone(draft), savesBeforePlan = saves;
+    await page.getByRole('textbox', {name: '챕터 제목', exact: true}).fill('내부 작업용 자료 목록');
+    await page.getByRole('button', {name: '작업 목차 제목 저장', exact: true}).click();
+    await page.locator('.report-review-outline').getByRole('status').filter({hasText:/작업 목차 제목을 저장했습니다.*원형 HWP의 표지·인쇄 목차·본문 제목·쪽수는 변경하지 않았습니다/u}).waitFor();
+    assert.equal(outlinePlan.version, 2); assert.equal(outlinePlan.items[1].chapterTitle, '내부 작업용 자료 목록');
+    assert.equal(saves, savesBeforePlan); assert.deepEqual(draft, beforePlan, 'Native planning-title saves cannot rewrite source, presentation, page images or draft content/version');
     readOnly = true; await page.goto(origin + '/native-nav.html?readonly=1&caseId=' + caseId); await links.locator('summary').click();
     await links.getByRole('combobox', {name: '연결할 목차 항목', exact: true}).selectOption(ids[0]);
     await links.getByRole('combobox', {name: '연결할 원본 물리 쪽', exact: true}).selectOption('1');
     assert.equal(await links.getByRole('button', {name: '연결 확인·보고서 저장', exact: true}).isDisabled(), true);
     assert.equal(saves, 6, 'Readonly draft selection cannot cause another save');
+    readOnly=false;draft=null;
+    await page.goto(origin+'/native-nav.html?mixed=1&caseId='+caseId);
+    await page.locator('.tiptap h1').getByText('감정자료 목록',{exact:false}).waitFor();
+    const mixedBefore=structuredClone(draft), savesBeforeMixed=saves;
+    await page.getByRole('textbox',{name:'챕터 제목',exact:true}).fill('혼합 원고에서 별도 작업 제목');
+    await page.getByRole('button',{name:'작업 목차 제목 저장',exact:true}).click();
+    await page.locator('.report-review-outline').getByRole('status').waitFor();
+    assert.equal(saves,savesBeforeMixed);
+    assert.deepEqual(draft,mixedBefore,'Even a stale native pointer with a real CH heading cannot be silently rewritten by planning-title saves');
+    assert.match(await page.locator('.tiptap h1').innerText(),/감정자료 목록/u);assert.doesNotMatch(await page.locator('.tiptap h1').innerText(),/혼합 원고에서 별도 작업 제목/u);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }
 });

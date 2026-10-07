@@ -12,11 +12,13 @@ export function ReportFrontMatterEditor({ title, caseTitle, html, value, disable
     const source = document.createElement('div'); source.innerHTML = html;
     return prepareReportPrint(source);
   }, [html]);
-  if (!value.enabled) return onEditNative ? <section className="notice-box" aria-label="원형 HWP 표지·목차 편집">
+  if (onEditNative) return <section className="notice-box report-native-frontmatter" aria-label="원형 HWP 표지·목차 편집">
     <strong>원형 HWP 표지·목차 편집</strong>
     <p>가져온 HWP의 페이지 모양을 유지하도록 자동 표지·목차를 추가하지 않습니다. 원본에 있는 표지·목차와 문장·표·사진은 HWP 편집기에서 수정하고, “수정 원본 보존·전체 페이지 적용”을 눌러 보고서에 반영하세요. 다운로드만으로는 보고서가 갱신되지 않습니다.</p>
+    {value.enabled && <><p role="alert">웹용 자동 표지·목차가 켜져 있습니다. 이 설정은 원형 HWP를 편집하지 않고 별도 페이지를 추가합니다. 원형과 맞추려면 자동 구성을 해제한 뒤 보고서 저장 상태를 확인하세요. 해제 후에도 연결 검증 오류가 남으면 연결 HWP 편집본을 다시 열어 전체 페이지를 적용하세요. 기존 날짜·기관·목차 문구는 자동으로 지우지 않습니다.</p><Button type="button" variant="secondary" disabled={disabled} onClick={() => onChange({...value, enabled: false})}>원형에 추가된 웹 표지·목차 해제</Button></>}
     <Button type="button" variant="secondary" disabled={disabled} onClick={onEditNative}>표지·목차·표를 HWP 편집기에서 수정</Button>
-  </section> : null;
+  </section>;
+  if (!value.enabled) return null;
   return <div className="report-frontmatter-edit report-final-document">
     <section className="report-frontmatter-cover" aria-label="표지 편집">
       <div className="report-cover-heading">
