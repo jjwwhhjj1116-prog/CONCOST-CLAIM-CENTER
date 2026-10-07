@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { EditorOptions, RhwpEditor } from '@rhwp/editor';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
 import { captureReportNativeSource, assertReportNativePagesMatch } from './report-native-source';
-import { inspectNativeTocNumbers, parseNativeTocPages, refreshConfirmedNativeTocNumbers } from './report-native-toc';
+import { inspectNativeTocNumbers, parseNativeTocPages, refreshConfirmedNativeTocNumbers, type NativeTocExcludedReason } from './report-native-toc';
 
 export interface RhwpEditorDialogProps {
   isOpen: boolean;
@@ -50,6 +50,7 @@ const textFromSvg = (svg: string): string => {
   if (lines.length) return lines.join('\n');
   return (document.documentElement.textContent ?? '').replace(/\s+/gu, ' ').trim();
 };
+const tocExcludedLabels:Record<NativeTocExcludedReason,string>={NO_PAGE_NUMBER:'지원하는 아라비아 쪽번호를 행 끝에서 확인하지 못했습니다.',TITLE_NOT_FOUND:'지원 범위에서 정확히 일치하는 본문 제목을 찾지 못했습니다.',TITLE_AMBIGUOUS:'같은 본문 제목이 여러 곳에 있어 연결하지 않았습니다.',TARGET_CONTROL:'목차 문단에 지원하지 않는 필드·컨트롤이 있습니다.',PAGE_UNCONFIRMED:'실제 인쇄번호나 본문 위치를 확인하지 못했습니다.',STYLE_UNCONFIRMED:'숫자·본문 위치나 서식 보존을 확인하지 못했습니다.'};
 
 export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, preserveAppliedSource = false, applyDisabled = false, applyLabel = '현재 HWP 내용을 선택 챕터에 적용', applyProgress }: RhwpEditorDialogProps): React.ReactElement | null {
   const editorHostRef = useRef<HTMLDivElement>(null);
@@ -69,6 +70,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [tocRange,setTocRange]=useState('');
+  const [tocInspection,setTocInspection]=useState<Awaited<ReturnType<typeof inspectNativeTocNumbers>>|null>(null);
   const [tocPreview,setTocPreview]=useState<(Awaited<ReturnType<typeof inspectNativeTocNumbers>> & {bytes:Uint8Array;format:ExportFormat;name:string;editor:RhwpEditor;generation:number;original:File|null;source:File|null|undefined})|null>(null);
   const [tocSelected,setTocSelected]=useState<number[]>([]);
   const [arabicConfirmed,setArabicConfirmed]=useState(false);
@@ -87,7 +89,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setPageCount(null);
     setHasImportedTemplate(false);
     originalFileRef.current = null;
-    tocHandedOffRef.current=false;setTocPreview(null);setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);setTocRange('');setConfirmClose(false);
+    tocHandedOffRef.current=false;setTocPreview(null);setTocInspection(null);setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);setTocRange('');setConfirmClose(false);
     setBusy(true);
     const options: EditorOptions = {
       width: '100%', height: '100%', renderer: 'canvas2d', requestTimeoutMs: 90_000
@@ -161,6 +163,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const loadFile = async (file: File | undefined) => {
     if (!file || tocPreview) return;
     const operation=beginOperation();if(!operation)return;
+    setTocInspection(null);setTocRange('');
     setBusy(true); setHasImportedTemplate(false); setError(''); setStatus(`${file.name} 파일을 여는 중입니다…`);
     try {
       const bytes=await file.arrayBuffer();requireCurrent(operation);
@@ -255,10 +258,11 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
 
   const inspectToc=async()=>{
     if(!preserveAppliedSource||!onApplyPages||!hasImportedTemplate||applyDisabled||tocPreview)return;
-    const operation=beginOperation();if(!operation)return;setStatus('현재 원형의 목차와 본문 위치를 확인하고 있습니다…');
+    const operation=beginOperation();if(!operation)return;setTocInspection(null);setStatus('현재 원형의 목차와 본문 위치를 확인하고 있습니다…');
     try {
       const pages=parseNativeTocPages(tocRange,pageCount??0), source=await readNativeSnapshot(operation);requireCurrent(operation,true,true);
       const proposal=await inspectNativeTocNumbers(source.bytes,source.format,pages,source.Engine);requireCurrent(operation,true,true);
+      setTocInspection(proposal);
       tocHandedOffRef.current=false;setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);
       if(proposal.candidates.length){setTocPreview({...proposal,bytes:source.bytes,format:source.format,name:source.name,...operation});setStatus('변경할 항목을 직접 선택해 주세요. 확인하는 동안 원형 편집은 잠겨 있습니다.');}
       else setStatus(`자동 확인 가능한 변경 후보가 없습니다. 일치 ${proposal.unchanged}건 · 자동 확인 제외 ${proposal.unsupported}건. 전체 목차의 일치 판정은 아니며, 나머지는 원형 편집기에서 직접 대조하세요.`);
@@ -313,13 +317,15 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         {!tocPreview ? <form onSubmit={event=>{event.preventDefault();void inspectToc();}}>
           <label htmlFor="native-toc-pages">목차가 있는 물리 쪽 <input id="native-toc-pages" value={tocRange} onChange={event=>setTocRange(event.target.value)} maxLength={200} placeholder="예: 2-4,6" disabled={busy||applyDisabled} aria-describedby="native-toc-help" /></label>
           <button type="submit" disabled={busy||applyDisabled||!hasImportedTemplate||!tocRange.trim()}>목차 번호 확인</button>
-          <p id="native-toc-help">표지를 포함해 세는 쪽입니다. 점선·탭 뒤 아라비아 숫자와 본문 제목이 정확히 일치하는 항목만 확인합니다. 표 안·필드·로마숫자 목차는 직접 편집하세요.</p>
+          <p id="native-toc-help">표지를 포함해 세는 쪽입니다. 점선·탭 뒤 아라비아 쪽번호와 본문 제목이 정확히 일치하는 항목만 확인합니다. 본문의 1행 2열 로마 번호·제목 표는 읽어서 위치만 확인하며 표는 바꾸지 않습니다. 목차가 표 안이거나 필드·로마 쪽번호이면 직접 편집하세요.</p>
         </form> : <>
           <p>숫자만 갱신합니다. 일치 {tocPreview.unchanged}건 · 자동 확인 제외 {tocPreview.unsupported}건. 제외 항목은 직접 대조하세요.</p>
           <div className="rhwp-dialog__toc-rows" role="group" aria-label="갱신할 목차 항목 선택">{tocPreview.candidates.map((row,index)=><label key={`${row.section}:${row.paragraph}`}><input type="checkbox" checked={tocSelected.includes(index)} disabled={busy||applyDisabled||tocHandedOff} onChange={event=>setTocSelected(previous=>event.target.checked?[...previous,index]:previous.filter(value=>value!==index))}/><span><strong>{row.title}</strong><small>목차 물리 {row.tocPhysicalPage}쪽 · 본문 물리 {row.anchor.physicalPage}쪽</small></span><b>{row.oldText} → {row.newText}</b></label>)}</div>
           <label className="rhwp-dialog__toc-folio"><input type="checkbox" checked={arabicConfirmed} disabled={busy||applyDisabled||tocHandedOff} onChange={event=>setArabicConfirmed(event.target.checked)}/>본문에 인쇄된 쪽번호가 위의 아라비아 숫자와 같고, 앞의 0 표시도 맞는지 확인했습니다.</label>
           <div className="rhwp-dialog__toc-actions">{tocHandedOff?<button type="button" disabled={busy} onClick={()=>setConfirmClose(true)}>닫고 보고서 저장 상태 확인</button>:<button type="button" disabled={busy} onClick={()=>{if(operationRef.current||tocHandedOffRef.current)return;setTocPreview(null);setTocSelected([]);setArabicConfirmed(false);setError('');setStatus('목차 갱신을 취소했습니다. 저장하지 않았습니다.');}}>취소·원형 편집 계속</button>}<button type="button" disabled={busy||applyDisabled||tocHandedOff||!tocSelected.length||!arabicConfirmed} onClick={()=>void applyToc()}>선택 숫자 갱신·보고서 적용</button></div>
         </>}
+        {tocInspection&&<div className="rhwp-dialog__toc-result" role="status"><p>마지막 확인 물리 쪽: {tocInspection.inspectedPages.join(', ')} · 쪽번호 있는 행 {tocInspection.numberRows}개 · 일치 {tocInspection.unchanged}개 · 갱신 후보 {tocInspection.candidates.length}개</p><p>아래 제외 수는 인식한 점선·탭 행만 센 값이며 전체 목차 검수 합격을 뜻하지 않습니다. 편집 후에는 번호 확인을 다시 실행하세요.</p></div>}
+        {tocInspection&&tocInspection.excluded.length>0&&<details className="rhwp-dialog__toc-excluded"><summary>자동 갱신 제외 사유 {tocInspection.excluded.length}개</summary><ul>{tocInspection.excluded.map(row=><li key={`${row.section}:${row.paragraph}`}><strong>{row.title}</strong><span>원본 물리 {row.physicalPage}쪽 · {tocExcludedLabels[row.reason]}</span></li>)}</ul></details>}
       </section>}
       <div className="rhwp-dialog__editor" ref={editorHostRef} aria-label="rhwp 한글 문서 편집 영역" />
       {confirmClose && <div className="rhwp-dialog__confirm" role="alertdialog" aria-modal="true" aria-label="편집기 닫기 확인"><div><h3>편집기를 닫을까요?</h3><p>{tocHandedOff?'목차 작업본 적용은 이미 시작됐습니다. 닫은 뒤 보고서 저장 상태를 확인하고 저장 실패 시 기존 저장 재시도를 사용하세요. 같은 숫자 갱신이나 파일 업로드를 반복하지 마세요.':preserveAppliedSource && onApplyPages ? '전체 페이지를 적용하지 않은 수정 내용은 보고서에 반영되지 않습니다. 먼저 전체 페이지 적용과 보고서 저장 완료를 확인하세요. 파일 다운로드만으로는 보고서가 갱신되지 않습니다.' : '내보내지 않은 수정 내용은 사라질 수 있습니다. 먼저 HWP 또는 HWPX로 내려받는 것을 권장합니다.'}</p><div><button type="button" disabled={busy} onClick={() => setConfirmClose(false)}>{tocHandedOff?'안내로 돌아가기':'계속 편집'}</button><button type="button" disabled={busy} className="is-danger" onClick={closeEditor}>{tocHandedOff?'닫고 저장 상태 확인':'저장하지 않고 닫기'}</button></div></div></div>}

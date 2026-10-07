@@ -9,9 +9,9 @@ import { readQaNativeEngine } from './cf183-template-source-gate.mjs';
 
 test('CF190 real SDK report dialog confirms numeral refresh once, cancels safely and excludes proposal dialogs',async()=>{
   const approved=readQaNativeEngine(), module=await import(pathToFileURL(resolve(approved.root,'rhwp.js')).href);await module.default({module_or_path:approved.wasm});const Engine=module.HwpDocument;
-  const pages=['<p>목 차</p><p>자료 목록 ........ <strong>9</strong></p>','<p>자료 목록</p><p>확정 금액 123,456원 · 보존 본문</p>'].map(html=>({html,text:html.replace(/<[^>]*>/gu,''),tables:0,images:0,width:794,height:1123,margins:{top:40,right:40,bottom:40,left:40}}));
+  const pages=['<p>목 차</p><p>Ⅰ. 자료 목록 ........ <strong>9</strong> </p><p>본문에서 없는 자료 ........ 8</p>','<table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td></tr></table><p>확정 금액 123,456원 · 보존 본문</p>'].map((html,index)=>({html,text:html.replace(/<[^>]*>/gu,''),tables:index===1?1:0,tableCells:index===1?[[{row:0,col:0,rowSpan:1,colSpan:1,text:'Ⅰ.'},{row:0,col:1,rowSpan:1,colSpan:1,text:'자료 목록'}]]:[],images:0,width:794,height:1123,margins:{top:40,right:40,bottom:40,left:40}}));
   const doc=new Engine(createNativeHwp(pages,Engine));let bytes:Uint8Array;
-  try{assert.equal(JSON.parse(doc.insertNewNumber(1,0,doc.getParagraphLength(1,0),23)).ok,true);bytes=doc.exportHwp();}finally{doc.free();}
+  try{assert.equal(JSON.parse(doc.insertNewNumber(1,1,doc.getParagraphLength(1,1),23)).ok,true);bytes=doc.exportHwp();}finally{doc.free();}
   const runtime=resolve('pinned-runtime/rhwp'), manifest=JSON.parse(readFileSync(resolve(runtime,'build-manifest.json'),'utf8'));
   const files=new Set(['index.html','build-manifest.json',...manifest.files.map((file:{path:string})=>file.path)]);
   const {createServer}=await import('../apps/web/qa/vite-server.js');
@@ -59,6 +59,8 @@ test('CF190 real SDK report dialog confirms numeral refresh once, cancels safely
     await page.getByRole('button',{name:'목차 번호 확인',exact:true}).click();await choices.waitFor();
     await choices.getByRole('checkbox').check();assert.equal(await apply.isDisabled(),true);
     await page.getByRole('checkbox',{name:/본문에 인쇄된 쪽번호/u}).check();assert.equal(await apply.isDisabled(),false);
+    const excluded=page.locator('.rhwp-dialog__toc-excluded');await excluded.locator('summary').click();assert.match(await excluded.innerText(),/지원 범위에서 정확히 일치하는 본문 제목/u);assert.match(await excluded.innerText(),/원본 물리 1쪽/u);
+    assert.match(await page.locator('.rhwp-dialog__toc-result').innerText(),/쪽번호 있는 행 2개/u);
     for(const width of [1440,390]){
       await page.setViewportSize({width,height:1000});
       const metrics=await page.locator('.rhwp-dialog__toc').evaluate(el=>({width:el.clientWidth,scrollWidth:el.scrollWidth,buttons:[...el.querySelectorAll('button')].map(button=>button.getBoundingClientRect().height)}));
@@ -68,7 +70,7 @@ test('CF190 real SDK report dialog confirms numeral refresh once, cancels safely
     // Two synchronous attempts use the same actual React control; only one callback is allowed.
     await apply.evaluate(button=>{(button as HTMLButtonElement).click();(button as HTMLButtonElement).click();});await page.getByRole('dialog').waitFor({state:'hidden'});
     const applied=await page.evaluate(()=>(window as any).cf190.applies);assert.equal(applied.length,1);assert.equal(applied[0].original,'합성 목차.hwp');assert.equal(applied[0].pages.length,2);
-    const saved=new Engine(new Uint8Array(applied[0].bytes));try{assert.equal(saved.getTextRange(0,1,0,saved.getParagraphLength(0,1)),'자료 목록 ........ 23');assert.match(saved.getTextFileText(),/123,456원/u);for(let p=0;p<2;p++)assert.equal(saved.renderPageSvgWithProfile(p,'print'),applied[0].pages[p]);}finally{saved.free();}
+    const saved=new Engine(new Uint8Array(applied[0].bytes));try{assert.equal(saved.getTextRange(0,1,0,saved.getParagraphLength(0,1)),'Ⅰ. 자료 목록 ........ 23 ');assert.match(saved.getTextFileText(),/123,456원/u);const table=JSON.parse(saved.getCursorModel()).lists.find((list:any)=>list.isCell&&list.sectionIndex===1&&list.hostPara===0);assert.ok(table);assert.equal(JSON.parse(saved.getTableDimensions(1,0,table.controlIndex)).cellCount,2);for(let p=0;p<2;p++)assert.equal(saved.renderPageSvgWithProfile(p,'print'),applied[0].pages[p]);}finally{saved.free();}
     const prepare=async()=>{
       await page.waitForFunction(()=>!document.querySelector<HTMLButtonElement>('.rhwp-action-hwp')?.disabled);
       await page.getByLabel('목차가 있는 물리 쪽',{exact:false}).fill('1');await page.getByRole('button',{name:'목차 번호 확인',exact:true}).click();await choices.waitFor();await choices.getByRole('checkbox').check();await page.getByRole('checkbox',{name:/본문에 인쇄된 쪽번호/u}).check();

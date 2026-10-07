@@ -5,3 +5,5 @@ export function assertQaOutputOutsideSources(sourceRoot: string, outputParent: s
 export function readQaNativeEngine(candidateRoot?: string, expectedWasm?: string, expectedBinding?: string): {
   root: string; wasm: Uint8Array; engineSha256: string; bindingSha256: string;
 };
+type QaNativeExportResult={contentLoss():string;takeBytes():Uint8Array;free():void};
+export function exportNativeWithReport(document:{exportHwpWithReport():QaNativeExportResult;exportHwpxWithReport():QaNativeExportResult},format:'hwp'|'hwpx'):{bytes:Uint8Array;report:{schemaVersion:number;outputFormat:'hwp'|'hwpx';count:number;lossRecords:number}};

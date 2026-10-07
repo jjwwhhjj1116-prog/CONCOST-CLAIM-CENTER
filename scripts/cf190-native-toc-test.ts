@@ -114,3 +114,49 @@ test('CF190 numeric-only claims cannot hide another text or layout mutation in t
   await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,'hwpx',originalHash,[entry],BadNumberLine as unknown as NativeHwpEngine));
   assert.equal(hash(bytes),originalHash);
 });
+
+test('CF191 numeral suffix spaces retain text, style and line while later text or TAB cannot be hidden',async()=>{
+  for(const format of ['hwp','hwpx'] as const){
+    const fixtureSource=await fixture(format),doc=new fixtureSource.Engine(fixtureSource.bytes);let bytes:Uint8Array;
+    try{assert.equal(JSON.parse(doc.insertText(0,1,doc.getParagraphLength(0,1),'  ')).ok,true);bytes=format==='hwp'?doc.exportHwp():doc.exportHwpx();}finally{doc.free();}
+    const read=new fixtureSource.Engine(bytes);let text:string;try{text=read.getTextRange(0,1,0,read.getParagraphLength(0,1));}finally{read.free();}
+    const entry={...fixtureSource.entry,paragraphSha256:hash(text)},checked=await inspectNativeTocNumbers(bytes,format,[1],fixtureSource.Engine);
+    assert.equal(checked.candidates.length,1);assert.equal(checked.numberRows,1);assert.equal(checked.excluded.length,0);
+    const result=await refreshConfirmedNativeTocNumbers(bytes,format,hash(bytes),[entry],fixtureSource.Engine),after=new fixtureSource.Engine(result.bytes);
+    try{assert.equal(after.getTextRange(0,1,0,after.getParagraphLength(0,1)),[...text].slice(0,entry.offset).join('')+'23  ');}finally{after.free();}
+    for(const suffix of ['x','\t','\n']){
+      const bad=new fixtureSource.Engine(fixtureSource.bytes);let badBytes:Uint8Array;try{assert.equal(JSON.parse(bad.insertText(0,1,bad.getParagraphLength(0,1),suffix)).ok,true);badBytes=format==='hwp'?bad.exportHwp():bad.exportHwpx();}finally{bad.free();}
+      const opened=new fixtureSource.Engine(badBytes);try{const raw=opened.getTextRange(0,1,0,opened.getParagraphLength(0,1));await assert.rejects(refreshConfirmedNativeTocNumbers(badBytes,format,hash(badBytes),[{...entry,paragraphSha256:hash(raw)}],fixtureSource.Engine));}finally{opened.free();}
+    }
+  }
+});
+async function compoundFixture(format:'hwp'|'hwpx',body='<table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td></tr></table>'){
+  const Engine=await engine,html=['<p>목 차</p><p>Ⅰ. 자료 목록 ........ <strong>9</strong> </p>',body+'<p>확정 금액 123,456원 · 보존 본문</p>'];
+  const tableCells=[...body.matchAll(/<table>(.*?)<\/table>/gu)].map(table=>[...table[1].matchAll(/<tr>(.*?)<\/tr>/gu)].flatMap((row,rowIndex)=>[...row[1].matchAll(/<td>(.*?)<\/td>/gu)].map((cell,col)=>({row:rowIndex,col,rowSpan:1,colSpan:1,text:cell[1].replace(/<[^>]*>/gu,'')}))));
+  const doc=new Engine(createNativeHwp(html.map((html,index)=>({html,text:html.replace(/<[^>]*>/gu,''),tables:index===1?tableCells.length:0,tableCells:index===1?tableCells:[],images:0,width:794,height:1123,margins:{top:40,right:40,bottom:40,left:40}})),Engine));
+  try{assert.equal(JSON.parse(doc.insertNewNumber(1,1,doc.getParagraphLength(1,1),23)).ok,true);return {Engine,bytes:new Uint8Array(format==='hwp'?doc.exportHwp():doc.exportHwpx())};}finally{doc.free();}
+}
+test('CF191 source-proven 1x2 Roman/title cells are read-only anchors with exact whole-title uniqueness',async()=>{
+  for(const format of ['hwp','hwpx'] as const){
+    const {Engine,bytes}=await compoundFixture(format),before=hash(bytes),inspection=await inspectNativeTocNumbers(bytes,format,[1],Engine);
+    assert.equal(inspection.candidates.length,1);const entry=inspection.candidates[0];assert.ok(entry.anchor.cells);assert.equal(entry.anchor.physicalPage,2);assert.equal(entry.anchor.printedPage,23);
+    const result=await refreshConfirmedNativeTocNumbers(bytes,format,before,[entry],Engine);assert.equal(result.changes[0].newText,'23');assert.equal(hash(bytes),before);
+    for(const cells of [ [...entry.anchor.cells].reverse(),[{...entry.anchor.cells[0],sha256:'0'.repeat(64)},entry.anchor.cells[1]],[{...entry.anchor.cells[0],path:[{...entry.anchor.cells[0].path[0],cellIndex:10}]},entry.anchor.cells[1]] ])await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,[{...entry,anchor:{...entry.anchor,cells:cells as typeof entry.anchor.cells}}],Engine));
+    class BadGrid extends Engine{getCellInfoByPath(...args:any[]){const info=JSON.parse(super.getCellInfoByPath(...args));return JSON.stringify({...info,colSpan:2});}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,[entry],BadGrid as unknown as NativeHwpEngine));
+    class MissingGlyph extends Engine{getPageTextLayout(page:number){const value=JSON.parse(super.getPageTextLayout(page));value.runs=value.runs.filter((run:any)=>!run.cellPath?.length);return JSON.stringify(value);}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,[entry],MissingGlyph as unknown as NativeHwpEngine));
+    class RepeatedGlyph extends Engine{getPageTextLayout(page:number){const value=JSON.parse(super.getPageTextLayout(page)),cell=value.runs.find((run:any)=>run.cellPath?.length);if(cell)value.runs.push({...cell});return JSON.stringify(value);}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,[entry],RepeatedGlyph as unknown as NativeHwpEngine));
+  }
+  for(const body of [ '<table><tr><td><p>Ⅱ.</p></td><td><p>자료 목록</p></td></tr></table>', '<table><tr><td><p>Ⅰ.</p><p>추가</p></td><td><p>자료 목록</p></td></tr></table>', '<table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td><td><p>추가</p></td></tr></table>', '<table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td></tr></table><table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td></tr></table>' ]){
+    const {Engine,bytes}=await compoundFixture('hwpx',body),inspection=await inspectNativeTocNumbers(bytes,'hwpx',[1],Engine);assert.equal(inspection.candidates.length,0);assert.ok(inspection.excluded.length>0);
+  }
+  const duplicate=await compoundFixture('hwpx','<table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td></tr></table><table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록</p></td></tr></table>'),opened=new duplicate.Engine(duplicate.bytes);
+  let secondParent:number;try{const parents=[...new Set<number>(JSON.parse(opened.getCursorModel()).lists.filter((list:any)=>list.isCell&&list.sectionIndex===1).map((list:any)=>list.hostPara))];assert.equal(parents.length,2);secondParent=parents[1];}finally{opened.free();}
+  class BadSecondGlyph extends duplicate.Engine{getPageTextLayout(page:number){const value=JSON.parse(super.getPageTextLayout(page));value.runs=value.runs.filter((run:any)=>!(run.secIdx===1&&run.parentParaIdx===secondParent));return JSON.stringify(value);}}
+  const ambiguous=await inspectNativeTocNumbers(duplicate.bytes,'hwpx',[1],BadSecondGlyph as unknown as NativeHwpEngine);assert.equal(ambiguous.candidates.length,0);assert.equal(ambiguous.excluded[0].reason,'TITLE_AMBIGUOUS','An unverified known duplicate cannot make another matching table look unique');
+  const withField=await compoundFixture('hwpx'),field=new withField.Engine(withField.bytes);let fieldBytes:Uint8Array;
+  try{const cell=JSON.parse(field.getCursorModel()).lists.find((list:any)=>list.isCell&&list.sectionIndex===1&&list.col===1);assert.ok(cell);assert.ok(JSON.parse(field.insertClickHereFieldInCell(1,cell.hostPara,cell.controlIndex,cell.cellIndex,0,0,false,' ','','qa-cell-field',true)).ok);assert.match(field.getFieldList(),/qa-cell-field/u);fieldBytes=field.exportHwpx();}finally{field.free();}
+  assert.equal((await inspectNativeTocNumbers(fieldBytes,'hwpx',[1],withField.Engine)).candidates.length,0);
+});
