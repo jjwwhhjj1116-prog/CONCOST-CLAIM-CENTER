@@ -1,8 +1,8 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF194, 2026-10-07
+## 현재 판정 — CF195, 2026-10-08
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~194은 로컬 검증본으로 아직 미전송·미배포다. CF194은 제품 변경 없이 실제 SDK 표 셀 클릭·키보드 입력·Undo/Redo·전체 적용·저장된 File 재열기를 검수했다. 합성 HWP/HWPX 각2쪽 및 실제017 HWPX47쪽의 메모리 사본에서 통과했고, 관련 회귀 **85/85 PASS, skipped0**다. 이85개는 실업무85개 카테고리 합격이 아니다. 원본16개의 제한된 목차 탐색은 기존 실행16/원본불변16 기록이며 이번에 전수 재실행하지 않았다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~195은 로컬 검증본으로 아직 미전송·미배포다. CF195은 제품 변경 없이 실제 HWP5 원본007(17쪽)의 표·본문, 원본005(9쪽)의 TAB 포함 본문을 별도 메모리 사본에서 UI 입력·Undo/Redo·전체 적용·동일 형식·새 SDK 재열기로 검수했다. 기존 합성2경로/실제017 HWPX47쪽도 포함한 **6/6 UI 경로, 직접 관련 회귀43/43 PASS, skipped0**다. 직전85/85는 CF194 당시 전체 관련 실행이며 이번에 다시85개를 실행하지 않았다. 같은 파서 자기대조/선정한 원본·위치의 검수이며 실업무43카테고리 합격이 아니다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 기존 미체크 항목은 일괄 완료하지 않는다. 원형 줄경계 캐럿 방향·실제 글꼴 잉크 경계·최초 SDK 내용 손실 보고의 미증명 범위도 유지한다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
@@ -13,7 +13,7 @@
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
 | 원형 편집 안정성 | 실제 React/Tiptap에서 끝 마커 뒤 자동 빈 문단, 전체 교체와 첫 편집의 Undo 병합, 문서 전환 시 이전 여백 유지 FAIL→최소 수정→PASS. 일반 표·사진·빈 문단·서식 Undo·문서 키 전환 보존 | 합성 localhost 검사. 실제 HWP 수정본의 영구저장·Yjs 다중 사용자 Undo·한컴 전수 대조와 별개 |
-| 원형 표 실제 입력 | CF194 실제017의 물리3쪽 제목 셀을 실제 iframe 클릭·키보드로 수정→Undo 원래47쪽 print SHA exact→Redo→전체 적용→새 SDK File 재열기 PASS. 모든 셀의 본문·치수·여백·병합·문단/글자 서식 및 다른46쪽·사진 보존 | 지정한 평면표 셀·로컬 메모리 저장 검수다. 중첩표, PC 한컴, 실제 D1/Drive 영구저장·모든32원본 합격으로 확대하지 않음 |
+| 원형 표·본문 실제 입력 | CF195 실제007 HWP의 셀/본문을 독립 사본에서 입력→Undo 원래17쪽→Redo→전체 적용·재열기 PASS. 표 입력은146셀·다른16쪽/원래셀 경계·서식 및2줄 가운데 배치를 검증. 실제005 HWP9쪽 TAB 본문 입력도6셀·다른8쪽·그림/TAB 속성 보존 PASS. 실제017 HWPX47쪽도 재통과 | 개별 평면표·본문 위치/로컬 메모리 저장 검수다. 누적 동시 수정·중첩표·PC 한컴·D1/Drive 영구저장·모든32원본 합격으로 확대하지 않음. 줄경계 query 보정1곳을 별도 명시하며 실제 UI 캐럿 방향은 미검증 |
 | 저장·재열기 | 구체 승인 후 CC6 표지·8쪽 표 각 ‘검수’ 추가→17쪽 전체 적용1회→실제 v5 저장→reload→연결 HWP 재열기 PASS. 원래 제목·17쪽·2표식 유지, 중복 확인·오류0 | PC 한컴 및 독립승인 후 제출용 파일 검수는 별도 |
 | 원본·기존 이력 | 이번 CC6 v1~v5 보존, 최초 원본44,544B/SHA 불변, 15쪽 자료 참조와 모든 페이지 속성 불변. 새 작업본+변경1·8쪽만 추가해23건 SUCCEEDED | 전체DB 복제는 승인 범위 밖으로 거절·미실행. 과거124/120테이블 대조를 이번 전수 결과로 확대하지 않음. CC5 복구/재업로드0 |
 | 검토·최종 출력 | 자기승인·CEO/DIRECTOR 규칙 유지. 승인 snapshot과 연결 지문을 검증한 원형 HWP/HWPX 동일바이트 출력·A4 실제 크기·불일치 차단 구현/격리 검사 PASS | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료. 원형 없는 페이지그림 DOCX의 개별 문장·표 편집은 불가하며 안내를 정정 |
@@ -32,6 +32,18 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF195 — 실제 HWP5 표·본문·TAB 입력과 정상 줄바꿈 구분
+
+- 시작 HEAD `6b6ecac6a09be8f0078f7f479ce6e2df389ba753`, 동일 recovery/`feat/CF123-es-v2`. 기존 CF194 하네스를 확장하고 감사 기록만 갱신했다. 제품·SDK·승인 runtime·API·DB 변경0. 세 전문의 읽기 검토에서 확인한 공백 예외 offset/시작점·2차 재열기 pageCount/format·TAB 실재·원문 glyph 일치 조건은 총괄이 보강한 뒤 재검증했다. 기존 사용자 삭제22 보존.
+- 원본32 inventory 지문 대조 뒤 작은 실제 HWP5 5개를 읽기 분류했다. 007/003/001/021/005 각각17/25/32/11/9쪽, 평면표146/14/21/277/6셀, BinData1/1/3/6/3; 021은 fields3이며 자동 편집 후보로 일반 허용하지 않았다. 앞8쪽의 제한된 위치 선택용 조사이고 전수 기능 합격은 아니다. 본 검수는 실제007의 물리5쪽 s0host123/control0/cell8/para0, 물리7쪽 본문 s0p159 및 실제005의 물리1쪽 본문 s0p3이다. CFB 서명 `d0cf11e0a1b11ae1`/format `hwp`/inventory 원본SHA를 모두 확인해 HWP3 가져오기와 구분했다. 007 셀·본문은 같은 원본의 독립 작업본이며 누적 동시 수정 시험이 아니다.
+- UI 입력 전에 body/cell 원문 주소를 고정한다. `expectedBodyText`는 원본 clone의 정확한 한 문단만 ` QA` 추가하며 원본은 끝까지 불변이다. body는 `getCursorRect`, cell은 ByPath, source 전체 scalar 문자열·glyph charX/물리쪽·단일 줄과 실제 canvas cache key/textarea focus/caret를 대조했다. Undo는 원래 root/body/cells 및 전쪽 SVG, Redo·적용·두 재열기는 입력 전 계산한 기대값을 사용한다. 입력 없음·다른 문단·이전 cell-only stage·없는 주소를 음성으로 거부한다. 전체 root 문단 속성/원문 prefix 글자서식·모든 셀과 그림·header/fields/controls·비대상16/8/46쪽 보존을 확인했다.
+- 초기 확장의 세 실패는 제품 오류로 단정하지 않았다. 합성 target을 바뀐 텍스트로 판별하던 QA 조건은 속성 주소로 고쳤다. 007-body `189.7` 대 `189.70000000000002`는 getter가 각각 소수1자리로 낸 x/charX를 더한 산술 잡음이었다. 합계를 정수0.1px 단위로 계산하고 실제0.1px 변화/정밀도 밖 입력을 거부하는 음성을 추가했다. 원시 SVG·y·서식·비대상 배치 조건을 완화하지 않았다. 005p3은 실제 TAB이 포함되어 초기 'TAB 없음' 조건과 불일치했다. 이를 숨기거나 다른 위치로 바꾸지 않고 해당 TAB 사례를 명시, 원문 TAB·문단 Tab 속성·실제 `<hp:tab>` 레코드>0와 전구역 직렬화 속성 exact 보존으로 검수했다.
+- 007-cell은 입력으로1줄→2줄이 되면서 원래 글자가 y571.6→562(−9.6px), 첫 줄 공백 간격이 변했다. 원래 셀 크기·여백·테두리·비텍스트 SVG는 동일했다. 승인 c3의 Center 식과 Justify의 마지막 줄 제외 규칙을 대조한 뒤 해당 주소에만 정상 재흐름을 구분했다. 12px×160%=19.2px 줄간격/2개 line y/첫 줄−9.6/두 줄 중간이 원래1줄 y와 일치, 원문+추가 문자열12scalar가 누락·중복 없이 표시·서식 유지, 모든 비공백 glyph 논리 폭이 정밀 원래 SVG 클립 안, 모든 비대상 glyph는 그대로임을 단언했다. 일반 target 좌표·제품 검사는 바꾸지 않았다.
+- 추가한 separator offset9의 줄끝 ASCII space는 승인 renderer가 보존하는 논리 advance라 x512.9→525.4로 클립을 넘는다. 예외는 **offset===originalLength·그 run 마지막 space·바로 다음행 charStart·underline/strike 없음** 하나에만 고정했다. 공백 시작은 클립 안이어야 하고 일반 글자/중간 공백/다음행 없음/밑줄은 음성으로 거부한다. 원래 SVG 클립 x403.693333…+w115.653333…의 실제 오른쪽519.34666…→query519.3이며, 개별0.1반올림 bbox403.7+115.7=519.4로 오판하지 않는다. 모든13개 caret의 원래 쪽/bbox/반환 위치를 검사하고, 그 경계offset10만 명시 보정 `cellOverflowed=true`, 나머지는false다. 이는 숨은 일반 글자 잘림이 아니라 원형 query의 이전줄 경계 보정이며 **실제 UI caret affinity·글꼴 잉크 경계·PC 한컴 증명은 아니다.** 결과에 `caretQueryLimitation`을 남겼다.
+- 실패 `attempt3`/`attempt4` 및 `cell-diagnostic1~3` 원장은 보존했다. case별 subtest로 뒤의 정상 본문 검사를 계속하되 결과의 planned/expected/passed/pass를 분리한다. 집중 모드는 명시한 기존 id1개만 허용하고 focusedDiagnostic을 기록하므로 집중6/6 테스트를 전체6경로 합격으로 계산하지 않는다. 최종은 **focused=null/planned6/expected6/passed6/pass=true**. 최종 직접 관련 **43/43 PASS, skipped0**(기존native/contract/source/import/TOC32 + helper4 + GUI parent1/child6), 53.54초. 새 음성/검사 경계 보강 후 전체43개를 다시 실행했다. tuple spread의 QA 타입 오류 TS2556을 명시 인자로 고친 뒤 root/webtsc exit0, diffcheck PASS.
+- 최종 익명 원장 `E:\Codex-QA\claim-center-cf195-20261007\final-v2\native-table-result.json` SHA `07db893feddccbdd67c5043b125c6d6cdcfebecc7309b06cb3451cd83d703783`. 합성 화면만 `native-table-edited-1440.png`로 캡처·육안 확인했고 고객 원본 화면/문구/파일명 공개0. 최초SDK byte-only export의 내용 손실 보고는 UNAVAILABLE, 후속 동일 형식 LossReport0와 구분했다. E195 dist43파일/37,667,102B 전파일SHA가E194와exact/차이0, 승인runtime28(+manifest)/WASMbcc40a79…·bindingad01e939…불변/진단candidate0. 제품 소스 변경/배포0이므로 이 검수 보강을 새 기능 배포로 보고하지 않는다.
+- CC6v5/두표식/3출력·CC4/CC5·기존 고객 원고·원본·직원 검토요청/배정/승인·DB/migration/ENV/키·GitHub/development/가오픈 변경0. 현장회의록HOLD/관리자 기술검수·업무 최종승인·자기승인차단 유지. PC Hwp.exe 경로·Docker 기동·지정3커밋 전송의 기존 미답변 질문은 우회/확대하지 않았다. 다음은 실제 UI 줄경계 캐럿 동작/독립 PC 한컴 대조와 원형 field·목차 문구·사진 배치/검토2·실사용 A–Z 잔여, 정식 엔진 승인 후 development 검수→동일 artifact 가오픈 승격이다. 전체완료/완성률/시각 단정금지.
 
 ### CF194 — 실제 원형 표 셀 입력·Undo·전체 적용·재열기 검수
 
