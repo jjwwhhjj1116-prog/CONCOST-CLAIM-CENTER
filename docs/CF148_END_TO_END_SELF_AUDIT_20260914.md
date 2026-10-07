@@ -1,13 +1,13 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF189, 2026-10-07
+## 현재 판정 — CF190, 2026-10-07
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186 엔진 후보·CF187 일반 제목 이동·CF188 확인된 원형 챕터↔쪽 연결・CF189 원형 중복 표지/목차 보호는 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~189 및 CF190 제한된 원형 목차 숫자 갱신은 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
 | 연결·배포 | 지정 단신 Chrome 로그인, 원 Git 이력 정상 push, development 최신 소스·승인 runtime28/28 일치 | 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
-| 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내. CF188 사용자가 확인한 목차 항목↔원본 물리 쪽 연결·일반 보고서 버전 저장/재진입 구현 | 원형 자동 의미 추출·목차 문구/쪽수 재생성 미완료. 신규 연결은 서버 미반영 |
+| 유형·목차 선택 | 유형명/CH 코드 제거 유지. CF188 확인된 항목↔물리 쪽 연결. CF190 점선·탭 뒤 십진 숫자와 고유 본문 제목이 일치하는 제한 범위에서 후보 확인→선택 숫자 갱신→기존 보고서 적용 연결 | 원형 자동 의미 추출·목차 문구/표·필드 재생성 미완료. 실제 대표017/025는 신규 후보0이며 전체 지원 아님. 신규 연결은 서버 미반영 |
 | 구조형 챕터 이동 | CF187 코드 없는 고유 제목 이동 누락을 실제 React에서 FAIL 재현→공유 제목 접두어 규칙과 정확 제목 fallback으로 수정.1440/390px 키보드·캐럿·편집기 스크롤·JSON/change 불변 PASS | 로컬 검증본/서버 미반영. 중복·부분 제목/표 내부/원형 쪽 이미지는 추정 연결 금지. 실제 서비스 선택 메뉴·자동저장 전구간 검증과 별개 |
 | 원형 쪽 탐색 | 원본17쪽 편집·출력 동시 이동의 과거 실제 Chrome 결과 유지. CF188 같은17쪽 다른 원형에서9쪽 선택 잔류 FAIL→초기화 수정; 확인된 챕터 이동·오래된 출력URL/미완료 이미지/이전 원본 지문 차단 PASS | 신규 검사는 localhost 합성 원고/실제 React 경로. 원형 목차 재생성·실제 서버 저장 왕복과 별개 |
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
@@ -31,6 +31,19 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF190 — 제한된 원형 목차 숫자 갱신 및 중복 적용·문서/권한 경합 보호
+
+- 시작 HEAD `8737a57a766868de9107ddf07a32f6ec78a91190`, 기존 recovery/`feat/CF123-es-v2`. 기존 사용자 삭제22는 보존하고 총괄만6파일을 변경했다. 세 전문의 읽기 검토에서 인쇄번호 u16 범위·입력 실제형식·숫자 실제쪽·TAB XML 보존·저장 실패 재적용·권한 callback 제거 경계를 발견하고 보완했다. 신규 외부 API/SDK 협상/`_request`/DEV 명령/엔진 수정0.
+- 기존 `preserveAppliedSource && onApplyPages` 보고서 편집기에만 `원형 목차 쪽번호 갱신`을 연결했다. 사용자가 표지 포함 물리 목차 쪽(예:2-4,6)을 지정하고, 점선·TAB 뒤 십진 숫자 + 목차 밖 고유한 본문 문단의 정확한 제목을 확인한 후보만 제시한다. CH 코드 제거·부분 제목·의미/OCR 추정 연결0. 후보는 기본 미선택이며 인쇄 아라비아 숫자/앞의0 표시 확인을 별도로 요구한다. 표 안/필드/로마·한글 번호/다단 등 미확인 구성과 제목 변경·항목 추가·자동 전체 목차 생성은 지원 완료로 표시하지 않는다.
+- 현재 iframe의 공개 같은형식 export와 기존 exact 전체 SVG baseline 검증 뒤, 그 바이트 SHA·문단 SHA·Unicode scalar 숫자 offset·oldText·charshape·원본 물리 숫자쪽/줄·본문 anchor SHA/물리쪽/실제 인쇄 pageNumber를 묶는다. pageIndex는 구역 local이므로 global 물리쪽과 같다고 보지 않는다. pageNumber1..65535만, 원래 format은 승인 엔진 getSourceFormat으로 일치 확인한다. 이미 같은 숫자는 원본 bytes 그대로/변경0. private copy의 숫자만 replace하고 charshape를 원래 ID로 복구한다.
+- 숫자 밖 전 glyph x/y/style, 모든 비텍스트 SVG SHA, 문단 속성/컨트롤/필드 사슬, HWPX entry 집합·비대상 XML·BinData/폰트/header를 보존한다. target hp:t의 텍스트만 마스킹하고 TAB 요소/속성은 비교에서 남긴다. 숫자는 기존 물리쪽·같은 줄(y/h)에 있어야 한다. 승인된 같은형식 export loss0→재열기→두번째 같은형식 재저장·재열기까지 대조하며 배치/서식 변경은 적용 전에 거부한다. Preview/PrvText·PrvImage만 파생 결과로 분리한다.
+- 후보 확인 중 iframe inert + 가져오기/다운로드/일반적용 잠금. 즉시 operationRef와 generation/editor/source/original identity 및 최신 canApply/report/applyDisabled를 async 전후·callback 직전에 확인한다. 숫자 candidate에서 생성한 동일 pages/file을 기존 onApplyPages에 한 번만 넘긴다. handoff 시작 즉시 ref로 소비 처리해 callback 실패 이후 같은 파일/숫자를 재적용하지 않는다. 편집기를 닫고 기존 보고서 저장 상태 확인·저장 재시도로 안내하며 이전 iframe을 다시 적용할 수 있게 풀지 않는다. 제안서 일반 안내/승인 규칙은 유지한다.
+- 최종 관련 **46/46 PASS**: CF190 native7 + actual SDK GUI1 + 기존 CF148 native11/CF1085/CF146 contract5/CF148 source3/CF188 unit7/CF149 GUI1/CF188 route GUI1 =41, 별도 원본 gate contract5. root/web tsc exit0, diffcheck PASS. CF190은 실제 승인 WASM/binding/Studio/SDK0.8.4/React를 localhost에서 사용했지만 합성 문서와 메모리 callback이며 실제 D1·Drive·보고서 save ACK 검증은 아니다. 9→23(본문 물리2/인쇄23), 009→023, max65535, noop bytes exact, 반대 format·잘못된 SHA/scalar/쪽·중복·TAB 변조·field·다른 글자/번호/줄 변경 거부를 포함한다. GUI는 취소0·동시 클릭 callback1·실제 렌더된 source 교체/권한 제거 후 늦은 적용0·부분 handoff 실패 뒤 재업로드0·제안서 패널0·1440/390px 조작44px/가로넘침0·pageerror0을 검사했다. 늦은 props 검사는 fixture flushSync로 변경이 실제 반영된 뒤를 구분했으며 배치만 요청된 상태를 제품 결함으로 단정하지 않았다.
+- 실제 원본 지문32개 대조 후 대표017(HWPX47쪽)/025(HWP45쪽)의1~4물리쪽을 읽기 검사했다. 처음은 페이지 없는 빈 문단의 getPageOfPosition에서 실패→빈 문단을 제목/목차 후보에서 제외하는 최소 수정→두 파일 모두 READ_ONLY_INSPECTION 및 원본 SHA 불변. **017 후보0/일치0/확인제외10,025 후보0/일치0/확인제외0**: 실제 원형 목차 갱신·한컴 동일성 합격으로 집계하지 않는다. UI의 후보 없음 안내도 전체 목차 일치 판정이 아니라고 명시했다.
+- `E:\Codex-QA\claim-center-cf190-20261007\dist` production build43파일/37,652,448B. main `index-3sH_p5Rw.js` SHA `570f52de5e6d40ca980e49f89ecba3f5c1f4d4064a72c1956d08aa5400da7352`, CSS `index-CSDBEKmI.css`. 승인 runtime28 전SHA exact(+manifest1), 기존 WASM/binding 불변, CF186 diagnostic 미포함. 동일 E의 desktop/mobile 목차 합성 화면 육안 확인. Vite 기존 큰 chunk 경고는 유지한다. C 여유27GB 확인/추가 정리0, 기존 E 빌드/원본 덮어쓰기0.
+- CC6 v5의 두 검수표식·3출력은 재편집/저장/다운로드하지 않았다. CC4/CC5/고객 원고·원본 업로드·직원 검토/승인/배정·DB/migration/ENV/API key·development/가오픈 변경0. Docker 기동 및 CF186~188 특정3커밋 외부 전송 승인 질문은 답변 대기라 우회하지 않았다. 이번 CF189/190까지 전송 범위를 자동 확대하지 않는다.
+- 다음: 실제 원형의 표/필드/번호제목 등 남은 목차 형식을 명확히 분류하고 서식보존 지원·PC 한컴 대조, CF186 정식 Docker build/독립 pin 승인, 검토2.xlsx·제안서4~12·A–Z 잔여. 이후 승인된 development 반영/실화면 검수→동일 artifact 가오픈 승격/양서버 대조→직원 영상. 전체 완료/완성률/완료시각을 단정하지 않는다.
 
 ### CF189 — 원형 중복 표지·목차 및 작업 목차의 잘못된 자동 반영 보호
 
