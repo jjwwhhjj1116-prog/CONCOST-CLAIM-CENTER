@@ -5,8 +5,13 @@ export interface ReportTitleChange { chapterCode: string; previousTitle: string;
 const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const plain = (node: JSONContent): string => node.text ?? node.content?.map(plain).join('') ?? '';
 
+export function reportChapterPrefix(text: string, chapterCode: string): string | undefined {
+  if (!chapterCode.trim()) return undefined;
+  return text.match(new RegExp(`^(\\s*${escapePattern(chapterCode)}(?:[\\s.:·–—-]+|$))`, 'iu'))?.[0];
+}
+
 function replacement(text: string, change: ReportTitleChange): string | null {
-  const prefix = text.match(new RegExp(`^(\\s*${escapePattern(change.chapterCode)}(?:[\\s.:·–—-]+|$))`, 'iu'))?.[0];
+  const prefix = reportChapterPrefix(text, change.chapterCode);
   if (prefix !== undefined) return `${prefix.trimEnd()}${/\s$/u.test(prefix) || prefix === change.chapterCode ? ' ' : ''}${change.title}`;
   // Whole-document imports may omit chapter codes. Only unique exact titles qualify.
   return text.trim() === change.previousTitle.trim() ? change.title : null;

@@ -1,13 +1,14 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF186, 2026-10-07
+## 현재 판정 — CF187, 2026-10-07
 
-아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186 엔진 후보와 CF187 챕터 이동 수정은 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
 | 연결·배포 | 지정 단신 Chrome 로그인, 원 Git 이력 정상 push, development 최신 소스·승인 runtime28/28 일치 | 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
 | 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내 | 원형 HWP의 의미별 챕터 매핑·자동 목차 갱신 미완료 |
+| 구조형 챕터 이동 | CF187 코드 없는 고유 제목 이동 누락을 실제 React에서 FAIL 재현→공유 제목 접두어 규칙과 정확 제목 fallback으로 수정.1440/390px 키보드·캐럿·편집기 스크롤·JSON/change 불변 PASS | 로컬 검증본/서버 미반영. 중복·부분 제목/표 내부/원형 쪽 이미지는 추정 연결 금지. 실제 서비스 선택 메뉴·자동저장 전구간 검증과 별개 |
 | 원형 쪽 탐색 | 원본17쪽 선택, 편집·출력 미리보기 동시 이동 구현. 실제 단신 Chrome 9→17→1쪽 PASS, JSON·저장 이력 추가 변경0 | 원형 HWP 내부 의미별 챕터 이동·목차 자동 갱신과 별개 |
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
@@ -30,6 +31,27 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF187 — 코드 없는 본문 제목 이동 보완·완료/승격 차단 조건 구분
+
+- 시작 HEAD `d02592d629205625f67db7e51ed57f1c303fb4d1`, branch `feat/CF123-es-v2`, 동일 recovery repo/AGENTS/기존 감사·보호 인수인계 대조. 총괄만 수정하고 세 전문이 현재 브라우저/확정 코드 누락/승격 기준을 읽기 검토했다. ponytail 최소 변경과 UI hardening 지침에 따라 기존 화면·서식·본문·저장 구조를 보존하고 실제 이동 동작만 보완한다. ES 전용 PRODUCT/DESIGN의 색·출력 기준은 보고서 화면에 가져오지 않았다.
+- 실제 누락: `goToChapter`가 CH 숫자 코드만 찾아 일반 전체문서의 `공사비 산정` 같은 코드 없는 정상 heading을 놓쳤다. 기존 제목 동기화는 고유 exact 제목을 이미 지원한다. 신규 CF149 실제 React/키보드 검사에서 수정 전 해당 `false !== true`로 FAIL, 다른 기존 검사 조건은 유지했다.
+- 수정: report-outline-sync의 기존 escaped 접두어 정규식을 `reportChapterPrefix`로 공유하고, `goToChapter(code,title?)`의 top-level heading에만 고유 정확 제목 fallback을 추가했다. 현재 목차 제목 `outlineTitles[id] ?? chapter.title`을 호출부에서 전달한다. CH 코드 우선·기존 숨긴 코드 다음 실제 제목 위치 보존, CH-02≠CH-020, 다른 명시 CH/빈 코드/중복·부분 제목/표 안 heading/원형 이미지는 거부한다. 실패 시 preview/focus 변경 전 반환, 본문·금액·원형 지문·저장 형식·권한 변경0.
+- 실행: CF108/CF149 합계6/6 PASS(큰 실제 브라우저 검사1개와 단위/계약5개를 업무6건으로 합산하지 않음). 1440/390px에서 키보드 Enter→고유 제목 캐럿/포커스/뷰포트 이동·JSON/onChange 불변, 중복/부분/문단·표/원형 이미지 실패, explicit CH 우선 확인. 초기 수정 후 검사에서는 숨긴 CH 코드가 포함된 DOM을 exact 표시 텍스트로 찾는 선택자 때문에 timeout했으므로 raw DOM/캐럿 확인으로 정정; 이동·문서 보존 기준 완화0. root/web 전체 tsc exit0. 실제 서비스 chapter 선택+autosave 전체 흐름은 이번 localhost 결과와 구분한다.
+- 새 웹 빌드 `E:\Codex-QA\claim-center-cf187-20261007\dist` PASS,43파일. main `/assets/index-t0YUVygM.js` SHA `e4069d320b04405adc178ede405e286be36629bfffcbd543ace709575e061ed1`, CSS8yhsWmje 유지. approved snapshot staging28/전파일SHA PASS, WASMbcc40a79... 그대로. **CF186 diagnostic 엔진은 이 빌드에 포함하지 않는다.** 프로세스 TEMP/TMP/cache를 새 E 폴더에 두었으며 기존 C/E 빌드 덮어쓰기·추가 정리0. 기존 큰 bundle 경고는 유지한다.
+- 지정 단신 extension UUIDd9cb0cc6-3a2f-4c07-862e-d6441bda9044/browser2/tab839124063 기존 development CC6을 읽기만 확인: CF185 moduleBRkdxuoG·로그인UI·단계4·저장2026-10-06 13:11:19·편집17/17+visible출력17/17 complete·미저장/로딩/alert/포착consoleerror0. 서버 재인증은 미검증. 새탭/reload/click/입력/저장/다운로드0, CC6 v5 두 표식/3파일 재검사 반복0. 사용자 삭제22 유지, 고객CC4/CC5·직원 배정/검토요청/가짜승인/납품/메일·DB/migration/키/ENV/가오픈 변경0.
+- 원형 의미별 챕터/자동 목차는 실제 미구현임을 확인했다. 승인 engine으로 원본017/025의 getOutlineNavigation 및 getStructure('outline') 각각0개. getStructure('auto')의99/29개는 번호 문장류이지 보고서 장이 아니다. SDK0.8.4에 의미별 이동·목차 재생성 RPC가 없고 setCaretPosition은 메타데이터 저장이다. 이 결과를 임의 장 매핑/자동 목차 합격으로 처리하지 않는다. 다음 원형 기능은 확인된 제목↔원본 쪽 연결과 원형 목차·쪽수·서식 보존 갱신을 별도 구현해야 한다.
+- Docker version은 기본/공식 승인 실행 모두 linux engine pipe 없음, Desktop/backend 프로세스도 이번 조회에서 발견되지 않았다. 이전 기동 성공/과거 컨테이너 빌드를 현재 준비 완료로 오인하지 않는다. 기존 GitHub push 자동 차단은 유지했고 우회0. 사용자에게 Docker 기동(초기화/삭제 없음) 및 CF186/187 코드·검수 기록의 기존 작업 브랜치 push 승인을 요청했다. 승인 전 기동·전송 재시도0.
+- 가오픈 즉시 배포 가능 상태가 아니다. 남은 실제 구현과 미검증/외부 대기를 아래처럼 분리하며, 근거 없는 전체 완성률/완료 날짜를 발표하지 않는다. 이미 검증한 CC6를 반복해 업무 완료 수를 늘리지 않는다.
+
+| 승격 전에 필요한 범위 | 상태 | 다음 확인/조치 |
+|---|---|---|
+| CF186 엔진 | 진단 수정·원본 내부 안정성 PASS, 정식 runtime 미승격 | Docker 표준 최적화 빌드→Studio/native 동일 WASM→독립 provenance/지문 승인→staging/smoke pin 갱신 |
+| 원형 의미별 이동·자동 목차 | 실제 미구현, 원형 수동 편집/쪽 이동과 별개 | 확인된 챕터↔쪽 연결·원형 목차 식별·쪽수/서식 보존 갱신 구현·검사 |
+| 원형/Word·제안서4~12·검토2.xlsx·A–Z | 기존 일부 증명/전체 실물·전구간 미검증 | 확정 결함과 검사 미실행을 분리한 기존 카테고리 체크리스트 완료; 현장조사 회의록 개편 HOLD 유지 |
+| 가오픈 환경·DB | 최신 현재 상태 미대조 | 현재 migration/settings 대조; 구조 변경 필요 시 해당 DB의 최신 서명백업·격리 복원·실제 runner 리허설 |
+| 동일 산출물·키 정합 | 후보 local/GitHub 미전송, secret 값 동일성 미증명 | 전송 승인 후 정상 push; 검증된 동일 dist 승격·양 서버 asset/runtime SHA 대조. secret 이름/존재를 값 동일성으로 주장하지 않음 |
+| 최종 업무/영상 | 전체 업무 합격·가이드 영상 미완료 | 관리자 기본 기술 QA와 독립 최종승인 규칙 분리 유지; 전체 합격 후 직원 가이드 제작 |
 
 ### CF186 — 저장 HWPX Square 표 뒤 간격 수정 후보·실제 원본 회귀
 

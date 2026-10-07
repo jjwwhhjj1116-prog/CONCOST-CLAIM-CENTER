@@ -8,7 +8,7 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
   const { createServer } = await import('../apps/web/qa/vite-server.js');
   let saved = 'null';
   const presentationPath = resolve('packages/document-engine/src/report-presentation.ts').replace(/\\/g,'/');
-  const server = await createServer({ root:resolve('apps/web'), server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{
+  const server = await createServer({ root:resolve('apps/web'), ...(process.env.CF149_CACHE_ROOT ? {cacheDir:process.env.CF149_CACHE_ROOT} : {}), server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{
     name:'report-editing-fixture',
     configureServer(server){server.middlewares.use(async(req,res,next)=>{
       if(/^\/page-\d+\.svg$/u.test(req.url??'')){res.setHeader('Content-Type','image/svg+xml');res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="794" height="1123"><rect width="794" height="1123" fill="white"/><text x="80" y="180">${req.url}</text></svg>`);return;}
@@ -33,10 +33,12 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
         globalThis.cf149Editing={use:async(next,bound=false)=>{const native={caseId:'40000000-0000-4000-8000-000000000010',evidenceId:'40000000-0000-4000-8000-000000000012',downloadUrl:'/api/cases/evidence/40000000-0000-4000-8000-000000000012/download',name:'synthetic-native-reference.hwp',sha256:'0'.repeat(64),byteSize:5};const doc={...parseStructuredDocumentMarkdown(next),attrs:{reportNativeSource:native}};if(bound){native.bindingVersion=1;native.originalSource={...native,evidenceId:'40000000-0000-4000-8000-000000000013',downloadUrl:'/api/cases/evidence/40000000-0000-4000-8000-000000000013/download',name:'synthetic-first-original.hwp',sha256:'1'.repeat(64)};native.bodySha256=await reportNativeBodySha256(joinReportPresentation(doc,{enabled:false,text:null},{enabled:false}));}setContent(next);setJson(doc);setFront({enabled:false});},get:()=>({json,changes:changes.current}),actual:()=>ref.current.getJSON(),insertTemporary:()=>ref.current.insertHtml('<p>CF180 임시 검수 문단</p>'),binding:async(actual=true)=>{const doc=joinReportPresentation(actual?ref.current.getJSON():json,{enabled:false,text:null},front);try{await readBoundReportNativeSource(doc,'40000000-0000-4000-8000-000000000010');return{valid:true,document:doc};}catch(error){return{valid:false,error:error.message,document:doc};}}};
         useEffect(()=>{fetch('/draft').then(r=>r.json()).then(saved=>{if(saved){setTitle(saved.title);setContent(saved.content);const p=splitReportPresentation(saved.json);setJson(p.body);setFront(p.frontMatter);}setReady(true);});},[]);
         globalThis.cf149Editing.useOrdinary=(next)=>{setContent(next);setJson(parseStructuredDocumentMarkdown(next));};
+        globalThis.cf149Editing.jump=(code,title)=>ref.current.goToChapter(code,title);
         globalThis.cf149Editing.remount=(key)=>setDocumentKey(key);
         if(!ready)return null;
         return React.createElement(React.Fragment,null,
           React.createElement('button',{onClick:()=>ref.current.goToChapter('CH-02')},'산정으로 이동'),
+          React.createElement('button',{onClick:()=>{globalThis.cf187Jump=ref.current.goToChapter('CH-02','공사비 산정');}},'제목으로 산정 이동'),
           React.createElement('button',{onClick:async()=>{await fetch('/draft',{method:'PUT',body:JSON.stringify({title,content,json:joinReportPresentation(json,{enabled:false,text:null},front)})});document.querySelector('#saved').textContent='저장 완료';}},'저장'),React.createElement('span',{id:'saved'}),
           React.createElement(StructuredDocumentEditor,{ref,documentKey,reportMode:true,label:'시험 보고서 편집',value:content,editorJson:json,onChange:(text,doc)=>{changes.current++;setContent(text);setJson(doc);},
             beforeContent:React.createElement(ReportFrontMatterEditor,{title,caseTitle:'사건명',html:renderStructuredDocumentHtml(json),value:front,disabled:false,onTitle:setTitle,onChange:setFront,onEditNative:()=>{globalThis.cf149NativeOpened=(globalThis.cf149NativeOpened??0)+1;}}),
@@ -97,6 +99,7 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     await page.locator('[data-export-page]').nth(16).waitFor();
     const nativeBefore=await page.evaluate(()=>(globalThis as any).cf149Editing.get());
     const actualNativeBefore=await page.evaluate(()=>(globalThis as any).cf149Editing.actual());
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jump('CH-02','공사비 산정')),false,'Source-page images must not acquire guessed chapter mappings');
     assert.deepEqual(actualNativeBefore,nativeBefore.json,'The real Tiptap document must match the imported body, not silently append invisible paragraphs');
     assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true,'The original native binding must also validate against actual ref.getJSON()');
     const sourcePageNavigation=page.getByRole('combobox',{name:'원형 보고서 쪽 이동',exact:true});
@@ -253,6 +256,40 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
       assert.equal(await printedTables.count(), 1, 'A small merged table must print once; exclude the non-export measurement tree');
       assert.deepEqual(await printedTables.locator('tr').evaluateAll(rows=>rows.map(row=>[...row.querySelectorAll(':scope > th, :scope > td')].map(cell=>(cell as HTMLElement).dataset.cellHorizontalAlign))), expected, 'Print preview must keep the same merged-table alignment');
     }
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:1000});
+      await page.evaluate(()=>(globalThis as any).cf149Editing.useOrdinary('# 앞부분\n\n'+Array(25).fill('보존할 본문과 금액 123,456원.').join('\n\n')+'\n\n# 공사비 산정\n\n근거 문장 보존.'));
+      await page.locator('.tiptap h1').getByText('공사비 산정',{exact:true}).waitFor();
+      const beforeJump=await page.evaluate(()=>(globalThis as any).cf149Editing.get());
+      const beforeJson=await page.evaluate(()=>(globalThis as any).cf149Editing.actual());
+      await page.getByRole('button',{name:'제목으로 산정 이동',exact:true}).focus();
+      await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(()=>(globalThis as any).cf187Jump),true,'A unique exact title without CH code must support keyboard chapter navigation');
+      await page.waitForFunction(()=>{
+        const editor=document.querySelector('.tiptap'),heading=editor?.querySelector('h1:last-of-type'),pane=editor?.closest('.document-review-pages__side');
+        const anchor=window.getSelection()?.anchorNode?.parentElement?.closest('h1');
+        return heading&&pane&&anchor===heading&&document.activeElement===editor&&heading.getBoundingClientRect().top>=pane.getBoundingClientRect().top&&heading.getBoundingClientRect().top<pane.getBoundingClientRect().bottom;
+      });
+      assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),beforeJson,'Moving to a title cannot rewrite the manuscript');
+      assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),beforeJump,'Moving to a title cannot emit a save/change');
+    }
+    for (const html of [
+      '<h1>공사비 산정</h1><p>첫 본문</p><h1>공사비 산정</h1><p>둘째 본문</p>',
+      '<h1>공사비 산정 검토</h1><p>부분 일치 제목은 제외</p>',
+      '<p>공사비 산정</p><table><tr><td><h1>공사비 산정</h1></td></tr></table>'
+    ]) {
+      await page.evaluate(value=>(globalThis as any).cf149Editing.useOrdinary(value),html);
+      await page.waitForFunction(value=>document.querySelector('.tiptap')?.textContent===value,html.includes('첫 본문')?'공사비 산정첫 본문공사비 산정둘째 본문':html.includes('부분 일치')?'공사비 산정 검토부분 일치 제목은 제외':'공사비 산정공사비 산정');
+      const beforeJump=await page.evaluate(()=>(globalThis as any).cf149Editing.get());
+      const beforeJson=await page.evaluate(()=>(globalThis as any).cf149Editing.actual());
+      assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jump('CH-02','공사비 산정')),false,'Ambiguous, partial, paragraph-only and table-only titles must not guess a chapter');
+      assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),beforeJson);
+      assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),beforeJump);
+    }
+    await page.evaluate(()=>(globalThis as any).cf149Editing.useOrdinary('<h1>공사비 산정</h1><h1>CH-02 계약 분석</h1><p>코드로 식별한 본문</p><h1>공사비 산정</h1>'));
+    await page.waitForFunction(()=>[...document.querySelectorAll('.tiptap h1')].some(heading=>heading.textContent==='CH-02 계약 분석'));
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jump('CH-02','공사비 산정')),true,'An explicit chapter code takes priority over ambiguous title candidates');
+    await page.waitForFunction(()=>window.getSelection()?.anchorNode?.parentElement?.closest('h1')?.textContent==='CH-02 계약 분석');
     assert.deepEqual(errors,[]);
   }finally{await browser.close();await server.close();}
 });

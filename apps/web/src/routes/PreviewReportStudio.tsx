@@ -584,7 +584,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const changeSelectedChapter = (chapterId: string) => {
     const chapter = authoring?.chapters.find(item => item.id === chapterId);
     if (chapter) {
-      const moved = reportBodyRef.current?.goToChapter(chapter.chapterCode);
+      const moved = reportBodyRef.current?.goToChapter(chapter.chapterCode, outlineTitles[chapter.id] ?? chapter.title);
       if (moved === false && activeStep === 4) setOutlineSyncNotice(CHAPTER_JUMP_NOTICE);
       if (moved === true) setOutlineSyncNotice((current) => current === CHAPTER_JUMP_NOTICE ? '' : current);
     }

@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { renameStructuredReportTitles } from '../apps/web/src/reports/report-outline-sync';
+import { renameStructuredReportTitles, reportChapterPrefix } from '../apps/web/src/reports/report-outline-sync';
 import { reportJson } from './fixtures/cf108-report';
 import type { JSONContent } from '@tiptap/core';
 const change = { chapterCode: 'CH-01', previousTitle: '검토결론 요약', title: '검수한 결론 및 권고' };
 const text = (node: JSONContent): string => node.text ?? node.content?.map(text).join('') ?? '';
+
+test('CF187 chapter navigation and title edits share exact escaped prefix boundaries', () => {
+  assert.equal(reportChapterPrefix('CH-02 공사비 산정', 'CH-02'), 'CH-02 ');
+  assert.equal(reportChapterPrefix('ch-02:공사비 산정', 'CH-02'), 'ch-02:');
+  assert.equal(reportChapterPrefix('CH-02—공사비 산정', 'CH-02'), 'CH-02—');
+  assert.equal(reportChapterPrefix('CH-02', 'CH-02'), 'CH-02');
+  assert.equal(reportChapterPrefix('CH-020 다른 코드', 'CH-02'), undefined);
+  assert.equal(reportChapterPrefix('CH-02suffix 다른 코드', 'CH-02'), undefined);
+  assert.equal(reportChapterPrefix('A.B 제목', 'A.B'), 'A.B ');
+  assert.equal(reportChapterPrefix('AxB 제목', 'A.B'), undefined);
+  assert.equal(reportChapterPrefix('공사비 산정', ''), undefined);
+  const source = readFileSync('apps/web/src/routes/PreviewReportStudio.tsx', 'utf8');
+  assert.ok(source.includes('goToChapter(chapter.chapterCode, outlineTitles[chapter.id] ?? chapter.title)'));
+});
 
 test('CF108 changes only the matched heading and preserves reviewed body, table, image and markers', () => {
   const original = JSON.stringify(reportJson);

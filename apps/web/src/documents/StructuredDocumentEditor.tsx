@@ -1,6 +1,7 @@
 import { HocuspocusProvider, WebSocketStatus, type StatesArray } from '@hocuspocus/provider';
 import { syncReportNativeSource } from './report-native-source';
 import { ReportChapterDecoration } from './report-chapter-decoration';
+import { reportChapterPrefix } from '../reports/report-outline-sync';
 import { prepareReportPrint } from './report-print-structure';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
@@ -50,7 +51,7 @@ export interface StructuredSelectionAssistant {
 }
 
 export interface StructuredDocumentEditorHandle {
-  goToChapter: (code: string) => boolean;
+  goToChapter: (code: string, title?: string) => boolean;
   focus: () => void;
   getJSON: () => JSONContent | null;
   getMarkdown: () => string;
@@ -1010,15 +1011,25 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   };
 
   useImperativeHandle(ref, () => ({
-    goToChapter: (code) => {
-      if (!editor) return false;
+    goToChapter: (code, title) => {
+      if (!editor || !code.trim()) return false;
       let target = -1;
+      let titleTarget = -1, titleMatches = 0;
+      const exactTitle = title?.trim();
       editor.state.doc.forEach((node, pos, index) => {
-        const prefix = /^\s*(CH-\d+)\s*[:.·-]?\s+/u.exec(node.textContent);
-        if (target >= 0 || node.type.name !== 'heading' || prefix?.[1] !== code) return;
+        if (node.type.name !== 'heading') return;
+        const prefix = reportChapterPrefix(node.textContent, code);
+        if (prefix === undefined) {
+          if (exactTitle && node.textContent.trim() === exactTitle && !/^\s*CH-\d+(?=[\s.:·–—-]|$)/iu.test(node.textContent)) {
+            titleMatches++; titleTarget = pos + 1;
+          }
+          return;
+        }
+        if (target >= 0) return;
         const next = index + 1 < editor.state.doc.childCount ? editor.state.doc.child(index + 1) : null;
-        target = next?.type.name === 'heading' && next.textContent.trim() === node.textContent.slice(prefix[0].length).trim() ? pos + node.nodeSize + 1 : pos + 1 + prefix[0].length;
+        target = next?.type.name === 'heading' && next.textContent.trim() === node.textContent.slice(prefix.length).trim() ? pos + node.nodeSize + 1 : pos + 1 + prefix.length;
       });
+      if (target < 0 && titleMatches === 1) target = titleTarget;
       if (target < 0) return false;
       setPreview(false);
       editor.chain().focus().setTextSelection(target).scrollIntoView().run();
