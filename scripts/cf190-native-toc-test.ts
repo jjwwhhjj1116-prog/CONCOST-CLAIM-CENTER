@@ -183,3 +183,29 @@ test('CF192 serialized heading-cell controls cannot be hidden by an incomplete n
   await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,'hwpx',before,[entry],HiddenSerializedControl as unknown as NativeHwpEngine),/CELL_ANCHOR/u);
   const inspection=await inspectNativeTocNumbers(bytes,'hwpx',[1],HiddenSerializedControl as unknown as NativeHwpEngine);assert.equal(inspection.candidates.length,0);assert.equal(inspection.excluded[0].reason,'STYLE_UNCONFIRMED');assert.equal(hash(bytes),before);
 });
+
+test('CF193 leading native PageHide is preserved while only the literal TOC numeral changes',async()=>{
+  for(const format of ['hwp','hwpx'] as const){
+    const seed=await fixture(format),doc=new seed.Engine(seed.bytes);let bytes:Uint8Array;
+    try{
+      assert.ok(JSON.parse(doc.setPageHide(0,1,false,false,false,false,false,true)).ok);
+      const trailing=new Uint8Array(format==='hwp'?doc.exportHwp():doc.exportHwpx());assert.equal((await inspectNativeTocNumbers(trailing,format,[1],seed.Engine)).excluded[0].reason,'TARGET_CONTROL','A non-leading PageHide remains unsupported');
+      const archive=unzipSync(doc.exportHwpx()),xml=strFromU8(archive['Contents/section0.xml']),control=xml.match(/<hp:ctrl><hp:pageHiding\b[^>]*\/><\/hp:ctrl>/u)?.[0];assert.ok(control);
+      assert.equal((xml.match(/<hp:t>😀 대상 항목/gu)??[]).length,1);archive['Contents/section0.xml']=strToU8(xml.replace(control,'').replace(/(<hp:run\b[^>]*>)(<hp:t>😀 대상 항목)/u,(_match,run:string,text:string)=>run+control+text));
+      const leading=new seed.Engine(zipSync(archive));try{assert.deepEqual(JSON.parse(leading.getControlTextPositions(0,1)),[0]);bytes=new Uint8Array(format==='hwp'?leading.exportHwp():leading.exportHwpx());}finally{leading.free();}
+    }finally{doc.free();}
+    const before=hash(bytes),inspection=await inspectNativeTocNumbers(bytes,format,[1],seed.Engine);assert.equal(inspection.candidates.length,1);
+    class FalseLeadingArchive extends seed.Engine{exportHwpxWithReport(){const result=super.exportHwpxWithReport(),loss=result.contentLoss(),archive=unzipSync(result.takeBytes());result.free();const xml=strFromU8(archive['Contents/section0.xml']),control=xml.match(/<hp:ctrl><hp:pageHiding\b[^>]*\/><\/hp:ctrl>/u)?.[0];assert.ok(control);archive['Contents/section0.xml']=strToU8(xml.replace(control,'').replace(/(<hp:t>😀 대상 항목[\s\S]*?<\/hp:t>)/u,(_match,text:string)=>text+control));return {contentLoss:()=>loss,takeBytes:()=>zipSync(archive),free:()=>{}};}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,inspection.candidates,FalseLeadingArchive as unknown as NativeHwpEngine),/TARGET_CONTROL/u);
+    assert.equal((await inspectNativeTocNumbers(bytes,format,[1],FalseLeadingArchive as unknown as NativeHwpEngine)).excluded[0].reason,'TARGET_CONTROL');
+    class BadHideFlag extends seed.Engine{exportHwpxWithReport(){const result=super.exportHwpxWithReport(),loss=result.contentLoss(),archive=unzipSync(result.takeBytes());result.free();archive['Contents/section0.xml']=strToU8(strFromU8(archive['Contents/section0.xml']).replace('hidePageNum="1"','hidePageNum="2"'));return {contentLoss:()=>loss,takeBytes:()=>zipSync(archive),free:()=>{}};}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,inspection.candidates,BadHideFlag as unknown as NativeHwpEngine),/TARGET_CONTROL/u);
+    let flagMutationSucceeded=false,flagChainStayed=false,hideDeletionSucceeded=false;
+    class MutatedHide extends seed.Engine{setCharShapeId(...args:any[]){const result=super.setCharShapeId(...args),chain=hash(super.getControls());flagMutationSucceeded=JSON.parse(super.setPageHide(0,1,true,false,false,false,false,true)).ok===true;flagChainStayed=hash(super.getControls())===chain;return result;}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,inspection.candidates,MutatedHide as unknown as NativeHwpEngine),/원형 목차/u);assert.equal(flagMutationSucceeded,true);assert.equal(flagChainStayed,true,'The flag-only mutation must actually be invisible in the control query');
+    class DeletedHide extends seed.Engine{setCharShapeId(...args:any[]){const result=super.setCharShapeId(...args);hideDeletionSucceeded=JSON.parse(super.setPageHide(0,1,false,false,false,false,false,false)).ok===true;return result;}}
+    await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,format,before,inspection.candidates,DeletedHide as unknown as NativeHwpEngine),/원형 목차/u);assert.equal(hideDeletionSucceeded,true);
+    const result=await refreshConfirmedNativeTocNumbers(bytes,format,before,inspection.candidates,seed.Engine),left=new seed.Engine(bytes),right=new seed.Engine(result.bytes);
+    try{assert.equal(result.changes.length,1);assert.equal(result.changes[0].newText,'23');assert.deepEqual(JSON.parse(right.getControlTextPositions(0,1)),[0]);assert.equal(right.getControls(),left.getControls());assert.equal(right.getFieldList(),left.getFieldList());const hide=(binary:Uint8Array)=>strFromU8(unzipSync(binary)['Contents/section0.xml']).match(/<hp:ctrl><hp:pageHiding\b[^>]*\/><\/hp:ctrl>/u)?.[0];assert.ok(hide(left.exportHwpx()));assert.equal(hide(right.exportHwpx()),hide(left.exportHwpx()));assert.equal(hash(bytes),before);}finally{left.free();right.free();}
+  }
+});

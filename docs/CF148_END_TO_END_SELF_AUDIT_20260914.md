@@ -1,8 +1,8 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF192, 2026-10-07
+## 현재 판정 — CF193, 2026-10-07
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~192는 로컬 검증본으로 아직 미전송·미배포다. CF192는 목차 중복·셀 컨트롤 확인 누락과 편집기 실패 안내를 보완했으며, 관련53개+주변28개 검사가 통과했다. 원본16개의 제한된 목차 탐색은 실행16/원본불변16이며 표식 미확인6개·부분 확인9개를 전체 합격으로 계산하지 않는다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~193은 로컬 검증본으로 아직 미전송·미배포다. CF193은 실제011의 선두 페이지 감추기 설정을 보존하는 숫자 갱신과, 잠금 상태의 목차·본문 읽기 전용 대조를 지원한다. 관련55개+주변28개 검사가 통과했다. 원본16개의 제한된 목차 탐색은 실행16/원본불변16이며 표식 미확인6개·부분 확인9개를 전체 합격으로 계산하지 않는다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
@@ -31,6 +31,20 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF193 — 선두 페이지 감추기 목차 숫자 보존 및 읽기 전용 확인
+
+- 시작 HEAD `fea1f47d7f48ecffb2ffeef9f9bbe11a65e41631`, 동일 recovery/`feat/CF123-es-v2`. 세 전문 읽기 조사에서 실제011(HWPX364쪽/251구역)의 물리2쪽 s0p40/offset47/length2 `TARGET_CONTROL`은 목차 필드가 아니라 pos0의 단일 pghd(PageHide)였다. getControls root/globalPara40/controlIndex0/ctrlCh2/fields0, canonical6플래그는 hideHeader/Footer/MasterPage/Border/Fill0·hidePageNum1이다. 전체 제목 exact인 유일 본문 anchor는 s0parent179/control0의1행2열 literal 번호·제목 셀, 물리13쪽·인쇄11이라 원래 숫자10→11이 맞다. 다른 컨트롤을 일반 허용하지 않았다.
+- `literalTocTarget`을 검사·쓰기·매 저장/재열기의 공유 조건으로 사용한다. 기존 literal/control-free 또는 source/query 양쪽에서 증명한 단일 선두 PageHide만 허용: positions[0]/숫자offset>0/허용태그/ctrl1·pageHiding1/self-close/6개고유Boolean속성/ctrl앞t·tab·ctrl0/rootglobalpara와실제pghd1개/pos0/ctrlCh2/controlIndex0. globalpara는 앞구역 paragraphCount 합과 localpara를 더해 승인 소스 규칙과 일치시켰다. 숫자만 변경하고 fullcontrols/fields/문단서식/전체glyph/비텍스트·비대상XML·BinData/fonts/header 및 두sameformatreopen을 보호한다. getControls.props가{}이므로 플래그 보존은 XML exact로 별도 확인한다.
+- 새 합성 양성의 native setPageHide는 선두가 아니라 문단 끝에 추가하므로 초기 setup이 실패했다. 지원 조건을 넓히지 않고 canonical 메모리 fixture만 실제와 같은 선두로 옮겨 source/query[0]를 확인했다. 비선두는 음성으로 유지한다. query/glyph는 선두인데 직렬화XML만 뒤로 옮기는 FalseLeadingArchive, flag값2, 숫자수정 뒤 hideHeader0→1(실제 setter성공·chain SHA불변), PageHide삭제(실제 setter성공)를 거부한다. 변조 성공·사슬 불변 단언은 assert.rejects 밖에서 확인해 준비 실패를 PASS로 오인하지 않는다. 양형식 HWP/HWPX에서 통과.
+- 실제011 원본 파일 쓰기0·메모리 사본10→11→loss0/두reopen 후364쪽/251구역·control/fieldSHA·선두 위치 유지. 목차2쪽은 숫자 변경으로 SVG가 달라야 하고 나머지363쪽은 전부 원래 printSVG SHA exact를 단언했다. 최종 원본 파일SHA불변. actual017 privateclone 복원47쪽 exact/actual025 임의숫자목차 생성0도 관련검사에서 재통과했다. 이는 동일 파서 내부 검사이며 최초파싱누락·PC한컴 대조·실제 보고서 영구저장 증명으로 확대하지 않는다.
+- 기존 후보 잠금(inert) 때문에 본문 인쇄번호를 보려면 취소·재검사를 왕복하던 확인 동선을 보완했다. 검사한 같은 bytes의 검증 snapshot에서 후보의 목차/본문 쪽 SVG만 보관하고 읽기 전용 details·항목선택으로 보여준다. 이미지BlobURL은 교체/닫기 때 해제하고 JS/원형편집/새RPC를 열지 않는다. 선택한 모든 관련 쪽이 complete/naturalWidth·Height>0으로 로드되어야 확인 가능하다. 준비/실패 ref는 즉시 갱신하며 prepared객체/문서/권한 확인과 함께 engine await후·refresh await후·callback직전에 재검증한다. 실패·다시로딩·선택변경은 인쇄번호확인을 해제한다. 화면이 작으면 브라우저 기본 확대 기능으로 대조할 수 있지만, 이미지 내용만으로 PC한컴 동일성 합격을 주장하지 않는다.
+- actualSDK localhost GUI: 두proof 이미지SVG SHA가 실제 검사 source 두쪽과 exact, 미로드 확인 차단/선택변경 확인해제/iframe잠금·일반apply차단 유지. helper 첫await 중 imageerror 이벤트를 명시 주입해 callback0/확인해제/적용차단/안내·cancel 복구 및 모든생성SVG BlobURL해제 확인. 이 사건은 UI late-event 음성이며 실제 source파싱 오류가 아니다. 기존 취소/이중click/stale source/권한철회/부분handoff 재업로드 금지/manifest503·재열기/HWP3 호환성 유지. 독립검수에서 발견한 state-only late-error와 XML선두 위치 빈틈은 고친 뒤 음성으로 재검증했다.
+- 최종 관련 **83/83 PASS, skipped0**(native12+SDKGUI1+actualsource3+import1+기존관련33+gate5=55, 제안서/관리자QA주변28). 음성 준비단언 보강·보기 상단 캡처 이후 관련native12+GUI1 **13/13** 추가 재검증, root/webtsc exit0/diffcheck PASS. 사진/표 일반편집의 실제 SDK 셀 클릭→타이핑→Undo→적용·재열기는 이번 별도 수행하지 않았다. schema/원고 종이/최종 출력 템플릿/승인규칙 변경0.
+- 원본32 inventory 지문 전체 대조·native16/855쪽 제한survey 16DONE/16원본불변, marker10개검사/표식미확인6(counters null), 분류PARTIAL9/LIMITED_ALIGNED1 유지. 숫자행53=일치33+후보5(011)+numeric제외15, 별도번호없는41로제외56. 011만 TARGET_CONTROL1→확인후보1 추가(전체후보4→5); 나머지분류/행수/제외사유 유지. E193 `toc-survey-cf193.json` SHA `9ad7556db6e5717c499b53075da35f868ec8e31625afd2ce29379f6a57800f25`, helper SHA `72e6772743cab356bf6b1e44439d82a56f2ba059beb77301c9016621ac7c2020`. 각child source/id/format/size/impl/WASM/binding지문은parent와일치한다. 원본 실제 보고서 적용은0.
+- 전문QA는 첫8쪽의 실제 표 셀문단2160개를 읽었다. marker표8개는 물리2쪽의1×1표이고 숫자목차행이 아니다. 011p3/021p6의숫자 인접쌍은 일반6열표라 TOC로 추정하지 않는다. 012의초기주소10개오류는 isCell=false 글상자로 구분하고 실제 table399문단을 다시 조회했다. 해당범위의genuine셀숫자목차0은 문서전체에없다는판정이 아니다. 근거없는자동cell목차 생성0. 이 구간에서 필요한 것은 실제pghd보존이며 일반field/병합/nestedcell 쓰기 지원과 구분한다.
+- E `claim-center-cf193-20261007/dist`43파일/37,667,102B, main `index-vru2QYY8.js` SHA `543a7e07c5a34e58df229f2618a37389ac755e5b66b3f96f15b7f88bb81a2369`, CSS `index-BQo78xLw`; 승인runtime28자산exact(+manifest1), WASM/binding불변/CF186진단엔진0. 기존large chunk경고유지.1440/390 batched 확인 후캡처위치를corrective1회로확인(첫캡처는종이하단빈영역), 새확인pane가로넘침0/조작44px·정상이미지2 검증. 기존빌드·원본덮어쓰기0.
+- PC HWPFrame.HwpObject 및 .1은 Registry32/64 모두등록0. HKLM 양view 설치기록과HNC/Hancom 후보폴더에서도 정식 실행파일을 확인하지 못했다. 한컴이 전혀 없다고 단정하지 않고, 사용자의 Hwp.exe 경로/다른PC 설치 여부를 비차단 질문으로 요청했다. 앱기동/설치/등록·OS ACL·Docker기동0. 기존 CC6v5/3출력·CC4/CC5·직원요청/배정/승인·DB/migration/ENV/키·GitHub·development/가오픈 변경0. 현장회의록HOLD/업무최종승인·자기승인차단유지. 다음은 PC한컴 독립대조 연결과 실제 SDK 표셀 편집·저장, 원형field/목차문구 및 검토2·실업무A–Z잔여, CF186정식엔진승인 이후 동일artifact서버승격 순서다. 전체완료/완성률/시각단정금지.
 
 ### CF192 — 중복·셀 제어 보호, 오류 복구와 원본 목차 범위 대조
 

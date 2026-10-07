@@ -3,7 +3,8 @@ import type { NativeHwpDocument, NativeHwpEngine } from './editable-hwp-export';
 import { reportSourceSha256 } from './report-native-source';
 
 /** Offsets are the engine's Unicode-scalar indices, never JS UTF-16 indices.
- * Writes remain control-free body numerals only. A literal Roman/title 1x2
+ * Writes remain literal body numerals only; an exact leading PageHide can
+ * stay unchanged. A literal Roman/title 1x2
  * table can be a read-only body anchor, never a cell mutation target. */
 type CellPath = [{controlIndex:number;cellIndex:number;cellParaIndex:number}];
 type CellProof = {path:CellPath;length:number;sha256:string};
@@ -144,6 +145,21 @@ const outerElements = (xml: string,tag:'p'|'tbl'|'tc') => {
   check(depth === 0); return result;
 };
 const outerParagraphs=(xml:string)=>outerElements(xml,'p');
+const literalTocTarget=(doc:TocDocument,entry:{section:number;paragraph:number;offset:number},xml:string|undefined)=>{
+  if(!xml)return false;
+  const positions=JSON.parse(doc.getControlTextPositions(entry.section,entry.paragraph));if(!Array.isArray(positions))return false;
+  const tags=[...xml.matchAll(/<\/?hp:([A-Za-z][\w]*)\b/gu)].map(match=>match[1]),literal=['p','run','t','tab','linesegarray','lineseg'];
+  if(!positions.length)return tags.every(tag=>literal.includes(tag));
+  if(JSON.stringify(positions)!=='[0]'||entry.offset<=0||!tags.every(tag=>[...literal,'ctrl','pageHiding'].includes(tag)))return false;
+  const controls=[...xml.matchAll(/<hp:ctrl\b[^>]*>[\s\S]*?<\/hp:ctrl>/gu)],hiding=[...xml.matchAll(/<hp:pageHiding\b([^>]*)\/>/gu)];
+  if(controls.length!==1||hiding.length!==1||controls[0][0]!==`<hp:ctrl>${hiding[0][0]}</hp:ctrl>`)return false;
+  if(/<hp:(?:t|tab|ctrl)\b/u.test(xml.slice(0,controls[0].index)))return false; // Serialized content must also prove the leading position.
+  const attrs=[...hiding[0][1].matchAll(/([A-Za-z]+)="([01])"/gu)],names=['hideHeader','hideFooter','hideMasterPage','hideBorder','hideFill','hidePageNum'];
+  if(attrs.length!==6||new Set(attrs.map(attr=>attr[1])).size!==6||!attrs.every(attr=>names.includes(attr[1]))||hiding[0][1].replace(/([A-Za-z]+)="([01])"/gu,'').trim())return false;
+  const globalPara=entry.paragraph+Array.from({length:entry.section},(_,section)=>doc.getParagraphCount(section)).reduce((sum,count)=>sum+count,0),chain=JSON.parse(doc.getControls());
+  if(!Array.isArray(chain))return false;const local=chain.filter(control=>control.list===0&&control.para===globalPara);
+  return local.length===1&&local[0].ctrlId==='pghd'&&local[0].ctrlCh===2&&local[0].pos===0&&local[0].controlIndex===0;
+};
 const verifyLiteralCellXml=(doc:TocDocument,anchor:NativeTocAnchor,archive:Record<string,Uint8Array>)=>{
   const section=archive[`Contents/section${anchor.section}.xml`];check(section,'CELL_ANCHOR');
   const hosts=outerParagraphs(strFromU8(section));check(hosts.length===doc.getParagraphCount(anchor.section)&&hosts[anchor.paragraph],'CELL_ANCHOR');
@@ -195,12 +211,9 @@ export async function refreshConfirmedNativeTocNumbers(bytes: Uint8Array, format
       const end=entry.offset+entry.oldText.length,suffix=chars.slice(end).join('');
       check(end<=chars.length&&/^ *$/u.test(suffix)&&chars.slice(entry.offset,end).join('')===entry.oldText&&Number(entry.oldText).toString().padStart(entry.decimalDigits,'0')===entry.oldText);
       check(numberLocation(pages,entry,entry.oldText).page+1===entry.tocPhysicalPage,'NUMBER_LOCATION');
-      const positions = JSON.parse(doc.getControlTextPositions(entry.section, entry.paragraph)); check(Array.isArray(positions) && positions.length === 0);
       const sectionXml = strFromU8(beforeArchive[`Contents/section${entry.section}.xml`]), paragraphs = outerParagraphs(sectionXml);
       check(paragraphs.length === doc.getParagraphCount(entry.section) && paragraphs[entry.paragraph]);
-      // getFieldInfoAt only recognizes ClickHere. The serialized paragraph must
-      // also contain no fields/controls or unsupported inline elements.
-      check([...paragraphs[entry.paragraph].xml.matchAll(/<\/?hp:([A-Za-z][\w]*)\b/gu)].every(match => ['p','run','t','tab','linesegarray','lineseg'].includes(match[1])));
+      check(literalTocTarget(doc,entry,paragraphs[entry.paragraph].xml),'TARGET_CONTROL');
       const styles = shapes(doc, entry, chars.length), digitStyle = styles[entry.offset]; check(styles.slice(entry.offset,end).every(style => style === digitStyle));
       const printedPage = anchorPage(doc, entry, pages,beforeArchive), newText = String(printedPage).padStart(entry.decimalDigits, '0');
       targets.set(id,{offset:entry.offset,oldLength:entry.oldText.length,newText,expected:chars.slice(0,entry.offset).join('')+newText+suffix,styles:[...styles.slice(0,entry.offset),...Array(newText.length).fill(digitStyle),...styles.slice(end)],props:doc.getParaPropertiesAt(entry.section,entry.paragraph)});
@@ -216,6 +229,7 @@ export async function refreshConfirmedNativeTocNumbers(bytes: Uint8Array, format
       const currentPages = layout(current),currentArchive=unzipSync(exportBytes(current,'hwpx')); check(currentPages.length === pages.length && current.getControls() === controls && current.getFieldList() === fields);
       for (const entry of entries) {
         const target = targets.get(key(entry))!; check(paragraph(current, entry) === target.expected && JSON.stringify(shapes(current, entry, [...target.expected].length)) === JSON.stringify(target.styles) && current.getParaPropertiesAt(entry.section, entry.paragraph) === target.props);
+        check(literalTocTarget(current,entry,outerParagraphs(strFromU8(currentArchive[`Contents/section${entry.section}.xml`]))[entry.paragraph]?.xml),'TARGET_CONTROL');
         await verifyAnchorText(current,entry,currentPages,currentArchive);anchorPage(current,entry,currentPages,currentArchive);
         check(JSON.stringify(numberLocation(currentPages,entry,target.newText))===JSON.stringify(numberLocation(pages,entry,entry.oldText)),'NUMBER_LOCATION');
       }
@@ -306,9 +320,8 @@ export async function inspectNativeTocNumbers(bytes: Uint8Array, format: 'hwp'|'
       const anchor=anchors[0];if(anchor.unverified){exclude(row,'STYLE_UNCONFIRMED',match[1]);continue;}const info=JSON.parse(doc.getPageInfo(anchor.page-1));
       const targetXml=outerParagraphs(strFromU8(xml[`Contents/section${row.section}.xml`]))[row.paragraph]?.xml;
       if(!printedNumber(info.pageNumber)||info.sectionIndex!==anchor.section){exclude(row,'PAGE_UNCONFIRMED',match[1]);continue;}
-      const controls=JSON.parse(doc.getControlTextPositions(row.section,row.paragraph));
-      if(!targetXml||!Array.isArray(controls)||controls.length||![...targetXml.matchAll(/<\/?hp:([A-Za-z][\w]*)\b/gu)].every(tag=>['p','run','t','tab','linesegarray','lineseg'].includes(tag[1]))){exclude(row,'TARGET_CONTROL',match[1]);continue;}
       const digits=match[2],decimalDigits=digits.startsWith('0')?digits.length:1,offset=[...row.text].length-digits.length-match[3].length;
+      if(!literalTocTarget(doc,{...row,offset},targetXml)){exclude(row,'TARGET_CONTROL',match[1]);continue;}
       const candidate:NativeTocCandidate={section:row.section,paragraph:row.paragraph,offset,oldText:digits,decimalDigits,paragraphSha256:await shaText(row.text),title:normal(match[1]),tocPhysicalPage:row.page,newText:String(info.pageNumber).padStart(decimalDigits,'0'),anchor:{section:anchor.section,paragraph:anchor.paragraph,paragraphSha256:await shaText(anchor.text),physicalPage:anchor.page,printedPage:info.pageNumber,...(anchor.cells?{cells:anchor.cells}:{})}};
       try{await verifyAnchorText(doc,candidate,pages,xml);anchorPage(doc,candidate,pages,xml);candidate.tocPhysicalPage=numberLocation(pages,candidate,digits).page+1;check(selected.has(candidate.tocPhysicalPage));const style=shapes(doc,candidate,[...row.text].length);check(style.slice(offset,offset+digits.length).every(shape=>shape===style[offset]));}catch{exclude(row,'STYLE_UNCONFIRMED',match[1]);continue;}
       if(candidate.newText===digits) unchanged++; else candidates.push(candidate);

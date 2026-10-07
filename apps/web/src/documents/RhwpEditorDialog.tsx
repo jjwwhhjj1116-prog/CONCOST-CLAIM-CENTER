@@ -51,6 +51,13 @@ const textFromSvg = (svg: string): string => {
   return (document.documentElement.textContent ?? '').replace(/\s+/gu, ' ').trim();
 };
 const tocExcludedLabels:Record<NativeTocExcludedReason,string>={NO_PAGE_NUMBER:'지원하는 아라비아 쪽번호를 행 끝에서 확인하지 못했습니다.',TITLE_NOT_FOUND:'지원 범위에서 정확히 일치하는 본문 제목을 찾지 못했습니다.',TITLE_AMBIGUOUS:'같은 본문 제목이 여러 곳에 있어 연결하지 않았습니다.',TARGET_CONTROL:'목차 문단에 지원하지 않는 필드·컨트롤이 있습니다.',PAGE_UNCONFIRMED:'실제 인쇄번호나 본문 위치를 확인하지 못했습니다.',STYLE_UNCONFIRMED:'숫자·본문 위치나 서식 보존을 확인하지 못했습니다.'};
+function NativeTocProofImage({svg,label,onState}:{svg:string;label:string;onState:(state:'loading'|'ready'|'failed')=>void}){
+  const [image,setImage]=useState<{svg:string;url:string;failed:boolean}|null>(null);
+  const activeUrl=useRef<string|null>(null);
+  useEffect(()=>{const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'}));activeUrl.current=url;onState('loading');setImage({svg,url,failed:false});return()=>{activeUrl.current=null;URL.revokeObjectURL(url);};},[svg]);
+  const current=image?.svg===svg?image:null;
+  return <figure><figcaption>{label}</figcaption>{current?.failed?<p role="alert">쪽 이미지를 표시하지 못했습니다. 취소하고 원형에서 직접 확인한 뒤 다시 검사하세요.</p>:current?<img key={current.url} src={current.url} alt={`${label} · 숫자 갱신 전 원형`} onLoad={event=>{if(activeUrl.current===current.url&&event.currentTarget.complete&&event.currentTarget.naturalWidth>0&&event.currentTarget.naturalHeight>0)onState('ready');}} onError={()=>{if(activeUrl.current!==current.url)return;setImage(previous=>previous?.url===current.url?{...previous,failed:true}:previous);onState('failed');}}/>:<p role="status">확인할 쪽을 준비하고 있습니다…</p>}</figure>;
+}
 
 export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, preserveAppliedSource = false, applyDisabled = false, applyLabel = '현재 HWP 내용을 선택 챕터에 적용', applyProgress }: RhwpEditorDialogProps): React.ReactElement | null {
   const editorHostRef = useRef<HTMLDivElement>(null);
@@ -72,10 +79,13 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const [confirmClose, setConfirmClose] = useState(false);
   const [tocRange,setTocRange]=useState('');
   const [tocInspection,setTocInspection]=useState<Awaited<ReturnType<typeof inspectNativeTocNumbers>>|null>(null);
-  const [tocPreview,setTocPreview]=useState<(Awaited<ReturnType<typeof inspectNativeTocNumbers>> & {bytes:Uint8Array;format:ExportFormat;name:string;editor:RhwpEditor;generation:number;original:File|null;source:File|null|undefined})|null>(null);
+  const [tocPreview,setTocPreview]=useState<(Awaited<ReturnType<typeof inspectNativeTocNumbers>> & {bytes:Uint8Array;format:ExportFormat;name:string;editor:RhwpEditor;generation:number;original:File|null;source:File|null|undefined;proofPages:Record<number,string>})|null>(null);
   const [tocSelected,setTocSelected]=useState<number[]>([]);
   const [arabicConfirmed,setArabicConfirmed]=useState(false);
   const [tocHandedOff,setTocHandedOff]=useState(false);
+  const [tocProofOpen,setTocProofOpen]=useState(false),[tocProofIndex,setTocProofIndex]=useState(0),[tocProofFailed,setTocProofFailed]=useState(false);
+  const [tocProofLoaded,setTocProofLoaded]=useState<Record<number,boolean>>({}),tocProofLoadedRef=useRef<Record<number,boolean>>({}),tocProofFailedRef=useRef(false),tocPreviewRef=useRef(tocPreview);
+  tocPreviewRef.current=tocPreview;
   useEffect(() => { if (editorHostRef.current) editorHostRef.current.inert = busy || Boolean(tocPreview); }, [busy,tocPreview]);
   const studioUrl = (globalThis as typeof globalThis & { __CLAIM_CENTER_RHWP_STUDIO_URL__?: string }).__CLAIM_CENTER_RHWP_STUDIO_URL__?.trim();
 
@@ -92,6 +102,8 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setEditorReady(false);
     originalFileRef.current = null;
     tocHandedOffRef.current=false;setTocPreview(null);setTocInspection(null);setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);setTocRange('');setConfirmClose(false);
+    setTocProofOpen(false);setTocProofIndex(0);setTocProofFailed(false);
+    tocProofLoadedRef.current={};tocProofFailedRef.current=false;setTocProofLoaded({});
     setBusy(true);
     const options: EditorOptions = {
       width: '100%', height: '100%', renderer: 'canvas2d', requestTimeoutMs: 90_000
@@ -269,27 +281,37 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       const proposal=await inspectNativeTocNumbers(source.bytes,source.format,pages,source.Engine);requireCurrent(operation,true,true);
       setTocInspection(proposal);
       tocHandedOffRef.current=false;setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);
-      if(proposal.candidates.length){setTocPreview({...proposal,bytes:source.bytes,format:source.format,name:source.name,...operation});setStatus('변경할 항목을 직접 선택해 주세요. 확인하는 동안 원형 편집은 잠겨 있습니다.');}
+      setTocProofOpen(false);setTocProofIndex(0);setTocProofFailed(false);
+      tocProofLoadedRef.current={};tocProofFailedRef.current=false;setTocProofLoaded({});
+      if(proposal.candidates.length){const proofPages:Record<number,string>={};for(const page of new Set(proposal.candidates.flatMap(row=>[row.tocPhysicalPage,row.anchor.physicalPage]))){const svg=source.snapshot.pages[page-1];if(typeof svg!=='string'||!svg.includes('<svg'))throw new Error('확인할 원형 쪽을 준비하지 못했습니다. 기존 원본은 유지됩니다.');proofPages[page]=svg;}setTocPreview({...proposal,bytes:source.bytes,format:source.format,name:source.name,...operation,proofPages});setStatus('변경할 항목을 직접 선택해 주세요. 확인하는 동안 원형 편집은 잠겨 있습니다.');}
       else setStatus(`자동 확인 가능한 변경 후보가 없습니다. 일치 ${proposal.unchanged}건 · 자동 확인 제외 ${proposal.unsupported}건. 전체 목차의 일치 판정은 아니며, 나머지는 원형 편집기에서 직접 대조하세요.`);
     }catch(reason){if(current(operation)){setError(reason instanceof Error?reason.message:'목차를 확인하지 못했습니다. 쪽 범위를 확인하고 다시 시도하세요.');setStatus('');}}
     finally{endOperation(operation);}
   };
   const applyToc=async()=>{
-    const prepared=tocPreview;if(!prepared||tocHandedOffRef.current||!tocSelected.length||!arabicConfirmed||applyDisabled||!onApplyPages)return;
+    const prepared=tocPreview;if(!prepared||tocHandedOffRef.current||!tocSelected.length||!arabicConfirmed||tocProofFailedRef.current||!tocSelected.every(index=>[prepared.candidates[index].tocPhysicalPage,prepared.candidates[index].anchor.physicalPage].every(page=>tocProofLoadedRef.current[page]))||applyDisabled||!onApplyPages)return;
     const operation=beginOperation();if(!operation)return;setStatus('선택한 목차 숫자를 변경하고 두 차례 저장·재열기에서 서식을 대조하고 있습니다…');
+    const requireProof=()=>{requireCurrent(operation,true,true);if(tocPreviewRef.current!==prepared||tocProofFailedRef.current||!tocSelected.every(index=>[prepared.candidates[index].tocPhysicalPage,prepared.candidates[index].anchor.physicalPage].every(page=>tocProofLoadedRef.current[page])))throw new Error('대조 화면의 확인 상태가 바뀌어 적용을 중단했습니다. 취소 후 다시 확인하세요.');};
     let handedOff=false;
     try{
       if(prepared.generation!==operation.generation||prepared.editor!==operation.editor||prepared.original!==operation.original||prepared.source!==operation.source)throw new Error('확인한 문서가 바뀌었습니다. 취소 후 목차를 다시 확인하세요.');
-      const Engine=await loadNativeHwpEngine();requireCurrent(operation,true,true);
-      const candidate=await refreshConfirmedNativeTocNumbers(prepared.bytes,prepared.format,prepared.sourceSha256,tocSelected.map(index=>prepared.candidates[index]),Engine);requireCurrent(operation,true,true);
+      const Engine=await loadNativeHwpEngine();requireProof();
+      const candidate=await refreshConfirmedNativeTocNumbers(prepared.bytes,prepared.format,prepared.sourceSha256,tocSelected.map(index=>prepared.candidates[index]),Engine);requireProof();
       if(!candidate.changes.length){setTocPreview(null);setStatus('목차 숫자가 이미 일치합니다. 저장하지 않았습니다.');return;}
-      const snapshot=captureReportNativeSource(candidate.bytes,prepared.name,Engine);requireCurrent(operation,true,true);
+      const snapshot=captureReportNativeSource(candidate.bytes,prepared.name,Engine);requireProof();
       handedOff=true;tocHandedOffRef.current=true;setTocHandedOff(true);
       await onApplyPages(snapshot.pages,snapshot.file,operation.original??undefined);if(!current(operation))return;
       setStatus(`목차 숫자 ${candidate.changes.length}건을 작업본에 적용했습니다. 보고서 저장 완료 여부를 확인해 주세요.`);setConfirmClose(false);endOperation(operation);onClose();
     }catch(reason){if(current(operation)){const message=reason instanceof Error?reason.message:'목차 숫자를 반영하지 못했습니다.';setError(handedOff?`${message} 파일 적용은 이미 시작되어 숫자를 다시 적용하지 않습니다. 편집기를 닫고 보고서 저장 상태를 확인한 뒤 기존 저장 재시도를 사용하세요.`:message);setStatus('');}}
     finally{endOperation(operation);}
   };
+  const proofState=(prepared:NonNullable<typeof tocPreview>,page:number,state:'loading'|'ready'|'failed')=>{
+    if(tocPreviewRef.current!==prepared||!latestRef.current.isOpen)return;
+    tocProofLoadedRef.current={...tocProofLoadedRef.current,[page]:state==='ready'};setTocProofLoaded(tocProofLoadedRef.current);
+    if(state!=='ready')setArabicConfirmed(false);
+    if(state==='failed'){tocProofFailedRef.current=true;setTocProofFailed(true);}
+  };
+  const selectedProofReady=Boolean(tocPreview&&tocSelected.length&&tocSelected.every(index=>[tocPreview.candidates[index].tocPhysicalPage,tocPreview.candidates[index].anchor.physicalPage].every(page=>tocProofLoaded[page])));
 
   return <div className="rhwp-dialog-backdrop" role="presentation">
     <section className="rhwp-dialog" role="dialog" aria-modal="true" aria-labelledby="rhwp-dialog-title">
@@ -325,9 +347,15 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
           <p id="native-toc-help">표지를 포함해 세는 쪽입니다. 점선·탭 뒤 아라비아 쪽번호와 본문 제목이 정확히 일치하는 항목만 확인합니다. 본문의 1행 2열 로마 번호·제목 표는 읽어서 위치만 확인하며 표는 바꾸지 않습니다. 목차가 표 안이거나 필드·로마 쪽번호이면 직접 편집하세요.</p>
         </form> : <>
           <p>숫자만 갱신합니다. 일치 {tocPreview.unchanged}건 · 자동 확인 제외 {tocPreview.unsupported}건. 제외 항목은 직접 대조하세요.</p>
-          <div className="rhwp-dialog__toc-rows" role="group" aria-label="갱신할 목차 항목 선택">{tocPreview.candidates.map((row,index)=><label key={`${row.section}:${row.paragraph}`}><input type="checkbox" checked={tocSelected.includes(index)} disabled={busy||applyDisabled||tocHandedOff} onChange={event=>setTocSelected(previous=>event.target.checked?[...previous,index]:previous.filter(value=>value!==index))}/><span><strong>{row.title}</strong><small>목차 물리 {row.tocPhysicalPage}쪽 · 본문 물리 {row.anchor.physicalPage}쪽</small></span><b>{row.oldText} → {row.newText}</b></label>)}</div>
-          <label className="rhwp-dialog__toc-folio"><input type="checkbox" checked={arabicConfirmed} disabled={busy||applyDisabled||tocHandedOff} onChange={event=>setArabicConfirmed(event.target.checked)}/>본문에 인쇄된 쪽번호가 위의 아라비아 숫자와 같고, 앞의 0 표시도 맞는지 확인했습니다.</label>
-          <div className="rhwp-dialog__toc-actions">{tocHandedOff?<button type="button" disabled={busy} onClick={()=>setConfirmClose(true)}>닫고 보고서 저장 상태 확인</button>:<button type="button" disabled={busy} onClick={()=>{if(operationRef.current||tocHandedOffRef.current)return;setTocPreview(null);setTocSelected([]);setArabicConfirmed(false);setError('');setStatus('목차 갱신을 취소했습니다. 저장하지 않았습니다.');}}>취소·원형 편집 계속</button>}<button type="button" disabled={busy||applyDisabled||tocHandedOff||!tocSelected.length||!arabicConfirmed} onClick={()=>void applyToc()}>선택 숫자 갱신·보고서 적용</button></div>
+          <div className="rhwp-dialog__toc-rows" role="group" aria-label="갱신할 목차 항목 선택">{tocPreview.candidates.map((row,index)=><label key={`${row.section}:${row.paragraph}`}><input type="checkbox" checked={tocSelected.includes(index)} disabled={busy||applyDisabled||tocHandedOff} onChange={event=>{setTocSelected(previous=>event.target.checked?[...previous,index]:previous.filter(value=>value!==index));setArabicConfirmed(false);}}/><span><strong>{row.title}</strong><small>목차 물리 {row.tocPhysicalPage}쪽 · 본문 물리 {row.anchor.physicalPage}쪽</small></span><b>{row.oldText} → {row.newText}</b></label>)}</div>
+          <p>선택한 모든 항목의 목차·본문 쪽을 아래 읽기 전용 보기에서 열어 확인하면 인쇄번호 확인란이 활성화됩니다.</p>
+          <details className="rhwp-dialog__toc-proof" open={tocProofOpen} onToggle={event=>setTocProofOpen(event.currentTarget.open)}><summary onClick={event=>{if(operationRef.current)event.preventDefault();}}>목차·본문 쪽 대조 · 읽기 전용</summary>{tocProofOpen&&<>
+            <label htmlFor="native-toc-proof-row">대조할 항목<select id="native-toc-proof-row" value={tocProofIndex} disabled={busy||tocHandedOff} onChange={event=>{const index=Number(event.target.value);if(!Number.isSafeInteger(index)||index<0||index>=tocPreview.candidates.length)return;setTocProofIndex(index);tocProofFailedRef.current=false;setTocProofFailed(false);setArabicConfirmed(false);}}>{tocPreview.candidates.map((row,index)=><option key={`${row.section}:${row.paragraph}`} value={index}>{row.title} · {row.oldText} → {row.newText}</option>)}</select></label>
+            <p>검사한 같은 작업본의 숫자 갱신 전 화면입니다. 웹 화면만으로 PC 한컴 출력 일치를 판정하지 않습니다. 선택한 모든 항목의 인쇄번호를 대조하세요. 번호가 보이지 않거나 확인하지 못했으면 취소 후 원형에서 직접 확인하고 다시 검사하세요.</p>
+            <div className="rhwp-dialog__toc-proof-pages" key={`${tocPreview.sourceSha256}:${tocProofIndex}`}>{[tocPreview.candidates[tocProofIndex].tocPhysicalPage,tocPreview.candidates[tocProofIndex].anchor.physicalPage].map((page,index)=><NativeTocProofImage key={index} svg={tocPreview.proofPages[page]} label={`${index===0?'목차':'본문'} · 물리 ${page}쪽`} onState={state=>proofState(tocPreview,page,state)}/>)}</div>
+          </>}</details>
+          <label className="rhwp-dialog__toc-folio"><input type="checkbox" checked={arabicConfirmed} disabled={busy||applyDisabled||tocHandedOff||tocProofFailed||!selectedProofReady} onChange={event=>setArabicConfirmed(event.target.checked)}/>선택한 모든 항목의 본문 인쇄번호가 위 아라비아 숫자와 같고, 앞의 0 표시도 맞는지 확인했습니다.</label>
+          <div className="rhwp-dialog__toc-actions">{tocHandedOff?<button type="button" disabled={busy} onClick={()=>setConfirmClose(true)}>닫고 보고서 저장 상태 확인</button>:<button type="button" disabled={busy} onClick={()=>{if(operationRef.current||tocHandedOffRef.current)return;setTocPreview(null);setTocSelected([]);setArabicConfirmed(false);setError('');setStatus('목차 갱신을 취소했습니다. 저장하지 않았습니다.');}}>취소·원형 편집 계속</button>}<button type="button" disabled={busy||applyDisabled||tocHandedOff||tocProofFailed||!selectedProofReady||!arabicConfirmed} onClick={()=>void applyToc()}>선택 숫자 갱신·보고서 적용</button></div>
         </>}
         {tocInspection&&<div className="rhwp-dialog__toc-result" role="status"><p>마지막 확인 물리 쪽: {tocInspection.inspectedPages.join(', ')} · 쪽번호 있는 행 {tocInspection.numberRows}개 · 일치 {tocInspection.unchanged}개 · 갱신 후보 {tocInspection.candidates.length}개</p><p>아래 제외 수는 인식한 점선·탭 행만 센 값이며 전체 목차 검수 합격을 뜻하지 않습니다. 편집 후에는 번호 확인을 다시 실행하세요.</p></div>}
         {tocInspection&&tocInspection.excluded.length>0&&<details className="rhwp-dialog__toc-excluded"><summary>자동 갱신 제외 사유 {tocInspection.excluded.length}개</summary><ul>{tocInspection.excluded.map(row=><li key={`${row.section}:${row.paragraph}`}><strong>{row.title}</strong><span>원본 물리 {row.physicalPage}쪽 · {tocExcludedLabels[row.reason]}</span></li>)}</ul></details>}
