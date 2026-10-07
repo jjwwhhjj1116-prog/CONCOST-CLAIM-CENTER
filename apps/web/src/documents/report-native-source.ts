@@ -2,6 +2,15 @@ import type { Editor, JSONContent } from '@tiptap/core';
 import { closeHistory } from '@tiptap/pm/history';
 import type { NativeHwpDocument, NativeHwpEngine } from './editable-hwp-export';
 
+/** Only reject a clearly broken container before SDK document replacement.
+ * Recognize the pinned parser's legacy HWP3 prefix too; not a fidelity proof. */
+export function assertReportNativeImportContainer(buffer:ArrayBuffer,name:string):void{
+  const bytes=new Uint8Array(buffer),starts=(signature:readonly number[])=>signature.every((value,index)=>bytes[index]===value);
+  const hwp=/\.hwp$/iu.test(name),hwpx=/\.hwpx$/iu.test(name);
+  const validHwp=(bytes.length>512&&starts([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]))||(bytes.length>=30&&starts([...new TextEncoder().encode('HWP Document File')]));
+  if((hwp&&!validHwp)||(hwpx&&!starts([0x50,0x4b,0x03,0x04])))throw new Error('선택한 파일의 한글 문서 형식이나 크기가 올바르지 않습니다. 한글에서 정상 저장한 HWP/HWPX 원본을 다시 선택해 주세요.');
+}
+
 /** Check real HWPUNIT dimensions, not only the A-series aspect ratio of a preview. */
 export function assertReportNativeA4Portrait(document: NativeHwpDocument): void {
   const sections = document.getSectionCount?.();

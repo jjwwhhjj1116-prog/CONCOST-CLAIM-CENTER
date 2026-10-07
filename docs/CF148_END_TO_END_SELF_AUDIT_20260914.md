@@ -1,8 +1,8 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF191, 2026-10-07
+## 현재 판정 — CF192, 2026-10-07
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~191은 로컬 검증본으로 아직 미전송·미배포다. CF191은 실제 원본의 공백 및 1행2열 본문 제목을 지원하고 실제 사본 숫자 복원/47쪽 내부 렌더 보존을 확인했다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~192는 로컬 검증본으로 아직 미전송·미배포다. CF192는 목차 중복·셀 컨트롤 확인 누락과 편집기 실패 안내를 보완했으며, 관련53개+주변28개 검사가 통과했다. 원본16개의 제한된 목차 탐색은 실행16/원본불변16이며 표식 미확인6개·부분 확인9개를 전체 합격으로 계산하지 않는다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
@@ -31,6 +31,18 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF192 — 중복·셀 제어 보호, 오류 복구와 원본 목차 범위 대조
+
+- 시작 HEAD `169a623b1f1f2adab532522d509f1194f4c8fc7e`, 동일 recovery/`feat/CF123-es-v2`. 총괄만 수정하고 세 전문은 읽기 검수했다. 긴 제목 공백 중복은 수정 전 후보1≠0 FAIL로 재현했다. 300자 glyph 제한보다 먼저 실제 셀 raw를 읽어 제목을 식별하고, 배치 확인이 불가능한 알려진 중복도 남긴다. 100,000자를 넘는 읽기 불확실성은 전체 검사를 제한하며 조용히 후보에서 삭제하지 않는다. 제품의 셀 쓰기0/root 숫자만 쓰기 원칙은 유지한다.
+- 승인 소스의 다중 구역 getControls는 body 누적 para와 section-local hostPara 비교 때문에 셀 내부 비필드 control을 누락할 수 있다. canonical HWPX archive의 실제 section/host 문단 수→단일 표→주소 row0/col0·1 셀2/문단1/허용 inline 태그를 추가 대조한다. 필드·자동번호·사진·중첩/복수 표는 읽기 anchor로 사용하지 않는다. 같은 archive를 각 검증 단계에서 공유하며 추가 엔진/RPC/cell setter0. 실제 합성 section1 autoNum의 query 누락 확인과 query/glyph를 고정한 명시적 serialized-control 음성에서 `CELL_ANCHOR` 거부를 확인했다.
+- 현재 generation의 가져오기/다운로드/목차 검사/적용 실패는 진행 문구를 종료한다. SDK 초기화 실패면 가져오기 비활성·닫고 재열기 안내를 제공하며, SDK가 준비됐으나 파일만 실패하면 재가져오기는 허용한다. 초기/추가 파일 모두 문서 교체 전에 명백히 깨진 container를 거부한다. 독립 검수가 초기 OLE-only 조건의 HWP3 회귀를 찾아, 승인 파서의 legacy `HWP Document File` prefix+30B 조건까지 보존했다. CFB512B 초과/ZIP 서명/HML 기존 dispatch는 단순 전단 조건이며 전체 parsing·fidelity 인증이 아니다.
+- 실제 SDK localhost: manifest 1회503→결과/콜백0·잠금/진행 해제→동일 화면 재시도 성공, scheme guard 초기화 실패→UI닫기→정상 런타임 재열기, 잘못된4B 파일 전단 차단→정상 SDK 재가져오기 성공. 기존 취소0/이중click1/stale source0/권한 철회0/부분handoff 재업로드0 유지. 복구 페이지에도 unhandled error 수집을 추가했다. 검사 도구의 `!querySelector()?.disabled`가 닫힌 화면을 ready로 오인해 통합51/52 timeout을 만들었고, 버튼 존재와 enabled를 모두 확인하도록 고쳐 재실행했다. 이를 제품 SDK 파싱 오류 수정으로 주장하지 않는다.
+- 공개 upstream `c3bc96a6…:samples/hwp3-sample.hwp`를 이미 로컬 Git object에서 메모리로 읽고 실제17B 서명/승인 getter `hwp`/pageCount와 SDK 초기 가져오기를 확인했다. getter를 `hwp3`로 가정한 시험은 실패하여 실제 계약으로 정정했다. 두 환경변수 활성 실행에서 SDK 준비/쪽수/noalert/noapply/입력SHA 불변 PASS이며 legacy 출력·PC 한컴 검증은 별도다. 전체 관련 **53/53 PASS, skipped0**(CF192 import1 + 기존 native9/CF192음성2 + actual SDK1 + actual source2 + 기존 관련33 + gate5). 제안서6유형 공통장·이미지/저장/수주·관리자 기술QA 주변 **28/28 PASS**도 재실행했다. 테스트81개는 업무81개 합격이나 실제 서버 전구간 합격이 아니다. root/web tsc exit0·diffcheck PASS.
+- `scripts/cf192-native-toc-survey.ts`는 현재 원본32 inventory에서 native16(855쪽)을 SHA/확장자/크기로 대조하고, 앞8쪽은 탐색 창으로만 쓴다. 확인한 목차 표식 쪽의 union만 inspector에 전달하며, 고객 제목·경로·본문을 결과에 내보내지 않는다. 각 child의 ID/format/sizeBytes/원본SHA/구현SHA/승인 WASM·binding SHA를 parent와 대조한다. 최종 실행16 DONE/원본불변16, 실제 검사10·표식미확인6(counters null), PARTIAL9/LIMITED_ALIGNED1(029). 숫자행53=일치33+확인 전 후보4(011)+숫자행 제외16; 별도 번호 없는 leader/TAB41을 더한 전체 제외57(TITLE_NOT_FOUND11/TITLE_AMBIGUOUS4/TARGET_CONTROL1/NO_PAGE_NUMBER41). 011 후보4는 적용·최종승인하지 않았고 PC 인쇄 folio 대조 전 수정하지 않는다. before/after-confirmed의 원본별 범위·분류·행수 결과 동일. 초기 parent 크기 필드 오용 실행 `toc-survey-after.json`의16 ERROR/UNVERIFIED/null은 성공 증거에 섞지 않는다.
+- E192 `toc-survey-before.json` SHA `6242f74662048976166c07b11cc3c23620cd2737442f83cc0ff3f32bd8ab6ca2`; `toc-survey-after-confirmed.json` SHA `5af23e682baadf80db09e070687e0e55da1dd68c5a4dce0d75464309ed07d8ee`. helper SHA `56e3da8f2cedad6e95f4906839b3224cb03e451287e61663dc82f1e5715ff687`. 원본32 전수의 무편집855쪽 재저장 검사는 과거CF183과 별개이며 이번 탐색만으로 다시 수행했다고 하지 않는다. actual017 사본09→01 복원 후47쪽 내부 print SVG exact 및 actual025 숫자목차 임의생성0도 이번 관련 묶음에서 다시 통과했다.
+- 최종 E `claim-center-cf192-20261007/dist-final`43파일/37,661,407B, main `index-CkBCnqVG.js` SHA `31c45c1fe4f32315463258eaf42836b46ae9d57ff16cb49a87083c232e49f5a6`, CSS `index-WG70PgeX`. 승인 runtime28 자산 exact(+manifest1), WASM/binding 불변·CF186 진단 엔진 포함0. 중간 dist는 보존하되 승격 대상으로 쓰지 않는다. 기존 큰 chunk 경고 유지. desktop1440/mobile390의 후보/오류 화면을 한 batched render로 확인, CSS/원고 종이/출력 스타일 변경0. 기존 사용자 삭제22·원본·CC6v5/3출력·CC4/CC5·직원요청/배정/승인·DB/migration/키/환경값·development/가오픈 변경0. 현장회의록HOLD·업무 최종승인/자기승인차단 유지.
+- 남은 순서: 불명확한 목차 문구/표·필드와 PC 한컴 원점·글꼴·쪽 나눔 대조, CF186 정식 Docker 및 동일 엔진 승인, 검토2.xlsx/제안서4~12 실제 흐름/A–Z 잔여→development 실제 화면→최신 환경·DB/필요 백업 검증→검증 동일 artifact 가오픈 승격·양서버 대조→직원 가이드 영상. 기존 Docker 기동/특정3커밋 전송 승인 질문 대기는 이번 변경의 외부전송 승인으로 확대하지 않는다.
 
 ### CF191 — 실제 원형의 후행공백·분리된 번호/제목 셀 읽기 및 복원 검증
 

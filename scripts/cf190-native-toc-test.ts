@@ -160,3 +160,26 @@ test('CF191 source-proven 1x2 Roman/title cells are read-only anchors with exact
   try{const cell=JSON.parse(field.getCursorModel()).lists.find((list:any)=>list.isCell&&list.sectionIndex===1&&list.col===1);assert.ok(cell);assert.ok(JSON.parse(field.insertClickHereFieldInCell(1,cell.hostPara,cell.controlIndex,cell.cellIndex,0,0,false,' ','','qa-cell-field',true)).ok);assert.match(field.getFieldList(),/qa-cell-field/u);fieldBytes=field.exportHwpx();}finally{field.free();}
   assert.equal((await inspectNativeTocNumbers(fieldBytes,'hwpx',[1],withField.Engine)).candidates.length,0);
 });
+
+test('CF192 a long whitespace-padded duplicate cannot make a short literal heading unique',async()=>{
+  const table=(suffix='')=>`<table><tr><td><p>Ⅰ.</p></td><td><p>자료 목록${suffix}</p></td></tr></table>`;
+  const {Engine,bytes}=await compoundFixture('hwpx',table()+table(' '.repeat(300))),before=hash(bytes);
+  const doc=new Engine(bytes);try{const titles=JSON.parse(doc.getCursorModel()).lists.filter((list:any)=>list.isCell&&list.sectionIndex===1&&list.col===1).map((list:any)=>{const path=JSON.stringify([{controlIndex:list.controlIndex,cellIndex:list.cellIndex,cellParaIndex:0}]),length=doc.getCellParagraphLengthByPath(1,list.hostPara,path);return {length,text:doc.getTextInCellByPath(1,list.hostPara,path,0,length)};});assert.equal(titles.length,2);assert.ok(titles[1].length>300);assert.equal(titles[0].text.trim(),titles[1].text.trim());}finally{doc.free();}
+  const inspected=await inspectNativeTocNumbers(bytes,'hwpx',[1],Engine);
+  assert.equal(inspected.candidates.length,0);assert.equal(inspected.excluded[0].reason,'TITLE_AMBIGUOUS');assert.equal(hash(bytes),before);
+  class UnreadableCell extends Engine{getCellParagraphLengthByPath(){return 100_001;}}
+  await assert.rejects(inspectNativeTocNumbers(bytes,'hwpx',[1],UnreadableCell as unknown as NativeHwpEngine),/DOCUMENT_LIMIT/u,'Unreadable candidates must not silently vanish');
+});
+
+test('CF192 serialized heading-cell controls cannot be hidden by an incomplete native control query',async()=>{
+  const {Engine,bytes}=await compoundFixture('hwpx'),before=hash(bytes),entry=(await inspectNativeTocNumbers(bytes,'hwpx',[1],Engine)).candidates[0];assert.ok(entry.anchor.cells);
+  const inject=(archive:Record<string,Uint8Array>)=>{let xml=strFromU8(archive['Contents/section1.xml']),count=0;xml=xml.replace(/<hp:tc\b[^>]*>[\s\S]*?<\/hp:tc>/gu,cell=>{if(!/<hp:cellAddr\b[^>]*\bcolAddr="1"/u.test(cell))return cell;count++;return cell.replace('</hp:run>','<hp:ctrl><hp:autoNum num="1" numType="PAGE"><hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/></hp:autoNum></hp:ctrl></hp:run>');});assert.equal(count,1);archive['Contents/section1.xml']=strToU8(xml);return zipSync(archive);};
+  const controlled=inject(unzipSync(bytes)),opened=new Engine(controlled);
+  try{const cell=JSON.parse(opened.getCursorModel()).lists.find((list:any)=>list.isCell&&list.sectionIndex===1&&list.col===1);assert.ok(cell);assert.equal(JSON.parse(opened.getFieldList()).length,0);assert.equal(JSON.parse(opened.getControls()).filter((control:any)=>control.list===cell.listId&&control.ctrlId==='atno').length,0);assert.match(strFromU8(unzipSync(opened.exportHwpx())['Contents/section1.xml']),/<hp:autoNum\b/u);const path=JSON.stringify([{controlIndex:cell.controlIndex,cellIndex:cell.cellIndex,cellParaIndex:0}]),length=opened.getCellParagraphLengthByPath(1,cell.hostPara,path);assert.equal(opened.getTextInCellByPath(1,cell.hostPara,path,0,length).trim(),'자료 목록');}finally{opened.free();}
+  assert.equal((await inspectNativeTocNumbers(controlled,'hwpx',[1],Engine)).candidates.length,0);
+  // Deliberately keep the query/glyph view unchanged while the canonical
+  // archive carries a control. This isolates the new serialized-cell guard.
+  class HiddenSerializedControl extends Engine{exportHwpxWithReport(){const result=super.exportHwpxWithReport();const loss=result.contentLoss(),archive=unzipSync(result.takeBytes());result.free();return {contentLoss:()=>loss,takeBytes:()=>inject(archive),free:()=>{}};}}
+  await assert.rejects(refreshConfirmedNativeTocNumbers(bytes,'hwpx',before,[entry],HiddenSerializedControl as unknown as NativeHwpEngine),/CELL_ANCHOR/u);
+  const inspection=await inspectNativeTocNumbers(bytes,'hwpx',[1],HiddenSerializedControl as unknown as NativeHwpEngine);assert.equal(inspection.candidates.length,0);assert.equal(inspection.excluded[0].reason,'STYLE_UNCONFIRMED');assert.equal(hash(bytes),before);
+});

@@ -67,10 +67,11 @@ const numberLocation=(pages:Run[][],entry:ConfirmedNativeTocNumber,digits:string
   }
   check(locations.every(location=>JSON.stringify(location)===JSON.stringify(locations[0])),'NUMBER_LOCATION');return locations[0];
 };
-const cellAnchorData=(doc:TocDocument,anchor:NativeTocAnchor,pages:Run[][])=>{
+const cellAnchorData=(doc:TocDocument,anchor:NativeTocAnchor,pages:Run[][],archive:Record<string,Uint8Array>)=>{
   paragraph(doc,anchor); // Validate section-local host address before native cell queries.
   for(const method of ['getCursorModel','getTableDimensions','getCellInfoByPath','getCellParagraphCountByPath','getCellParagraphLengthByPath','getTextInCellByPath'])check(typeof(doc as unknown as Record<string,unknown>)[method]==='function','CELL_ANCHOR');
   const cells=anchor.cells;check(Array.isArray(cells)&&cells.length===2,'CELL_ANCHOR');
+  verifyLiteralCellXml(doc,anchor,archive);
   const model=JSON.parse(doc.getCursorModel()),controls=JSON.parse(doc.getControls()),fields=JSON.parse(doc.getFieldList());check(Array.isArray(model.lists)&&Array.isArray(controls)&&Array.isArray(fields),'CELL_ANCHOR');
   const texts:string[]=[], positions:Array<{page:number;y:number;h:number}>=[];
   for(const [col,cell]of cells.entries()){
@@ -91,14 +92,14 @@ const cellAnchorData=(doc:TocDocument,anchor:NativeTocAnchor,pages:Run[][])=>{
   check(/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+\.$/u.test(texts[0].trim())&&texts[1].trim()&&positions.every(position=>JSON.stringify(position)===JSON.stringify(positions[0])),'CELL_ANCHOR');
   return {texts,page:positions[0].page};
 };
-const verifyAnchorText=async(doc:TocDocument,entry:ConfirmedNativeTocNumber,pages:Run[][])=>{
+const verifyAnchorText=async(doc:TocDocument,entry:ConfirmedNativeTocNumber,pages:Run[][],archive:Record<string,Uint8Array>)=>{
   if(!entry.anchor.cells){check(await shaText(paragraph(doc,entry.anchor))===entry.anchor.paragraphSha256);return;}
-  const {texts}=cellAnchorData(doc,entry.anchor,pages);
+  const {texts}=cellAnchorData(doc,entry.anchor,pages,archive);
   for(const [index,text]of texts.entries())check(await shaText(text)===entry.anchor.cells[index].sha256,'CELL_ANCHOR');
   check(await shaText(JSON.stringify(texts))===entry.anchor.paragraphSha256&&normalTitle(texts.join(' '))===normalTitle(tocNumber(paragraph(doc,entry))?.[1]??''),'CELL_ANCHOR');
 };
-const anchorPage = (doc: TocDocument, entry: ConfirmedNativeTocNumber, pages: Run[][]) => {
-  if(entry.anchor.cells){const {page}=cellAnchorData(doc,entry.anchor,pages);check(page+1===entry.anchor.physicalPage,'CELL_ANCHOR');const info=JSON.parse(doc.getPageInfo(page));check(info.sectionIndex===entry.anchor.section&&printedNumber(info.pageNumber)&&info.pageNumber===entry.anchor.printedPage,'CELL_ANCHOR');return info.pageNumber as number;}
+const anchorPage = (doc: TocDocument, entry: ConfirmedNativeTocNumber, pages: Run[][],archive:Record<string,Uint8Array>) => {
+  if(entry.anchor.cells){const {page}=cellAnchorData(doc,entry.anchor,pages,archive);check(page+1===entry.anchor.physicalPage,'CELL_ANCHOR');const info=JSON.parse(doc.getPageInfo(page));check(info.sectionIndex===entry.anchor.section&&printedNumber(info.pageNumber)&&info.pageNumber===entry.anchor.printedPage,'CELL_ANCHOR');return info.pageNumber as number;}
   const position = JSON.parse(doc.getPageOfPosition(entry.anchor.section, entry.anchor.paragraph));
   check(position.ok === true); const page = position.page;
   check(validIndex(page) && page < pages.length && page + 1 === entry.anchor.physicalPage);
@@ -133,17 +134,32 @@ const exportBytes = (doc: TocDocument, format: 'hwp' | 'hwpx') => {
   const result = format === 'hwp' ? doc.exportHwpWithReport() : doc.exportHwpxWithReport();
   try {const report = JSON.parse(result.contentLoss()); check(report.schemaVersion === 1 && report.count === 0 && Array.isArray(report.losses) && !report.losses.length && report.outputFormat?.toLowerCase() === format); const bytes = result.takeBytes(); check(bytes instanceof Uint8Array && bytes.length); return new Uint8Array(bytes);} finally {result.free();}
 };
-const outerParagraphs = (xml: string) => {
+const outerElements = (xml: string,tag:'p'|'tbl'|'tc') => {
   const result: Array<{start: number; end: number; xml: string}> = []; let depth = 0, start = 0;
-  for (const match of xml.matchAll(/<(\/?)hp:p(?:\s[^>]*|)>/gu)) {
+  for (const match of xml.matchAll(new RegExp(`<(\\/?)hp:${tag}(?:\\s[^>]*|)>`,'gu'))) {
+    if(!match[1]&&/\/>$/u.test(match[0])){if(depth===0)result.push({start:match.index!,end:match.index!+match[0].length,xml:match[0]});continue;}
     if (!match[1]) {if (depth++ === 0) start = match.index!;}
     else {check(depth > 0); if (--depth === 0) result.push({start, end: match.index! + match[0].length, xml: xml.slice(start, match.index! + match[0].length)});}
   }
   check(depth === 0); return result;
 };
+const outerParagraphs=(xml:string)=>outerElements(xml,'p');
+const verifyLiteralCellXml=(doc:TocDocument,anchor:NativeTocAnchor,archive:Record<string,Uint8Array>)=>{
+  const section=archive[`Contents/section${anchor.section}.xml`];check(section,'CELL_ANCHOR');
+  const hosts=outerParagraphs(strFromU8(section));check(hosts.length===doc.getParagraphCount(anchor.section)&&hosts[anchor.paragraph],'CELL_ANCHOR');
+  const tables=outerElements(hosts[anchor.paragraph].xml,'tbl');check(tables.length===1,'CELL_ANCHOR');
+  const cells=outerElements(tables[0].xml,'tc');check(cells.length===2,'CELL_ANCHOR');
+  for(let col=0;col<2;col++){
+    const matches=cells.filter(cell=>{const addresses=[...cell.xml.matchAll(/<hp:cellAddr\b[^>]*\/>/gu)];return addresses.length===1&&/\browAddr="0"/u.test(addresses[0][0])&&new RegExp(`\\bcolAddr="${col}"`,'u').test(addresses[0][0]);});
+    check(matches.length===1&&outerParagraphs(matches[0].xml).length===1,'CELL_ANCHOR');
+    // getControls can omit child controls after a section boundary. Check the
+    // canonical selected cell too: no fields, generated numbers or pictures.
+    check([...matches[0].xml.matchAll(/<\/?hp:([A-Za-z][\w]*)\b/gu)].every(match=>['tc','subList','p','run','t','linesegarray','lineseg','cellAddr','cellSpan','cellSz','cellMargin'].includes(match[1])),'CELL_ANCHOR');
+  }
+};
 const paragraphStructure = (xml: string) => xml.replace(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu, '').replace(/(<hp:t(?:\s[^>]*)?>)([\s\S]*?)(<\/hp:t>)/gu,(_match,open:string,inner:string,close:string)=>open+inner.replace(/(^|>)[^<]*/gu,'$1')+close).replace(/<\/?hp:run(?:\s[^>]*)?>/gu, '');
-const verifyArchive = (left: Record<string,Uint8Array>, after: Uint8Array, targets: Map<string, {offset: number}>) => {
-  const right = unzipSync(after); check(JSON.stringify(Object.keys(left).sort()) === JSON.stringify(Object.keys(right).sort()));
+const verifyArchive = (left: Record<string,Uint8Array>, right: Record<string,Uint8Array>, targets: Map<string, {offset: number}>) => {
+  check(JSON.stringify(Object.keys(left).sort()) === JSON.stringify(Object.keys(right).sort()));
   for (const path of Object.keys(left)) {
     if (/^Preview\/(?:PrvText\.txt|PrvImage\.png)$/u.test(path)) continue; // Derived preview, not manuscript/BinData.
     const section = /^Contents\/section(\d+)\.xml$/u.exec(path);
@@ -175,7 +191,7 @@ export async function refreshConfirmedNativeTocNumbers(bytes: Uint8Array, format
       check(entry && entry.anchor && typeof entry.oldText === 'string');
       const text = paragraph(doc, entry), chars = [...text], id = key(entry);
       check(!targets.has(id) && validIndex(entry.offset) && /^[0-9]{1,9}$/u.test(entry.oldText) && validIndex(entry.decimalDigits) && entry.decimalDigits >= 1 && entry.decimalDigits <= 9);
-      check(await shaText(text)===entry.paragraphSha256);await verifyAnchorText(doc,entry,pages);
+      check(await shaText(text)===entry.paragraphSha256);await verifyAnchorText(doc,entry,pages,beforeArchive);
       const end=entry.offset+entry.oldText.length,suffix=chars.slice(end).join('');
       check(end<=chars.length&&/^ *$/u.test(suffix)&&chars.slice(entry.offset,end).join('')===entry.oldText&&Number(entry.oldText).toString().padStart(entry.decimalDigits,'0')===entry.oldText);
       check(numberLocation(pages,entry,entry.oldText).page+1===entry.tocPhysicalPage,'NUMBER_LOCATION');
@@ -186,7 +202,7 @@ export async function refreshConfirmedNativeTocNumbers(bytes: Uint8Array, format
       // also contain no fields/controls or unsupported inline elements.
       check([...paragraphs[entry.paragraph].xml.matchAll(/<\/?hp:([A-Za-z][\w]*)\b/gu)].every(match => ['p','run','t','tab','linesegarray','lineseg'].includes(match[1])));
       const styles = shapes(doc, entry, chars.length), digitStyle = styles[entry.offset]; check(styles.slice(entry.offset,end).every(style => style === digitStyle));
-      const printedPage = anchorPage(doc, entry, pages), newText = String(printedPage).padStart(entry.decimalDigits, '0');
+      const printedPage = anchorPage(doc, entry, pages,beforeArchive), newText = String(printedPage).padStart(entry.decimalDigits, '0');
       targets.set(id,{offset:entry.offset,oldLength:entry.oldText.length,newText,expected:chars.slice(0,entry.offset).join('')+newText+suffix,styles:[...styles.slice(0,entry.offset),...Array(newText.length).fill(digitStyle),...styles.slice(end)],props:doc.getParaPropertiesAt(entry.section,entry.paragraph)});
       if (newText !== entry.oldText) changes.push({section: entry.section, paragraph: entry.paragraph, offset: entry.offset, oldText: entry.oldText, newText, physicalPage: entry.anchor.physicalPage, printedPage});
     }
@@ -197,15 +213,15 @@ export async function refreshConfirmedNativeTocNumbers(bytes: Uint8Array, format
     }
     const verify = async (current: TocDocument) => {
       check(current.getSourceFormat()===format,'FORMAT');
-      const currentPages = layout(current); check(currentPages.length === pages.length && current.getControls() === controls && current.getFieldList() === fields);
+      const currentPages = layout(current),currentArchive=unzipSync(exportBytes(current,'hwpx')); check(currentPages.length === pages.length && current.getControls() === controls && current.getFieldList() === fields);
       for (const entry of entries) {
         const target = targets.get(key(entry))!; check(paragraph(current, entry) === target.expected && JSON.stringify(shapes(current, entry, [...target.expected].length)) === JSON.stringify(target.styles) && current.getParaPropertiesAt(entry.section, entry.paragraph) === target.props);
-        await verifyAnchorText(current,entry,currentPages);anchorPage(current,entry,currentPages);
+        await verifyAnchorText(current,entry,currentPages,currentArchive);anchorPage(current,entry,currentPages,currentArchive);
         check(JSON.stringify(numberLocation(currentPages,entry,target.newText))===JSON.stringify(numberLocation(pages,entry,entry.oldText)),'NUMBER_LOCATION');
       }
       check(JSON.stringify(geometry(currentPages,targets,true))===JSON.stringify(geometry(pages,targets)), 'TEXT_GEOMETRY');
       check(JSON.stringify(await svgNonText(current)) === JSON.stringify(nonText), 'PAGE_GRAPHICS');
-      verifyArchive(beforeArchive, exportBytes(current, 'hwpx'), targets);
+      verifyArchive(beforeArchive,currentArchive,targets);
     };
     await verify(doc);
     const candidate = exportBytes(doc, format); reopened = new Engine(candidate) as TocDocument; await verify(reopened);
@@ -266,16 +282,17 @@ export async function inspectNativeTocNumbers(bytes: Uint8Array, format: 'hwp'|'
     }
     for(const lists of pairs.values()){
       if(lists.length!==2)continue;lists.sort((a,b)=>Number(a.col)-Number(b.col));const first=lists[0],section=Number(first.sectionIndex),index=Number(first.hostPara),control=Number(first.controlIndex);
-      let known:AnchorRecord|undefined,title='';
+      const proofs:CellProof[]=[],texts:string[]=[];
+      // Read before the tighter glyph-proof cap. An oversized/unreadable cell
+      // cannot silently disappear and make another title look unique.
+      for(const list of lists){const path:CellPath=[{controlIndex:control,cellIndex:Number(list.cellIndex),cellParaIndex:0}],encoded=JSON.stringify(path),length=doc.getCellParagraphLengthByPath(section,index,encoded);check(validIndex(length)&&length<=100_000,'DOCUMENT_LIMIT');const text=doc.getTextInCellByPath(section,index,encoded,0,length);check([...text].length===length,'CELL_READ');texts.push(text);proofs.push({path,length,sha256:await shaText(text)});}
+      if(!/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+\.$/u.test(texts[0].trim())||!texts[1].trim())continue;
+      const cells=proofs as [CellProof,CellProof],title=normal(texts.join(' ')),known:AnchorRecord={section,paragraph:index,text:JSON.stringify(texts),page:0,cells};
       try{
-        const proofs:CellProof[]=[],texts:string[]=[];
-        for(const list of lists){const path:CellPath=[{controlIndex:control,cellIndex:Number(list.cellIndex),cellParaIndex:0}],encoded=JSON.stringify(path),length=doc.getCellParagraphLengthByPath(section,index,encoded);check(validIndex(length)&&length>0&&length<=300);const text=doc.getTextInCellByPath(section,index,encoded,0,length);texts.push(text);proofs.push({path,length,sha256:await shaText(text)});}
-        const cells=proofs as [CellProof,CellProof],anchor:NativeTocAnchor={section,paragraph:index,paragraphSha256:await shaText(JSON.stringify(texts)),physicalPage:0,printedPage:0,cells};
-        check(/^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩIVX]+\.$/u.test(texts[0].trim())&&texts[1].trim());
-        title=normal(texts.join(' '));known={section,paragraph:index,text:JSON.stringify(texts),page:0,cells};
-        const located=cellAnchorData(doc,anchor,pages);if(selected.has(located.page+1))continue;
+        const anchor:NativeTocAnchor={section,paragraph:index,paragraphSha256:await shaText(JSON.stringify(texts)),physicalPage:0,printedPage:0,cells};
+        const located=cellAnchorData(doc,anchor,pages,xml);if(selected.has(located.page+1))continue;
         addAnchor(title,{...known,page:located.page+1});
-      }catch{if(known)addAnchor(title,{...known,unverified:true});/* A known duplicate cannot disappear just because its glyph proof failed. */}
+      }catch{addAnchor(title,{...known,unverified:true});/* A known duplicate cannot disappear just because its glyph proof failed. */}
     }
     let unchanged=0, rows=0;
     const exclude=(row:typeof records[number],reason:NativeTocExcludedReason,title=row.text)=>{check(excluded.length<100,'TOC_LIMIT');excluded.push({physicalPage:row.page,section:row.section,paragraph:row.paragraph,title:normal(title).slice(0,180),reason});};
@@ -293,7 +310,7 @@ export async function inspectNativeTocNumbers(bytes: Uint8Array, format: 'hwp'|'
       if(!targetXml||!Array.isArray(controls)||controls.length||![...targetXml.matchAll(/<\/?hp:([A-Za-z][\w]*)\b/gu)].every(tag=>['p','run','t','tab','linesegarray','lineseg'].includes(tag[1]))){exclude(row,'TARGET_CONTROL',match[1]);continue;}
       const digits=match[2],decimalDigits=digits.startsWith('0')?digits.length:1,offset=[...row.text].length-digits.length-match[3].length;
       const candidate:NativeTocCandidate={section:row.section,paragraph:row.paragraph,offset,oldText:digits,decimalDigits,paragraphSha256:await shaText(row.text),title:normal(match[1]),tocPhysicalPage:row.page,newText:String(info.pageNumber).padStart(decimalDigits,'0'),anchor:{section:anchor.section,paragraph:anchor.paragraph,paragraphSha256:await shaText(anchor.text),physicalPage:anchor.page,printedPage:info.pageNumber,...(anchor.cells?{cells:anchor.cells}:{})}};
-      try{await verifyAnchorText(doc,candidate,pages);anchorPage(doc,candidate,pages);candidate.tocPhysicalPage=numberLocation(pages,candidate,digits).page+1;check(selected.has(candidate.tocPhysicalPage));const style=shapes(doc,candidate,[...row.text].length);check(style.slice(offset,offset+digits.length).every(shape=>shape===style[offset]));}catch{exclude(row,'STYLE_UNCONFIRMED',match[1]);continue;}
+      try{await verifyAnchorText(doc,candidate,pages,xml);anchorPage(doc,candidate,pages,xml);candidate.tocPhysicalPage=numberLocation(pages,candidate,digits).page+1;check(selected.has(candidate.tocPhysicalPage));const style=shapes(doc,candidate,[...row.text].length);check(style.slice(offset,offset+digits.length).every(shape=>shape===style[offset]));}catch{exclude(row,'STYLE_UNCONFIRMED',match[1]);continue;}
       if(candidate.newText===digits) unchanged++; else candidates.push(candidate);
     }
     return {sourceSha256:await reportSourceSha256(original.buffer),candidates,unchanged,unsupported:excluded.length,numberRows:rows,inspectedPages:[...selected].sort((a,b)=>a-b),excluded};

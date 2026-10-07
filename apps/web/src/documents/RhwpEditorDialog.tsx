@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { EditorOptions, RhwpEditor } from '@rhwp/editor';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
-import { captureReportNativeSource, assertReportNativePagesMatch } from './report-native-source';
+import { captureReportNativeSource, assertReportNativePagesMatch,assertReportNativeImportContainer } from './report-native-source';
 import { inspectNativeTocNumbers, parseNativeTocPages, refreshConfirmedNativeTocNumbers, type NativeTocExcludedReason } from './report-native-toc';
 
 export interface RhwpEditorDialogProps {
@@ -67,6 +67,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const [activeFileName, setActiveFileName] = useState(sourceFile?.name ?? suggestedName);
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [hasImportedTemplate, setHasImportedTemplate] = useState(false);
+  const [editorReady,setEditorReady]=useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [tocRange,setTocRange]=useState('');
@@ -88,6 +89,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setStatus('rhwp 오픈소스 편집기를 연결하고 있습니다…');
     setPageCount(null);
     setHasImportedTemplate(false);
+    setEditorReady(false);
     originalFileRef.current = null;
     tocHandedOffRef.current=false;setTocPreview(null);setTocInspection(null);setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);setTocRange('');setConfirmClose(false);
     setBusy(true);
@@ -106,9 +108,11 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         if (!active) { editor.destroy(); return; }
         instance = editor;
         editorRef.current = editor;
+        setEditorReady(true);
         if (sourceFile) {
           setStatus(`${sourceFile.name} 파일을 여는 중입니다…`);
-          const result = await editor.loadFile(await sourceFile.arrayBuffer(), sourceFile.name, { suppressDialogs: true });
+          const bytes=await sourceFile.arrayBuffer();if(!active)return;assertReportNativeImportContainer(bytes,sourceFile.name);
+          const result = await editor.loadFile(bytes, sourceFile.name, { suppressDialogs: true });
           if (!active) return;
           setPageCount(result.pageCount);
           originalFileRef.current = sourceFile;
@@ -167,6 +171,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     setBusy(true); setHasImportedTemplate(false); setError(''); setStatus(`${file.name} 파일을 여는 중입니다…`);
     try {
       const bytes=await file.arrayBuffer();requireCurrent(operation);
+      assertReportNativeImportContainer(bytes,file.name);
       const result = await operation.editor.loadFile(bytes, file.name, { suppressDialogs: true });requireCurrent(operation);
       setPageCount(result.pageCount);
       originalFileRef.current = file;
@@ -174,7 +179,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       setHasImportedTemplate(true);
       setStatus(`${result.pageCount}페이지를 열었습니다. 원본과 표·이미지 위치를 확인해 주세요.`);
     } catch (reason) {
-      if(current(operation))setError(reason instanceof Error ? reason.message : '선택한 HWP 문서를 열지 못했습니다.');
+      if(current(operation)){setError(reason instanceof Error ? reason.message : '선택한 HWP 문서를 열지 못했습니다.');setStatus('');}
     } finally {
       endOperation(operation);
       if (current(operation)&&importInputRef.current) importInputRef.current.value = '';
@@ -209,7 +214,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       setStatus(`${fileName} 다운로드를 완료했습니다. 웹 엔진에서 저장 전·후 페이지 일치는 확인했지만, PC 한컴의 글꼴·여백·배치와 동일한지는 아직 검증되지 않았습니다. 제출 전 한컴에서 다시 열어 대조해 주세요.`);
       setConfirmClose(false);
     } catch (reason) {
-      if(current(operation))setError(reason instanceof Error ? reason.message : `${format.toUpperCase()} 파일 생성에 실패했습니다.`);
+      if(current(operation)){setError(reason instanceof Error ? reason.message : `${format.toUpperCase()} 파일 생성에 실패했습니다.`);setStatus('');}
     } finally { endOperation(operation); }
   };
 
@@ -266,7 +271,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       tocHandedOffRef.current=false;setTocSelected([]);setArabicConfirmed(false);setTocHandedOff(false);
       if(proposal.candidates.length){setTocPreview({...proposal,bytes:source.bytes,format:source.format,name:source.name,...operation});setStatus('변경할 항목을 직접 선택해 주세요. 확인하는 동안 원형 편집은 잠겨 있습니다.');}
       else setStatus(`자동 확인 가능한 변경 후보가 없습니다. 일치 ${proposal.unchanged}건 · 자동 확인 제외 ${proposal.unsupported}건. 전체 목차의 일치 판정은 아니며, 나머지는 원형 편집기에서 직접 대조하세요.`);
-    }catch(reason){if(current(operation))setError(reason instanceof Error?reason.message:'목차를 확인하지 못했습니다. 쪽 범위를 확인하고 다시 시도하세요.');}
+    }catch(reason){if(current(operation)){setError(reason instanceof Error?reason.message:'목차를 확인하지 못했습니다. 쪽 범위를 확인하고 다시 시도하세요.');setStatus('');}}
     finally{endOperation(operation);}
   };
   const applyToc=async()=>{
@@ -282,7 +287,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       handedOff=true;tocHandedOffRef.current=true;setTocHandedOff(true);
       await onApplyPages(snapshot.pages,snapshot.file,operation.original??undefined);if(!current(operation))return;
       setStatus(`목차 숫자 ${candidate.changes.length}건을 작업본에 적용했습니다. 보고서 저장 완료 여부를 확인해 주세요.`);setConfirmClose(false);endOperation(operation);onClose();
-    }catch(reason){if(current(operation)){const message=reason instanceof Error?reason.message:'목차 숫자를 반영하지 못했습니다.';setError(handedOff?`${message} 파일 적용은 이미 시작되어 숫자를 다시 적용하지 않습니다. 편집기를 닫고 보고서 저장 상태를 확인한 뒤 기존 저장 재시도를 사용하세요.`:message);}}
+    }catch(reason){if(current(operation)){const message=reason instanceof Error?reason.message:'목차 숫자를 반영하지 못했습니다.';setError(handedOff?`${message} 파일 적용은 이미 시작되어 숫자를 다시 적용하지 않습니다. 편집기를 닫고 보고서 저장 상태를 확인한 뒤 기존 저장 재시도를 사용하세요.`:message);setStatus('');}}
     finally{endOperation(operation);}
   };
 
@@ -294,7 +299,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       </header>
       <nav className="rhwp-dialog__toolbar" aria-label="HWP 문서 도구">
         <input ref={importInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event) => void loadFile(event.target.files?.[0])} />
-        <button type="button" className="rhwp-action-import" disabled={busy || Boolean(tocPreview)} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
+        <button type="button" className="rhwp-action-import" disabled={busy || !editorReady || Boolean(tocPreview)} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
         <button type="button" className="rhwp-action-hwp" disabled={busy || Boolean(tocPreview) || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 다운로드만</button>
         <button type="button" className="rhwp-action-hwpx" disabled={busy || Boolean(tocPreview) || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 다운로드만</button>
         {(onApplyContent||onApplyPages) && <button type="button" className="rhwp-action-apply" disabled={busy || Boolean(tocPreview) || applyDisabled || !hasImportedTemplate} title={applyDisabled ? '원본 연결 또는 다른 저장이 끝난 뒤 적용할 수 있습니다.' : !hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
@@ -311,7 +316,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       {!studioUrl && <aside className="rhwp-dialog__security">
         현재 `rhwp` 공식 공개 편집 런타임을 사용합니다. 회사 기밀 문서 운영 전 서버가 <b>__CLAIM_CENTER_RHWP_STUDIO_URL__</b> 런타임 설정을 사내 동일 출처 주소로 주입하면 편집 엔진도 사내 서버에서 실행됩니다.
       </aside>}
-      {error && <p className="rhwp-dialog__error" role="alert">{error}</p>}
+      {error && <p className="rhwp-dialog__error" role="alert">{error}{!busy&&!editorReady&&' 편집기 연결에 실패했습니다. 오른쪽 위 닫기 버튼으로 닫은 뒤 다시 열어 연결을 재시도해 주세요.'}</p>}
       {preserveAppliedSource && onApplyPages && <section className="rhwp-dialog__toc" aria-labelledby="native-toc-title">
         <h3 id="native-toc-title">원형 목차 쪽번호 갱신</h3>
         {!tocPreview ? <form onSubmit={event=>{event.preventDefault();void inspectToc();}}>
