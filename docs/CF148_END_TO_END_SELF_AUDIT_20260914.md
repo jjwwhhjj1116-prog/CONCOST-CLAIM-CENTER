@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF185, 2026-10-06
+## 현재 판정 — CF186, 2026-10-07
 
 아래 과거 기록의 미인증·GitHub 전송 실패·구버전 배포 표시는 당시 이력이다. 현재 GitHub 정상 push와 development 반영은 완료했다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
@@ -20,7 +20,7 @@
 | 원형 실제 용지·병합 표 | A3를 A4로 오인하던 비율 검사 보완: 가져오기와 출력이 실제 HU 치수 기준 공유, 확인/업로드/저장 이전 차단. 병합 헤더·행 병합의 자동 정렬 열 오류 FAIL→최소 수정→실제 편집/저장/재열기/출력 쪽 PASS | 기존 원형을 임의 A4로 축소하지 않음. 기존 v2 명시 정렬·값·폭·행높이 보존. 전체 업무·모든 표 기능 합격을 뜻하지 않음 |
 | 구조형 표·쪽 나누기 | CF184 행 병합 자동 폭의 열 위치 오류, 긴 표 목록 번호 재시작, 셀 안 쪽나누기 무시를 수정. 실제 React 버튼·F4·Undo 불변 및 사진/본문 보존 검사 PASS | 합성 로컬 QA이며 PC 한컴 원형/업무 전구간 동일성 증명과 구분. 셀 내부 수동 쪽나누기는 지원하지 않고 표 밖으로 옮기도록 안내 |
 | PDF 원본 용지 | CF185 실제 A3/A5·혼합 쪽이 비율만으로 A4에 통과하는 FAIL→실제 pt 치수 검사. 합성7+실제PDF15 검사 PASS, 원본 SHA 보존 | 원본14개 A4389쪽 허용, 세로/가로 혼합 PDF013은 기존처럼 전체 적용 전 거부. 한컴 HWP 동일성 증명과 구분 |
-| 원형 HWPX 실제 배치 | 대표017/018·025/026의 실제 인쇄 SVG/JPG/PDF를 대조해 표 뒤 세로 간격 누적 차이 확인. 01724쪽 원본 anchor 대비 +22.48px/+36.96px를 엔진 Square 표의 host spacing 계산까지 추적 | **원형 동일성 FAIL·수정 미완료.** 제품 래퍼/JPG 문제가 아니며 엔진의 paint·pagination 양쪽 수정/전체 회귀 필요. 일괄 좌표 이동·원본 축소로 숨기지 않음 |
+| 원형 HWPX 실제 배치 | CF186 격리 후보에서 저장된 Square 표 뒤 간격을 paint·pagination 공통 계산으로 수정. 실제01724쪽 누적22.48px/36.96px 과다 간격 해소, 대표9쪽 중 나머지8쪽 SVG exact 보존. 후보의 실제 native16개·855쪽 무편집 재저장 검사 PASS | **후보 수정·회귀 통과, 서버 미반영. 전체 원형 동일성은 여전히 미합격.** 정식 Docker 빌드·승인 runtime 승격과 PC 한컴·글꼴/전체 원점 대조 필요. 일괄 좌표 이동·원본 축소0 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
 
 이전 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거는 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
@@ -30,6 +30,24 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF186 — 저장 HWPX Square 표 뒤 간격 수정 후보·실제 원본 회귀
+
+- 시작 repo `work/cf166-recovery`, branch `feat/CF123-es-v2`, HEAD `ff28dbd3e0b07354f48682375557058a0d2c4ef6`. 총괄만 코드·후보 patch를 수정하고 세 전문은 읽기 전용으로 원인·수치·원본·회귀 범위를 독립 검토했다. 사용자 기존 삭제 로그21/PDF1은 그대로 unstaged 유지한다. 이번에는 추가 C 파일 정리, CC6 재입력/재저장/재출력, 고객 원고·DB/migration·서버 ENV/API키·가오픈 변경0.
+- 실제01724쪽의 host 문단294/297 뒤 Square 표는 `height + outer top/bottom`이 다음 원본 anchor delta와 정확히 일치한다. 원본 간격은283+283=566HU이나 기존 host `line_spacing`2252/1652HU를 가산해22.48px/14.48px, 누적36.96px 초과했다. 이는 line_height가 아니라 line_spacing이며 JPG wrapper/guide padding이 아니다. 원본 raw row 높이는3080+11078 및3080+16124HU로 각각 표 높이와 exact 일치한다.
+- 신규 `stored_hwpx_square_table_gap_hu`를 float_placement.rs에 두고 layout.rs와 typeset.rs가 같은 HU 결과를 한 번만 px로 변환한다. 원형 HWPX 저장 레이아웃·spacingAfter0·비TAC/flowWithText/Square·Para/Para LEFT/TOP offset0·겹침/캡션 없음·한 개 표만 있는 빈 host·원본 lineSeg/텍스트 길이 일치·재조판/dirty/합성줄/중첩표/column break 없음·양의 row height 합계 exact·유효 row/col span·저장 anchor delta exact일 때만 적용한다. 다른 HWP5/TopBottom/명시 spacing/편집 후 재조판/잘못된 기하에는 기존 경로를 유지한다. 셀 값·높이·간격·원본 직렬화 변경0, 전체 좌표 translation0.
+- 추적 후보 `patches/cf186-stored-hwpx-square-gap.candidate.patch`는3파일, SHA `e6d91309543bc2662842499deebd0406167d636c12e215262c803882f9919640`. 기존 CF146/149 승인 patch를 적용한 정확 upstream `c3bc96a6cc5aa852228ce157c2aa5104014a539e` 사본에 생성했다. command-local `core.autocrlf=true` apply/reverse check PASS. rustfmt의 child13개 CRLF→LF 부수변경은 원본 archive와 normalized byte 동일성을 확인해 owned E 사본에서 exact 복원; 최종 semantic patch는3파일뿐이다.
+- E에만 Rust1.93.1 GNU·wasm32 target/rustfmt, w64devkit2.10.0, wasm-bindgen0.2.127을 검증된 원격 release SHA로 설치/추출하고 process TEMP/TMP/CARGO/RUSTUP/PATH/target을 격리했다. 공식 installer `--no-modify-path`, 7z.exe는 실행하지 않고 Windows tar로 추출했다. C global PATH/계정/ACL/서비스/보안 설정 변경0. 정확 upstream 빌드 입력256개와 wrapper를 기존 Git 객체에서 별도 복원, Cargo.lock SHA `082127262ca6640fcf1a6d94636a59cbc23b74b6a9793ed76891fb93d83994df` 불변.
+- `cargo check --locked --target wasm32-unknown-unknown` PASS, R1 release compile PASS, R2 `cargo build --locked --profile release-test` PASS. float_placement native 단위검사19/19는 R1/R2 모두 PASS. R2에 col_count0/span0/u16 주소 초과 음성 조건을 추가했다. **표준 최적화 Docker 배포 빌드가 아니라 진단 빌드다.** 초기 wasm-pack 자동 binding installer는 Windows dlltool 때문에 실패했고, 검증한 동일 버전의 binding generator로 별도 생성했다. 실패를 정식 빌드 PASS로 바꾸지 않는다.
+- R2 diagnostic WASM SHA `9613bf443d49dc01f719a62ae8c19e7d72e483a619f7dff7b9d10c1ef86ebb93`, binding `ad01e939079e3518bc76c442bf395ab058a912991ccb54c8b0be7f5a9a760153`. 승인 WASM `bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44` 및 manifest/runtime28은 변경0. cf183/185 QA는 선택 후보와 두 지문을 모두 명시한 경우만 사용하고 누락/위조/잘못된 형식을 차단한다. 기본값은 여전히 승인 pin이며 diagnostic≠approved를 결과 scope에 기록한다.
+- 실제 대표017/018의1/6/9/24/47쪽,025/026의1/4/6/45쪽을 print SVG/JPG와 Poppler PDF PNG로 재생성했다. R1/R2 후보 모두9/9 렌더·원본SHA 불변·오류0. R2↔R1 SVG9개 exact, 승인본↔R2는01724쪽만 변경/나머지8개 exact. 해당②의 y454.7067→432.2267(−22.48px),③798.8133→761.8533(−36.96px), x97.5867 불변을 별도 읽기 검토로 확인했다. 루트 before/after/reference PDF 육안에서도 표 뒤 과다 간격 해소 확인. 절대 문단 전체 좌표·글꼴·PDFdriver별 원점 차이와 PC 한컴 동일성은 여전히 별도 미검증이다.
+- 최종 공통 경로보호 후 E `native-pdf-r3`의9쪽을 다시 렌더해 R2 metadata·SVG9개 exact/원본SHA 불변/errors0 확인. 별도 읽기 조사에서 승인 screen/print의 viewBox·②/③ 좌표가 exact 같고 제품 wrapper에 전체 translation이 없음을 확인했다. 원본017 pagePr595.28×841.88pt, PDF018593×840pt, 테두리 offset14.17pt라 이를12pt guide 이동으로 단정할 수 없다. SVG 내장 font 데이터0이므로 실제 Blink font 선택도 미확정. 이 후속 조사 마지막 PDF proxy cleanup은 TypeError/exit1이어서 전체 명령 PASS로 보고하지 않으며, 확보된 메타수치만 사용한다. 다음은 비문자 테두리/표/사진 anchor와 글자 baseline 오차를 분리 측정하는 것이다.
+- 실제 원본32개 extension/size/SHA unique 재매칭·불변. HWP13/HWPX3,855쪽을 같은 형식으로 두 번 저장·재열기(총32exports)해 쪽 차이0·컨트롤 사슬3회 동일·loss0. PDF15/475쪽은 metadata만, XLSX1은 inventory만. E `source-gate-r2/results.json`과 child16개가 exact 일치하며 독립 전문 확인 PASS. 중앙 지문 helper 전환 후 `source-gate-r3/results.json`에서도 같은 범위를 재실행해 exit0. 같은 parser의 무편집 자기대조이므로 최초 파싱 누락·수정 후 한컴·PC 동일성 합격을 뜻하지 않는다.
+- 검증도구4/4와 root/apps/web 전체 tsc exit0 뒤 전문이 경로보호의 영구 자동검사 누락을 찾아 보완했다. 공유 보호 함수와 실제 Windows 대소문자/junction·원본 동일/하위·형제/다른 드라이브 합성 검사 추가 후5/5+root/web tsc 최신 exit0. 두 실제 CLI에 기존 E 결과 경로를 재사용하는 음성검사도 쓰기 전 expected reject/기존 JSON SHA불변2/2. 기본 sandbox tsc가 Prisma/Tiptap/Yjs 타입 누락을 표시한 원인은 같은 파일의 junction realpath EPERM으로 경로를 다르게 해석하는 실행권한 경계였다. 공식 승인 실행에서 같은 Node/TS와 현재 의존성으로 통과, 의존성 삭제/재설치/Prisma재생성/타입 완화0.
+- 후보 unified diff의 빈 문맥3행은 형식상 한 칸 공백을 담으므로 일반 텍스트 공백 검사와 구분한다. `.gitattributes`는 그 후보 파일1개만 byte pin/EOL 보존하고 문맥의 blank-at-eol 검사를 제외한다. 실제 적용 코드의 공백 오류는 별도 `git apply --check --whitespace=error` 정/역방향 모두 PASS, 저장소 diff check PASS. Rust 코드나 테스트의 공백 정책은 완화하지 않는다.
+- upstream source test 정책의 전체 수4212≤4225 검사는 PASS이나 `--base-ref` 검사는2위반이다. 기존 승인3patch 사본14→후보19개, 실제 upstream c3bc96a 원본은13개이므로 이전 CF146도1개를 추가한 상태다. private 진단 단위검사19/19와 upstream CI/기여 합격은 별개이며, 이를 제품 QA와 혼동하지 않는다. tests/cases로 단순 이동하면 private pub(crate) helper와 재조판 overlay 검사5군의 동등성을 잃고 이전1개 위반도 남으므로 이번에는 API 공개화/코드 복제/정책 baseline 완화 없이 후보를 보존한다. upstream 제출은 미실행·미합격이며 그 별도 기준 충족 없이 upstream PR/Issue/push를 하지 않는다.
+- Docker Desktop 상태 조회는 실패했고 linux engine 연결 준비를 확인하지 못했다. Native Sky는 현재 초기화/앱 목록 조회 가능해졌지만 Docker 앱 실행 승인은 timeout; 그 동작을 우회·재시도하거나 Docker reset/service 변경하지 않았다. 사용자에게 엔진 실행 상태 확인을 요청했으며 표준 Docker 빌드→승인 회귀→development만 반영이 다음 단계다. 지금 development는 CF185 source9df783a/Worker10c2e684 그대로이며 후보 미반영이다. C/E 후속 여유46,972,764,160B/140,458,590,208B 관측은 다른 동시 변화를 포함하므로 이번 정리 기여로 산정하지 않는다.
+- 이후 원형PC 한컴·의미별 표지/목차/챕터·전체A–Z·검토2.xlsx·제안서4~12 실물·가오픈 동일 배포·가이드 영상은 미완료. 관리자유종욱 기본 개발 QA와 업무 CEO/DIRECTOR 최종승인·자기승인 차단, 현장조사회의록 HOLD 유지.
 
 ### CF185 — 실제 PDF 용지 검사·원형 배치 반례·C 공간 보호 정리
 

@@ -2,25 +2,25 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
-import { resolve, join, relative, isAbsolute, sep, dirname, basename } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve, join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
-import { matchReferenceSources } from './cf183-template-source-gate.mjs';
+import { assertQaOutputOutsideSources, matchReferenceSources, readQaNativeEngine } from './cf183-template-source-gate.mjs';
 
 async function main() {
   const sourceRoot = process.env.CF183_SOURCE_ROOT, outputRoot = process.env.CF185_OUTPUT_ROOT, pdfRenderer = process.env.CF185_PDFTOPPM;
   assert.ok(sourceRoot && outputRoot && pdfRenderer, 'Explicit source, private output and Poppler paths are required.');
   const output = resolve(outputRoot);
   assert.equal(existsSync(output), false, 'Never overwrite an earlier visual QA run.');
-  const fromOriginals = relative(realpathSync(sourceRoot), join(realpathSync(dirname(output)), basename(output)));
-  assert.ok(isAbsolute(fromOriginals) || fromOriginals === '..' || fromOriginals.startsWith('..' + sep), 'QA output must not be inside the originals.');
+  assertQaOutputOutsideSources(sourceRoot, dirname(output), basename(output));
   const inventory = JSON.parse(readFileSync('docs/templates/reference-inventory.json', 'utf8'));
   const sources = matchReferenceSources(sourceRoot, inventory);
-  const wasm = readFileSync('pinned-runtime/pkg/rhwp_bg.wasm');
   const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-  assert.equal(sha(wasm), 'bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44');
-  const engine = await import(pathToFileURL(resolve('pinned-runtime/pkg/rhwp.js')).href);
+  const candidateRoot = process.env.CF186_ENGINE_ROOT;
+  const { root: engineRoot, wasm, engineSha256, bindingSha256 } = readQaNativeEngine(candidateRoot,
+    process.env.CF186_ENGINE_WASM_SHA256, process.env.CF186_ENGINE_BINDING_SHA256);
+  const engine = await import(pathToFileURL(join(engineRoot, 'rhwp.js')).href);
   await engine.default({ module_or_path: wasm });
   const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)),
@@ -58,6 +58,7 @@ async function main() {
         for (const number of pair.pages) {
           assert.ok(number > 0 && number <= doc.pageCount());
           const svg = doc.renderPageSvgWithProfile(number - 1, 'print');
+          writeFileSync(join(output, pair.native + '-page-' + number + '.svg'), svg);
           const raster = await page.evaluate(async value => {
             const file: File = await (globalThis as any).cf185Raster(value, 'qa-page.jpg');
             const bitmap = await createImageBitmap(file);
@@ -66,7 +67,7 @@ async function main() {
           }, svg);
           writeFileSync(join(output, pair.native + '-page-' + number + '.jpg'), new Uint8Array(raster.bytes));
           execFileSync(pdfRenderer, ['-f', String(number), '-singlefile', '-r', '96', '-png', pdf.source, join(output, pair.pdf + '-page-' + number)], { windowsHide: true, timeout: 30000 });
-          results.push({ native: pair.native, pdf: pair.pdf, page: number, width: raster.width, height: raster.height, svgSha256: sha(Buffer.from(svg)), scope: 'Representative private render, requires visual inspection; not all-page fidelity PASS' });
+          results.push({ native: pair.native, pdf: pair.pdf, page: number, pageCount: doc.pageCount(), width: raster.width, height: raster.height, svgSha256: sha(Buffer.from(svg)), scope: 'Representative private render, requires visual inspection; not all-page fidelity PASS' });
           console.log(JSON.stringify({ native: pair.native, pdf: pair.pdf, page: number, rendered: true }));
         }
       } finally { doc.free(); }
@@ -74,7 +75,12 @@ async function main() {
       assert.equal(sha(readFileSync(pdf.source)), pdf.sha256);
     }
     assert.deepEqual(errors, []);
-    writeFileSync(join(output, 'results.json'), JSON.stringify({ originalsUnchanged: true, errors, results }, null, 2));
+    writeFileSync(join(output, 'results.json'), JSON.stringify({
+      originalsUnchanged: true, errors,
+      engine: { wasmSha256: engineSha256, bindingSha256,
+        scope: candidateRoot ? 'Explicit diagnostic candidate, not approved runtime' : 'Approved pinned runtime' },
+      results,
+    }, null, 2));
   } finally { await browser.close(); await server.close(); }
 }
 void main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,0 +1,2 @@
+# Preserve the byte-pinned candidate diff; blank context records encode one space.
+patches/cf186-stored-hwpx-square-gap.candidate.patch -text whitespace=-blank-at-eol

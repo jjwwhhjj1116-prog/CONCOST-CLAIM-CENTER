@@ -7,6 +7,22 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+export function assertQaOutputOutsideSources(sourceRoot, outputParent, outputName = '') {
+  const location = path.relative(realpathSync(sourceRoot), path.join(realpathSync(outputParent), outputName));
+  assert.ok(path.isAbsolute(location) || location === '..' || location.startsWith('..' + path.sep), 'QA output must not be inside the originals');
+}
+export function readQaNativeEngine(candidateRoot, expectedWasm, expectedBinding) {
+  const root = path.resolve(candidateRoot || 'pinned-runtime/pkg');
+  const wasmFingerprint = candidateRoot ? expectedWasm : 'bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44';
+  const bindingFingerprint = candidateRoot ? expectedBinding : 'ad01e939079e3518bc76c442bf395ab058a912991ccb54c8b0be7f5a9a760153';
+  assert.match(wasmFingerprint || '', /^[a-f0-9]{64}$/, 'Explicit candidate WASM fingerprint is required');
+  assert.match(bindingFingerprint || '', /^[a-f0-9]{64}$/, 'Explicit candidate binding fingerprint is required');
+  const wasm = readFileSync(path.join(root, 'rhwp_bg.wasm'));
+  const engineSha256 = sha(wasm), bindingSha256 = sha(readFileSync(path.join(root, 'rhwp.js')));
+  assert.equal(engineSha256, wasmFingerprint);
+  assert.equal(bindingSha256, bindingFingerprint);
+  return { root, wasm, engineSha256, bindingSha256 };
+}
 export function exportNativeWithReport(document, format) {
   assert.ok(format === 'hwp' || format === 'hwpx');
   const result = format === 'hwp' ? document.exportHwpWithReport() : document.exportHwpxWithReport();
@@ -65,11 +81,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   assert.equal(files.length, 32);
   const runName = process.env.CF183_RUN_NAME || 'cf183-source-gate';
   assert.match(runName, /^[a-zA-Z0-9_-]+$/u);
-  const output = path.resolve('tmp', runName);
+  const outputRoot = process.env.CF183_OUTPUT_ROOT;
+  if (outputRoot) assertQaOutputOutsideSources(sourceRoot, outputRoot);
+  const output = path.resolve(outputRoot || 'tmp', runName);
   assert.equal(existsSync(output), false, 'Preserve the existing gate results; use a new run name');
+  const candidateRoot = process.env.CF186_ENGINE_ROOT;
+  const { root: engineRoot, engineSha256, bindingSha256 } = readQaNativeEngine(candidateRoot,
+    process.env.CF186_ENGINE_WASM_SHA256, process.env.CF186_ENGINE_BINDING_SHA256);
   mkdirSync(output, { recursive: true });
-  const report = { scope: 'Actual originals, local parser/serialization only; not PC Hancom, full visual fidelity, or Drive persistence', sourceFiles: 32, engineSha256: sha(readFileSync('pinned-runtime/pkg/rhwp_bg.wasm')), results: [] };
-  assert.equal(report.engineSha256, 'bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44');
+  const report = { scope: (candidateRoot ? 'Explicit diagnostic candidate, not approved runtime. ' : '') + 'Actual originals, local parser/serialization only; not PC Hancom, full visual fidelity, or Drive persistence', sourceFiles: 32, engineSha256, bindingSha256, results: [] };
   let failures = 0;
   for (const file of files) {
     console.log(JSON.stringify({ id: file.fileId, extension: file.extension, stage: 'START' }));
@@ -77,7 +97,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const started = Date.now();
     if (/^\.hwpx?$/u.test(file.extension)) {
       const childFile = path.join(output, file.fileId + '-roundtrip.json');
-      const child = spawnSync(process.execPath, ['--max-old-space-size=768', 'scripts/cf149-hwpx-edit-roundtrip.mjs', 'pinned-runtime/pkg', file.source], {
+      const child = spawnSync(process.execPath, ['--max-old-space-size=768', 'scripts/cf149-hwpx-edit-roundtrip.mjs', engineRoot, file.source], {
         encoding: 'utf8', timeout: 60000, maxBuffer: 2_000_000, windowsHide: true,
         env: { ...process.env, CF149_NO_EDIT_ONLY: '1', CF149_EXPORT_FORMAT: file.extension === '.hwp' ? 'hwp' : 'hwpx', CF149_REQUIRE_CONTENT_LOSS: '1', CF149_EXPECTED_PAGES: '0', CF149_RESULT_FILE: childFile }
       });

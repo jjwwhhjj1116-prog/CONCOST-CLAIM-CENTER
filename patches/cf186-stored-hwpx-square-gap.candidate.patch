@@ -1,0 +1,483 @@
+diff --git a/src/renderer/float_placement.rs b/src/renderer/float_placement.rs
+--- a/src/renderer/float_placement.rs
++++ b/src/renderer/float_placement.rs
+@@ -774,6 +774,106 @@ pub(crate) fn stored_picture_gap_fits_body(
+         && text_start + i64::from(text.line_height) <= i64::from(body_height_hu)
+ }
+ 
++/// An original HWPX Square table can encode its trailing gap in the next
++/// paragraph's stored position, rather than in the anchor's text line spacing.
++/// Only accept the exact declared-height + outer-margins contract; stale or
++/// recomposed ladders and edited table measurements must use normal flow.
++pub(crate) fn stored_hwpx_square_table_gap_hu(
++    original_hwpx: bool,
++    table_reflowed: bool,
++    para: &Paragraph,
++    next_para: Option<&Paragraph>,
++) -> Option<i32> {
++    use crate::model::paragraph::{ColumnBreakType, LineSeg};
++
++    let [Control::Table(table)] = para.controls.as_slice() else {
++        return None;
++    };
++    let next = next_para?;
++    let cm = &table.common;
++    let stored = |p: &Paragraph| {
++        !p.line_segs_recomputed
++            && !p.stored_text_partition_is_dirty()
++            && p.layout_only_fill_lines == 0
++            && p.source_line_seg_vertical_pos
++                .as_ref()
++                .is_none_or(|source| source.len() == p.line_segs.len())
++            && p.line_segs
++                .iter()
++                .all(|line| line.tag & LineSeg::TAG_IMPLEMENTATION_PROPERTY == 0)
++    };
++    if !original_hwpx
++        || table_reflowed
++        || cm.treat_as_char
++        || cm.text_wrap != TextWrap::Square
++        || !cm.flow_with_text
++        || cm.allow_overlap
++        || cm.vert_rel_to != VertRelTo::Para
++        || cm.vert_align != VertAlign::Top
++        || cm.horz_rel_to != HorzRelTo::Para
++        || cm.horz_align != HorzAlign::Left
++        || cm.vertical_offset != 0
++        || cm.horizontal_offset != 0
++        || table.page_break != TablePageBreak::RowBreak
++        || table.row_count <= 1
++        || table.col_count == 0
++        || table.cell_spacing != 0
++        || table.caption.is_some()
++        || para.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}')
++        || para.column_type != ColumnBreakType::None
++        || !next.controls.is_empty()
++        || next.column_type != ColumnBreakType::None
++        || !stored(para)
++        || !stored(next)
++        || table.cells.is_empty()
++        || table.cells.iter().any(|cell| {
++            cell.row_span == 0
++                || cell.col_span == 0
++                || usize::from(cell.row) + usize::from(cell.row_span) > usize::from(table.row_count)
++                || usize::from(cell.col) + usize::from(cell.col_span) > usize::from(table.col_count)
++                || cell.paragraphs.is_empty()
++                || cell.paragraphs.iter().any(|p| {
++                    p.line_segs.is_empty()
++                        || !stored(p)
++                        || p.controls
++                            .iter()
++                            .any(|control| matches!(control, Control::Table(_)))
++                })
++        })
++        || table.outer_margin_top < 0
++        || table.outer_margin_bottom < 0
++    {
++        return None;
++    }
++    let [host] = para.line_segs.as_slice() else {
++        return None;
++    };
++    let following = next.line_segs.first()?;
++    if host.line_height <= 0 || following.line_height <= 0 {
++        return None;
++    }
++    let height = i32::try_from(cm.height).ok()?;
++    let row_heights = table.get_raw_row_heights();
++    if row_heights.iter().any(|height| *height == 0)
++        || row_heights
++            .iter()
++            .try_fold(0u32, |sum, height| sum.checked_add(*height))?
++            != cm.height
++    {
++        return None;
++    }
++    let margins = i32::from(table.outer_margin_top) + i32::from(table.outer_margin_bottom);
++    let host_vpos = ladder_vpos(para, 0, host.vertical_pos);
++    let next_vpos = ladder_vpos(next, 0, following.vertical_pos);
++    let delta = next_vpos.checked_sub(host_vpos)?;
++    (host_vpos >= 0
++        && height > 0
++        && margins > 0
++        && margins < host.line_spacing
++        && delta == height.checked_add(margins)?)
++    .then_some(margins)
++}
++
+ fn ladder_vpos(paragraph: &Paragraph, index: usize, fallback: i32) -> i32 {
+     paragraph
+         .source_line_seg_vertical_pos
+@@ -1450,6 +1550,273 @@ mod tests {
+         }
+     }
+ 
++    fn hwpx_square_gap_candidate(
++        host_vpos: i32,
++        height: u32,
++        next_vpos: i32,
++        line_spacing: i32,
++    ) -> (Paragraph, Paragraph) {
++        let table = Table {
++            row_count: 2,
++            col_count: 3,
++            page_break: TablePageBreak::RowBreak,
++            outer_margin_top: 283,
++            outer_margin_bottom: 283,
++            cells: (0..2)
++                .map(|row| Cell {
++                    row,
++                    row_span: 1,
++                    col_span: 1,
++                    height: if row == 0 {
++                        3080
++                    } else {
++                        height.saturating_sub(3080)
++                    },
++                    paragraphs: vec![Paragraph {
++                        line_segs: vec![LineSeg {
++                            line_height: 1100,
++                            tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
++                            ..Default::default()
++                        }],
++                        ..Default::default()
++                    }],
++                    ..Default::default()
++                })
++                .collect(),
++            common: CommonObjAttr {
++                height,
++                flow_with_text: true,
++                text_wrap: TextWrap::Square,
++                horz_rel_to: HorzRelTo::Para,
++                horz_align: HorzAlign::Left,
++                vert_rel_to: VertRelTo::Para,
++                vert_align: VertAlign::Top,
++                ..Default::default()
++            },
++            ..Default::default()
++        };
++        let host = Paragraph {
++            controls: vec![Control::Table(Box::new(table))],
++            line_segs: vec![LineSeg {
++                vertical_pos: host_vpos,
++                line_height: 1100,
++                line_spacing,
++                tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        let next = Paragraph {
++            line_segs: vec![LineSeg {
++                vertical_pos: next_vpos,
++                line_height: 1100,
++                tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
++                ..Default::default()
++            }],
++            ..Default::default()
++        };
++        (host, next)
++    }
++
++    #[test]
++    fn hwpx_square_gap_uses_exact_original_ladder_not_text_spacing() {
++        for (host_y, height, next_y, spacing) in
++            [(5504, 14158, 20228, 2252), (25732, 19204, 45502, 1652)]
++        {
++            let (mut host, mut next) = hwpx_square_gap_candidate(host_y, height, next_y, spacing);
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, false, &host, Some(&next)),
++                Some(566)
++            );
++            // Axis normalization may shift working vpos; the intact source
++            // snapshot is the authority for this original-layout contract.
++            host.source_line_seg_vertical_pos = Some(vec![host_y]);
++            next.source_line_seg_vertical_pos = Some(vec![next_y]);
++            host.line_segs[0].vertical_pos += 100;
++            next.line_segs[0].vertical_pos += 200;
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, false, &host, Some(&next)),
++                Some(566)
++            );
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(false, false, &host, Some(&next)),
++                None
++            );
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, true, &host, Some(&next)),
++                None
++            );
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, false, &host, None),
++                None
++            );
++        }
++    }
++
++    #[test]
++    fn hwpx_square_gap_rejects_recomputed_dirty_or_partial_ladders() {
++        let (host, next) = hwpx_square_gap_candidate(5504, 14158, 20228, 2252);
++        for change_host in [true, false] {
++            for kind in 0..6 {
++                let (mut candidate_host, mut candidate_next) = (host.clone(), next.clone());
++                let p = if change_host {
++                    &mut candidate_host
++                } else {
++                    &mut candidate_next
++                };
++                match kind {
++                    0 => p.line_segs_recomputed = true,
++                    1 => p.stored_text_partition_dirty = true,
++                    2 => p.layout_only_fill_lines = 1,
++                    3 => p.line_segs[0].tag |= LineSeg::TAG_IMPLEMENTATION_PROPERTY,
++                    4 => p.source_line_seg_vertical_pos = Some(vec![]),
++                    _ => p.line_segs.clear(),
++                }
++                assert_eq!(
++                    stored_hwpx_square_table_gap_hu(
++                        true,
++                        false,
++                        &candidate_host,
++                        Some(&candidate_next)
++                    ),
++                    None
++                );
++            }
++        }
++        let mut mixed_next = next.clone();
++        mixed_next.line_segs.push(LineSeg {
++            tag: LineSeg::TAG_IMPLEMENTATION_PROPERTY,
++            ..Default::default()
++        });
++        assert_eq!(
++            stored_hwpx_square_table_gap_hu(true, false, &host, Some(&mixed_next)),
++            None
++        );
++    }
++
++    #[test]
++    fn hwpx_square_gap_rejects_neighboring_table_contracts() {
++        let (host, next) = hwpx_square_gap_candidate(5504, 14158, 20228, 2252);
++        for kind in 0..17 {
++            let mut candidate = host.clone();
++            let Control::Table(table) = &mut candidate.controls[0] else {
++                unreachable!()
++            };
++            match kind {
++                0 => table.common.treat_as_char = true,
++                1 => table.common.text_wrap = TextWrap::TopAndBottom,
++                2 => table.common.flow_with_text = false,
++                3 => table.common.allow_overlap = true,
++                4 => table.common.vert_rel_to = VertRelTo::Page,
++                5 => table.common.vert_align = VertAlign::Bottom,
++                6 => table.common.horz_rel_to = HorzRelTo::Column,
++                7 => table.common.horz_align = HorzAlign::Right,
++                8 => table.common.vertical_offset = 1,
++                9 => table.common.vertical_offset = u32::MAX,
++                10 => table.common.horizontal_offset = 1,
++                11 => table.page_break = TablePageBreak::CellBreak,
++                12 => table.row_count = 1,
++                13 => table.caption = Some(Default::default()),
++                14 => table.outer_margin_top = -1,
++                15 => table.cell_spacing = 1,
++                _ => table.cell_spacing = -1,
++            }
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, false, &candidate, Some(&next)),
++                None
++            );
++        }
++        let mut visible_host = host.clone();
++        visible_host.text = "표 제목".into();
++        assert_eq!(
++            stored_hwpx_square_table_gap_hu(true, false, &visible_host, Some(&next)),
++            None
++        );
++        let mut multiple_controls = host.clone();
++        multiple_controls.controls.push(host.controls[0].clone());
++        assert_eq!(
++            stored_hwpx_square_table_gap_hu(true, false, &multiple_controls, Some(&next)),
++            None
++        );
++        let mut next_table = next.clone();
++        next_table.controls = host.controls.clone();
++        assert_eq!(
++            stored_hwpx_square_table_gap_hu(true, false, &host, Some(&next_table)),
++            None
++        );
++        let mut page_break = next.clone();
++        page_break.column_type = crate::model::paragraph::ColumnBreakType::Page;
++        assert_eq!(
++            stored_hwpx_square_table_gap_hu(true, false, &host, Some(&page_break)),
++            None
++        );
++    }
++
++    #[test]
++    fn hwpx_square_gap_rejects_edited_geometry_page_reset_and_overflow() {
++        for (host_y, height, next_y, spacing) in [
++            (5504, 14258, 20228, 2252), // Edited height with stale ladder.
++            (5504, 14158, 20227, 2252),
++            (5504, 14158, 20229, 2252),
++            (5504, 14158, 0, 2252), // A new physical page is not this gap.
++            (5504, 14158, 20228, 566),
++            (5504, u32::MAX, 20228, 2252),
++            (0, i32::MAX as u32, i32::MAX, 2252),
++            (i32::MIN, 14158, i32::MAX, 2252),
++        ] {
++            let (host, next) = hwpx_square_gap_candidate(host_y, height, next_y, spacing);
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, false, &host, Some(&next)),
++                None
++            );
++        }
++        let (mut host, next) = hwpx_square_gap_candidate(5504, 14158, 20228, 2252);
++        let Control::Table(table) = &mut host.controls[0] else {
++            unreachable!()
++        };
++        table.outer_margin_bottom += 1;
++        assert_eq!(
++            stored_hwpx_square_table_gap_hu(true, false, &host, Some(&next)),
++            None
++        );
++    }
++
++    #[test]
++    fn hwpx_square_gap_rejects_cell_edits_even_when_host_ladder_is_intact() {
++        let (host, next) = hwpx_square_gap_candidate(5504, 14158, 20228, 2252);
++        for kind in 0..14 {
++            let mut candidate = host.clone();
++            let Control::Table(table) = &mut candidate.controls[0] else {
++                unreachable!()
++            };
++            match kind {
++                0 => table.cells[1].height += 100,
++                1 => table.cells[0].paragraphs[0].line_segs_recomputed = true,
++                2 => table.cells[0].paragraphs[0].stored_text_partition_dirty = true,
++                3 => {
++                    table.cells[0].paragraphs[0].line_segs[0].tag |=
++                        LineSeg::TAG_IMPLEMENTATION_PROPERTY
++                }
++                4 => table.cells[0].paragraphs[0].source_line_seg_vertical_pos = Some(vec![]),
++                5 => table.cells[0].paragraphs[0]
++                    .controls
++                    .push(Control::Table(Box::default())),
++                6 => table.cells.clear(),
++                7 => table.cells[0].height = 0,
++                8 => table.cells[0].paragraphs.clear(),
++                9 => table.col_count = 0,
++                10 => table.cells[0].col_span = 0,
++                11 => table.cells[0].row_span = 0,
++                12 => table.cells[0].col = u16::MAX,
++                _ => table.cells[0].row_span = u16::MAX,
++            }
++            assert_eq!(
++                stored_hwpx_square_table_gap_hu(true, false, &candidate, Some(&next)),
++                None
++            );
++        }
++    }
++
+     #[test]
+     fn stored_picture_host_height_is_not_added_twice() {
+         let picture = Picture {
+diff --git a/src/renderer/layout.rs b/src/renderer/layout.rs
+--- a/src/renderer/layout.rs
++++ b/src/renderer/layout.rs
+@@ -12,8 +12,8 @@ use super::float_placement::{
+     native_empty_host_rowbreak_line_advance_hu,
+     original_hwpx_column_rowbreak_equal_outer_margin_hu,
+     para_relative_left_aligned_outer_margin_left_hu, signed_hwpunit,
+-    stored_empty_anchor_band_host_line_advance_hu, stored_visible_anchor_band_host_line_advance_hu,
+-    FloatLaneSet, FloatPlacementContext,
++    stored_empty_anchor_band_host_line_advance_hu, stored_hwpx_square_table_gap_hu,
++    stored_visible_anchor_band_host_line_advance_hu, FloatLaneSet, FloatPlacementContext,
+ };
+ use super::font_metrics_data;
+ use super::height_cursor::HeightCursor;
+@@ -11304,10 +11304,13 @@ impl LayoutEngine {
+                 let para_style_id = comp
+                     .map(|c| c.para_style_id as usize)
+                     .unwrap_or(para.para_shape_id as usize);
+-                if let Some(para_style) = styles.para_styles.get(para_style_id) {
+-                    if para_style.spacing_after > 0.0 {
+-                        y_offset += para_style.spacing_after;
+-                    }
++                let spacing_after = styles
++                    .para_styles
++                    .get(para_style_id)
++                    .map(|style| style.spacing_after)
++                    .unwrap_or(0.0);
++                if spacing_after > 0.0 {
++                    y_offset += spacing_after;
+                 }
+                 // [Task #1147 v2] 빈 앵커 TopAndBottom 비-TAC 표는 다음
+                 // 항목이 일반 문단일 때 host_line_spacing=0 으로 맞춘다. 단, [Task
+@@ -11373,6 +11376,22 @@ impl LayoutEngine {
+                     } else {
+                         seg.line_height
+                     };
++                    let stored_gap = para.controls.get(control_index).and_then(|control| {
++                        let Control::Table(table) = control else {
++                            return None;
++                        };
++                        stored_hwpx_square_table_gap_hu(
++                            self.profile.get().hwpx_container()
++                                && self.profile.get().hwpx_stored_layout()
++                                && spacing_after == 0.0,
++                            self.render_normalization
++                                .borrow()
++                                .table_text_reflowed(table),
++                            para,
++                            paragraphs.get(para_index + 1),
++                        )
++                    });
++                    let gap = stored_gap.unwrap_or(gap);
+                     // [#6900] **사다리가 다음 문단을 이미 표 하단에 두면 더 띄우지 않는다.**
+                     //
+                     // 이 간격은 표 뒤 host 앵커 줄의 후행 간격이다. 그런데 앵커 줄의
+diff --git a/src/renderer/typeset.rs b/src/renderer/typeset.rs
+--- a/src/renderer/typeset.rs
++++ b/src/renderer/typeset.rs
+@@ -20,7 +20,7 @@ use crate::renderer::float_placement::{
+     empty_offset_float_deferred_text_ladder_hu, horizontal_range, is_page_bottom_fixed_float,
+     is_para_topbottom_float, native_empty_host_rowbreak_line_advance_hu,
+     original_hwpx_infront_para_flow_paginates, signed_hwpunit,
+-    stored_empty_anchor_band_host_line_advance_hu,
++    stored_empty_anchor_band_host_line_advance_hu, stored_hwpx_square_table_gap_hu,
+     stored_visible_anchor_band_host_line_advance_from_vpos, FloatLaneSet, FloatPlacementContext,
+ };
+ use crate::renderer::height_cursor::HeightCursor;
+@@ -19071,14 +19071,26 @@ impl TypesetEngine {
+         let suppress_empty_anchor_spacing =
+             is_topbottom_empty_anchor && !next_is_empty_table_anchor;
+ 
++        let stored_gap = stored_hwpx_square_table_gap_hu(
++            self.profile.get().hwpx_container()
++                && self.profile.get().hwpx_stored_layout()
++                && sa == 0.0,
++            self.render_normalization.table_text_reflowed(table),
++            para,
++            next_para,
++        );
+         let host_line_spacing = if suppress_empty_anchor_spacing {
+             0.0
+         } else if !is_tac && !is_single_cell_placeholder {
+-            para.line_segs
+-                .last()
+-                .filter(|seg| seg.line_spacing > 0)
+-                .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
+-                .unwrap_or(0.0)
++            stored_gap
++                .map(|gap| hwpunit_to_px(gap, self.dpi))
++                .unwrap_or_else(|| {
++                    para.line_segs
++                        .last()
++                        .filter(|seg| seg.line_spacing > 0)
++                        .map(|seg| hwpunit_to_px(seg.line_spacing, self.dpi))
++                        .unwrap_or(0.0)
++                })
+         } else {
+             0.0
+         };
