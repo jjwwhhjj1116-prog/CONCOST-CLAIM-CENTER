@@ -1,8 +1,8 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF193, 2026-10-07
+## 현재 판정 — CF194, 2026-10-07
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~193은 로컬 검증본으로 아직 미전송·미배포다. CF193은 실제011의 선두 페이지 감추기 설정을 보존하는 숫자 갱신과, 잠금 상태의 목차·본문 읽기 전용 대조를 지원한다. 관련55개+주변28개 검사가 통과했다. 원본16개의 제한된 목차 탐색은 실행16/원본불변16이며 표식 미확인6개·부분 확인9개를 전체 합격으로 계산하지 않는다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~194은 로컬 검증본으로 아직 미전송·미배포다. CF194은 제품 변경 없이 실제 SDK 표 셀 클릭·키보드 입력·Undo/Redo·전체 적용·저장된 File 재열기를 검수했다. 합성 HWP/HWPX 각2쪽 및 실제017 HWPX47쪽의 메모리 사본에서 통과했고, 관련 회귀 **85/85 PASS, skipped0**다. 이85개는 실업무85개 카테고리 합격이 아니다. 원본16개의 제한된 목차 탐색은 기존 실행16/원본불변16 기록이며 이번에 전수 재실행하지 않았다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
@@ -13,6 +13,7 @@
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
 | 원형 편집 안정성 | 실제 React/Tiptap에서 끝 마커 뒤 자동 빈 문단, 전체 교체와 첫 편집의 Undo 병합, 문서 전환 시 이전 여백 유지 FAIL→최소 수정→PASS. 일반 표·사진·빈 문단·서식 Undo·문서 키 전환 보존 | 합성 localhost 검사. 실제 HWP 수정본의 영구저장·Yjs 다중 사용자 Undo·한컴 전수 대조와 별개 |
+| 원형 표 실제 입력 | CF194 실제017의 물리3쪽 제목 셀을 실제 iframe 클릭·키보드로 수정→Undo 원래47쪽 print SHA exact→Redo→전체 적용→새 SDK File 재열기 PASS. 모든 셀의 본문·치수·여백·병합·문단/글자 서식 및 다른46쪽·사진 보존 | 지정한 평면표 셀·로컬 메모리 저장 검수다. 중첩표, PC 한컴, 실제 D1/Drive 영구저장·모든32원본 합격으로 확대하지 않음 |
 | 저장·재열기 | 구체 승인 후 CC6 표지·8쪽 표 각 ‘검수’ 추가→17쪽 전체 적용1회→실제 v5 저장→reload→연결 HWP 재열기 PASS. 원래 제목·17쪽·2표식 유지, 중복 확인·오류0 | PC 한컴 및 독립승인 후 제출용 파일 검수는 별도 |
 | 원본·기존 이력 | 이번 CC6 v1~v5 보존, 최초 원본44,544B/SHA 불변, 15쪽 자료 참조와 모든 페이지 속성 불변. 새 작업본+변경1·8쪽만 추가해23건 SUCCEEDED | 전체DB 복제는 승인 범위 밖으로 거절·미실행. 과거124/120테이블 대조를 이번 전수 결과로 확대하지 않음. CC5 복구/재업로드0 |
 | 검토·최종 출력 | 자기승인·CEO/DIRECTOR 규칙 유지. 승인 snapshot과 연결 지문을 검증한 원형 HWP/HWPX 동일바이트 출력·A4 실제 크기·불일치 차단 구현/격리 검사 PASS | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료. 원형 없는 페이지그림 DOCX의 개별 문장·표 편집은 불가하며 안내를 정정 |
@@ -31,6 +32,18 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF194 — 실제 원형 표 셀 입력·Undo·전체 적용·재열기 검수
+
+- 시작 HEAD `0030c6c2c798f24b5898a9a576c45b1eabeece7a`, 동일 recovery/`feat/CF123-es-v2`. 총괄만 `scripts/cf194-native-table-browser-test.ts`와 이 감사 기록을 추가/갱신했다. 제품 소스·승인 runtime·API·DB·출력 형식 변경0. 세 전문은 읽기 검수했고 추가 차단 사항0이다. 기존 사용자 삭제22는 그대로 unstaged이며 이번 커밋에 포함하지 않는다.
+- 직접 native setter/RPC/개발 hook 없이 실제 승인 SDK/Studio iframe의 공개 UI를 사용했다. 실제 glyph+`getCursorRectByPath`+`getPageInfo`+print SVG 크기를 교차 확인하고, 가상화 캔버스의 실제 물리쪽 cache key로 선택했다. 셀 글자 내부 click→입력 textarea 실제 포커스·caret 표시→End·키보드 ` QA` 입력이다. 합성 HWP/HWPX 각2쪽과 실제017 HWPX47쪽/물리3쪽 s0host46/control0/cell1/para0를 구분해 실행했다. 실제 파일명·본문은 로그/캡처에 내보내지 않았고 실제 원본은 읽기와 SHA 재확인만 했다.
+- 처음 실물 실행에서 전체 SVG 여러 벌·binary JS 배열을 검사 프로세스에 보관해 Node1.5GB 한도 OOM이 발생했다. 제품 오류로 판정하지 않았다. 페이지 비교를 SHA 배열로, 저장 파일을 단일 File+로컬 POST 메모리 바이트로 바꾸고 동일 대조를 유지해 재실행했다. 이후 실제017까지 통과했다. C/기존 산출물 삭제·설정/ACL·사용자 Chrome 변경0, TEMP/TMP/cache는 E194 전용이다.
+- 실제 편집 뒤 target쪽 raw 비텍스트 SVG 지문 차이를 추적했다. 승인 c3 소스의 `cell-clip-{renderNode.id}`는 지속 셀 주소가 아닌 증가 렌더노드 번호이며, 정의/참조 번호만 달라질 수 있다. QA 전용 비교에서 유일 정의·정확 참조·존재/중복/미해결 보호 뒤 정의 순서별 ID/참조를 함께 정규화했다. cell prefix/plane suffix·순서·좌표·속성·도형·사진은 그대로다. 좌표 변경/참조 교환/접미사 변경/중복/미해결 음성을 추가했고 제품의 전체 페이지 일치 검사는 완화하지 않았다.
+- 같은 원본 문자들의 target쪽 위치·서식, 전체 root 본문, 모든 평면 셀의 모든 문단·문단/원문 prefix 글자서식·치수·padding·border·span, fields/controls, header/BinData·다른 구역 및 다른46쪽 print SHA exact를 확인했다. 중첩 셀은 hostListId0 조건을 명시하며 일반 중첩 지원을 주장하지 않는다. Undo는 원래47쪽 전부 exact, Redo는 수정 상태 복원, 전체 적용의 File SHA와47쪽 SHA는 같은 산출물, 새 SDK에 그 File을 재열어 재다운로드/대조했다. 최초 원본 SHA 불변. 같은 형식 추가 재저장의 LossReport0는 그 후속 산출물만 증명하며 최초 SDK byte-only export의 LossReport는 **UNAVAILABLE**로 기록했다.
+- 합성 HWP 음성: 실제 적용 시작 직후 권한 회수→operation 오류·handoff attempts0/POST0/File null; 실제 로컬 POST503 응답→failedSaves1/attempts1/completions0/File null·편집기 및 입력 유지. 실패 준비 단언은 실패 기대 구문 안에 숨기지 않았다. 이후 retry와 두 동시 click의 성공 저장은1개다. 실제 원본에서 이런 실패를 반복하지 않았다. 실제 D1/Drive 저장·직원 승인 요청은0이다.
+- 최종 **85/85 PASS, skipped0**, root/web tsc exit0/diffcheck PASS. CF194 자체는 **2개 test group**(clip 음성·실제 SDK 복합 검사)이며, 명시 `CF194_SOURCE_ROOT`와 `CF194 017 ... PASS` 로그로 실제017 실행을 구분한다. 기존 actual017 목차 복원47쪽/actual025 임의 생성0/actual011 선두PageHide 숫자 갱신·다른363쪽/legacy HWP3 및 제안서 고정장·이미지·관리자 기술QA도 관련 회귀에서 재통과했다. 앞서 기본 sandbox tsc의 경로 조회/타입 오류는 공식 권한 재실행에서0으로 확인했으며 무관한 소스를 일괄 변경하지 않았다.
+- 최종 익명 결과 `E:\Codex-QA\claim-center-cf194-20261007\final\native-table-result.json`, 합성 화면 `native-table-edited-1440.png`. 결과는 PC 한컴·실제 영구저장·전체 A–Z 미증명 범위를 명시한다. E194 `dist`43파일/37,667,102B가 CF193 dist43파일과 전 파일 SHA exact(차이0), main `index-vru2QYY8.js` SHA `543a7e07c5a34e58df229f2618a37389ac755e5b66b3f96f15b7f88bb81a2369`, 승인 runtime28 exact/CF186 diagnostic0. 새 제품 변경/서버 배포는 없다. C20.47GB/E138.41GB 여유 확인, 추가 정리0.
+- CC6v5/두 표식/3출력·CC4/CC5·고객 원고·원본32·직원 요청/배정/승인·DB/migration/ENV/API key·GitHub/development/가오픈 변경0. 현장회의록HOLD/관리자 기술검수와 업무 승인·자기승인차단 유지. Docker 기동/CF186~188 특정3커밋 전송/Hwp.exe 경로의 기존 질문은 미답변이며 범위를 우회하거나 자동 확대하지 않는다. 다음은 PC 한컴 독립대조·나머지 실제 입력/표/field/목차 문구·검토2/실업무A–Z 잔여, 정식 엔진 승인 후 development 검수→동일 artifact 가오픈 승격이다. 전체 완료/완성률/완료시각 단정금지.
 
 ### CF193 — 선두 페이지 감추기 목차 숫자 보존 및 읽기 전용 확인
 
