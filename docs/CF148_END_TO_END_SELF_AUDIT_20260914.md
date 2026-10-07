@@ -1,15 +1,15 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF187, 2026-10-07
+## 현재 판정 — CF188, 2026-10-07
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186 엔진 후보와 CF187 챕터 이동 수정은 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186 엔진 후보·CF187 일반 제목 이동·CF188 확인된 원형 챕터↔쪽 연결은 로컬 검증본으로 아직 미전송·미배포다. **전체 A–Z, 한컴 원형 동일성, 가오픈 승격은 아직 합격이 아니다.** 카테고리별 기존 체크리스트의 미체크 항목은 이번 일부 통과만으로 일괄 완료하지 않는다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
 | 연결·배포 | 지정 단신 Chrome 로그인, 원 Git 이력 정상 push, development 최신 소스·승인 runtime28/28 일치 | 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
-| 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내 | 원형 HWP의 의미별 챕터 매핑·자동 목차 갱신 미완료 |
+| 유형·목차 선택 | 유형명, 목차 선택10개와 협업 제목의 CH 코드 제거, 실패한 본문 이동 안내. CF188 사용자가 확인한 목차 항목↔원본 물리 쪽 연결·일반 보고서 버전 저장/재진입 구현 | 원형 자동 의미 추출·목차 문구/쪽수 재생성 미완료. 신규 연결은 서버 미반영 |
 | 구조형 챕터 이동 | CF187 코드 없는 고유 제목 이동 누락을 실제 React에서 FAIL 재현→공유 제목 접두어 규칙과 정확 제목 fallback으로 수정.1440/390px 키보드·캐럿·편집기 스크롤·JSON/change 불변 PASS | 로컬 검증본/서버 미반영. 중복·부분 제목/표 내부/원형 쪽 이미지는 추정 연결 금지. 실제 서비스 선택 메뉴·자동저장 전구간 검증과 별개 |
-| 원형 쪽 탐색 | 원본17쪽 선택, 편집·출력 미리보기 동시 이동 구현. 실제 단신 Chrome 9→17→1쪽 PASS, JSON·저장 이력 추가 변경0 | 원형 HWP 내부 의미별 챕터 이동·목차 자동 갱신과 별개 |
+| 원형 쪽 탐색 | 원본17쪽 편집·출력 동시 이동의 과거 실제 Chrome 결과 유지. CF188 같은17쪽 다른 원형에서9쪽 선택 잔류 FAIL→초기화 수정; 확인된 챕터 이동·오래된 출력URL/미완료 이미지/이전 원본 지문 차단 PASS | 신규 검사는 localhost 합성 원고/실제 React 경로. 원형 목차 재생성·실제 서버 저장 왕복과 별개 |
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
 | 원형 편집 안정성 | 실제 React/Tiptap에서 끝 마커 뒤 자동 빈 문단, 전체 교체와 첫 편집의 Undo 병합, 문서 전환 시 이전 여백 유지 FAIL→최소 수정→PASS. 일반 표·사진·빈 문단·서식 Undo·문서 키 전환 보존 | 합성 localhost 검사. 실제 HWP 수정본의 영구저장·Yjs 다중 사용자 Undo·한컴 전수 대조와 별개 |
@@ -31,6 +31,21 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF188 — 확인된 원형 챕터·쪽 연결 저장과 재진입/탐색 안전성
+
+- 시작 HEAD `1d8f32ba6198ea8e1180c780a05df7b1d38d1f1f`, 동일 recovery 저장소·작업 브랜치/AGENTS. 총괄만 수정했고 세 전문이 저장 경로·UI/Undo·회귀를 읽기 검토했다. ponytail의 최소 변경, UI hardening/접근성 지침으로 기존 표지·목차·본문·A4/쪽 이미지·권한·버전 API를 보존했다. ES 전용 디자인 기준을 보고서에 적용하지 않았다.
+- `챕터·원본 쪽 연결 확인`은 처음 두 선택이 빈 임시 상태다. 사용자가 현재 목차 항목과 표지 포함 물리 쪽을 고르고 양쪽을 조회한 뒤 **명시적 연결 확인·보고서 저장**을 해야 등록된다. 제목이나 CH 숫자로 원형 쪽을 추정하지 않으며, 여러 항목의 같은 쪽 연결·일부 연결·선택 연결 해제를 지원한다. 현재 작업본 연결 표시와 서버 저장 성공/실패를 구분한다.
+- 연결은 기존 `editorJson.attrs.reportNativeSource.confirmedChapterPages` 안에 저장한다. 새 top-level API 필드·DB/migration/역할 변경0. current case/evidence/file SHA/byte size/body proof/전체 쪽수·현재 chapter ID가 맞아야 사용하며, 잘못된 map은 원본 참조를 깨뜨리지 않고 무시한다. 명시적 갱신 때 제거된 챕터 ID는 새 연결에 이월하지 않는다. body SHA의 기존6필드 투영·최초 원본/작업본 참조·본문/그림 크기/순서는 그대로다. Node 서버 지원 증명으로 확대하지 않는다.
+- 부모의 실제 `saveNativeChapterPage`는 현재 joined 문서의 body proof를 검증하고, 비동기 전후 사건·본문·표지/머리글·단계·편집 가능/미저장 목차·협업원고·작업 중 상태를 재확인한다. 기존 `saveNow('MANUAL', false, true)`의 revision/JSON exact 응답 검증과 정상 재시도 경로를 사용한다. 기본 읽기 전용·Yjs 세션에는 신규 연결 저장을 차단하며 조회는 유지한다. 현재 보고서의 두 편집기는 비Yjs 경로다.
+- 확인된 챕터 선택은 body proof 및 실제 편집기 source 지문을 다시 확인한 후 양쪽 동일 쪽으로 이동한다. 실제 출력 `[data-export-page]`만 계수하며 전체 URL/순서·쪽수 및 두 타깃 이미지 로딩이 맞지 않으면 어느 쪽도 움직이지 않는다. navigation key만 사건/원본/본문/문서 키를 따라 바꾸며 Yjs/문서 방 키는 변경하지 않는다.
+- 실제 FAIL→수정: 같은17쪽 다른 원본인데 기존9쪽 선택이 남는 오류, 저장 후 재진입에서 hook의 초기 null/이전 editor snapshot 때문에 새 연결 설정이 숨겨지는 오류를 재현했다. 현재 editor identity+실제 모델 fallback과 source key 초기화로 해소했다. metadata-only root attr 동기화는 body setContent 없이 `addToHistory:false`; 실제 ProseMirror 독립 검사에서 기존 본문 Undo는 유지하고 저장 연결을 Undo/자동저장이 지우지 않음을 확인했다. 전체 본문 교체의 기존 Undo 정책은 유지한다.
+- 최종 실행 **22/22 PASS**: CF1085+CF146 계약5+CF148 source3+CF188 단위/계약7+CF149 실제 편집기 큰 검사1+CF188 실제 보고서 route 큰 검사1. 업무22건/실제 원본22건으로 합산하지 않는다. 후자에서는 실제 부모 저장 함수와 모의 API로 MANUAL revision+1→쪽 이동→선택 AUTO 저장→reload→503/409/잘못된 ACK 거부→일반 저장 재시도→읽기 전용 저장0을 검사했다. CF149는 같은17쪽 stale URL·미완료 타깃·이전 지문 거부/스크롤·JSON·저장 횟수 불변까지 포함한다. 실제 D1/Drive 서버 왕복은 미실행이다.
+- root/web 전체 tsc exit0, production build PASS. `E:\Codex-QA\claim-center-cf188-20261007\dist`43파일/37,630,632B, main `/assets/index-CXN0vk5r.js` SHA `3345d3a4a337eeab36e55fac9e4ddd1008ca196bc5faf31cd72f0e8911bdbe2d`, CSSindex-CYwkQrwe. 승인 runtime28자산 전SHA 일치(+생성 manifest1), WASMbcc40a79... 유지. CF186 진단 엔진 포함0. 1440/390px 컨트롤 가시성/44px 검사 및 합성 `native-links-1440.png`/`native-links-390.png` 육안 확인. 기존 bundle 크기 경고는 남는다.
+- 이번 실제 서비스 Chrome 조작·CC6 재저장/두 표식/3종 재생성·CC4/CC5·직원 배정/검토요청/승인/납품/메일·DB/migration/ENV/API키·가오픈 변경0. 사용자 기존 삭제22 그대로. E 새 폴더만 사용, 추가 C 정리/의존성 재설치/OS ACL 변경0. 기존 Docker 기동 및 GitHub 전송 승인 대기는 우회/재시도하지 않았다.
+- **자동 원형 목차 갱신·한컴/글꼴/원점 전수 동일성·CF186 정식 최적화 엔진 승격·검토2.xlsx/제안서4~12/전체 A–Z·가오픈/직원 영상은 아직 미완료다.** 확인된 쪽 탐색 구현을 목차 내용/쪽수 자동 재생성 또는 전체 완료로 보고하지 않는다. 아래 CF187 승격 조건의 원형 항목 중 수동 확인 연결만 이번에 구현됐으며 나머지 조건은 유지한다.
+
+- 독립 후속 검토에서 시험 API의 navigation-only 버전 처리 차이를 발견했다. 제품은 수정하지 않고 모의 서버를 실제 Worker 계약에 맞췄다: 연결 등록은 JSON 변경이라 v1→v2, 선택 항목 AUTO 저장만으로는 v2/updatedAt 유지, 연결 해제 재시도 성공 때 v3. 실패 검사를 통과했다고 버전이나 업무 승인 상태를 임의 변경하지 않는다.
 
 ### CF187 — 코드 없는 본문 제목 이동 보완·완료/승격 차단 조건 구분
 

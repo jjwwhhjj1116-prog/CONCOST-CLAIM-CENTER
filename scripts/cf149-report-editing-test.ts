@@ -6,14 +6,14 @@ import { chromium } from 'playwright-core';
 
 test('Report editing preserves IDs, navigates chapters, edits front matter and fits long table columns', async () => {
   const { createServer } = await import('../apps/web/qa/vite-server.js');
-  let saved = 'null';
+  let saved = 'null', saveRequests = 0;
   const presentationPath = resolve('packages/document-engine/src/report-presentation.ts').replace(/\\/g,'/');
   const server = await createServer({ root:resolve('apps/web'), ...(process.env.CF149_CACHE_ROOT ? {cacheDir:process.env.CF149_CACHE_ROOT} : {}), server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{
     name:'report-editing-fixture',
     configureServer(server){server.middlewares.use(async(req,res,next)=>{
       if(/^\/page-\d+\.svg$/u.test(req.url??'')){res.setHeader('Content-Type','image/svg+xml');res.end(`<svg xmlns="http://www.w3.org/2000/svg" width="794" height="1123"><rect width="794" height="1123" fill="white"/><text x="80" y="180">${req.url}</text></svg>`);return;}
       if(req.url==='/draft'){
-        if(req.method==='PUT'){const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));saved=Buffer.concat(chunks).toString();}
+        if(req.method==='PUT'){saveRequests++;const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));saved=Buffer.concat(chunks).toString();}
         res.setHeader('Content-Type','application/json');res.end(saved);return;
       }
       if(req.url!=='/editing.html')return next();
@@ -26,7 +26,7 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
       import{ReportFrontMatterEditor}from'/src/documents/ReportFrontMatterEditor.tsx';
       import{ReportFinalDocumentPreview}from'/src/routes/PreviewReportStudio.tsx';
       import{joinReportPresentation,splitReportPresentation}from'/@fs/${presentationPath}';
-      import{reportNativeBodySha256,readBoundReportNativeSource}from'/src/documents/report-native-source.ts';
+      import{reportNativeBodySha256,readBoundReportNativeSource,reportNativeChapterPage,updateReportNativeChapterPage}from'/src/documents/report-native-source.ts';
       import'/src/documents/StructuredDocumentEditor.css';import'/src/documents/DocumentReviewWorkspace.css';
       const original='<!-- AI-CHAPTER:CH-01:START -->\\n## CH-01 개요\\n# 개요\\n'+Array(25).fill('검토 원문 보존.').join('\\n\\n')+'\\n<!-- AI-CHAPTER:CH-01:END -->\\n<!-- AI-CHAPTER:CH-02:START -->\\n## CH-02 산정\\n# 산정\\n<table data-document-defaults-version="2"><colgroup><col style="width:10%"><col style="width:80%"><col style="width:10%"></colgroup><tr><th>번호</th><th>내용</th><th>판단상태</th></tr><tr><td>1</td><td>근거 확인</td><td>UNREVIEWABLE 자료확인전까지검토할수없음</td></tr></table>\\n<!-- AI-CHAPTER:CH-02:END -->';
       function App(){const ref=useRef(null);const[documentKey,setDocumentKey]=useState('cf149-1');const[title,setTitle]=useState('시험 보고서');const[content,setContent]=useState(original);const[json,setJson]=useState(parseStructuredDocumentMarkdown(original));const[front,setFront]=useState({enabled:true,date:'2026.9',author:'작성자'});const[ready,setReady]=useState(false);const changes=useRef(0);
@@ -34,13 +34,18 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
         useEffect(()=>{fetch('/draft').then(r=>r.json()).then(saved=>{if(saved){setTitle(saved.title);setContent(saved.content);const p=splitReportPresentation(saved.json);setJson(p.body);setFront(p.frontMatter);}setReady(true);});},[]);
         globalThis.cf149Editing.useOrdinary=(next)=>{setContent(next);setJson(parseStructuredDocumentMarkdown(next));};
         globalThis.cf149Editing.jump=(code,title)=>ref.current.goToChapter(code,title);
+        globalThis.cf149Editing.replaceSourceIdentity=async()=>{const doc=structuredClone(json);Object.assign(doc.attrs.reportNativeSource,{evidenceId:'40000000-0000-4000-8000-000000000014',downloadUrl:'/api/cases/evidence/40000000-0000-4000-8000-000000000014/download',sha256:'2'.repeat(64)});doc.attrs.reportNativeSource.bodySha256=await reportNativeBodySha256(joinReportPresentation(doc,{enabled:false,text:null},front));setJson(doc);};
+        const sourceChapters=[{id:'PROMPT-TYPE-01-CH-01',title:'대상·개요'},{id:'PROMPT-TYPE-01-CH-02',title:'감정자료 목록'}];
+        const confirmSourceChapter=async(id,page)=>{const body=ref.current.getJSON();await readBoundReportNativeSource(joinReportPresentation(body,{enabled:false,text:null},front),'40000000-0000-4000-8000-000000000010');const next=updateReportNativeChapterPage(body,'40000000-0000-4000-8000-000000000010',id,page,sourceChapters.map(x=>x.id));setJson(next);const response=await fetch('/draft',{method:'PUT',body:JSON.stringify({title,content,json:joinReportPresentation(next,{enabled:false,text:null},front)})});return response.ok;};
+        globalThis.cf149Editing.jumpSourceChapter=async(id)=>{const body=ref.current.getJSON(),joined=joinReportPresentation(body,{enabled:false,text:null},front);const source=await readBoundReportNativeSource(joined,'40000000-0000-4000-8000-000000000010');const page=reportNativeChapterPage(body,source.caseId,id,sourceChapters.map(x=>x.id));return page!==null&&ref.current.goToSourcePage(page,source);};
+        globalThis.cf149Editing.jumpExpectedSource=(page,source)=>ref.current.goToSourcePage(page,source);
         globalThis.cf149Editing.remount=(key)=>setDocumentKey(key);
         if(!ready)return null;
         return React.createElement(React.Fragment,null,
           React.createElement('button',{onClick:()=>ref.current.goToChapter('CH-02')},'산정으로 이동'),
           React.createElement('button',{onClick:()=>{globalThis.cf187Jump=ref.current.goToChapter('CH-02','공사비 산정');}},'제목으로 산정 이동'),
           React.createElement('button',{onClick:async()=>{await fetch('/draft',{method:'PUT',body:JSON.stringify({title,content,json:joinReportPresentation(json,{enabled:false,text:null},front)})});document.querySelector('#saved').textContent='저장 완료';}},'저장'),React.createElement('span',{id:'saved'}),
-          React.createElement(StructuredDocumentEditor,{ref,documentKey,reportMode:true,label:'시험 보고서 편집',value:content,editorJson:json,onChange:(text,doc)=>{changes.current++;setContent(text);setJson(doc);},
+          React.createElement(StructuredDocumentEditor,{ref,documentKey,reportMode:true,label:'시험 보고서 편집',value:content,editorJson:json,sourceChapterLinks:{chapters:sourceChapters,disabled:false,onConfirm:confirmSourceChapter},onChange:(text,doc)=>{changes.current++;setContent(text);setJson(doc);},
             beforeContent:React.createElement(ReportFrontMatterEditor,{title,caseTitle:'사건명',html:renderStructuredDocumentHtml(json),value:front,disabled:false,onTitle:setTitle,onChange:setFront,onEditNative:()=>{globalThis.cf149NativeOpened=(globalThis.cf149NativeOpened??0)+1;}}),
             previewContent:React.createElement(ReportFinalDocumentPreview,{title,caseTitle:'사건명',caseNumber:'QA',content,editorJson:joinReportPresentation(json,{enabled:false,text:null},front)})}));
       }createRoot(document.getElementById('root')).render(React.createElement(App));
@@ -206,6 +211,69 @@ test('Report editing preserves IDs, navigates chapters, edits front matter and f
     await page.getByRole('button',{name:'실행 취소',exact:true}).click();
     await page.locator('.tiptap img').nth(16).waitFor();
     assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),actualNativeBefore,'Undo of whole-body replacement restores its body and source in one event');
+    assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true);
+    await sourcePageNavigation.selectOption('9');
+    await page.waitForFunction(()=>document.querySelector<HTMLSelectElement>('[aria-label="원형 보고서 쪽 이동"]')?.value==='9');
+    await page.evaluate(()=>(globalThis as any).cf149Editing.replaceSourceIdentity());
+    await page.waitForFunction(()=>(globalThis as any).cf149Editing.actual()?.attrs.reportNativeSource.evidenceId==='40000000-0000-4000-8000-000000000014');
+    assert.equal(await sourcePageNavigation.inputValue(),'1','A different native source with the same 17 pages must not retain the previous source-page selection');
+    const links=page.locator('.document-review-pages__source-links');
+    assert.equal(await links.count(),1,JSON.stringify(await page.evaluate(()=>({source:(globalThis as any).cf149Editing.actual()?.attrs.reportNativeSource,navigation:document.querySelector('.document-review-pages__source-nav')?.textContent,errors:document.querySelector('.structured-editor')?.textContent?.slice(0,200)}))));
+    await links.locator('summary').click();
+    const mapChapter=links.getByRole('combobox',{name:'연결할 목차 항목',exact:true}),mapPage=links.getByRole('combobox',{name:'연결할 원본 물리 쪽',exact:true});
+    assert.equal(await mapChapter.inputValue(),'');assert.equal(await mapPage.inputValue(),'');
+    const mapBefore=await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),savesBeforeMap=saveRequests;
+    await mapChapter.selectOption('PROMPT-TYPE-01-CH-01');await mapPage.selectOption('9');
+    assert.equal(await links.getByRole('button',{name:'연결 확인·보고서 저장',exact:true}).isDisabled(),true);
+    assert.equal(saveRequests,savesBeforeMap,'Choosing a tentative chapter/page must not silently save');
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),mapBefore);
+    await links.getByRole('button',{name:'쪽 보기',exact:true}).click();
+    assert.equal(await sourcePageNavigation.inputValue(),'9');
+    const mapSaved=page.waitForResponse(response=>response.url()===origin+'/draft'&&response.request().method()==='PUT');
+    await links.getByRole('button',{name:'연결 확인·보고서 저장',exact:true}).click();await mapSaved;
+    await links.getByRole('status').getByText(/탐색 연결을 원본 9쪽으로 저장했습니다/u).waitFor();
+    assert.equal(saveRequests,savesBeforeMap+1);
+    const mapAfter=await page.evaluate(()=>(globalThis as any).cf149Editing.actual());
+    assert.deepEqual(mapAfter.content,mapBefore.content);
+    const beforeSource={...mapBefore.attrs.reportNativeSource},afterSource={...mapAfter.attrs.reportNativeSource};delete afterSource.confirmedChapterPages;
+    assert.deepEqual(afterSource,beforeSource,'Confirming navigation must preserve native file and first-original references and proof');
+    assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true);
+    await sourcePageNavigation.selectOption('1');
+    const scrollBeforeBlocked=await page.locator('.document-review-pages__side').evaluateAll(panes=>panes.map(p=>p.scrollTop));
+    const outputFirst=page.locator('.document-review-pages__output [data-export-page] img[data-report-source-page="true"]').first();
+    const firstUrl=await outputFirst.getAttribute('src');
+    await outputFirst.evaluate((el,url)=>el.setAttribute('src',url!),origin+'/page-2.svg');
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jumpSourceChapter('PROMPT-TYPE-01-CH-01')),false,'An old/mismatched output URL must be rejected even with all 17 output pages');
+    assert.equal(await sourcePageNavigation.inputValue(),'1');
+    assert.deepEqual(await page.locator('.document-review-pages__side').evaluateAll(panes=>panes.map(p=>p.scrollTop)),scrollBeforeBlocked);
+    await outputFirst.evaluate((el,url)=>el.setAttribute('src',url!),firstUrl);
+    const outputNinth=page.locator('.document-review-pages__output [data-export-page] img[data-report-source-page="true"]').nth(8);
+    await outputNinth.evaluate(el=>Object.defineProperty(el,'complete',{value:false,configurable:true}));
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jumpSourceChapter('PROMPT-TYPE-01-CH-01')),false,'An unready target cannot move only one pane');
+    assert.deepEqual(await page.locator('.document-review-pages__side').evaluateAll(panes=>panes.map(p=>p.scrollTop)),scrollBeforeBlocked);
+    await outputNinth.evaluate(el=>{delete (el as any).complete;});
+    assert.equal(await page.evaluate(source=>(globalThis as any).cf149Editing.jumpExpectedSource(9,source),nativeBefore.json.attrs.reportNativeSource),false,'A stale source fingerprint cannot navigate the current editor');
+    assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),mapAfter);
+    assert.equal(saveRequests,savesBeforeMap+1,'Blocked moves must not create saves');
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:1000});
+      await sourcePageNavigation.selectOption('1');
+      const beforeJump=await page.evaluate(()=>(globalThis as any).cf149Editing.get());
+      assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jumpSourceChapter('PROMPT-TYPE-01-CH-01')),true);
+      assert.equal(await sourcePageNavigation.inputValue(),'9');
+      assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()),mapAfter);
+      assert.deepEqual(await page.evaluate(()=>(globalThis as any).cf149Editing.get()),beforeJump,'Confirmed chapter navigation cannot create a save/change');
+      assert.equal(saveRequests,savesBeforeMap+1);
+    }
+    await page.reload();await page.locator('.tiptap img').nth(16).waitFor();
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.actual()?.attrs.reportNativeSource.confirmedChapterPages.entries[0].page),9,'Explicit saved navigation must survive React re-entry');
+    assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true);
+    assert.equal(await links.count(),1,JSON.stringify(await page.evaluate(()=>({source:(globalThis as any).cf149Editing.actual()?.attrs.reportNativeSource,navigation:document.querySelector('.document-review-pages__source-nav')?.textContent,native:document.querySelector('.structured-editor')?.className}))));
+    await links.locator('summary').click();await mapChapter.selectOption('PROMPT-TYPE-01-CH-01');
+    const mapCleared=page.waitForResponse(response=>response.url()===origin+'/draft'&&response.request().method()==='PUT');
+    await links.getByRole('button',{name:'선택 연결 해제·보고서 저장',exact:true}).click();await mapCleared;
+    await page.waitForFunction(()=>!(globalThis as any).cf149Editing.actual()?.attrs.reportNativeSource.confirmedChapterPages);
+    assert.equal(await page.evaluate(()=>(globalThis as any).cf149Editing.jumpSourceChapter('PROMPT-TYPE-01-CH-01')),false);
     assert.equal((await page.evaluate(()=>(globalThis as any).cf149Editing.binding())).valid,true);
     for(const mixed of ['<p>일반 본문</p>'+pageHtml,pageHtml+'<table><tr><td></td></tr></table>',pageHtml.replaceAll(' data-report-source-page="true"','')]){
       await page.evaluate(value=>(globalThis as any).cf149Editing.use(value),mixed);

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import './DocumentReviewWorkspace.css';
 
 /** Only the read-only display is scaled; document metrics and editor hit testing stay unchanged. */
@@ -29,13 +29,17 @@ export function DocumentPreviewPane({ children, title = '출력 미리보기', w
 }
 
 /** Shared controls sit above this spread. Native zoom keeps both pages at the same layout scale. */
-export function DocumentReviewPages({ children, previewContent, width, sourcePageCount = 0 }: { children: ReactNode; previewContent?: ReactNode; width: number; sourcePageCount?: number }) {
+export interface DocumentReviewPagesHandle { goToSourcePage: (page: number) => boolean }
+export const DocumentReviewPages = forwardRef<DocumentReviewPagesHandle, {
+  children: ReactNode; previewContent?: ReactNode; width: number; sourcePageCount?: number;
+  sourceNavigationKey?: string; sourcePageUrls?: readonly string[]; sourceNavigation?: ReactNode;
+}>(function DocumentReviewPages({ children, previewContent, width, sourcePageCount = 0, sourceNavigationKey, sourcePageUrls, sourceNavigation }, ref) {
   const spreadRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState(1);
   const [zoom, setZoom] = useState('fit');
   const [sourcePage, setSourcePage] = useState(1);
   const [navigationNotice, setNavigationNotice] = useState('');
-  useLayoutEffect(() => { setSourcePage(1); setNavigationNotice(''); }, [sourcePageCount]);
+  useLayoutEffect(() => { setSourcePage(1); setNavigationNotice(''); }, [sourcePageCount, sourceNavigationKey]);
   useLayoutEffect(() => {
     const spread = spreadRef.current;
     if (!spread || !previewContent) return;
@@ -46,18 +50,17 @@ export function DocumentReviewPages({ children, previewContent, width, sourcePag
     const observer = new ResizeObserver(measure); observer.observe(spread); measure();
     return () => observer.disconnect();
   }, [Boolean(previewContent), width]);
-  if (!previewContent) return children;
   const moveToSourcePage = (page: number) => {
-    if (!Number.isSafeInteger(page) || page < 1 || page > sourcePageCount) return;
+    if (!previewContent || !Number.isSafeInteger(page) || page < 1 || page > sourcePageCount) return false;
     const panes = [...(spreadRef.current?.querySelectorAll<HTMLElement>('.document-review-pages__side') ?? [])];
     const targets = panes.map(pane => {
       const images = pane.querySelectorAll<HTMLImageElement>(pane.classList.contains('document-review-pages__output') ? '[data-export-page] img[data-report-source-page="true"]' : 'img[data-report-source-page="true"]');
-      return images.length === sourcePageCount ? images[page - 1] : null;
+      return images.length === sourcePageCount && (!sourcePageUrls || (sourcePageUrls.length === images.length && [...images].every((image, index) => image.getAttribute('src') === sourcePageUrls[index]))) ? images[page - 1] : null;
     });
     // Wait for both renderers; never guess a chapter or move only one pane.
-    if (panes.length !== 2 || targets.some(target => !target)) {
+    if (panes.length !== 2 || targets.some(target => !target || !target.complete || !target.naturalWidth || !target.naturalHeight)) {
       setNavigationNotice('쪽 미리보기를 준비 중입니다. 잠시 후 다시 이동해 주세요.');
-      return;
+      return false;
     }
     targets.forEach((target, index) => {
       const pane = panes[index];
@@ -66,7 +69,10 @@ export function DocumentReviewPages({ children, previewContent, width, sourcePag
     });
     setSourcePage(page);
     setNavigationNotice(`편집·출력 미리보기를 원본 ${page}쪽으로 이동했습니다.`);
+    return true;
   };
+  useImperativeHandle(ref, () => ({ goToSourcePage: moveToSourcePage }));
+  if (!previewContent) return children;
   const scale = zoom === 'fit' ? fit : Number(zoom);
   return <div className="document-review-pages" ref={spreadRef} style={{ '--review-scale': scale, '--review-paper-width': `${width}px`, '--review-paper-height': `${width === 794 ? 1123 : 794}px` } as CSSProperties}>
     <div className="document-review-pages__heading"><strong>편집</strong><label>양쪽 배율 <select aria-label="편집 및 미리보기 배율" value={zoom} onChange={event => setZoom(event.target.value)}><option value="fit">나란히 맞춤 ({Math.round(fit * 100)}%)</option><option value="1">100%</option><option value="0.75">75%</option></select></label><strong>출력 미리보기</strong></div>
@@ -75,9 +81,10 @@ export function DocumentReviewPages({ children, previewContent, width, sourcePag
       <button type="button" aria-label="선택한 원형 쪽으로 이동" onClick={() => moveToSourcePage(sourcePage)}>이동</button>
       <span role="status">{navigationNotice || '편집·출력 미리보기를 같은 원본 쪽으로 이동합니다.'}</span>
     </div>}
+    {sourcePageCount > 0 && sourceNavigation}
     <div className="document-review-pages__spread">
       <div className="document-review-pages__side">{children}</div>
       <div className="document-review-pages__side document-review-pages__output" aria-label="출력 미리보기"><div className="document-review-pages__paper">{previewContent}</div></div>
     </div>
   </div>;
-}
+});

@@ -1,5 +1,5 @@
 import { HocuspocusProvider, WebSocketStatus, type StatesArray } from '@hocuspocus/provider';
-import { syncReportNativeSource } from './report-native-source';
+import { readReportNativeSource, reportSourceNavigationKey, reportSourcePageCount, reportSourcePageUrls, syncReportNativeSource, type ReportNativeSource } from './report-native-source';
 import { ReportChapterDecoration } from './report-chapter-decoration';
 import { reportChapterPrefix } from '../reports/report-outline-sync';
 import { prepareReportPrint } from './report-print-structure';
@@ -30,7 +30,8 @@ import { structuredDocumentContentSignature } from './structured-document-sync';
 import { fitImageDimensions, inferredTableColumnWeight, normalizeColumnWidths, tableCellColumnIndexes } from './structured-document-layout';
 import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
 import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
-import { DocumentReviewPages } from './DocumentPreviewPane';
+import { DocumentReviewPages, type DocumentReviewPagesHandle } from './DocumentPreviewPane';
+import { ReportSourceChapterLinks, type SourceChapterLinkSettings } from './ReportSourceChapterLinks';
 import { ScaledImage, ScaledTableResize, selectTableCells, syncImageDimensions } from './document-resize-scale';
 
 export interface StructuredSelection {
@@ -52,6 +53,7 @@ export interface StructuredSelectionAssistant {
 
 export interface StructuredDocumentEditorHandle {
   goToChapter: (code: string, title?: string) => boolean;
+  goToSourcePage: (page: number, expectedSource?: Pick<ReportNativeSource, 'caseId' | 'evidenceId' | 'name' | 'downloadUrl' | 'byteSize' | 'sha256' | 'bodySha256'>) => boolean;
   focus: () => void;
   getJSON: () => JSONContent | null;
   getMarkdown: () => string;
@@ -85,6 +87,7 @@ interface StructuredDocumentEditorProps {
   onRequestInsertTable?: () => void;
   onRequestInsertImage?: () => void;
   previewContent?: React.ReactNode;
+  sourceChapterLinks?: SourceChapterLinkSettings;
   previewWidth?: number;
   reportMode?: boolean;
   beforeContent?: React.ReactNode;
@@ -371,16 +374,6 @@ const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수
 const rightAlignedTableValue = /^\s*(?:[-+]?\d[\d,.]*(?:\s*(?:원|억원|만원|%|㎡|m²|m2|세대|동))?)\s*$/iu;
 
 const jsonText = (node: JSONContent): string => `${typeof node.text === 'string' ? node.text : ''}${node.content?.map(jsonText).join('') ?? ''}`;
-const reportSourcePageCount = (source: JSONContent | undefined): number => {
-  let pages = 0;
-  const visit = (node: JSONContent): boolean => {
-    if (node.type === 'image') { if (node.attrs?.reportSourcePage !== true) return false; pages++; return true; }
-    if (node.type === 'doc' || node.type === 'paragraph') return (node.content ?? []).every(visit);
-    if (node.type === 'text') return !node.text?.trim();
-    return ['aiChapterMarker', 'documentPageBreak', 'hardBreak'].includes(node.type ?? '');
-  };
-  return source && visit(source) ? pages : 0;
-};
 export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
     const next: JSONContent = { ...node, ...(node.attrs ? { attrs: { ...node.attrs } } : {}), ...(node.content ? { content: node.content.map(visit) } : {}) };
@@ -678,6 +671,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   onRequestInsertTable,
   onRequestInsertImage,
   previewContent,
+  sourceChapterLinks,
   previewWidth = 794,
   reportMode = false,
   beforeContent,
@@ -723,6 +717,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [tableColumns, setTableColumns] = useState(3);
   const lastAppliedContentSignature = useRef(structuredDocumentContentSignature(value, editorJson));
   const selectionRef = useRef<StructuredSelection | null>(null);
+  const reviewPagesRef = useRef<DocumentReviewPagesHandle | null>(null);
   // useEditor is recreated for each documentKey. Calculate this value on that
   // render so a chapter never inherits the previous chapter's first content.
   const initialContent = collaborationSession ? undefined : editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value);
@@ -886,6 +881,18 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     const desiredSignature = structuredDocumentContentSignature(value, editorJson);
     if (desiredSignature === lastAppliedContentSignature.current) return;
     lastAppliedContentSignature.current = desiredSignature;
+    if (editorJson) {
+      const withoutSource = (document: JSONContent) => {
+        const { reportNativeSource: _source, ...attrs } = document.attrs ?? {};
+        const body = { ...document };
+        if (Object.keys(attrs).length) body.attrs = attrs; else delete body.attrs;
+        return JSON.stringify(body);
+      };
+      if (withoutSource(editor.getJSON()) === withoutSource(editorJson)) {
+        syncReportNativeSource(editor, editorJson);
+        return;
+      }
+    }
     syncReportNativeSource(editor, editorJson, editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), false);
   }, [collaborationSession, editor, editorJson, pageMode, value]);
 
@@ -1011,6 +1018,15 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   };
 
   useImperativeHandle(ref, () => ({
+    goToSourcePage: (page, expectedSource) => {
+      if (!editor) return false;
+      if (expectedSource) {
+        const source = readReportNativeSource(editor.getJSON(), expectedSource.caseId);
+        if (!source || source.evidenceId !== expectedSource.evidenceId || source.name !== expectedSource.name || source.downloadUrl !== expectedSource.downloadUrl
+          || source.byteSize !== expectedSource.byteSize || source.sha256 !== expectedSource.sha256 || source.bodySha256 !== expectedSource.bodySha256) return false;
+      }
+      return reviewPagesRef.current?.goToSourcePage(page) ?? false;
+    },
     goToChapter: (code, title) => {
       if (!editor || !code.trim()) return false;
       let target = -1;
@@ -1156,6 +1172,13 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const characterCount = editor?.storage.characterCount.characters() as number | undefined;
   // setContent can suppress onUpdate; page margins still follow the actual model.
   const sourcePageCount = useEditorState({ editor, selector: ({ editor: activeEditor }) => activeEditor && activeEditor === editor ? (reportMode ? reportSourcePageCount(activeEditor.getJSON()) : 0) : null }) ?? (reportMode ? reportSourcePageCount(editor?.getJSON()) : 0);
+  const readSourceState = (activeEditor: Editor | null) => {
+    const json = activeEditor?.isDestroyed ? undefined : activeEditor?.getJSON();
+    return { key: reportSourceNavigationKey(json, documentKey), urls: reportMode ? reportSourcePageUrls(json) : [], native: json?.attrs?.reportNativeSource ? readReportNativeSource(json, json.attrs.reportNativeSource.caseId) : null };
+  };
+  // useEditorState can retain its initial null/previous-editor snapshot until the
+  // first transaction. Re-entry still has to use the actual imported model.
+  const sourceState = useEditorState({ editor, selector: ({ editor: activeEditor }) => activeEditor && activeEditor === editor ? readSourceState(activeEditor) : null }) ?? readSourceState(editor);
   const nativePages = sourcePageCount > 0;
 
   return <>
@@ -1294,7 +1317,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     {showSearch && <div className="structured-editor__search" role="search"><label>찾기<input value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); findNext(); } }} /></label><label>바꾸기<input value={replacement} onChange={(event) => setReplacement(event.target.value)} /></label><button type="button" onClick={findNext}>다음 찾기</button>{!readOnly && <><button type="button" onClick={replaceCurrent}>현재 바꾸기</button><button type="button" className="is-primary" onClick={replaceAll}>모두 바꾸기</button></>}<span role="status">{searchStatus}</span></div>}
     <span className="structured-editor__repeat-status" role="status">{repeatStatus}</span>
     </div>
-    <DocumentReviewPages previewContent={previewContent} width={previewWidth} sourcePageCount={sourcePageCount}>
+    <DocumentReviewPages ref={reviewPagesRef} previewContent={previewContent} width={previewWidth} sourcePageCount={sourcePageCount} sourceNavigationKey={sourceState?.key} sourcePageUrls={sourceState?.urls}
+      sourceNavigation={sourceChapterLinks && sourceState?.native && <ReportSourceChapterLinks {...sourceChapterLinks} disabled={sourceChapterLinks.disabled || readOnly || Boolean(collaborationSession)} sourceKey={sourceState.key} pageCount={sourcePageCount} connections={sourceState.native.confirmedChapterPages?.entries ?? []} onPreview={page => reviewPagesRef.current?.goToSourcePage(page) ?? false}/> }>
     <div className={`structured-editor__canvas${reportMode ? ' report-edit-canvas' : ''}`}>
       {beforeContent}
       {preview ? <article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: (() => { const html = DOMPurify.sanitize(normalizeStructuredDocumentHtml(editor?.getHTML() ?? '')); if (!reportMode) return html; const source = document.createElement('div'); source.innerHTML = html; prepareReportPrint(source); return source.innerHTML; })() }} /> : <>

@@ -36,6 +36,47 @@ export interface ReportNativeSource {
   bodySha256?: string;
   bindingVersion?: 1;
   originalSource?: Omit<ReportNativeSource, 'originalSource'>;
+  confirmedChapterPages?: ReportNativeChapterPages;
+}
+export interface ReportNativeChapterPages {
+  version: 1; caseId: string; evidenceId: string; sha256: string; byteSize: number; bodySha256: string; pageCount: number;
+  entries: Array<{ chapterId: string; page: number }>;
+}
+/** Only a whole imported page-image document qualifies; ordinary photos are not pages. */
+export function reportSourcePageCount(source: JSONContent | null | undefined): number {
+  let pages = 0;
+  const visit = (node: JSONContent): boolean => {
+    if (node.type === 'image') { if (node.attrs?.reportSourcePage !== true) return false; pages++; return true; }
+    if (node.type === 'doc' || node.type === 'paragraph') return (node.content ?? []).every(visit);
+    if (node.type === 'text') return !node.text?.trim();
+    return ['aiChapterMarker', 'documentPageBreak', 'hardBreak'].includes(node.type ?? '');
+  };
+  return source && visit(source) ? pages : 0;
+}
+export function reportSourcePageUrls(source: JSONContent | null | undefined): string[] {
+  if (!source || !reportSourcePageCount(source)) return [];
+  const urls: string[] = [];
+  const visit = (node: JSONContent) => { if (node.type === 'image') urls.push(String(node.attrs?.src ?? '')); else node.content?.forEach(visit); };
+  visit(source); return urls;
+}
+export function reportSourceNavigationKey(source: JSONContent | null | undefined, documentKey?: string): string {
+  const native = source?.attrs?.reportNativeSource as ReportNativeSource | undefined;
+  // Navigation metadata itself must not reset the view or change the editor/Yjs room key.
+  return JSON.stringify([documentKey, native?.caseId, native?.evidenceId, native?.name, native?.downloadUrl, native?.byteSize, native?.sha256, native?.bodySha256, source?.content]);
+}
+function readNativeChapterPages(value: unknown, source: ReportNativeSource, pageCount: number): ReportNativeChapterPages | null {
+  if (!value || typeof value !== 'object' || !pageCount || source.bindingVersion !== 1 || !source.bodySha256) return null;
+  const map = value as Partial<ReportNativeChapterPages>;
+  if (map.version !== 1 || map.caseId !== source.caseId || map.evidenceId !== source.evidenceId || map.sha256 !== source.sha256
+    || map.byteSize !== source.byteSize || map.bodySha256 !== source.bodySha256 || map.pageCount !== pageCount || !Array.isArray(map.entries)) return null;
+  const ids = new Set<string>();
+  const entries: ReportNativeChapterPages['entries'] = [];
+  for (const entry of map.entries) {
+    if (!entry || typeof entry.chapterId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/u.test(entry.chapterId) || ids.has(entry.chapterId)
+      || !Number.isSafeInteger(entry.page) || entry.page < 1 || entry.page > pageCount) return null;
+    ids.add(entry.chapterId); entries.push({ chapterId: entry.chapterId, page: entry.page });
+  }
+  return { version: 1, caseId: source.caseId, evidenceId: source.evidenceId, sha256: source.sha256, byteSize: source.byteSize, bodySha256: source.bodySha256, pageCount, entries };
 }
 export function assertReportNativePagesMatch(before: string[], after: string[]): void {
   const signature = (svg: string) => {
@@ -69,7 +110,24 @@ export function readReportNativeSource(document: JSONContent | null | undefined,
   const source = readSourceReference(value, caseId);
   if (!source) return null;
   const original = readSourceReference(value?.originalSource, caseId);
-  return original ? { ...source, originalSource: original } : source;
+  const confirmed = readNativeChapterPages(value?.confirmedChapterPages, source, reportSourcePageCount(document));
+  return { ...source, ...(original ? { originalSource: original } : {}), ...(confirmed ? { confirmedChapterPages: confirmed } : {}) };
+}
+/** Caller must verify the current joined document with readBoundReportNativeSource first. */
+export function updateReportNativeChapterPage(document: JSONContent, caseId: string, chapterId: string, page: number | null, chapterIds: readonly string[]): JSONContent {
+  const source = readReportNativeSource(document, caseId), pageCount = reportSourcePageCount(document);
+  if (!source?.bodySha256 || source.bindingVersion !== 1 || !pageCount || !chapterIds.includes(chapterId) || !/^[A-Za-z0-9_-]{1,100}$/u.test(chapterId)
+    || (page !== null && (!Number.isSafeInteger(page) || page < 1 || page > pageCount))) throw new Error('현재 원형·목차 항목·원본 쪽을 확인하지 못했습니다. 기존 연결은 유지됩니다.');
+  const entries = (source.confirmedChapterPages?.entries ?? []).filter(entry => entry.chapterId !== chapterId && chapterIds.includes(entry.chapterId));
+  if (page !== null) entries.push({ chapterId, page });
+  const nextSource = { ...document.attrs!.reportNativeSource } as ReportNativeSource;
+  delete nextSource.confirmedChapterPages;
+  if (entries.length) nextSource.confirmedChapterPages = { version: 1, caseId, evidenceId: source.evidenceId, sha256: source.sha256, byteSize: source.byteSize, bodySha256: source.bodySha256, pageCount, entries };
+  return { ...document, attrs: { ...document.attrs, reportNativeSource: nextSource } };
+}
+export function reportNativeChapterPage(document: JSONContent | null | undefined, caseId: string, chapterId: string, chapterIds: readonly string[]): number | null {
+  if (!chapterIds.includes(chapterId)) return null;
+  return readReportNativeSource(document, caseId)?.confirmedChapterPages?.entries.find(entry => entry.chapterId === chapterId)?.page ?? null;
 }
 export function readReportOriginalSource(document: JSONContent | null | undefined, caseId: string): ReportNativeSource | null {
   const original = readReportNativeSource(document, caseId)?.originalSource;
@@ -103,7 +161,7 @@ export async function readBoundReportNativeSource(document: JSONContent | null, 
 export function syncReportNativeSource(editor: Editor, document: JSONContent | null | undefined, content?: JSONContent | string, emitUpdate = true): void {
   const source = document?.attrs?.reportNativeSource ?? null;
   if (content === undefined) {
-    editor.view.dispatch(editor.state.tr.setDocAttribute('reportNativeSource', source).setMeta('preventUpdate', true));
+    editor.view.dispatch(editor.state.tr.setDocAttribute('reportNativeSource', source).setMeta('preventUpdate', true).setMeta('addToHistory', false));
     return;
   }
   // Keep the replacement body and its source reference in one undo event.
