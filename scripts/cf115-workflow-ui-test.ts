@@ -1,20 +1,24 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
 test('CF115 actual workflow UI imports automatically, preserves drafts and blocks stale results', async t => {
+  const component=fileURLToPath(new URL('../apps/web/src/workflow/WorkflowOperations.tsx',import.meta.url)).replaceAll('\\','/');
+  const baseline=process.env.CF197_BASELINE_UI==='1'?execFileSync('git',['-c','safe.directory='+process.cwd().replaceAll('\\','/'),'show','HEAD:apps/web/src/workflow/WorkflowOperations.tsx'],{encoding:'utf8'}):null;
   const { createServer } = await import('../apps/web/qa/vite-server.js');
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf115-workflow-ui-fixture',
+    enforce: 'pre',
     configureServer(server) { server.middlewares.use(async (request, response, next) => {
       if (!request.url?.startsWith('/cf115-workflow-test.html')) return next();
       const html = await server.transformIndexHtml(request.url, '<!doctype html><html lang="ko"><head><meta charset="utf-8"><script>window.__CLAIM_API_ORIGIN__=location.origin</script></head><body><div id="root"></div><script type="module" src="/cf115-workflow-test-entry.js"></script></body></html>');
       response.setHeader('Content-Type', 'text/html'); response.end(html);
     }); },
     resolveId: id => id === '/cf115-workflow-test-entry.js' ? '\0cf115-workflow-test-entry' : undefined,
-    load: id => id === '\0cf115-workflow-test-entry' ? `
+    load: id => baseline&&id.replaceAll('\\','/').split('?')[0].toLowerCase()===component.toLowerCase()?baseline:id === '\0cf115-workflow-test-entry' ? `
       import React from 'react'; import { createRoot } from 'react-dom/client';
       import { WorkflowOperations } from '/src/workflow/WorkflowOperations.tsx';
       import { requestNavigation } from '/src/navigation-guard.ts';
@@ -82,6 +86,13 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
       await page.getByText(/Gemini 자동정리 완료 · 화면에 반영했습니다/u).waitFor();
       assert.equal((await state()).uploads,1,'AI retry must not re-upload');
       assert.equal(await page.locator('textarea.is-tall').inputValue(),'본문 새 원문');
+      if(kind==='WF-03'){
+        assert.equal(await page.locator('.workflow-internal-review').evaluate(element=>(element as HTMLDetailsElement).open),false,'AI suggestions are not automatically part of the minutes');
+        await page.locator('.workflow-internal-review > summary').click();
+        assert.match(await page.locator('.workflow-internal-review').innerText(),/새 AI 요약/u);
+        assert.match(await page.locator('.company-minutes-table').innerText(),/본문 새 원문/u);
+        assert.doesNotMatch(await page.locator('.company-minutes-table').innerText(),/새 AI 요약|새 후속/u);
+      }
       assert.match(await page.locator('.is-output').first().innerText(),/새 AI 요약/u); assert.doesNotMatch(await page.locator('.is-output').first().innerText(),/기존 요약/u);
       assert.equal(await page.getByLabel('작성자 성명',{exact:true}).inputValue(),'홍검수');
       assert.equal(await page.getByLabel('첨부파일명',{exact:true}).inputValue(),'source.txt','original filename is a persisted form value, not only a preview fallback');

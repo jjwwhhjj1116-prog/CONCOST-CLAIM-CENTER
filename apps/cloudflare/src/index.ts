@@ -1,3 +1,4 @@
+import { WORKFORCE_ALLOCATION_OPTIONS } from '../../web/src/workflow/workflow-model';
 import { normalizeReportAiContent, validateReportAiImprovement, REPORT_AUTHORING_OUTPUT_CONTRACT, REPORT_IMPROVEMENT_OUTPUT_CONTRACT } from '../../../packages/document-engine/src/report-ai-content';
 import { readReportDriveBytes, reuseReportTranscription } from './report-source';
 import {
@@ -908,7 +909,7 @@ function normalizedWorkflowText(value: unknown, maximum: number): string | null 
 }
 
 function validWorkflowDate(value: unknown): value is string {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
 }
 
 
@@ -1048,7 +1049,7 @@ async function generateSavedWorkflowSummary(env: CloudflareEnv, caseRow: Preview
   return generateWorkflowAiImport(env, caseRow, user, kind, file, new Uint8Array(await file.arrayBuffer()), 'text/plain');
 }
 
-async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRow): Promise<Response> {
+async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRow, allocationBatch?: { count:number; ids:string[]; replayed:boolean; requestKey:string }): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const [kickoff, surveys, allocations, events] = await Promise.all([
     env.DB.prepare(
@@ -1068,7 +1069,8 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     env.DB.prepare(
       'SELECT a.id, a.unit_key AS unitKey, a.unit_label AS unitLabel, a.office, a.scheduling_mode AS schedulingMode, a.discipline, ' +
       'a.scope_text AS scopeText, a.basis_text AS basisText, a.start_date AS startDate, a.end_date AS endDate, a.created_at AS createdAt, ' +
-      'u.display_name AS createdByName FROM preview_workforce_allocations a JOIN preview_users u ON u.id = a.created_by WHERE a.case_id = ? AND a.organization_id = ? ORDER BY a.start_date, a.unit_label LIMIT 100'
+      "(SELECT json_extract(e.detail_json,'$.leadMemberName') FROM preview_workflow_events e WHERE e.entity_id=a.id AND e.case_id=a.case_id AND e.event_type='WORKFORCE_ALLOCATED' ORDER BY e.rowid DESC LIMIT 1) AS leadMemberName, " +
+      'u.display_name AS createdByName FROM preview_workforce_allocations a JOIN preview_users u ON u.id = a.created_by WHERE a.case_id = ? AND a.organization_id = ? ORDER BY a.start_date, a.unit_label'
     ).bind(caseRow.id, PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>(),
     env.DB.prepare(
       'SELECT e.id, e.event_type AS eventType, e.entity_id AS entityId, e.detail_json AS detailJson, e.created_at AS createdAt, u.display_name AS actorName ' +
@@ -1098,6 +1100,7 @@ async function previewWorkflowPayload(env: CloudflareEnv, caseRow: PreviewCaseRo
     allocations: allocations.results,
     events: events.results.map((event) => ({ ...event, detail: JSON.parse(event.detailJson) as unknown, detailJson: undefined })),
     googleDrive: { connected: driveConnected, deferredByUser: !driveConfigured, uploadEnabled: driveConnected },
+    ...(allocationBatch ? { allocationBatch } : {}),
     phase: 'CF39_INTEGRATED_PROJECT_WORKSPACE'
   });
 }
@@ -1340,6 +1343,37 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     return previewWorkflowPayload(env, caseRow);
   }
 
+  if (action === 'allocations-bulk' && request.method === 'POST') {
+    if (!exactObjectKeys(body, ['unitKey','memberNames','leadMemberName','scopeText','basisText','startDate','endDate'])) return json({error:'일괄 투입 입력 항목을 확인해 주세요.',code:'INVALID_ALLOCATION_PAYLOAD'},400);
+    const unit=WORKFORCE_ALLOCATION_OPTIONS.find(item=>item.key===body.unitKey && item.schedulingMode==='PERSON'),names=body.memberNames;
+    const scopeText=normalizedWorkflowText(body.scopeText,12000),basisText=normalizedWorkflowText(body.basisText,12000),key=request.headers.get('Idempotency-Key');
+    if (!unit?.members || !Array.isArray(names) || names.length===0 || names.length>unit.members.length || names.some(name=>typeof name!=='string'||!unit.members!.includes(name)) || new Set(names).size!==names.length || typeof body.leadMemberName!=='string'||!unit.members.includes(body.leadMemberName) || !scopeText || !basisText || !validWorkflowDate(body.startDate) || !validWorkflowDate(body.endDate) || String(body.endDate)<String(body.startDate) || !key || !PREVIEW_CASE_CREATE_KEY.test(key)) return json({error:'소속 조직·투입 인원·PM·범위·기간 또는 저장 요청을 확인해 주세요.',code:'INVALID_ALLOCATION_PAYLOAD'},400);
+    const memberNames=unit.members.filter(name=>names.includes(name)),startDate=String(body.startDate),endDate=String(body.endDate),leadMemberName=body.leadMemberName;
+    const fingerprint=await sha256Hex(JSON.stringify({kind:'PERSON_BATCH_V1',caseId,actorId:user.id,unitKey:unit.key,memberNames,leadMemberName,scopeText,basisText,startDate,endDate})),keyHash=await sha256Hex(key);
+    const keys=memberNames.map((_,index)=>index===0?key:`person-batch-${keyHash}-${index}`);
+    const read=async()=> (await env.DB!.prepare(`SELECT id,idempotency_key AS requestKey,request_fingerprint AS requestFingerprint FROM preview_workforce_allocations WHERE case_id=? AND idempotency_key IN (${keys.map(()=>'?').join(',')})`).bind(caseId,...keys).all<{id:string;requestKey:string;requestFingerprint:string}>()).results;
+    const replay=(rows:Array<{id:string;requestKey:string;requestFingerprint:string}>)=>{
+      if(rows.length!==keys.length || keys.some(value=>rows.filter(row=>row.requestKey===value&&row.requestFingerprint===fingerprint).length!==1))return null;
+      return keys.map(value=>rows.find(row=>row.requestKey===value)!.id);
+    };
+    const prior=await read();if(prior.length){const ids=replay(prior);return ids?previewWorkflowPayload(env,caseRow,{count:ids.length,ids,replayed:true,requestKey:key}):json({error:'같은 저장 요청의 내용 또는 기록이 다릅니다. 저장 상태를 확인해 주세요.',code:'IDEMPOTENCY_MISMATCH'},409);}
+    const ids=memberNames.map(()=>crypto.randomUUID());
+    try {
+      await env.DB.batch(memberNames.flatMap((member,index)=>[
+        env.DB!.prepare('INSERT INTO preview_workforce_allocations (id,case_id,organization_id,unit_key,unit_label,office,scheduling_mode,discipline,scope_text,basis_text,start_date,end_date,idempotency_key,request_fingerprint,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .bind(ids[index],caseId,PREVIEW_ORGANIZATION_ID,unit.key,`${unit.unit} · ${member}`,unit.organization,'PERSON',unit.disciplineCode,scopeText,basisText,startDate,endDate,keys[index],fingerprint,user.id,now),
+        env.DB!.prepare('INSERT INTO preview_workflow_events (id,case_id,actor_id,event_type,entity_id,detail_json,created_at) VALUES (?,?,?,?,?,?,?)')
+          .bind(crypto.randomUUID(),caseId,user.id,'WORKFORCE_ALLOCATED',ids[index],JSON.stringify({unitKey:unit.key,memberName:member,leadMemberName,office:unit.organization,schedulingMode:'PERSON',startDate,endDate}),now)
+      ]));
+    } catch {
+      const rows=await read(),existing=replay(rows);if(existing)return previewWorkflowPayload(env,caseRow,{count:existing.length,ids:existing,replayed:true,requestKey:key});
+      return json({error:rows.length?'같은 요청의 투입 기록을 모두 확인하지 못했습니다. 저장 상태를 확인해 주세요.':'투입 기록을 저장하지 못했습니다. 입력을 유지한 채 같은 요청으로 다시 저장해 주세요.',code:rows.length?'IDEMPOTENCY_MISMATCH':'ALLOCATION_WRITE_FAILED'},rows.length?409:503);
+    }
+    // Explicit receipt, not the (possibly filtered) display list, confirms this exact batch.
+    const confirmed=replay(await read());if(!confirmed)return json({error:'투입 기록의 저장 결과를 확인하지 못했습니다. 같은 요청으로 재시도해 주세요.',code:'ALLOCATION_ACK_UNCONFIRMED'},503);
+    return previewWorkflowPayload(env,caseRow,{count:confirmed.length,ids:confirmed,replayed:false,requestKey:key});
+  }
+
   if (action === 'allocations' && request.method === 'POST') {
     if (!exactObjectKeys(body, ['unitKey', 'unitLabel', 'office', 'schedulingMode', 'discipline', 'scopeText', 'basisText', 'startDate', 'endDate'])) return json({ error: 'Allocation payload is invalid', code: 'INVALID_ALLOCATION_PAYLOAD' }, 400);
     const unitKey = normalizedWorkflowText(body.unitKey, 120);
@@ -1358,7 +1392,7 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     const existing = await env.DB.prepare('SELECT id, request_fingerprint AS requestFingerprint FROM preview_workforce_allocations WHERE case_id=? AND idempotency_key=?').bind(caseId, key).first<{ id: string; requestFingerprint: string }>();
     if (existing) {
       if (existing.requestFingerprint !== fingerprint) return json({ error: 'Idempotency-Key was used for a different allocation', code: 'IDEMPOTENCY_MISMATCH' }, 409);
-      return previewWorkflowPayload(env, caseRow);
+      return previewWorkflowPayload(env, caseRow, {count:1,ids:[existing.id],replayed:true,requestKey:key});
     }
     const allocationId = crypto.randomUUID();
     await env.DB.batch([
@@ -1367,7 +1401,7 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
       env.DB.prepare('INSERT INTO preview_workflow_events (id, case_id, actor_id, event_type, entity_id, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .bind(crypto.randomUUID(), caseId, user.id, 'WORKFORCE_ALLOCATED', allocationId, JSON.stringify({ unitKey, unitLabel, office, schedulingMode, startDate, endDate }), now)
     ]);
-    return previewWorkflowPayload(env, caseRow);
+    return previewWorkflowPayload(env, caseRow, {count:1,ids:[allocationId],replayed:false,requestKey:key});
   }
 
   return json({ error: 'Workflow route or method was not found', code: 'WORKFLOW_ROUTE_NOT_FOUND' }, 404);
@@ -3845,7 +3879,7 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
   if(url.pathname==='/api/cases/intake-source/draft')return handlePreviewIntakeDraft(request,env,user);
   const intakeSourcePath=url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/(?:intake-source|intake-audio)$/iu);
   if(intakeSourcePath)return handlePreviewIntakeSource(request,env,user,intakeSourcePath[1]);
-  const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|site-survey-summary|site-survey-confirm|allocations|ai-import))?$/iu);
+  const workflowPath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})\/workflow(?:\/(kickoff|kickoff-summary|site-survey|site-survey-summary|site-survey-confirm|allocations|allocations-bulk|ai-import))?$/iu);
   if (workflowPath) return handlePreviewCaseWorkflow(request, env, url, user, workflowPath[1], workflowPath[2]);
   const casePath = url.pathname.match(/^\/api\/cases\/([0-9a-f-]{36})(?:\/(status|parties|schedules))?$/iu);
 

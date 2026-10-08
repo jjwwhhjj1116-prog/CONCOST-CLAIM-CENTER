@@ -110,6 +110,14 @@ export const WORKFORCE_UNITS: readonly WorkforceUnit[] = [
   { organization: 'VIETQS', discipline: '토목·조경', unit: 'Civil', size: 2, schedulingMode: 'TEAM' }
 ] as const;
 
+// The UI and bulk-write validator use the same existing roster and stable keys.
+export const WORKFORCE_ALLOCATION_OPTIONS = WORKFORCE_UNITS
+  .filter((unit) => unit.discipline !== '클레임')
+  .map((unit, index) => ({ ...unit,
+    key: `${unit.organization.toLowerCase()}-${String(index + 1).padStart(2, '0')}`,
+    disciplineCode: unit.discipline === '마감' ? 'FINISH' : unit.discipline === '구조' ? 'STRUCTURE' : 'CIVIL_LANDSCAPE'
+  }));
+
 export interface ProjectWorkflowItem {
   stageId: WorkflowStageId;
   stageCode?: 'PROPOSAL' | 'AWARD' | 'KICKOFF' | 'SITE_SURVEY' | 'TAKEOFF_COST' | 'REPORT_WRITING';

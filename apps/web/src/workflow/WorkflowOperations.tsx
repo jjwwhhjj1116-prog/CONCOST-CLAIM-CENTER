@@ -7,7 +7,7 @@ import { CaseEvidencePanel } from '../evidence/CaseEvidencePanel';
 import { CompanyMinutes, MinutesFieldsEditor, downloadMinutes } from './CompanyMinutes';
 import { meetingMinutesWorkbook } from '../proposals/proposal-excel';
 import { minutesContent, minutesFieldDefaults, normalizeMinutesFields, type MinutesFields } from '../../../cloudflare/src/company-minutes';
-import { WORKFLOW_STAGES, WORKFORCE_UNITS } from './workflow-model';
+import { WORKFLOW_STAGES, WORKFORCE_ALLOCATION_OPTIONS } from './workflow-model';
 import { registerNavigationBlocker } from '../navigation-guard';
 
 type WorkflowRouteId = 'WF-03' | 'WF-04' | 'WF-05';
@@ -71,7 +71,9 @@ interface AllocationRecord {
   endDate: string;
   createdAt: string;
   createdByName: string;
+  leadMemberName?: string | null;
 }
+interface AllocationForm { unitKey:string; memberName:string; memberNames:string[]; scopeText:string; basisText:string; startDate:string; endDate:string }
 
 interface WorkflowPayload {
   case: CaseSummary;
@@ -80,6 +82,7 @@ interface WorkflowPayload {
   allocations: AllocationRecord[];
   events: Array<{ id: string; eventType: string; createdAt: string; actorName: string }>;
   googleDrive: { connected: boolean; deferredByUser: boolean; uploadEnabled: boolean };
+  allocationBatch?: { count:number; ids:string[]; replayed:boolean; requestKey:string };
 }
 
 type SharedStageCode = 'KICKOFF' | 'SITE_SURVEY' | 'TAKEOFF_COST';
@@ -132,13 +135,8 @@ const projectStatusLabels: Record<string, string> = {
   ANALYSIS: '분석', REPORT_DRAFTING: '보고서 작성', SUBMITTED: '제출', LITIGATION: '소송 진행',
   JUDGEMENT: '판결', SUCCESS_FEE: '성공보수 정산', CLOSED: '종결'
 };
-const WORKFORCE_OPTIONS = WORKFORCE_UNITS
-  .filter((unit) => unit.discipline !== '클레임')
-  .map((unit, index) => ({
-    ...unit,
-    key: `${unit.organization.toLowerCase()}-${String(index + 1).padStart(2, '0')}`,
-    disciplineCode: unit.discipline === '마감' ? 'FINISH' : unit.discipline === '구조' ? 'STRUCTURE' : 'CIVIL_LANDSCAPE'
-  }));
+const WORKFORCE_OPTIONS = WORKFORCE_ALLOCATION_OPTIONS;
+const blankAllocation = ():AllocationForm => ({unitKey:WORKFORCE_OPTIONS[0]?.key??'',memberName:WORKFORCE_OPTIONS[0]?.members?.[0]??'',memberNames:[],scopeText:'',basisText:'설계도서·현장실측',startDate:kstToday(),endDate:kstToday()});
 
 function kstToday(): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -186,6 +184,9 @@ export const WorkflowOperations: React.FC<{
   const [scheduleProject, setScheduleProject] = useState<SharedScheduleProject | null>(null);
   const [scheduleDraft, setScheduleDraft] = useState({ startDate: '', endDate: '', status: 'PLANNED', noteText: '', version: 0, explicit: false });
   const allocationKeys = useRef(new Map<string, string>());
+  const allocationSavingRef=useRef(false);
+  const canAllocate=roles.some(role=>['admin','ceo','director','pm'].includes(role));
+  const allocationPermissionRef=useRef(canAllocate);allocationPermissionRef.current=canAllocate;
 
   const [kickoff, setKickoff] = useState({
     minutesFields: { ...minutesFieldDefaults }, meetingAt: `${kstToday()}T10:00`, location: '', agenda: '', participantUnits: '', rawNotes: '', status: 'PLANNED', expectedVersion: 0
@@ -193,9 +194,7 @@ export const WorkflowOperations: React.FC<{
   const [survey, setSurvey] = useState({
     minutesFields: { ...minutesFieldDefaults }, surveyDate: kstToday(), location: '', scopeText: '', leadUnit: '현장조사팀', rawNotes: '', status: 'PLANNED', expectedVersion: 0, outputExpectedVersion: 0
   });
-  const [allocation, setAllocation] = useState({
-    unitKey: WORKFORCE_OPTIONS[0]?.key ?? '', memberName: WORKFORCE_OPTIONS[0]?.members?.[0] ?? '', scopeText: '', basisText: '설계도서·현장실측', startDate: kstToday(), endDate: kstToday()
-  });
+  const [allocation, setAllocation] = useState<AllocationForm>(blankAllocation);
 
   const selectedUnit = useMemo(() => WORKFORCE_OPTIONS.find((unit) => unit.key === allocation.unitKey) ?? WORKFORCE_OPTIONS[0], [allocation.unitKey]);
 
@@ -242,11 +241,12 @@ export const WorkflowOperations: React.FC<{
 
   const loadWorkflow = async (caseId: string, sync = true) => {
     const requestCaseId = caseId;
-    const generation = routeLoadGeneration.current;
+    const generation = ++routeLoadGeneration.current;
     const isCurrent = () => generation === routeLoadGeneration.current && requestCaseId === selectedCaseRef.current;
     if (!requestCaseId || requestCaseId !== selectedCaseRef.current) return;
     setLoading(true);
     setFailure('');
+    setAllocation(blankAllocation());
     setScheduleFailure('');
     try {
       const [payload, schedule] = await Promise.all([
@@ -257,6 +257,7 @@ export const WorkflowOperations: React.FC<{
         })
       ]);
       if (!isCurrent()) return;
+      if(payload?.case?.id!==requestCaseId)throw new Error('선택한 프로젝트와 조회 결과가 다릅니다. 다시 불러와 주세요.');
       setData(payload);
       if (sync) syncForms(payload);
       if (schedule) syncSharedSchedule(schedule.projects, payload);
@@ -316,6 +317,7 @@ export const WorkflowOperations: React.FC<{
     setNotice('');
     setFailure('');
     setFormDirty(false);
+    setAllocation(blankAllocation());
     void loadWorkflow(caseId);
   };
 
@@ -477,22 +479,38 @@ export const WorkflowOperations: React.FC<{
     }
   });
 
-  const saveAllocation = () => {
-    if (!selectedUnit) return;
-    const payload = {
+  const saveAllocation = async () => {
+    if (!selectedUnit || allocationSavingRef.current || !allocationPermissionRef.current || busy || importBusy) return;
+    const requestCaseId=selectedCaseId,generation=routeLoadGeneration.current;
+    const current=()=>generation===routeLoadGeneration.current&&selectedCaseRef.current===requestCaseId&&allocationPermissionRef.current;
+    if(!requestCaseId||!current())return;
+    const members=(selectedUnit.members??[]).filter(member=>allocation.memberNames.includes(member));
+    if(selectedUnit.schedulingMode==='PERSON'&&(!members.length||!selectedUnit.members?.includes(allocation.memberName)))return;
+    const payload = selectedUnit.schedulingMode==='PERSON'?{unitKey:selectedUnit.key,memberNames:members,leadMemberName:allocation.memberName,scopeText:allocation.scopeText,basisText:allocation.basisText,startDate:allocation.startDate,endDate:allocation.endDate}:{
       unitKey: selectedUnit.key, unitLabel: `${selectedUnit.unit} · ${allocation.memberName || '담당자 미지정'}`, office: selectedUnit.organization,
       schedulingMode: selectedUnit.schedulingMode, discipline: selectedUnit.disciplineCode,
       scopeText: allocation.scopeText, basisText: allocation.basisText, startDate: allocation.startDate, endDate: allocation.endDate
     };
-    const fingerprint = JSON.stringify(payload);
+    if(selectedUnit.schedulingMode==='TEAM')payload.unitLabel=selectedUnit.unit;
+    const fingerprint = requestCaseId+':'+JSON.stringify(payload);
     const key = allocationKeys.current.get(fingerprint) ?? `workflow-${crypto.randomUUID()}`;
     allocationKeys.current.set(fingerprint, key);
-    return mutate('팀 투입·기준 일정 저장', async () => {
-      await persistSharedSchedule({ startDate: allocation.startDate, endDate: allocation.endDate });
-      return apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(selectedCaseId)}/workflow/allocations`, {
-        method: 'POST', headers: { 'Idempotency-Key': key }, body: JSON.stringify(payload)
-      });
-    });
+    allocationSavingRef.current=true;
+    try {return await mutate('팀 투입·기준 일정 저장', async () => {
+      let scheduleSaved=false;
+      try {
+        await persistSharedSchedule({ startDate: allocation.startDate, endDate: allocation.endDate },generation);scheduleSaved=true;
+        if(!current())throw new Error('프로젝트 또는 저장 권한이 바뀌어 투입 저장을 중단했습니다.');
+        const result=await apiRequest<WorkflowPayload>(`/api/cases/${encodeURIComponent(requestCaseId)}/workflow/${selectedUnit.schedulingMode==='PERSON'?'allocations-bulk':'allocations'}`, {method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify(payload)});
+        if(result?.case?.id!==requestCaseId||!Array.isArray(result.allocations))throw new Error('투입 저장 결과를 확인하지 못했습니다. 같은 요청으로 다시 저장해 주세요.');
+        const receipt=result.allocationBatch,labels=selectedUnit.schedulingMode==='PERSON'?members.map(member=>`${selectedUnit.unit} · ${member}`):[selectedUnit.unit];
+        if(!receipt||receipt.requestKey!==key||receipt.count!==labels.length||!Array.isArray(receipt.ids)||receipt.ids.length!==labels.length||new Set(receipt.ids).size!==labels.length||typeof receipt.replayed!=='boolean')throw new Error('이 저장 요청 전체의 처리 결과를 확인하지 못했습니다. 같은 요청으로 재시도해 주세요.');
+        const rows=receipt.ids.map(id=>result.allocations.filter(row=>row.id===id));
+        if(rows.some(values=>values.length!==1)||labels.some(label=>rows.filter(values=>values[0].unitLabel===label).length!==1)||rows.some(([row])=>row.unitKey!==selectedUnit.key||row.schedulingMode!==selectedUnit.schedulingMode||row.office!==selectedUnit.organization||row.discipline!==selectedUnit.disciplineCode||row.scopeText!==allocation.scopeText.trim()||row.basisText!==allocation.basisText.trim()||row.startDate!==allocation.startDate||row.endDate!==allocation.endDate||(selectedUnit.schedulingMode==='PERSON'&&row.leadMemberName!==allocation.memberName)))throw new Error('선택 인원·범위·기간 전체의 저장 결과가 입력과 다릅니다. 같은 요청으로 재시도해 주세요.');
+        if(!current())throw new Error('프로젝트 또는 저장 권한이 바뀌었습니다. 현재 프로젝트에서 저장 상태를 확인해 주세요.');
+        return {payload:result,notice:selectedUnit.schedulingMode==='PERSON'?`${members.length}명 투입 기록 ${result.allocationBatch?.replayed?'확인 완료 · 중복 등록 없음':'저장 완료'} · 기준 일정은 별도 저장했습니다.`:'팀 투입 기록 1건 저장 완료 · 기준 일정은 별도 저장했습니다.'};
+      } catch(error){throw new Error(`${scheduleSaved?'기준 일정은 저장됐지만 투입 기록 저장·확인은 완료되지 않았습니다. 선택·입력은 유지되며 같은 요청으로 재시도할 수 있습니다. ':''}${messageFrom(error)}`);}
+    });}finally{allocationSavingRef.current=false;}
   };
 
   return (
@@ -536,7 +554,7 @@ export const WorkflowOperations: React.FC<{
 
       {!loading && data && stageId === 3 && <KickoffEditor key={selectedCaseId} caseId={selectedCaseId} form={kickoff} setForm={setKickoff} record={data.kickoff} disabled={!canEdit || Boolean(busy) || importBusy} onSave={saveKickoff} onGenerate={generateSummary} onConfirm={confirmKickoff} busy={importBusy ? '파일 자동정리' : busy} onImportBusy={setImportBusy} onDirtyChange={setFormDirty} onNavigate={onNavigate} />}
       {!loading && data && stageId === 4 && <SurveyEditor key={selectedCaseId} caseId={selectedCaseId} form={survey} setForm={setSurvey} surveys={data.siteSurveys} drive={data.googleDrive} disabled={!canEdit || Boolean(busy) || importBusy} onSave={saveSurvey} onGenerate={generateSurveySummary} onConfirm={confirmSurvey} busy={importBusy ? '파일 자동정리' : busy} onImportBusy={setImportBusy} onDirtyChange={setFormDirty} onNavigate={onNavigate} />}
-      {!loading && data && stageId === 5 && <AllocationEditor caseId={selectedCaseId} form={allocation} setForm={setAllocation} allocations={data.allocations} disabled={!canEdit || Boolean(busy)} onSave={saveAllocation} busy={busy} onNavigate={onNavigate} />}
+      {!loading && data && stageId === 5 && <AllocationEditor key={selectedCaseId} caseId={selectedCaseId} form={allocation} setForm={value=>{setFormDirty(true);setAllocation(value);}} dirty={formDirty} onDirtyChange={setFormDirty} allocations={data.allocations} disabled={!canAllocate || Boolean(busy)} onSave={()=>{void saveAllocation().then(saved=>{if(saved)setFormDirty(false);});}} busy={busy} onNavigate={onNavigate} />}
     </section>
   );
 };
@@ -920,30 +938,37 @@ const SurveyEditor: React.FC<{
 
 const AllocationEditor: React.FC<{
   caseId: string;
-  form: { unitKey: string; memberName: string; scopeText: string; basisText: string; startDate: string; endDate: string };
-  setForm: React.Dispatch<React.SetStateAction<{ unitKey: string; memberName: string; scopeText: string; basisText: string; startDate: string; endDate: string }>>;
+  form: AllocationForm;
+  setForm: React.Dispatch<React.SetStateAction<AllocationForm>>;
+  dirty:boolean;
+  onDirtyChange:(dirty:boolean)=>void;
   allocations: AllocationRecord[];
   disabled: boolean;
   busy: string;
   onSave: () => void;
   onNavigate: (path: string) => void;
-}> = ({ caseId, form, setForm, allocations, disabled, busy, onSave, onNavigate }) => (
+}> = ({ caseId, form, setForm, dirty, onDirtyChange, allocations, disabled, busy, onSave, onNavigate }) => {
+  useWorkflowDraftGuard(dirty,onDirtyChange);
+  const unit=WORKFORCE_OPTIONS.find(item=>item.key===form.unitKey),person=unit?.schedulingMode==='PERSON';
+  return (
   <div className="workflow-editor-grid">
     <article className="workflow-editor-card">
       <header><div><span>TAKEOFF & RESOURCE PLAN</span><h3>산출 범위·팀 투입 일정</h3></div><em>한국 개인 · 베트남 팀</em></header>
       <div className="workflow-form-grid">
-        <label className="is-wide">투입 조직<select value={form.unitKey} disabled={disabled} onChange={(event) => { const unit=WORKFORCE_OPTIONS.find((item)=>item.key===event.target.value);setForm((current) => ({ ...current, unitKey:event.target.value, memberName:unit?.members?.[0]??'' })); }}>{WORKFORCE_OPTIONS.map((unit) => <option key={unit.key} value={unit.key}>{unit.organization} · {unit.unit} · {unit.size}명 · {unit.schedulingMode === 'TEAM' ? '팀 일정' : '인원 일정'}</option>)}</select></label>
-        <label className="is-wide">산출 및 내역 PM<select value={form.memberName} disabled={disabled} onChange={(event)=>setForm((current)=>({...current,memberName:event.target.value}))}><option value="">담당자 선택</option>{(WORKFORCE_OPTIONS.find((unit)=>unit.key===form.unitKey)?.members??[]).map((member)=><option key={member} value={member}>{member}</option>)}</select></label>
+        <label className="is-wide">투입 조직<select value={form.unitKey} disabled={disabled} onChange={(event) => { const unit=WORKFORCE_OPTIONS.find((item)=>item.key===event.target.value);setForm((current) => ({ ...current, unitKey:event.target.value, memberName:unit?.members?.[0]??'',memberNames:[] })); }}>{WORKFORCE_OPTIONS.map((unit) => <option key={unit.key} value={unit.key}>{unit.organization} · {unit.unit} · {unit.size}명 · {unit.schedulingMode === 'TEAM' ? '팀 일정' : '인원 일정'}</option>)}</select></label>
+        {person?<><label className="is-wide">산출 및 내역 PM<select value={form.memberName} disabled={disabled} onChange={(event)=>setForm((current)=>({...current,memberName:event.target.value}))}><option value="">담당자 선택</option>{(unit?.members??[]).map((member)=><option key={member} value={member}>{member}</option>)}</select></label>
+          <fieldset className="allocation-person-picker" disabled={disabled} aria-describedby="allocation-person-count"><legend>투입 인원 · 여러 명 선택</legend>{(unit?.members??[]).map(member=><label key={member}><input type="checkbox" checked={form.memberNames.includes(member)} onChange={event=>setForm(current=>({...current,memberNames:event.target.checked?[...current.memberNames,member]:current.memberNames.filter(name=>name!==member)}))}/>{member}</label>)}<span id="allocation-person-count" role="status">{form.memberNames.length}명 선택 · 같은 범위·기간으로 인원별 기록을 함께 저장합니다.</span></fieldset>
+        </>:<p className="is-wide workflow-honest-note">이 조직은 팀 단위 일정입니다. 개인 선택 없이 팀 투입 기록 1건을 저장합니다.</p>}
         <label className="is-wide">산출 범위<textarea value={form.scopeText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, scopeText: event.target.value }))} placeholder="도면·동·공종·산출 제외 범위를 구체적으로 입력" /></label>
         <label className="is-wide">산출 기준<textarea value={form.basisText} maxLength={12000} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, basisText: event.target.value }))} placeholder="설계도서, 현장실측, 계약내역, 감정 기준" /></label>
         <label>시작일<input type="date" value={form.startDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} /></label>
         <label>종료일<input type="date" value={form.endDate} disabled={disabled} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} /></label>
       </div>
-      <Button className="workflow-form-save-button" disabled={disabled || !form.memberName || !form.scopeText.trim() || !form.basisText.trim() || form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : '담당자 투입 일정 저장·프로젝트 일정표 반영'}</Button>
+      <Button className="workflow-form-save-button" disabled={disabled || (person&&(!form.memberName||!form.memberNames.length)) || !form.scopeText.trim() || !form.basisText.trim() || !form.startDate||!form.endDate||form.endDate < form.startDate} onClick={onSave}>{busy === '팀 투입·기준 일정 저장' ? '일정과 투입 저장 중…' : person?`선택 ${form.memberNames.length}명 투입 일정 일괄 저장`:'팀 투입 일정 저장·프로젝트 일정표 반영'}</Button>
     </article>
     <article className="workflow-editor-card is-output">
       <header><div><span>ALLOCATION LEDGER</span><h3>프로젝트 투입 현황</h3></div><em>{allocations.length}건</em></header>
-      {allocations.length ? <div className="allocation-list">{allocations.map((item) => <section key={item.id}><div className={`allocation-office is-${item.office.toLowerCase()}`}>{item.office}</div><div><strong>{item.unitLabel}</strong><span>{item.schedulingMode === 'TEAM' ? '팀 단위 일정' : '인원 단위 일정'} · {item.startDate} → {item.endDate}</span><p>{item.scopeText}</p><small>{item.basisText} · {item.createdByName}</small></div></section>)}</div> : <div className="workflow-empty"><strong>아직 투입 일정이 없습니다.</strong><p>범위와 기준을 확정한 뒤 팀 일정을 추가하세요.</p></div>}
+      {allocations.length ? <div className="allocation-list">{allocations.map((item) => <section key={item.id}><div className={`allocation-office is-${item.office.toLowerCase()}`}>{item.office}</div><div><strong>{item.unitLabel}</strong><span>{item.schedulingMode === 'TEAM' ? '팀 단위 일정' : '인원 단위 일정'} · {item.startDate} → {item.endDate}</span><p>{item.scopeText}</p><small>{item.leadMemberName?`산출 PM ${item.leadMemberName} · `:''}{item.basisText} · {item.createdByName}</small></div></section>)}</div> : <div className="workflow-empty"><strong>아직 투입 일정이 없습니다.</strong><p>범위와 기준을 확정한 뒤 팀 일정을 추가하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
       <header>
@@ -955,3 +980,4 @@ const AllocationEditor: React.FC<{
     </article>
   </div>
 );
+};

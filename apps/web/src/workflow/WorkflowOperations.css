@@ -98,7 +98,8 @@
 .workflow-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .workflow-form-grid .allocation-person-picker { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px 16px; border: 1px solid #94a3b8; border-radius: 6px; }
 .workflow-form-grid .allocation-person-picker legend { padding: 0 4px; font-weight: 700; }
-.workflow-form-grid .allocation-person-picker label { display: inline-flex; align-items: center; min-height: 36px; gap: 7px; cursor: pointer; }
+.workflow-form-grid .allocation-person-picker label { display: inline-flex; align-items: center; min-height: 44px; gap: 7px; cursor: pointer; }
+.workflow-form-grid .allocation-person-picker [role='status'] { flex-basis: 100%; font-size: .75rem; line-height: 1.5; }
 .workflow-form-grid .allocation-person-picker input[type='checkbox'] { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; padding: 0; }
 .workflow-form-grid label { display: grid; gap: 7px; color: #aebbd0; font-size: .75rem; font-weight: 700; }
 .workflow-form-grid label.is-wide { grid-column: 1 / -1; }

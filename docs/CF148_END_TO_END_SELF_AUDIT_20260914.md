@@ -1,12 +1,12 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF196, 2026-10-08
+## 현재 판정 — CF197, 2026-10-08
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~196은 로컬 검증본으로 아직 미전송·미배포다. CF196은 실제 HWP5 원본007의 표에서 첫 줄 End 커서가 셀 밖으로 나가는 오류와 End→아래 방향키가 같은 줄에 머무는 오류를 재현해 수정했다. 변환 WASM·binding·SDK를 교체하지 않고 Studio의 두 커서 메서드만 교정했다. **최종 관련41/41 PASS, skipped0**(실제 SDK 6경로 포함18 + staging23)이며 007의19개 좌표/입력 오프셋/Undo도 통과했다. 같은 파서 내부 자기대조이며 실업무41카테고리 합격이 아니다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 실제 UI 줄경계 검사는 이번에 완료한 제한 범위로 닫고, 같은 위치를 반복하지 않는다. 글꼴 잉크 경계·PC 한컴 대조·최초 SDK 내용 손실 보고는 별도 미증명으로 유지한다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~197은 로컬 검증본으로 아직 미전송·미배포다. CF197은 검토2 의견33의 여러 인원 일괄 지정과 TEAM 저장 차단을 수정했다. PERSON의 인원별 N기록+N이력은 하나의 원자적 DB 저장으로 처리하고, 실패 후 같은 요청 재시도·중복 방지·선택/초안 보존·저장결과 대조·사건 조회 응답 역전을 검증했다. **최종 관련65/65 PASS, skipped0**(API/실제 localhost React·기존 업무 회귀42 + staging23), root/web 타입검사·프로덕션 빌드·Worker dry-run PASS다. 65는 시험 집계이며 실업무65카테고리 합격이 아니다. 기존 일정 PUT과 투입 POST는 별도 저장이므로 전체 동작을 하나의 거래라고 표현하지 않는다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** CF196에서 닫은 HWP 커서 구간은 이번에 반복하지 않고 승인 runtime으로 유지했다. 실제 직원 배정·원격 DB·서버 변경은0이며 Cloudflare 구현을 원래 배정 경로가 없는 Node 서버의 지원 완료로 확대하지 않는다.
 
 ### 현재 완료 순서 — 과거 미체크 목록과 구분
 
-1. **다음 구현은 검토2 의견33의 여러 인원 일괄 지정이다.** 현재 WorkflowOperations의 단일 담당자 선택/단일 allocation POST가 실제 남아 있다. PERSON의 인원별 기록·원자 저장·멱등 재시도와 TEAM의 기존 팀 단위를 보존해야 한다. 이번에는 배정을 실행하거나 해당 기능을 구현하지 않았다.
+1. **검토2 의견33의 여러 인원 일괄 지정은 CF197 로컬 구현·회귀 PASS로 닫았다.** 단일 PM은 유지하고 투입 인원만 여러 명 선택한다. PERSON N기록+N이력 원자 저장·멱등 재시도·TEAM1건·사건/권한/ACK 보호를 확인했다. 실제 서버 반영·직원 배정 검수는 아직 미실행이며 같은 로컬 구간을 다시 기본부터 반복하지 않는다.
 2. 제안서 4~12장 유형 변경→편집→저장→재진입→실제 출력, 쟁점 첨부 및 A–Z에서 증거가 없는 동선만 검수한다. 현재 선택목록의 첫100건 제한은 공유 전페이지 로더로 해소됐으므로 옛 의견13을 현재 미구현으로 세지 않는다.
 3. 원형 목차 문구/field·사진 배치, PC 한컴 독립 대조 및 CF186 정식 엔진 승격을 구분해 진행한다. native DOCX의 페이지 그림 편집성 제한은 남아 있다. 이번 JS 교정은 전체 Studio 소스 재빌드나 CF186 WASM 승인으로 가장하지 않는다.
 4. 최신 소스/승인 runtime의 development 실화면 검수→환경·DB 및 필요한 보호 백업/리허설→동일 검증 artifact의 가오픈 승격·양서버 대조 순서다. 기존 Docker 기동·지정3커밋 전송·Hwp.exe 경로 질문의 승인/답변 대기는 확대·우회하지 않는다.
@@ -14,7 +14,8 @@
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
-| 연결·배포 | 마지막 실제 확인 CF185의 development·승인 runtime28/28 일치. CF196 로컬 빌드에 별도 승인 JS 교정 연결 | CF186~196 서버 미반영. 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
+| 연결·배포 | 마지막 실제 확인 CF185의 development·승인 runtime28/28 일치. CF197 로컬 빌드에 CF196 승인 JS 교정 유지·Worker dry-run PASS | CF186~197 서버 미반영. 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
+| 물량·인원 배정 | 검토2#33 PERSON 여러 인원+단일 PM, N기록/N이력 원자 저장·멱등 재시도·TEAM1건·103건 재조회·실제 React 실패/권한/사건 전환 보호 PASS | 합성 localhost UI와 Worker 메모리 DB 증거를 분리. 실제 서버/직원 배정·Node 배정 경로는 미실행/미구현. 일정과 배정은 별도 저장 |
 | 유형·목차 선택 | 유형명/CH 코드 제거 유지. CF188 항목↔물리 쪽 연결. CF190 숫자 갱신에 CF191 후행공백 보존·원본 1행2열 Roman/제목 읽기 위치 확인·제외 사유 표시 추가. 실제017 사본09→01 복원 뒤47쪽 내부 렌더 exact | 원형 자동 의미 추출·목차 문구/표·필드 재생성 미완료. 실제017 4행 확인/6행 제외,025는 지원 목차 없음으로 임의 생성0. 신규 연결은 서버 미반영 |
 | 구조형 챕터 이동 | CF187 코드 없는 고유 제목 이동 누락을 실제 React에서 FAIL 재현→공유 제목 접두어 규칙과 정확 제목 fallback으로 수정.1440/390px 키보드·캐럿·편집기 스크롤·JSON/change 불변 PASS | 로컬 검증본/서버 미반영. 중복·부분 제목/표 내부/원형 쪽 이미지는 추정 연결 금지. 실제 서비스 선택 메뉴·자동저장 전구간 검증과 별개 |
 | 원형 쪽 탐색 | 원본17쪽 편집·출력 동시 이동의 과거 실제 Chrome 결과 유지. CF188 같은17쪽 다른 원형에서9쪽 선택 잔류 FAIL→초기화 수정; 확인된 챕터 이동·오래된 출력URL/미완료 이미지/이전 원본 지문 차단 PASS | 신규 검사는 localhost 합성 원고/실제 React 경로. 원형 목차 재생성·실제 서버 저장 왕복과 별개 |
@@ -40,6 +41,18 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF197 — 여러 인원 일괄 배정·팀 저장·저장 확인 및 오래된 조회 응답 차단
+
+- 시작 HEAD `df11eb78cb24a263f2976042f251c68b053e2e21`, 같은 recovery/`feat/CF123-es-v2`, 기존 사용자 삭제22 보존. 총괄만 수정하고 세 전문의 읽기 검수와 별도 최종 코드검수로 경로/권한/DB/실제 화면 조건을 확인했다. ponytail 최소 변경, UI hardening·키보드/반응형 지침을 적용했다. 명단/조직/discipline/기존 key는 기존 WORKFORCE_UNITS에서 파생한 공유 순수 데이터로 유지했으며 새 조직·인원·계정 역할을 만들지 않았다.
+- PERSON은 기존 ‘산출 및 내역 PM’ 하나를 유지하고 native checkbox로 투입 인원만 N명 선택한다. 0명/잘못된 PM/범위·기준/기간은 차단하고 조직/사건 전환 때 이전 선택을 초기화한다. TEAM은 개인 명단이 없어 기존 memberName 필수 검사에 걸리던 경로를 고쳐 원래 단일 팀 allocation POST로1건 저장한다. STAFF는 기존 서버 권한과 동일하게 입력/저장을 막는다. 미저장 취소/승인·오류 후 입력 보존·동일 턴 두 클릭의 일정 PUT1회/배정 POST1회를 실제 React에서 확인했다.
+- Worker의 `allocations-bulk`는 exact body/기존 PERSON 명단/중복·외부 인원/리드PM/길이/실제 ISO 날짜와 요청 key를 검증한다. 인원은 명단 순서로 정규화하고 요청 내용·actor·case 지문을 공유한다. 첫 child key는 원래 요청 key, 추가는 key SHA+index로 만들며 N개 plain INSERT와 N개 WORKFORCE_ALLOCATED event를 단일 D1.batch로 저장한다. UNIQUE 경합 때 완전한 동일 지문 N행만 replay하고 부분/다른 지문/legacy 충돌은409다. 둘째 allocation/event에 진짜 RAISE(ABORT)를 주입하여 전체 DB export byte 불변·같은 key 재시도 성공을 확인했다. schema/migration 변경0, 기존 단일 API body 계약 보존, Node에는 원래 해당 업무 경로·모델이 없어 이번 범위의 지원으로 주장하지 않는다.
+- 응답 receipt는 count/unique IDs/replayed/requestKey를 명시한다. UI는 해당 ID의 행1개씩과 요청 인원별 label 일대일 대응·조직/단위/공종/PM/범위·기준/기간 전체를 확인한 뒤만 성공·dirty 해제를 허용한다. duplicate-member/wrong-fields/wrong-key/invalid-json/빈 TEAM ACK는 초안 유지·성공0이다. 오래된 첫100 allocation 제한은 사건/조직 scope를 그대로 유지하며 제거하여 기존101+새2=103 저장/재조회가 확인된다. 일정 PUT 이후 배정 실패는 ‘기준 일정은 저장됐지만 투입 기록은 미확인’으로 구분하고 선택을 보존한다. 둘을 원자적 일괄 저장이라고 부르지 않는다.
+- `loadWorkflow`의 generation을 조회마다 증가시키고 payload.case.id도 대조한다. 실제 한 mounted 화면의 A→B→A에서 마지막 A의 새 날짜/입력/checkbox를 만든 뒤 이전 A/B 응답4개를 해제해 모두 유지되는지 확인했다. 테스트 안에서만 이 epoch 증가 한 줄을 제거한 음성 대조는 날짜2030-11-03이2030-10-01로 바뀌어 정확히 해당 시나리오 FAIL(나머지11 PASS)했다. 원본 소스·서버를 되돌리지 않았다. 기존 HEAD 화면은 PERSON checkbox0으로 기능 누락 FAIL이며 TEAM 개인 담당자 전제도 실제 원인이다.
+- 최종 관련 **42/42 PASS, skipped0**: cf11 API8, cf197 실제 React 부모1+시나리오12=13, cf115 회의·조사8, cf117 일정·취소·late response9, cf72 기존 달력/수주/가입4. 기존 cf115는 접힌 AI 내부 확인사항을 `.innerText` 본문에서 읽어 실패했으며 HEAD에서도 같은 실패를 확인했다. 실제 summary를 펼친 뒤 새 요약/기존 요약 부재를 읽고, CompanyMinutes 본문은 원문만 포함·AI요약/후속0을 별도 단언해 검수 계약을 바로잡았다. 회의록 제품/현장조사 양식 개편0. 최초 route whitelist 누락404와 검사 버튼 busy label/정확 label 조건의 도구 실패 이력도 통과와 구분한다. staging23/23을 더한65는 실제 업무65개 합격이 아니다.
+- root/web tsc exit0, diffcheck PASS, 새 E197 프로덕션 build/개발 Worker **dry-run** exit0. default sandbox에서 dependency 타입 접근이 실패한 검사는 공식 권한으로 재확인해 실제 신규 QA implicit-any1곳만 수정했고 OS/ACL/설정은 변경하지 않았다. 실제 production index inline CSS를 검수 fixture에 재사용해1440/390px 배치 한 번 교정·육안 확인, native checkbox label44px/인원 그룹 넘침0·키보드 Space/PM 선택 유지 PASS. `ui-final/allocation-ui-result.json` pass=true/expected12/passed12, SHA `f21da0bc3b1e69ba96741dee96573e0b863997cfe4998262570df2e820e66ca3`다. 이는 API mock을 이용한 실제 UI 증거이며 Worker SQL 시험과 분리한다.
+- E `claim-center-cf197-20261008/dist` 실제43파일/37,674,146B, canonical SHA `4093e9d2afa818d900020ec018398176dad5fb520c544e39b2c27dc3bdb9e067`(ordinal 정렬 상대경로+TAB+SHA+LF); main `index-BWL-sMUU.js` SHA `30315054cfd640070c1dab1a0475a8f9c7149d0ad4608ea5b38af8789b383652`, CSS `index-gRFP-3Cg.css` SHA `f505af0a649a564ca095d69b3f798dfd32a9b812af410b06ee318d895ef01708`. 승인 runtime28자산 readback exact/manifest `caa93fef1b362f878032e6e27231d197132a08b00e1b1bb05a0d1b8f1f0c7932`, WASM bcc40a79…/binding ad01e939…/CF196 Studio·renderer 지문 불변. CF186 후보 엔진·샘플 포함0. 기존 large chunk 경고 유지, 실제 deploy/upload/push0. 이전 빌드·원본·CC6v5/3출력·CC4/CC5·원격 DB·직원 배정/승인/메일·ENV/API key·Docker·C정리 변화0. C23.2GB/E137.7GB 여유를 읽기 확인했다.
+- 다음은 제안서4~12의 유형 변경→공통 양식/이미지→담당자 수정→저장·재진입→실제 출력에서 아직 증거가 없는 구간과 검토2/A–Z 잔여다. HWP 커서/855쪽/CC6다운로드는 닫은 범위를 반복하지 않는다. PC 한컴 독립 대조·원형 목차 문구/field·사진배치와 정식 CF186 승격은 미증명으로 유지한다. 외부 승인 범위가 확정되면 development 실제 화면→환경·DB·보호 백업/리허설→동일 artifact 가오픈 승격·양서버 대조→직원 영상 순서다. 관리자 개발 QA와 CEO/DIRECTOR 최종승인·자기승인 차단을 구분하고 현장조사 양식#32 HOLD는 유지한다.
 
 ### CF196 — 실제 줄 경계 End·수직 이동 수정과 검증된 빌드 연결
 
