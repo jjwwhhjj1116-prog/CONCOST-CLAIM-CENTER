@@ -1,8 +1,13 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF210 일정 출력 언어 수정 검증 통과·개발 반영 준비, 전체 A–Z는 미합격, 2026-10-08
+## 현재 판정 — CF210 일정 출력 언어 개발 반영·실제 화면 왕복 통과, 전체 A–Z는 미합격, 2026-10-08
 
 ### CF210 일정 출력 언어·원자료·실제 로컬 PDF 검수
+
+- 제품 `5cec544` 정상 GitHub push→development Worker `af82ff57-acef-4f6e-b860-0f1be8aa8cf3`. 검증한 `E200/cf210/dist-checked/index-DFugdOgU.js`를 재빌드 없이 keep-vars로 반영했다. 공개43파일/37,709,916B byte·SHA exact/canonical `f201e18de4afdf320bed0abf17c5972c5788d0bbc18bf41f893822af02ee593f`, health/readiness200·Drive true. 승인runtime28/WASM·CSS·DB/schema·키ENV·가오픈·고객자료·직원 배정·업무승인·메일·ERP 변경0. source ProjectWorkflowSchedule SHA27ef10d5…도 불변이다.
+- 단신 Chrome 출력탭839125601을 새 모듈로 재열어 실제 CC7 `Tháng 10/2026 Lịch chi tiết dự án`/VI6단계·T2~T7/CN·메타·범례·미입력 안내·1쪽을 확인했다. before/after DOM에서 시험 프로젝트명·코드·owner·ISO 일정·막대 style·날짜 숫자·휴일 class·쪽수를 비교해 exact였다(PM 미지정 fallback 표시만 의미상 정규화). 한국어 버튼을 누른 뒤 lang=ko/H1 `2026년 10월 프로젝트 상세 일정표`/1쪽/PM미지정도 재확인했다. 이름·담당 원문은 번역하지 않았고 원격 저장·native 인쇄·업무승인을 수행하지 않았다. 실제 화면 언어 왕복 PASS와 앞의 합성4쪽 PDF PASS를 실제 development OS PDF파일 PASS로 확대하지 않는다.
+
+아래 개발 반영 준비 문구는 당시 경위이며 현재 배포 결과는 위 항목을 기준으로 한다.
 
 - 단신 Chrome의 CC7 실제 일정 출력에서 `lang=vi`와 Tiếng Việt 선택을 확인했지만 H1은 `2026년 10월 프로젝트 상세 일정표`, 메타정보·범례는 한국어로 남았다. 기존 VI 동작은 출력 기준 시각 locale만 바꿨다. 기존 통과 검사 CF145도 페이지 수/query만 대조해 문구 누락을 잡지 못했다. 실제 보고서839125259는 여전히 v7/14:38:51/159단어715자/시작9·2열/실등록0 첨부창을 보존했다. 동일 schedule839125591의 취소 후 note DOM은 다시 시간 초과해 미검증을 유지하며, 보고서와 새 출력 탭839125601은 정상 읽혔다. 제품 실패와 특정 브라우저 탭의 조작 제한을 혼동하지 않는다.
 - 최소 수정은 ProjectSchedulePrint.tsx 한 제품 파일의 고정 VI 문구·요일·알려진 단계/6유형·휴일 tooltip·인쇄 안내/접근성 언어를 연결한 것이다. 한국어 표기와 월 범위·페이지 계산·holiday 날짜/판정·query/GET/print 호출 코드는 보존했다. 프로젝트명·직원명·owner·코드·ISO 날짜·저장 원문은 번역 helper를 통과하지 않는다. `미지정 원문직원` 같은 동명 원자료와 unknown 유형/단계도 그대로다. 제품 CSS·용지 크기·쪽나눔·HWP 엔진·DB·권한·키ENV·원본·고객자료 변경0. 기존 CF145는 올바른 VI 버튼명3곳만 수정했다.
