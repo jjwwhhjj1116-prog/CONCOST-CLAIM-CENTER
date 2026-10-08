@@ -121,6 +121,13 @@ function replaceReportChapterBlock(content: string, chapterCode: string, chapter
 
 const WHOLE_DOCUMENT_START = '<!-- MANUAL-WHOLE-DOCUMENT:START -->';
 const WHOLE_DOCUMENT_END = '<!-- MANUAL-WHOLE-DOCUMENT:END -->';
+
+function reportBodyHasContent(node: import('@tiptap/core').JSONContent): boolean {
+  if (node.type === 'text' && node.text?.trim()) return true;
+  if (node.type === 'image' && typeof node.attrs?.src === 'string' && node.attrs.src.trim()) return true;
+  if (node.type === 'table' && node.content?.length) return true;
+  return node.content?.some(reportBodyHasContent) ?? false;
+}
 const CHAPTER_JUMP_NOTICE = '선택한 목차에 해당하는 본문 제목이 없어 이동하지 않았습니다. 원형 HWP 문서는 연결된 편집본에서 해당 항목을 확인해 주세요.';
 
 export function reportDraftMethod(content: string, aiConnected: boolean): 'MANUAL' | 'AI' {
@@ -1393,7 +1400,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const projectStepComplete = Boolean(selectedCaseId && loadedCaseId === selectedCaseId && authoring?.available);
   const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty && !outlineSyncPending && !savingOutline;
   const wholeDocumentImported = content.includes(WHOLE_DOCUMENT_START) && content.includes(WHOLE_DOCUMENT_END);
-  const chapterStepComplete = Boolean(outlineStepComplete && (wholeDocumentImported || (authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length)));
+  const wholeDocumentHasBody = wholeDocumentImported && reportBodyHasContent(editorJson ?? parseStructuredDocumentMarkdown(content));
+  const chapterStepComplete = Boolean(outlineStepComplete && (wholeDocumentHasBody || (authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length)));
   const editingStepComplete = Boolean(chapterStepComplete && version > 0 && title.trim() && content.trim() && !dirty && !saving);
   const outputStepComplete = Boolean(editingStepComplete && currentFinalization);
   const stepComplete: Record<ReportWizardStep, boolean> = {

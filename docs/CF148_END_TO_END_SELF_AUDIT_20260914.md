@@ -1,6 +1,12 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF200, 2026-10-08
+## 현재 판정 — CF201 배포·CF202 최종 검증, 2026-10-08
+
+CF201 제품 소스 `ffacf08` 정상 GitHub push→development Worker `6e43049f-459c-4bdc-922d-fca681f75921` 반영. `dist-cf201-final`의 전체43파일/37,692,065B canonical `8c83a46ebc477ac77d0b662083589dc763330b140e7bc7a5e7f38f7b7cff845c`와 공개파일 exact PASS, health/readiness200·Drive connected true. 배포 직후 최초대조1회는 새 PDF chunk 대신HTML반환으로 FAIL했고, 완료확인 후 같은전체43 재검사 PASS. 최초실패는 기록하며 원인을 확정하지 않는다. 실제 단신 Chrome에서 CC7 내부확정1/외부검증0 준비됨 및 카드→제안서의 동일caseId 유지 확인. 새탭 수주팝업이 클릭을 가로막아 일정표로 이동하던 현상은 팝업 ‘나중에 다시 보기’를 닫은 뒤 정상이며 보고서 저장 라우팅 오류로 판정하지 않는다.
+
+CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→재열기 초안 미완료를 재현해 비원형 reportMode·비협업 편집 transaction에서 기존정상pair만 보존하도록 수정했다. 최신documentKey/readonly·preventUpdate·old/new raw native 포인터 제외, 원형SHA/attrs기본값/승인 변경0. metadata-only `<p><br></p>`를본문으로 오판하던 실제 추가FAIL은 의미있는JSON text/image/table 존재 검사로 고쳤다(원고내용변경0). 이전코드음성 양성2 FAIL, 수정 후 root 최종 **71/71 PASS, skipped0**(CF14/18/42/115/146/200/201/202). 실제 React Ctrl+A→10 H2·caret·Undo/Redo→합성HTTP AUTO ACK→reload, 표/이미지/attrs exact 포함. 이는 localhost저장 검증이며 CC7 실첨부0건/최종3출력·한컴 독립대조·전체A–Z·가오픈승격은 여전히 미합격이다. root/web타입·새Vite·승인runtime28·Worker dry-run PASS. 다음 배포후 실제재검수.
+
+### CF200 배포 이력
 
 최신 제품 소스 `dde7cf191bcd553768bd888d2863f4c93775fa13`를 정상 GitHub push 후 **development에만** Worker `9ab8b7a9-6c6d-4a85-824f-0a29b606fb3c`로 반영했다. `--assets E:/Codex-QA/claim-center-cf200-20261008/dist --keep-vars` 사용. 공개 전체43파일/37,689,127B의 byte·SHA 대조 PASS, canonical `d1e30ba2470254290f636cc987111d1fccaec87529ec183a5a4718832b9a5357`, main `index-BtXxWHzp.js` SHA `b1c2c2f0dc2c0771766e0fc2e98e920ff00ef0f7e76a37aaf669f24a0bcd910c`. health/readiness200·Drive 연결 true 전후 보존. 승인 runtime28/WASM/CF196 JS 지문 불변이며 CF186 진단 후보 엔진은 배포하지 않았다. DB/schema/migration·키/ENV·가오픈 변경0.
 

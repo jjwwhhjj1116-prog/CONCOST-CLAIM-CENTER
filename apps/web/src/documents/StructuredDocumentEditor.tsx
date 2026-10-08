@@ -15,7 +15,7 @@ import { Extension, Mark, Node, generateHTML, generateJSON, mergeAttributes, typ
 import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { DOMParser as ProseMirrorDOMParser, type Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { NodeSelection } from '@tiptap/pm/state';
+import { NodeSelection, Plugin } from '@tiptap/pm/state';
 import { CellSelection } from '@tiptap/pm/tables';
 import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
@@ -125,6 +125,31 @@ const AiChapterMarker = Node.create({
   },
   parseHTML() { return [{ tag: 'div[data-ai-chapter-marker]' }]; },
   renderHTML({ HTMLAttributes }) { return ['div', mergeAttributes(HTMLAttributes, { class: 'structured-editor__marker' })]; }
+});
+
+const PreserveManualReportMode = Extension.create<{isEnabled:()=>boolean}>({
+  name:'preserveManualReportMode',
+  addOptions() { return {isEnabled:()=>false}; },
+  addProseMirrorPlugins() {
+    return [new Plugin({appendTransaction:(transactions,previous,current)=>{
+      if (!this.options.isEnabled() || !transactions.some(transaction=>transaction.docChanged)
+        || transactions.some(transaction=>transaction.getMeta('preventUpdate'))
+        || previous.doc.attrs.reportNativeSource || current.doc.attrs.reportNativeSource) return null;
+      const start=previous.doc.firstChild, end=previous.doc.lastChild;
+      const isMarker=(node:ProseMirrorNode|null,marker:string)=>node?.type.name==='aiChapterMarker' && node.attrs.marker===marker;
+      if (!isMarker(start,'MANUAL-WHOLE-DOCUMENT:START') || !isMarker(end,'MANUAL-WHOLE-DOCUMENT:END')) return null;
+      if (isMarker(current.doc.firstChild,'MANUAL-WHOLE-DOCUMENT:START') && isMarker(current.doc.lastChild,'MANUAL-WHOLE-DOCUMENT:END')) return null;
+      // Keep mode markers in the editing transaction, not a parent setContent: caret and undo remain mapped.
+      // They are authoring metadata, never native fingerprints or a business approval.
+      const transaction=current.tr, positions:Array<{from:number;to:number}>=[];
+      current.doc.forEach((node,offset)=>{
+        if (node.type.name==='aiChapterMarker' && /^MANUAL-WHOLE-DOCUMENT:(?:START|END)$/u.test(String(node.attrs.marker))) positions.push({from:offset,to:offset+node.nodeSize});
+      });
+      for (const position of positions.reverse()) transaction.delete(position.from,position.to);
+      transaction.insert(0,start!).insert(transaction.doc.content.size,end!);
+      return transaction;
+    }})];
+  }
 });
 
 const DocumentPageBreak = Node.create({
@@ -719,6 +744,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const lastAppliedContentSignature = useRef(structuredDocumentContentSignature(value, editorJson));
   const selectionRef = useRef<StructuredSelection | null>(null);
   const reviewPagesRef = useRef<DocumentReviewPagesHandle | null>(null);
+  const manualModeContextRef=useRef({key:documentKey,enabled:false});
+  manualModeContextRef.current={key:documentKey,enabled:reportMode&&!readOnly&&!collaborationSession};
   // useEditor is recreated for each documentKey. Calculate this value on that
   // render so a chapter never inherits the previous chapter's first content.
   const initialContent = collaborationSession ? undefined : editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value);
@@ -788,6 +815,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const editor = useEditor({
     extensions: [
       ...(reportMode ? [ReportChapterDecoration] : []),
+      ...(reportMode && !collaborationSession ? [PreserveManualReportMode.configure({isEnabled:()=>manualModeContextRef.current.key===documentKey && manualModeContextRef.current.enabled})] : []),
       StarterKit.configure({
         ...(collaborationSession ? { undoRedo: false } : {}),
         link: { openOnClick: false, autolink: true, defaultProtocol: 'https' },
