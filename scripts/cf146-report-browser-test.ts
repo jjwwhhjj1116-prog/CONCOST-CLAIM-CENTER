@@ -28,9 +28,15 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
   const runtimeManifest = dialogSource ? JSON.parse(readFileSync(resolve(runtimeRoot, 'build-manifest.json'), 'utf8')) : null;
   const runtimeFiles = new Set<string>(['build-manifest.json', ...(runtimeManifest?.files ?? []).map((file: {path:string}) => file.path)]);
   const { createServer } = await import('../apps/web/qa/vite-server.js');
-  const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
-    name: 'cf146-render',
+  const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), ...(process.env.CF149_CACHE_ROOT ? {cacheDir:process.env.CF149_CACHE_ROOT} : {}), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
+    name: 'cf146-render', enforce:'pre',
     transform(code, id) {
+      if (process.env.CF203_LEGACY_PARAGRAPH_SPLIT === '1' && id.replaceAll('\\','/').endsWith('/report-pagination.ts')) {
+        const start=code.indexOf('// A paragraph that fits a fresh sheet');
+        const end=code.indexOf('const positions: Array<[Node, number]> = [];',start);
+        assert.ok(start>=0 && end>start && code.slice(start,end).includes('const fitsFresh=fits();'));
+        return code.slice(0,start)+code.slice(end);
+      }
       if (dialogSource && id.replaceAll('\\','/').endsWith('/RhwpEditorDialog.tsx')) return code.replaceAll('assertReportNativePagesMatch(before, snapshot.pages);', 'globalThis.cf149LayoutSnapshot = {before,after:snapshot.pages}; assertReportNativePagesMatch(before, snapshot.pages);');
     },
     configureServer(server) { server.middlewares.use(async (req,res,next) => {
@@ -346,6 +352,65 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
       assert.equal(result.text,expected);
       assert.equal(result.overflow,false);
       assert.ok(result.pages<=12,`Long source was fragmented into ${result.pages} pages`);
+    });
+    await t.test('CF203 fresh-sheet paragraphs keep two and seven lines whole with contiguous headings and exact inline evidence',async()=>{
+      const results=await page.evaluate(async()=>{
+        const {paginateReport}=await import('/src/documents/report-pagination.ts' as string) as typeof import('../apps/web/src/documents/report-pagination');
+        await document.fonts.ready;
+        return [{lines:2,headings:0},{lines:7,headings:0},{lines:7,headings:1},{lines:7,headings:2}].map(({lines,headings})=>{
+          const root=document.createElement('div');root.style.cssText='position:absolute;left:-2000px;top:0;width:600px;font:14px/24px Arial;margin:0';
+          const headingHtml=Array.from({length:headings},(_,i)=>`<h${i+2} data-cf203-heading="${i}" style="font:14px/24px Arial;margin:0">CF203 검수 제목 ${i+1}</h${i+2}>`).join('');
+          const body=Array.from({length:lines-1},(_,i)=>i===0?'<strong data-evidence="bold">CF203 강조 원문</strong> 금액 123,456원.':i===lines-2?'문장 끝을 쪼개지 않습':`CF203 근거 ${i+1}`).join('<br>')+'<br><a href="#cf203-source" title="원문 링크" data-evidence="link">니다.</a>';
+          root.innerHTML=`<div data-cf203-prefix style="height:${240-((lines-1)+headings)*24}px">CF203 앞 내용</div>`+headingHtml+`<p id="cf203-paragraph" class="reviewed-paragraph" data-business="unchanged" style="margin:0;line-height:24px;text-indent:12px">${body}</p>`;
+          document.body.append(root);
+          const before=root.innerHTML,expectedText=root.textContent,expectedParagraph=root.querySelector('p')!.outerHTML;
+          const expectedHeadings=[...root.querySelectorAll('h2,h3')].map(node=>node.outerHTML);
+          try {
+            const layout=paginateReport(root,240),unchanged=root.innerHTML===before;
+            const docs=layout.pages.map(html=>new DOMParser().parseFromString(html,'text/html'));
+            const probe=root.cloneNode(false) as HTMLElement;root.append(probe);
+            const heights=layout.pages.map(html=>{probe.innerHTML=html;return{height:probe.scrollHeight,width:probe.scrollWidth};});
+            return {lines,headings,overflow:layout.overflow,unchanged,pages:layout.pages.length,heights,text:docs.map(doc=>doc.body.textContent).join(''),expectedText,
+              paragraphPages:docs.flatMap((doc,index)=>doc.querySelector('p')?[index]:[]),paragraphs:docs.flatMap(doc=>[...doc.querySelectorAll('p')]).map(node=>node.outerHTML),expectedParagraph,
+              headingPages:docs.flatMap((doc,index)=>[...doc.querySelectorAll('h2,h3')].map(()=>index)),headingHtml:docs.flatMap(doc=>[...doc.querySelectorAll('h2,h3')]).map(node=>node.outerHTML),expectedHeadings,
+              isolatedTail:docs.some(doc=>doc.body.textContent?.trim()==='니다.')};
+          } finally {root.remove();}
+        });
+      });
+      assert.deepEqual(results.map(({lines,headings,paragraphPages,headingPages,isolatedTail})=>({lines,headings,paragraphPages,headingPages,isolatedTail})),
+        [{lines:2,headings:0},{lines:7,headings:0},{lines:7,headings:1},{lines:7,headings:2}].map(({lines,headings})=>({lines,headings,paragraphPages:[1],headingPages:Array(headings).fill(1),isolatedTail:false})),
+        'All short/tall paragraph and H2/H3 cases must avoid fragmented one-line continuations');
+      for(const result of results){
+        assert.equal(result.overflow,false);assert.equal(result.unchanged,true);assert.equal(result.pages,2);
+        assert.deepEqual(result.paragraphPages,[1],`A ${result.lines}-line paragraph must not become a one-line tail`);
+        assert.equal(result.isolatedTail,false);assert.equal(result.text,result.expectedText);
+        assert.deepEqual(result.paragraphs,[result.expectedParagraph],'Text, strong/link attributes, indent and reviewed HTML remain exact');
+        assert.deepEqual(result.headingPages,Array(result.headings).fill(1),'Immediately preceding H2/H3 travel with the paragraph');
+        assert.deepEqual(result.headingHtml,result.expectedHeadings);
+        assert.ok(result.heights.every(page=>page.height<=241&&page.width<=601),JSON.stringify(result.heights));
+      }
+    });
+    await t.test('CF203 oversized paragraphs still split without duplicate text, missing markup or source mutation',async()=>{
+      const result=await page.evaluate(async()=>{
+        const {paginateReport}=await import('/src/documents/report-pagination.ts' as string) as typeof import('../apps/web/src/documents/report-pagination');
+        await document.fonts.ready;
+        const root=document.createElement('div');root.style.cssText='position:absolute;left:-2000px;top:0;width:600px;font:14px/24px Arial;margin:0';
+        root.innerHTML='<div style="height:24px">CF203 앞 내용</div><p data-cf203-long style="margin:0;line-height:24px">'+Array.from({length:50},(_,i)=>`<strong data-line="${i}">CF203 긴 원문 ${String(i).padStart(2,'0')} 123,456원</strong>`).join('<br>')+'<a href="#cf203-source" title="원문 링크">긴 문단 끝</a></p>';
+        document.body.append(root);const before=root.innerHTML,expectedText=root.textContent,expectedBold=[...root.querySelectorAll('strong')].map(node=>node.textContent).join('');
+        try {
+          const layout=paginateReport(root,240),unchanged=root.innerHTML===before;
+          const docs=layout.pages.map(html=>new DOMParser().parseFromString(html,'text/html'));
+          const probe=root.cloneNode(false) as HTMLElement;root.append(probe);
+          const heights=layout.pages.map(html=>{probe.innerHTML=html;return{height:probe.scrollHeight,width:probe.scrollWidth};});
+          return{overflow:layout.overflow,unchanged,pages:layout.pages.length,text:docs.map(doc=>doc.body.textContent).join(''),expectedText,heights,
+            bold:docs.flatMap(doc=>[...doc.querySelectorAll('strong')]).map(node=>node.textContent).join(''),expectedBold,
+            links:docs.flatMap(doc=>[...doc.querySelectorAll('a')]).map(node=>[node.getAttribute('href'),node.getAttribute('title'),node.textContent])};
+        } finally {root.remove();}
+      });
+      assert.equal(result.overflow,false);assert.equal(result.unchanged,true);assert.ok(result.pages>1);
+      assert.equal(result.text,result.expectedText);assert.equal(result.bold,result.expectedBold);
+      assert.deepEqual(result.links,[['#cf203-source','원문 링크','긴 문단 끝']]);
+      assert.ok(result.heights.every(page=>page.height<=241&&page.width<=601),JSON.stringify(result.heights));
     });
     await t.test('a tall unmerged table row continues across portrait pages without losing cells',async()=>{
       const result=await page.evaluate(async()=>{

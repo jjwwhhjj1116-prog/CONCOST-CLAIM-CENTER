@@ -1,6 +1,12 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF201 배포·CF202 최종 검증, 2026-10-08
+## 현재 판정 — CF202 배포·CF203 실제 출력 수정, 2026-10-08
+
+CF202 제품 `8cd8e36` push·development Worker `92bb1a1d-a189-4c1a-9d6c-596113a6b1ec` 실제 반영. `dist-cf202-final` 전체43파일/37,693,618B canonical `08f86caeb230b9e91b1bac11b602c966256bf3526d5e21166a6b15846c315d3f` public byte/SHA exact·health/readiness200·Drive true. 승인runtime28/WASM 불변·keep-vars·migration/키/ENV/가오픈0. 실제 새모듈 `index-ClsmGbGa.js`에서 CC7의 이미표식없는 원고를 자동복구하지 않고 명시적 수동선택→AI 없이 이동으로 본문10 H2/표지/목차를 보존한v7 저장·4단계 완료 확인. 관리자QA 저장본v7 읽기까지 실제 성공(업무승인/직원검토요청0).
+
+CF203 실제 출력 FAIL: v7 관리자QA PDF335,285B·4쪽·A4 세로가 Downloads에 실제 저장됨. 브라우저 download 이벤트 timeout은 파일존재로 도구감지 실패와 분리. 공식 bundled Poppler로 전4쪽 렌더: 본문1쪽 끝7장 ‘않습’/본문2쪽 첫줄 ‘니다.’ 고립 확인, 기존PDF 사본 E200/cc7-v7-adminqa.pdf 보존. DOCX13,304B도 실제생성(번들LibreOffice없어 독립Office렌더 미실행). 일반HWP변환은 ‘HWP 줄바꿈으로 페이지 수가 달라졌습니다. (5/4)’로 실제중단·파일0; 쪽수 guard 유지. 원형 HWP 가져오기 실패로 혼동하지 않는다.
+
+새 최소수정은 렌더 clone에서 fresh 한쪽에 들어가는 일반P+직전제목을 통째 옮기는17줄이며 저장원고/편집속성/원형지문0변경. 모든 oversized 문단에2줄 고아줄을 보장하는 광범위정책은 아니다. before 실제2/7줄·H2/H3/inline 모두고립FAIL, 총괄 full 실제DOM/출력구조회귀 **26/26/skipped0 PASS**(기존 표·목록·병합·명시쪽나눔·원형·DOCX 등 포함). root/web타입·freshVite·승인runtime·Worker dry-run PASS. 현재 새개발배포와 실제PDF/HWP 재출력은 아직 미완료이며 아래 과거결과를 전체출력합격으로 확대하지 않는다. 실제 사진3/XLSX1 업로드0·사용자직접선택대기 및 한컴 독립대조·A–Z·가오픈 미합격 유지.
 
 CF201 제품 소스 `ffacf08` 정상 GitHub push→development Worker `6e43049f-459c-4bdc-922d-fca681f75921` 반영. `dist-cf201-final`의 전체43파일/37,692,065B canonical `8c83a46ebc477ac77d0b662083589dc763330b140e7bc7a5e7f38f7b7cff845c`와 공개파일 exact PASS, health/readiness200·Drive connected true. 배포 직후 최초대조1회는 새 PDF chunk 대신HTML반환으로 FAIL했고, 완료확인 후 같은전체43 재검사 PASS. 최초실패는 기록하며 원인을 확정하지 않는다. 실제 단신 Chrome에서 CC7 내부확정1/외부검증0 준비됨 및 카드→제안서의 동일caseId 유지 확인. 새탭 수주팝업이 클릭을 가로막아 일정표로 이동하던 현상은 팝업 ‘나중에 다시 보기’를 닫은 뒤 정상이며 보고서 저장 라우팅 오류로 판정하지 않는다.
 

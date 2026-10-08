@@ -36,6 +36,24 @@ export function paginateReport(source: HTMLElement, height: number): { pages: st
       tester.append(rest);
       if (fits()) return;
       rest.remove();
+      // A paragraph that fits a fresh sheet is not an oversized block. Keep it
+      // intact with its immediately preceding headings instead of splitting a word
+      // into a one-line continuation. All measurements use render-only clones.
+      if (rest.tagName === 'P' && tester.childNodes.length && !rest.querySelector('img,table,svg,canvas,iframe,video,audio,object,embed,input,textarea,button')) {
+        const prior=[...tester.childNodes], headings:Node[]=[];
+        for (let index=prior.length-1;index>=0;index--) {
+          const node=prior[index];
+          if (!(node instanceof HTMLElement) || !/^H[1-6]$/u.test(node.tagName)) break;
+          headings.unshift(node);
+        }
+        tester.replaceChildren(...headings,rest);
+        const fitsFresh=fits();
+        tester.replaceChildren(...prior);
+        if (fitsFresh) {
+          headings.forEach(heading=>heading.parentNode?.removeChild(heading));
+          commit(); tester.append(...headings,rest); return;
+        }
+      }
       const positions: Array<[Node, number]> = [];
       const walk = document.createTreeWalker(rest, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
       while (walk.nextNode()) {
