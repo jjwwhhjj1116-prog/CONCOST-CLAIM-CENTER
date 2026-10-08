@@ -1,6 +1,12 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF204 실제 PDF 합격·CF205 HWP 간격 수정, 2026-10-08
+## 현재 판정 — CF205 실제 후속 FAIL·CF206 목차 보존 수정 중, 2026-10-08
+
+CF206 최종 로컬 판정: 보고서10행3열·점선10개·cellCap오류수정후에도carrier 기본160%에 의해행37px(원문42.796875px)·누적52.171844px축소FAIL을새SVG검수가잡았다. 표carrier만PERCENT100＋after=실측advance−native行높이로매핑·기존자체위치cache만확인후무효화하여재열기진행최대오차0.028106689px로수정했다. 실패했던FIXED전체advance후보는59.8px중복진행이므로채택하지않았다. case75/default150 단위각각정확검증하며필수lineSpacing/prev/next 누락도차단한다. 최종HWP25/25+body27/27 skipped0·root/webtsc PASS. 전문가동결test SHA `d0379eea63851ff5269cccd4a91dbd388c6ebe60c97258df1a94bcbcf46046eb`, 제품collector aaeef724…/exporter a04538f6… . 점선SOLID변조/advance+1/CASEnext삭제/비정상입력차단과기존갑지·그라데이션·표·사진·원형 경계유지. 원형전체폰트대조와별개로raw첫glyph absoluteY차이최대3.1312px·X약−1px를미검증범위로기록(반복간격합격과구분). 최종산출물은 E200/dist-cf206-checked이며오래된dist-cf206-final 후보는배포하지않는다. 새development반영·CC7v7실제4쪽HWP생성/재열기/전쪽시각검수는이후확인할항목이다.
+
+CF205 제품 `d4f3d7d` 정상push·development Worker `dcdf85b3-aeaa-461f-9c76-b4f56d33a5db` 실제반영. public43/37,695,315B/canonical `68c46ff82e0e2fa88c4974cc3c51792d288cc5a260a7788ecd2e7ef8cb044383` byte/SHA exact·health/readiness200·Drive true. freshD5UsEDPS 실제CC7v7재열기/저장14:38:51불변. 실제HWP는이전5/4단계를넘었지만후속‘표 셀 크기·여백이 원문과 다릅니다.’로차단·파일0. 전체HWP합격아님.
+
+CF206 확정원인: 실제보고서TOC10행은3span인데2열native표로저장되어넓은연결선공간을첫셀right padding에몰았다. 실제5행488.637691px=36648HU/10행479.455004px로pinned엔진32767HU상한을넘으면prepared재직렬화에서0이된다. 전문가메모리probe32767PASS/32768FAIL, 새보고서10행actualbrowser도동일binaryguard FAIL·sourceHTML불변·파일0. 값clamp나guard허용오차변경없이실제3span→3열/무내용leader셀과실측점선native수평선으로표현수정중. DOT=3은승인runtime UI enum+실제setShapeProperties/바이너리재열기SVG대조로확인(height0,stroke1,DOT,Paper좌표 exact). 원고·폰트·원본·엔진0변경이며기존rect/table/pageguard보존+새점선count/geometry/style/fillnone검증추가. 현재root HWP25/25+body27/27PASS/typePASS이지만10행title/page Y·점선위치시각대조와최종freeze/새빌드·development実출력은미완료다.
 
 CF205 최종 추가 검수: 총괄 최신 actual HWP browser+Node **24/24 PASS, skipped0**, body/TOC/PDF/DOCX **27/27 PASS, skipped0**. 재열기 SVG 첫글자와 DOM Range를 같은px로 대조한 반복간격 누적오차는 dense0.043762px/blank0.062531px, 첫제목 좌표129px 일치·본문의 고정glyph offset약0.4px를 미확인 한컴동일성으로 확대하지 않는다. 실제높이/최소높이/BR/명시spacer/명시0높이 문단을 내보내기에서 없애지 않는5경계와sourceHTML exact도 통과. 신규검수에 있었던 SVG text run 분할 matcher0건 오류는 harness 오류로 분리하고 같은baseline run연결 후 재검수했다. source collector 최종 SHA `eabec83ccb502be712f1a0f39fd73df3870e1d59da6d43a20f9855b793ce840d`, exporter d00fe716…/승인WASM 불변. CF204 PDF3쪽5장 불균일 시각후보는 원본픽셀 제목→본문65~66/문단→다음제목59~60px로 전장동일해 철회했고 PDF clone 변경0.
 

@@ -116,10 +116,10 @@ async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
 }
 
 /** Native borderless table for an authored two/three-column layout (cover/TOC). */
-function layoutRow(contents:NativeHwpContent[],widths:number[],height:number,padding?:Array<{top:number;right:number;bottom:number;left:number}>):NativeHwpContent{
+function layoutRow(contents:NativeHwpContent[],widths:number[],height:number,padding?:Array<{top:number;right:number;bottom:number;left:number}>,advance?:number):NativeHwpContent{
   const result=empty();result.tables=1;
   result.tableCells!.push(contents.map((c,col)=>({row:0,col,rowSpan:1,colSpan:1,text:c.text})));
-  result.tableGeometry!.push({width:widths.reduce((a,b)=>a+b,0),cells:widths.map((width,i)=>({width,height,padding:padding?.[i]??{top:0,right:0,bottom:0,left:0}}))});
+  result.tableGeometry!.push({width:widths.reduce((a,b)=>a+b,0),advance,cells:widths.map((width,i)=>({width,height,padding:padding?.[i]??{top:0,right:0,bottom:0,left:0}}))});
   result.html='<table style="border-collapse:collapse"><tr>'+contents.map((c,i)=>`<td style="width:${widths[i]}px;height:${height}px;padding:0;border:0px none #ffffff;vertical-align:middle">${c.html}</td>`).join('')+'</tr></table>';
   for(const c of contents){result.text+=c.text;result.images+=c.images;result.tables+=c.tables;result.tableCells!.push(...c.tableCells!);result.tableGeometry!.push(...c.tableGeometry!);result.pictures!.push(...c.pictures!);}
   return result;
@@ -133,17 +133,21 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
     if(ignored(node)||node.matches('.report-page-number,.proposal-cover-frame'))continue;
     if(node.matches('.proposal-final-toc li,.report-toc-entry')){
       await flush();previous=null;
-      const children=node.matches('li')?[node.querySelector(':scope > b'),node.querySelector(':scope > span'),node.querySelector(':scope > i')]:[node.firstElementChild,node.querySelector('.report-toc-page')];
+      const reportToc=node.matches('.report-toc-entry');
+      const children=reportToc?[node.firstElementChild,node.querySelector('.report-toc-leader'),node.querySelector('.report-toc-page')]:[node.querySelector(':scope > b'),node.querySelector(':scope > span'),node.querySelector(':scope > i')];
       if(children.some(e=>!e))throw Error('HWP 목차 제목·쪽번호를 확인하지 못했습니다.');
-      const contents=await Promise.all(children.map(e=>paragraph(e!,[...e!.childNodes],0,0)));
+      const contents=await Promise.all(children.map((e,i)=>reportToc&&i===1?empty():paragraph(e!,[...e!.childNodes],0,0)));
       const rect=node.getBoundingClientRect(),scale=rect.width/(node as HTMLElement).offsetWidth||1;
       const boxes=children.map(e=>e!.getBoundingClientRect());
       const starts=boxes.map((box,i)=>i?(box.left-rect.left)/scale:0);
       const ends=boxes.map((_,i)=>i+1<boxes.length?starts[i+1]:rect.width/scale);
       const widths=starts.map((start,i)=>ends[i]-start);
-      const padding=boxes.map((box,i)=>({left:(box.left-rect.left)/scale-starts[i],right:ends[i]-(box.right-rect.left)/scale,top:(box.top-rect.top)/scale,bottom:(rect.bottom-box.bottom)/scale}));
+      const padding=boxes.map((box,i)=>reportToc&&i===1?{left:0,right:0,top:0,bottom:0}:{left:(box.left-rect.left)/scale-starts[i],right:ends[i]-(box.right-rect.left)/scale,top:(box.top-rect.top)/scale,bottom:(rect.bottom-box.bottom)/scale});
       if(widths.some(width=>width<=0)||padding.some(p=>Object.values(p).some(value=>value<-.1)))throw Error('HWP 목차 열 배치를 확인하지 못했습니다.');
-      append(result,layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding));continue;
+      const page=node.closest<HTMLElement>('[data-export-page]'),pageScale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):scale;
+      const next=reportToc&&node.nextElementSibling?.matches('.report-toc-entry')?node.nextElementSibling:null;
+      const advance=reportToc?(next?(next.getBoundingClientRect().top-rect.top)/pageScale:rect.height/pageScale+px(style(node).marginBottom)):undefined;
+      append(result,layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding,advance));continue;
     }
     if(node instanceof HTMLTableElement){await flush();previous=null;append(result,await table(node));continue;}
     if(node instanceof HTMLImageElement){await flush();previous=null;append(result,await image(node));continue;}
@@ -192,6 +196,9 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
       if(!height)return;
       const rect=element.getBoundingClientRect(),fill=color(computed.getPropertyValue(`border-${side}-color`));
       if(fill==='transparent')return;
+      if(element.matches('.report-toc-leader')&&side==='bottom'&&computed.borderBottomStyle==='dotted'){
+        rules.push({left:(rect.left-pageRect.left)/scale,top:(rect.bottom-pageRect.top)/scale-height/2,width:rect.width/scale,height:0,colors:[fill],dotted:true,stroke:height});return;
+      }
       if(computed.getPropertyValue(`border-${side}-style`)!=='solid')throw Error('HWP 장식선 형식의 추가 검증이 필요합니다.');
       rules.push({left:(rect.left-pageRect.left)/scale,top:(rect[side==='top'?'top':'bottom']-pageRect.top)/scale-(side==='bottom'?height:0),width:rect.width/scale,height,colors:[fill]});
     };
@@ -222,7 +229,7 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
         margins.bottom=Math.max(margins.bottom,footer.distance+signature.offsetHeight);
       }
     }else append(body,await blocks(page));
-    for(const element of page.querySelectorAll(':scope > ol > li, :scope > header'))borderRule(element,'bottom');
+    for(const element of page.querySelectorAll(':scope > ol > li, :scope > header, .report-toc-leader'))borderRule(element,'bottom');
     const pageNumber=page.querySelector<HTMLElement>(':scope > .report-page-number');
     if(pageNumber&&!ignored(pageNumber))footer={...await paragraph(pageNumber),distance:px(style(pageNumber).bottom)};
     if(page.matches('.proposal-final-toc,.proposal-final-chapter')){

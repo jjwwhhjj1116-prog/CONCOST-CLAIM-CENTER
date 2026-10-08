@@ -24,7 +24,7 @@ export interface NativeHwpContent {
   images: number;
   tableCells?: Array<Array<{ row: number; col: number; rowSpan: number; colSpan: number; text: string }>>;
   pictures?: Array<{ bytes: Uint8Array; width: number; height: number }>;
-  tableGeometry?: Array<{width:number;cells:Array<{width:number;height:number;padding:{top:number;right:number;bottom:number;left:number}}>}>;
+  tableGeometry?: Array<{width:number;advance?:number;cells:Array<{width:number;height:number;padding:{top:number;right:number;bottom:number;left:number}}>}>;
 }
 export interface NativeHwpPage extends NativeHwpContent {
   width: number;
@@ -32,11 +32,11 @@ export interface NativeHwpPage extends NativeHwpContent {
   margins: { top: number; right: number; bottom: number; left: number };
   footer?:NativeHwpContent & {distance:number;centerTable?:boolean};
   frame?:{left:number;top:number;width:number;height:number;color:string;stroke:number};
-  rules?:Array<{left:number;top:number;width:number;height:number;colors:[string]|[string,string]}>;
+  rules?:Array<{left:number;top:number;width:number;height:number;colors:[string]|[string,string];dotted?:boolean;stroke?:number}>;
   paragraphInsets?:Array<{left:number;right:number}>;
 }
 
-const pageShapes=(page:NativeHwpPage)=>[...(page.frame?[{...page.frame,colors:undefined as string[]|undefined}]:[]),...(page.rules||[]).map(rule=>({...rule,color:rule.colors[0],stroke:0}))];
+const pageShapes=(page:NativeHwpPage)=>[...(page.frame?[{...page.frame,colors:undefined as string[]|undefined,dotted:false}]:[]),...(page.rules||[]).map(rule=>({...rule,color:rule.colors[0],stroke:rule.stroke??0,dotted:!!rule.dotted}))];
 
 const normalize = (value: string) => value.replace(/[\u200b\ufeff]/gu, '').replace(/\s+/gu, ' ').trim();
 const normalizedLines=(value:string)=>JSON.stringify(value.split(/\r\n|\r|\n/u).map(normalize));
@@ -89,11 +89,13 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
     }
     if(verifyFrame&&pageShapes(source).length){
       const rectangles=elements(xml,'rect');
-      if(rectangles.length!==pageShapes(source).length)throw new Error('HWP 갑지 테두리·장식선이 누락되었습니다.');
+      const lines=elements(xml,'line');
+      if(rectangles.length!==pageShapes(source).filter(shape=>!shape.dotted).length||lines.length!==pageShapes(source).filter(shape=>shape.dotted).length)throw new Error('HWP 갑지 테두리·장식선이 누락되었습니다.');
       for(const frame of pageShapes(source)){
-      const rect=rectangles.find(rect=>{const position=rect.match(/<hp:pos\b[^>]*\/>/u)?.[0]||'';return Number(attribute(position,'horzOffset'))===Math.round(frame.left*75)&&Number(attribute(position,'vertOffset'))===Math.round(frame.top*75);})||'';
+      const rect=(frame.dotted?lines:rectangles).find(rect=>{const position=rect.match(/<hp:pos\b[^>]*\/>/u)?.[0]||'';return Number(attribute(position,'horzOffset'))===Math.round(frame.left*75)&&Number(attribute(position,'vertOffset'))===Math.round(frame.top*75);})||'';
       const size=rect.match(/<hp:sz\b[^>]*\/>/u)?.[0]||'',position=rect.match(/<hp:pos\b[^>]*\/>/u)?.[0]||'',line=rect.match(/<hp:lineShape\b[^>]*\/>/u)?.[0]||'';
       if(Number(attribute(size,'width'))!==Math.round(frame.width*75)||Number(attribute(size,'height'))!==Math.round(frame.height*75)||Number(attribute(position,'horzOffset'))!==Math.round(frame.left*75)||Number(attribute(position,'vertOffset'))!==Math.round(frame.top*75)||attribute(position,'horzRelTo')!=='PAPER'||attribute(position,'vertRelTo')!=='PAPER'||attribute(line,'color')?.toLowerCase()!==frame.color.toLowerCase()||Number(attribute(line,'width'))!==Math.round(frame.stroke*75))throw new Error('HWP 갑지 테두리의 위치·크기·색상이 원문과 다릅니다.');
+      if(frame.dotted){if(attribute(line,'style')!=='DOT'||/<hc:fillBrush\b/u.test(rect))throw new Error('HWP 목차 점선의 모양이 원문과 다릅니다.');continue;}
       if(frame.colors?.length===2){
         const gradient=rect.match(/<hc:gradation\b[\s\S]*?<\/hc:gradation>/u)?.[0]||'';
         const colors=[...gradient.matchAll(/<hc:color\b[^>]*value="([^"]+)"/gu)].map(m=>m[1].toLowerCase());
@@ -119,6 +121,15 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
       if (JSON.stringify(cells) !== JSON.stringify(expected)) throw new Error(`HWP ${index + 1}쪽 표의 셀·병합·내용이 원문과 다릅니다.`);
       const geometry=page.tableGeometry?.[tableIndex];
       if(geometry){
+        if(geometry.advance!==undefined){
+          const carrier=elements(xml,'p',true).find(paragraph=>paragraph.includes(table));
+          const definition=[...strFromU8(files['Contents/header.xml']).matchAll(/<hh:paraPr\b[^>]*>[\s\S]*?<\/hh:paraPr>/gu)].find(match=>attribute(match[0],'id')===attribute(carrier||'','paraPrIDRef'))?.[0]||'';
+          const cases=[...definition.matchAll(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu)].map(match=>match[0]);
+          const defaults=definition.replace(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu,'');
+          const after=geometry.advance-Math.max(...geometry.cells.map(cell=>cell.height));
+          const exact=(part:string,factor:number)=>/<hh:lineSpacing\b/u.test(part)&&/<hc:prev\b/u.test(part)&&/<hc:next\b/u.test(part)&&[...part.matchAll(/<hh:lineSpacing\b[^>]*\/>/gu)].every(match=>attribute(match[0],'type')==='PERCENT'&&Number(attribute(match[0],'value'))===100)&&[...part.matchAll(/<hc:(prev|next)\b[^>]*\/>/gu)].every(match=>Number(attribute(match[0],'value'))===(match[1]==='prev'?0:Math.round(after*factor)));
+          if(after<0||!/<hh:lineSpacing\b/u.test(defaults)||!/<hc:next\b/u.test(defaults)||!exact(defaults,150)||cases.some(part=>!exact(part,75)))throw new Error('HWP 목차 행 간격이 원문과 다릅니다.');
+        }
         const size=table.match(/<hp:sz\b[^>]*\/>/u)?.[0]||'';
         const outer=table.match(/<hp:outMargin\b[^>]*\/>/u)?.[0]||'';
         if(Number(attribute(size,'width'))!==Math.round(geometry.width*75)||['left','right','top','bottom'].some(side=>Number(attribute(outer,side))!==0))throw new Error('HWP 표 너비·바깥 여백이 원문과 다릅니다.');
@@ -201,6 +212,35 @@ function clearImportedTableIndent(xml:string,files:Record<string,Uint8Array>):st
   files['Contents/header.xml']=strToU8(header);return xml;
 }
 
+/** Layout-only TOC tables must use their measured advance, not template 160% leading. */
+function restoreTableAdvances(xml:string,files:Record<string,Uint8Array>,geometries:NativeHwpContent['tableGeometry']):string{
+  if(!geometries?.some(geometry=>geometry.advance!==undefined))return xml;
+  let header=strFromU8(files['Contents/header.xml']);
+  const definitions=[...header.matchAll(/<hh:paraPr\b[^>]*>[\s\S]*?<\/hh:paraPr>/gu)].map(match=>match[0]);
+  let id=Math.max(...definitions.map(definition=>Number(attribute(definition,'id'))))+1,count=0;
+  const tables=elements(xml,'tbl'),paragraphs=elements(xml,'p',true);
+  geometries.forEach((geometry,index)=>{
+    if(geometry.advance===undefined)return;
+    if(!Number.isFinite(geometry.advance)||geometry.advance<=0)throw Error('HWP 목차 행 간격을 확인하지 못했습니다.');
+    const carrier=paragraphs.find(paragraph=>paragraph.includes(tables[index]));
+    const definition=carrier&&definitions.find(value=>attribute(value,'id')===attribute(carrier,'paraPrIDRef'));
+    if(!carrier||!definition||!/<hh:lineSpacing\b/u.test(definition))throw Error('HWP 목차 표의 문단 속성이 없습니다.');
+    const after=geometry.advance-Math.max(...geometry.cells.map(cell=>cell.height));
+    if(after<0)throw Error('HWP 목차 행의 겹친 배치를 보존하지 못했습니다.');
+    const set=(part:string,factor:number)=>part.replace(/<hc:(prev|next)\b[^>]*\/>/gu,(tag,side:string)=>tag.replace(/value="[^"]*"/u,`value="${side==='prev'?0:Math.round(after*factor)}"`));
+    const updated=set(definition.replace(/\bid="[^"]*"/u,`id="${id}"`).replace(/<hh:lineSpacing\b[^>]*\/>/gu,tag=>tag.replace(/type="[^"]*"/u,'type="PERCENT"').replace(/value="[^"]*"/u,'value="100"')),150).replace(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu,part=>set(part,75));
+    header=header.replace('</hh:paraProperties>',`${updated}</hh:paraProperties>`);
+    let next=carrier.replace(/(<hp:p\b[^>]*paraPrIDRef=")[^"]*/u,`$1${id++}`);
+    // The carrier's own cache follows its runs; earlier arrays belong to cells.
+    // Invalidate only the changed carrier so the engine measures its new advance.
+    const cached=[...next.matchAll(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu)].at(-1)?.[0];
+    if(cached){const offset=next.lastIndexOf(cached);if(next.slice(offset+cached.length).trim()==='</hp:p>')next=next.slice(0,offset)+next.slice(offset+cached.length);}
+    xml=xml.replace(carrier,next);count++;
+  });
+  header=header.replace(/<hh:paraProperties\b[^>]*>/u,tag=>tag.replace(/itemCnt="(\d+)"/u,(_,value)=>`itemCnt="${Number(value)+count}"`));
+  files['Contents/header.xml']=strToU8(header);return xml;
+}
+
 function restoreParagraphInsets(xml:string,files:Record<string,Uint8Array>,insets:NativeHwpPage['paragraphInsets']):string{
   if(!insets)return xml;
   const paragraphs=elements(xml,'p',true);
@@ -229,7 +269,7 @@ function blankSections(pages: NativeHwpPage[]): Uint8Array {
     if(page.footer&&(!Number.isFinite(page.footer.distance)||page.footer.distance<0||page.footer.distance>margins.bottom))throw new Error('HWP 바닥글 위치가 본문 여백 밖에 있습니다.');
     if (![width, height, ...Object.values(margins)].every(Number.isFinite) || width <= margins.left + margins.right || height <= margins.top + margins.bottom || Object.values(margins).some(value => value < 0)) throw new Error('HWP 용지 크기 또는 여백이 올바르지 않습니다.');
     for(const shape of pageShapes(page)){
-      if(![shape.left,shape.top,shape.width,shape.height,shape.stroke].every(Number.isFinite)||shape.left<0||shape.top<0||shape.width<=0||shape.height<=0||shape.stroke<0||shape.left+shape.width>width+1||shape.top+shape.height>height+1||(shape.colors&&![1,2].includes(shape.colors.length))||!(shape.colors??[shape.color]).every(value=>/^#[0-9a-f]{6}$/iu.test(value)))throw new Error('HWP 테두리·장식선의 위치 또는 색상이 올바르지 않습니다.');
+      if(![shape.left,shape.top,shape.width,shape.height,shape.stroke].every(Number.isFinite)||shape.left<0||shape.top<0||shape.width<=0||(shape.dotted?shape.height!==0||shape.stroke<=0||shape.colors?.length!==1:shape.height<=0)||shape.stroke<0||shape.left+shape.width>width+1||shape.top+shape.height>height+1||(shape.colors&&![1,2].includes(shape.colors.length))||!(shape.colors??[shape.color]).every(value=>/^#[0-9a-f]{6}$/iu.test(value)))throw new Error('HWP 테두리·장식선의 위치 또는 색상이 올바르지 않습니다.');
     }
     // HWPUNIT = 1/100 pt = 75 screen px. WIDELY is the engine's portrait enum.
     const hu = (value: number) => Math.round(value * 75);
@@ -327,7 +367,7 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
         withoutMarker=withoutMarker.slice(0,start)+'</hs:sec>';
         controls+=`<hp:run charPrIDRef="0"><hp:ctrl><hp:footer id="0" applyPageType="BOTH"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="BOTTOM" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${footer}</hp:subList></hp:footer></hp:ctrl></hp:run>`;
       }
-      native[path] = strToU8(restoreParagraphInsets(clearImportedTableIndent(restoreTableGeometry(withoutMarker.replace(/(<hp:p\b[^>]*>)/u, `$1${controls}`),combinedContent(page).tableGeometry),native),native,page.paragraphInsets));
+      native[path] = strToU8(restoreParagraphInsets(restoreTableAdvances(clearImportedTableIndent(restoreTableGeometry(withoutMarker.replace(/(<hp:p\b[^>]*>)/u, `$1${controls}`),combinedContent(page).tableGeometry),native),native,combinedContent(page).tableGeometry),native,page.paragraphInsets));
     });
     const normalized = zipSync(native);
     verifyNativeHwpContent(normalized, pages, false);
@@ -335,10 +375,10 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
     try {
       pages.forEach((page,index)=>pageShapes(page).forEach(f=>{
         const hu=(value:number)=>Math.round(value*75);
-        const result=JSON.parse(prepared.createShapeControl(JSON.stringify({sectionIdx:index,paraIdx:0,charOffset:0,width:hu(f.width),height:hu(f.height),horzOffset:hu(f.left),vertOffset:hu(f.top),treatAsChar:false,textWrap:'BehindText',shapeType:'rectangle'}))) as {ok:boolean;paraIdx:number;controlIdx:number};
+        const result=JSON.parse(prepared.createShapeControl(JSON.stringify({sectionIdx:index,paraIdx:0,charOffset:0,width:hu(f.width),height:hu(f.height),horzOffset:hu(f.left),vertOffset:hu(f.top),treatAsChar:false,textWrap:'BehindText',shapeType:f.dotted?'line':'rectangle'}))) as {ok:boolean;paraIdx:number;controlIdx:number};
         if(!result.ok)throw Error('HWP 갑지 테두리를 만들지 못했습니다.');
         const color=Number.parseInt(f.color.replace('#','').match(/../gu)!.reverse().join(''),16);
-        if(!JSON.parse(prepared.setShapeProperties(index,result.paraIdx,result.controlIdx,JSON.stringify({fillType:f.colors?'solid':'none',...(f.colors?{fillBgColor:color}:{}),borderColor:color,borderWidth:hu(f.stroke),lineType:f.colors?0:1,horzRelTo:'Paper',vertRelTo:'Paper'}))).ok)throw Error('HWP 갑지 테두리 배치를 보존하지 못했습니다.');
+        if(!JSON.parse(prepared.setShapeProperties(index,result.paraIdx,result.controlIdx,JSON.stringify({fillType:!f.dotted&&f.colors?'solid':'none',...(!f.dotted&&f.colors?{fillBgColor:color}:{}),borderColor:color,borderWidth:hu(f.stroke),lineType:f.dotted?3:f.colors?0:1,horzRelTo:'Paper',vertRelTo:'Paper'}))).ok)throw Error('HWP 갑지 테두리 배치를 보존하지 못했습니다.');
       }));
       if (prepared.pageCount() !== pages.length) throw new Error(`HWP 줄바꿈으로 페이지 수가 달라졌습니다. (${prepared.pageCount()}/${pages.length})`);
       // The SDK exposes gradient geometry, but not its color stops. Preserve

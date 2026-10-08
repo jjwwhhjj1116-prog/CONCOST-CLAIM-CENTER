@@ -4,11 +4,12 @@ import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {chromium} from 'playwright-core';
 import test from 'node:test';
+import type {NativeHwpPage} from '../apps/web/src/documents/editable-hwp-export';
 
 test('reviewed browser DOM downloads native HWP using the pinned same-origin runtime',async t=>{
   assert.match(readFileSync('apps/web/src/theme-system.css','utf8'),/@font-face\s*\{[^}]*font-family:'HY헤드라인M'[^}]*local\('HYHeadLine-Medium'\)/u,'Resolve the existing HY font alias without redistributing font bytes');
   const {createServer}=await import('../apps/web/qa/vite-server.js');
-  const server=await createServer({root:resolve('apps/web'),...(process.env.CF149_CACHE_ROOT?{cacheDir:process.env.CF149_CACHE_ROOT}:{}),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error'});
+  const server=await createServer({root:resolve('apps/web'),...(process.env.CF149_CACHE_ROOT?{cacheDir:process.env.CF149_CACHE_ROOT}:{}),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{name:'cf206-native-archive',resolveId:id=>id==='/cf206-zip.js'?'\0cf206-zip':undefined,load:id=>id==='\0cf206-zip'?"export {unzipSync,zipSync,strFromU8,strToU8} from 'fflate';":undefined}]});
   await server.listen();
   const origin='http://127.0.0.1:'+(server.httpServer!.address() as {port:number}).port;
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(p=>p&&existsSync(p));
@@ -25,7 +26,7 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
     await page.route('**/*',route=>{
       const u=new URL(route.request().url());requests.push(u.origin+u.pathname);
       if(u.origin!==origin)return route.abort();
-      if(u.pathname==='/native-qa.html')return route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><meta charset="utf-8"><script type="module">import "/src/theme-system.css";</script></head><body></body></html>'});
+      if(u.pathname==='/native-qa.html')return route.fulfill({contentType:'text/html',body:'<!doctype html><html><head><meta charset="utf-8"><script type="module">import "/src/theme-system.css";import "/src/documents/DocumentReviewWorkspace.css";</script></head><body></body></html>'});
       if(u.pathname==='/rhwp/build-manifest.json')return route.fulfill({json:manifest});
       if(u.pathname==='/rhwp/assets/rhwp_bg-test.wasm')return route.fulfill({body:wasm,contentType:'application/wasm'});
       if(u.pathname==='/rhwp/native/rhwp-ad01e939079e.js')return route.fulfill({body:binding,contentType:'text/javascript'});
@@ -33,13 +34,13 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
     });
     await page.goto(origin+'/native-qa.html');await page.waitForFunction(()=>document.styleSheets.length>0);
     await page.evaluate('globalThis.__name = value => value');
-    for(const name of ['letterSpacing','normalLine','inlineBreaks','photoWhitespace','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs'])await t.test(name,async()=>{
+    for(const name of ['letterSpacing','normalLine','inlineBreaks','photoWhitespace','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows'])await t.test(name,async()=>{
       await page.evaluate(()=>document.querySelectorAll('#native-source').forEach(node=>node.remove()));
       const download=page.waitForEvent('download');
       const result=await page.evaluate(async name=>{
         const {downloadFinalDocument}=await import('/src/documents/final-document-export.ts' as string);
         const canvas=document.createElement('canvas');canvas.width=120;canvas.height=72;canvas.getContext('2d')!.fillRect(0,0,120,72);
-        const src=canvas.toDataURL(),root=document.createElement('div');root.className='proposal-final-document';
+        const src=canvas.toDataURL(),root=document.createElement('div');root.className=name==='reportToc10Rows'?'report-final-document':'proposal-final-document';
         const photo=`<p style="text-align:center">
 <img src="${src}" width="120" height="72">
 </p>`;
@@ -54,13 +55,23 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           cover:`<section class="proposal-final-cover" data-export-page><div class="proposal-cover-frame" aria-hidden="true"></div><div class="proposal-cover-heading"><p>합성 검수 프로젝트</p><div><h2>기술용역 제안</h2><strong>용역 제안서</strong></div></div><time>2026. 09. 15</time><footer><img class="proposal-template-logo" src="${src}" alt="회사 로고"><div><b>검수 회사</b><span>주소 원문</span><span>전화 원문</span><small>제출처 원문</small></div></footer></section>`,
           toc:'<section class="proposal-final-toc" data-export-page data-page-number="2"><h3>목 차</h3><ol><li><b>04</b><span>전문가 현황</span><i>03</i></li></ol></section>',
           denseH2ParagraphMargins:'<section data-export-page data-export-page-policy="fit" style="width:794px;height:1123px;padding:96px 80px 76px;font:16px/29.6px Arial"><article style="display:flow-root">'+Array.from({length:8},(_,i)=>`<h2 style="font:20px/32px Arial;margin:28px 0 16px"><strong>CF205 제목 ${i+1}</strong></h2><p style="font:16px/29.6px Arial;margin:16px 0">CF205 본문 ${i+1} <em>금액 123,456원</em>.</p>`).join('')+'</article></section>',
-          collapsedBlankParagraphs:'<style>#native-source .cf205-collapse h2{font:20px/32px Arial;margin:28px 0 16px}#native-source .cf205-collapse p{font:16px/29.6px Arial;margin:16px 0}#native-source .cf205-collapse p:empty{height:0;min-height:0}</style><section data-export-page data-export-page-policy="fit" style="width:794px;height:1123px;padding:96px 80px 76px;font:16px/29.6px Arial"><article class="cf205-collapse" style="display:flow-root">'+Array.from({length:6},(_,i)=>`<h2><strong>CF205 짧은 제목 ${i+1}</strong></h2><p>CF205 본문 ${i+1} 첫째 줄 123,456원.<br>둘째 줄 <em>246.90 보존</em>.</p><p></p>`).join('')+'<p></p><p></p></article></section>'
+          collapsedBlankParagraphs:'<style>#native-source .cf205-collapse h2{font:20px/32px Arial;margin:28px 0 16px}#native-source .cf205-collapse p{font:16px/29.6px Arial;margin:16px 0}#native-source .cf205-collapse p:empty{height:0;min-height:0}</style><section data-export-page data-export-page-policy="fit" style="width:794px;height:1123px;padding:96px 80px 76px;font:16px/29.6px Arial"><article class="cf205-collapse" style="display:flow-root">'+Array.from({length:6},(_,i)=>`<h2><strong>CF205 짧은 제목 ${i+1}</strong></h2><p>CF205 본문 ${i+1} 첫째 줄 123,456원.<br>둘째 줄 <em>246.90 보존</em>.</p><p></p>`).join('')+'<p></p><p></p></article></section>',
+          reportToc10Rows:'<section class="report-final-body report-final-toc report-paginated-sheet" data-export-page data-export-page-policy="fit" data-page-number="2"><h2>목 차</h2><article class="report-toc-content">'+Array.from({length:10},(_,i)=>`<div class="report-toc-entry report-toc-level-2"><span>${i===0?'CF206 담당자 수정한 첫 목차':i===4?'5. 실무 검수':i===9?'10. 원문':`CF206 원본 목차 ${i+1}: 프로젝트 및 계약상 권리 검수`}</span><span class="report-toc-leader"></span><span class="report-toc-page">${i<6?1:2}</span></div>`).join('')+'</article><footer class="report-page-number">- 목차 1 -</footer></section>'
         };
         root.innerHTML=contents[name];root.style.cssText='background:#fff;color:#17263a';root.querySelectorAll<HTMLElement>('[data-export-page]').forEach(p=>p.style.boxSizing='border-box');document.body.append(root);
         await Promise.all([...root.querySelectorAll('img')].map(i=>i.decode()));
         root.id='native-source';
         const before=root.innerHTML;
         let metrics:any;
+        if(name==='reportToc10Rows'){
+          await document.fonts.ready;
+          const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
+          const [collected]=await collectNativeHwpPages(root,'portrait');
+          const rows=[...root.querySelectorAll<HTMLElement>('.report-toc-entry')];
+          metrics={sourceUnchanged:root.innerHTML===before,tables:collected.tables,cells:collected.tableCells?.map((table:NonNullable<NativeHwpPage['tableCells']>[number])=>table.length),geometry:collected.tableGeometry,rules:collected.rules,
+            titles:rows.map(row=>row.firstElementChild!.textContent),numbers:rows.map(row=>row.lastElementChild!.textContent),
+            boxes:rows.map(row=>{const box=row.getBoundingClientRect();return{width:box.width,height:box.height,offsetWidth:row.offsetWidth,offsetHeight:row.offsetHeight,spans:[...row.children].map(node=>{const child=node.getBoundingClientRect();return{width:child.width,left:child.left-box.left,top:child.top-box.top,bottom:box.bottom-child.bottom};})};})};
+        }
         if(name==='denseH2ParagraphMargins'||name==='collapsedBlankParagraphs'){
           await document.fonts.ready;
           const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
@@ -106,13 +117,72 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
         const progress:string[]=[];
         let exported;
         try{exported=await downloadFinalDocument({root,format:'hwp',fileName:'native-'+name,orientation:'portrait',onProgress:(message:string)=>progress.push(message)});}
-        catch(error){throw Error(String(error)+(metrics?' CF205 measured DOM/collector: '+JSON.stringify(metrics):''));}
+        catch(error){throw Error(String(error)+(metrics?` ${name==='reportToc10Rows'?'CF206':'CF205'} measured DOM/collector: `+JSON.stringify(metrics):''));}
         if(name==='sourcePage' && (!progress.some(message=>message.includes('문장·표 개별 편집 불가')) || progress.some(message=>message.includes('편집 가능한 HWP'))))throw Error('원본 페이지 이미지를 편집 가능한 문장·표로 안내함');
         return {...exported,...(metrics?{metrics,sourceUnchanged:root.innerHTML===before}:{})};
       },name).catch(error=>{download.catch(()=>{});throw error;});
       const artifact=await download;
       assert.equal(result.pageCount,1);assert.ok(result.byteSize>512);assert.equal(artifact.suggestedFilename(),'native-'+name+'.hwp');
       const path=await artifact.path();assert.ok(path);assert.equal(sha(readFileSync(path)),result.sha256);
+      if(name==='reportToc10Rows'){
+        assert.equal(result.sourceUnchanged,true);assert.equal(result.metrics.sourceUnchanged,true);assert.equal(result.metrics.tables,10);
+        assert.deepEqual(result.metrics.cells,Array(10).fill(3));assert.deepEqual(result.metrics.numbers,[...Array(6).fill('1'),...Array(4).fill('2')]);
+        assert.equal(result.metrics.titles[0],'CF206 담당자 수정한 첫 목차');
+        const reopened=await page.evaluate(async bytes=>{
+          const {loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string);const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);const {verifyNativeHwpContent}=await import('/src/documents/editable-hwp-export.ts' as string);
+          const {unzipSync,zipSync,strFromU8,strToU8}=await import('/cf206-zip.js' as string);
+          const source=document.querySelector<HTMLElement>('#native-source')!,before=source.innerHTML,pages=await collectNativeHwpPages(source,'portrait'),Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
+          try{
+            const archive=doc.exportHwpx();verifyNativeHwpContent(archive,pages);
+            const zip=unzipSync(archive),xml=strFromU8(zip['Contents/section0.xml']);
+            if(!xml.includes('style="DOT"'))throw Error('CF206 native DOT definition missing');
+            let overwrittenDotBlocked=false;
+            try{verifyNativeHwpContent(zipSync({...zip,'Contents/section0.xml':strToU8(xml.replace('style="DOT"','style="SOLID"'))}),pages);}catch(error){if(!String(error).includes('목차 점선의 모양'))throw error;overwrittenDotBlocked=true;}
+            const altered=structuredClone(pages),firstGeometry=altered[0].tableGeometry![0];
+            if(!Number.isFinite(firstGeometry.advance))throw Error('CF206 measured TOC row advance missing');
+            firstGeometry.advance!+=1;
+            let alteredAdvanceBlocked=false;
+            try{verifyNativeHwpContent(archive,altered);}catch(error){if(!String(error).includes('목차 행 간격'))throw error;alteredAdvanceBlocked=true;}
+            const section=new DOMParser().parseFromString(xml,'application/xml');let carrier=section.getElementsByTagName('hp:tbl')[0]?.parentElement;
+            while(carrier&&carrier.localName!=='p')carrier=carrier.parentElement;
+            const header=strFromU8(zip['Contents/header.xml']),definition=[...header.matchAll(/<hh:paraPr\b[^>]*>[\s\S]*?<\/hh:paraPr>/gu)].find(match=>new DOMParser().parseFromString(match[0],'text/html').body.firstElementChild?.getAttribute('id')===carrier?.getAttribute('paraPrIDRef'))?.[0];
+            const casePart=definition?.match(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/u)?.[0];
+            if(!definition||!casePart||!/<hc:next\b[^>]*\/>/u.test(casePart))throw Error('CF206 serialized TOC carrier case next missing');
+            const missingNextHeader=header.replace(definition,definition.replace(casePart,casePart.replace(/<hc:next\b[^>]*\/>/u,'')));
+            let missingCaseNextBlocked=false;
+            try{verifyNativeHwpContent(zipSync({...zip,'Contents/header.xml':strToU8(missingNextHeader)}),pages);}catch(error){if(!String(error).includes('목차 행 간격'))throw error;missingCaseNextBlocked=true;}
+            verifyNativeHwpContent(archive,pages);
+            return{pages:doc.pageCount(),sourceUnchanged:source.innerHTML===before,svg:doc.renderPageSvg(0),overwrittenDotBlocked,alteredAdvanceBlocked,missingCaseNextBlocked};
+          }finally{doc.free();}
+        },[...readFileSync(path)]);
+        assert.equal(reopened.pages,1);assert.equal(reopened.sourceUnchanged,true);
+        assert.equal(reopened.overwrittenDotBlocked,true);
+        assert.equal(reopened.alteredAdvanceBlocked,true);
+        assert.equal(reopened.missingCaseNextBlocked,true);
+        const rendered=await page.evaluate(async svg=>{
+          const source=document.querySelector<HTMLElement>('#native-source [data-export-page]')!,box=source.getBoundingClientRect();
+          const target=[...source.querySelectorAll<HTMLElement>('.report-toc-entry')].map(row=>{
+            const spans=[row.firstElementChild!,row.lastElementChild!];return spans.map(span=>{const walk=document.createTreeWalker(span,NodeFilter.SHOW_TEXT);walk.nextNode();const range=document.createRange();range.setStart(walk.currentNode,0);range.setEnd(walk.currentNode,1);const rect=range.getBoundingClientRect();return{text:span.textContent!,x:rect.x-box.x,y:rect.y-box.y};});
+          });
+          const probe=document.createElement('div');probe.style.cssText='position:absolute;left:-5000px;top:0;width:794px;height:1123px';probe.innerHTML=svg;document.body.append(probe);
+          try{
+            await document.fonts.ready;const paper=probe.querySelector('svg')!,paperBox=paper.getBoundingClientRect(),rows=new Map<number,{text:string;nodes:SVGTextContentElement[]}>();
+            for(const node of paper.querySelectorAll<SVGTextContentElement>('text')){if(!node.getNumberOfChars())continue;const start=node.getStartPositionOfChar(0),point=new DOMPoint(start.x,start.y).matrixTransform(node.getScreenCTM()!),key=Math.round((point.y-paperBox.y)*10),prior=rows.get(key);if(prior){prior.text+=node.textContent??'';prior.nodes.push(node);}else rows.set(key,{text:node.textContent??'',nodes:[node]});}
+            const glyphs=target.map(([title,page],i)=>{
+              const matches=[...rows.values()].filter(row=>row.text.replace(/\s+/gu,'').startsWith(title.text.replace(/\s+/gu,'')));if(matches.length!==1)throw Error('CF206 native title glyph ambiguous '+i+' '+JSON.stringify([...rows.values()].map(row=>row.text)));
+              const nodes=matches[0].nodes,number=nodes.filter(node=>node.textContent?.trim()===page.text).at(-1);if(!number)throw Error('CF206 native page-number glyph missing '+i);
+              return [nodes[0],number].map((node,index)=>{const dom=index?page:title,rect=node.getExtentOfChar(0),point=new DOMPoint(rect.x,rect.y).matrixTransform(node.getScreenCTM()!);return{row:i+1,kind:index?'page':'title',text:dom.text,domX:dom.x,domY:dom.y,svgX:point.x-paperBox.x,svgY:point.y-paperBox.y};});
+            }).flat();
+            const dots=[...paper.querySelectorAll<SVGGraphicsElement>('[stroke-dasharray]')].map(node=>{const rect=node.getBBox(),point=new DOMPoint(rect.x,rect.y).matrixTransform(node.getScreenCTM()!);return{x:point.x-paperBox.x,y:point.y-paperBox.y,width:rect.width,height:rect.height,dash:node.getAttribute('stroke-dasharray'),stroke:parseFloat(getComputedStyle(node).strokeWidth),color:getComputedStyle(node).stroke};}).sort((a,b)=>a.y-b.y);
+            return{glyphs,dots};
+          }finally{probe.remove();}
+        },reopened.svg);
+        const progression=rendered.glyphs.map(glyph=>{const first=rendered.glyphs.find(node=>node.kind===glyph.kind)!;return{row:glyph.row,kind:glyph.kind,deltaY:(glyph.svgY-first.svgY)-(glyph.domY-first.domY),deltaX:glyph.svgX-glyph.domX};});
+        console.log('CF206 report TOC actual save/reopen',JSON.stringify({metrics:result.metrics,rendered,progression,maxProgressionY:Math.max(...progression.map(node=>Math.abs(node.deltaY))),maxAbsoluteY:Math.max(...rendered.glyphs.map(node=>Math.abs(node.svgY-node.domY))),overwrittenDotBlocked:reopened.overwrittenDotBlocked,alteredAdvanceBlocked:reopened.alteredAdvanceBlocked,missingCaseNextBlocked:reopened.missingCaseNextBlocked,coordinateScope:'Same-pixel DOM Range / reopened SVG glyph progression at the existing 0.1px bound; absolute cross-font offset is reported, not a new visual-fidelity PASS'}));
+        assert.equal(rendered.dots.length,10);assert.ok(rendered.dots.every(dot=>dot.dash==='2 2'&&Math.abs(dot.stroke-1)<.1));
+        for(let i=0;i<10;i++){const dot=rendered.dots[i],expected=result.metrics.rules[i];assert.ok(Math.abs(dot.x-expected.left)<=.1&&Math.abs(dot.y-expected.top)<=.1&&Math.abs(dot.width-expected.width)<=.1,'CF206 actual dotted line geometry must match the reviewed span');}
+        assert.ok(progression.every(node=>Math.abs(node.deltaY)<=.1),'CF206 native title/page rows must retain reviewed progression');
+      }
       if(name==='denseH2ParagraphMargins'||name==='collapsedBlankParagraphs'){
         assert.equal(result.sourceUnchanged,true);assert.equal(result.metrics.nativeParagraphs,name==='denseH2ParagraphMargins'?16:12);
         assert.equal(result.metrics.zeroParagraphs,name==='denseH2ParagraphMargins'?0:8);
