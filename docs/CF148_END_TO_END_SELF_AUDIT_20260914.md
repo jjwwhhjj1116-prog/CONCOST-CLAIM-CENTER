@@ -1,6 +1,14 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF204 출력 준비 상태 수정, 2026-10-08
+## 현재 판정 — CF204 실제 PDF 합격·CF205 HWP 간격 수정, 2026-10-08
+
+CF205 최종 추가 검수: 총괄 최신 actual HWP browser+Node **24/24 PASS, skipped0**, body/TOC/PDF/DOCX **27/27 PASS, skipped0**. 재열기 SVG 첫글자와 DOM Range를 같은px로 대조한 반복간격 누적오차는 dense0.043762px/blank0.062531px, 첫제목 좌표129px 일치·본문의 고정glyph offset약0.4px를 미확인 한컴동일성으로 확대하지 않는다. 실제높이/최소높이/BR/명시spacer/명시0높이 문단을 내보내기에서 없애지 않는5경계와sourceHTML exact도 통과. 신규검수에 있었던 SVG text run 분할 matcher0건 오류는 harness 오류로 분리하고 같은baseline run연결 후 재검수했다. source collector 최종 SHA `eabec83ccb502be712f1a0f39fd73df3870e1d59da6d43a20f9855b793ce840d`, exporter d00fe716…/승인WASM 불변. CF204 PDF3쪽5장 불균일 시각후보는 원본픽셀 제목→본문65~66/문단→다음제목59~60px로 전장동일해 철회했고 PDF clone 변경0.
+
+CF205 HWP원인 실제 재현: 동일 승인 WASM에서 가용951px인 합성 제목8/P16개(source높이860.75px)가 native2/1로 FAIL, 6×2줄+실제0height plainP8개(source827.125px)는 native20문단→2/1 FAIL. 제품 before SHA cb8308d0…/exporter d00fe716… 보존. 일반block/flow-root의P/H 연속만 실제DOM sibling gap delta를 기존반행간이동후margin-top에반영하고, 앞visible문단있는 attr0/child0/actualrectheight0/pseudoempty P는export변환에서만미생성. td/th/li·사진/표/원자·inline/wrapper전환은제외, 저장원고/HTML·엔진·pagecount/의미손실guard 변경0. 현재 총괄 HWP actual browser+Node **23/23 PASS, skipped0**, body/TOC/PDF/DOCX등 **27/27 PASS, skipped0**, root/web 타입·freshVite·승인runtime28·dry-run PASS. 새엔진 rebuild0. 음성2FAIL과source불변/숫자123,456·246.90/marks/표·사진·갑지·footer보존확인. 최종선언에는HWP재열기Y배치와개발실제CC7v7출력검증이추가로필요하다.
+
+CF204 제품 `c039c4b` 정상push·development Worker `7b3c18a0-91a7-42c5-8df7-fde7e41b615f` 실제반영. 전체43파일/37,694,106B canonical `6bfc3b64e91e68e86638edfead810a7e4f10ae7bde9a43c725b2303fa0a1f6f5` byte/SHA exact, health/readiness200·Drive true. 첫공개검수 명령은 URL인수누락ERR_INVALID_URL(도구호출오류)이며 정확URL재실행PASS. 최종동결test SHA c1948e3d2b350159df6c15030a4af516a7d59087136ea622c357750fd1e498df·full27/27再PASS, legacy 실제동등목차상태4회 blocked3 FAIL/기존guard PASS 보존.
+
+단신Chrome fresh `index-D__6s4xP.js`에서CC7v7실제재열기·adminQA원고읽기·PDF출력성공: 336,455B/SHA `73bc391f5e2914aabc6c1da1973c21447ed39b2457f641810bf055c8bb382a5f`/4쪽/A4portrait/rotation0, 실제file+성공status대조. E200/cc7-v7-cf204-adminqa.pdf 및全4PNG를총괄열람해표지·편집TOC10항목/7장쪽수2·7장전체이동/‘니다.’고립해결확인. 본문7~10/하단쪽수2까지보존. 다만이는합성textPDF검증이며 사진/XLSX0건·전문서HWP/Office독립동일성합격이아니다. 같은v7실제HWP재출력은여전히5/4guard FAIL/파일0. 실제DOM H2 mt28/mb16·Pmt16/mb16, H2→Pgap16(합침), 빈PoffsetHeight0·순차gap16+12(합28)을확보하여CF205 collector차이조사중. 원고/업무승인/가오픈 변경0.
 
 CF203 제품 `8b9eb89` 정상 push·development Worker `7d6ab5d9-a709-45a4-bc1a-10d335d91c98` 반영. 공개 전체43파일/37,694,082B canonical `c51ee9733b40b47b1ef441aad58594d77758aa08b366c52701c44aaba364eb26` byte/SHA exact·health/readiness200·Drive true. 실제 CC7v7 새모듈에서 본문2쪽의 고립 ‘니다.’가 사라지고 7장 제목+문단이 통째 이동·목차7장 쪽수2로 일치했다. 그러나 실제 PDF 출력 버튼을 누르면 동일 내용의 새 tocTitles 객체 때문에 ready가 다시 false가 되어 ‘2페이지 넘침’으로 차단됐다. 이는 안정된 화면의 실제 넘침과 구분한다.
 

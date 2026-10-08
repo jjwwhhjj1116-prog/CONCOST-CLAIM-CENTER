@@ -126,13 +126,13 @@ function layoutRow(contents:NativeHwpContent[],widths:number[],height:number,pad
 }
 
 async function blocks(parent:Element):Promise<NativeHwpContent>{
-  const result=empty();let pending:Node[]=[];
-  const flush=async()=>{if(pending.some(n=>n instanceof Element||n.textContent?.trim()))append(result,await paragraph(parent,pending));pending=[];};
+  const result=empty();let pending:Node[]=[],previous:HTMLElement|null=null;
+  const flush=async()=>{if(pending.some(n=>n instanceof Element||n.textContent?.trim())){append(result,await paragraph(parent,pending));previous=null;}pending=[];};
   for(const node of [...parent.childNodes]){
     if(!(node instanceof Element)){pending.push(node);continue;}
     if(ignored(node)||node.matches('.report-page-number,.proposal-cover-frame'))continue;
     if(node.matches('.proposal-final-toc li,.report-toc-entry')){
-      await flush();
+      await flush();previous=null;
       const children=node.matches('li')?[node.querySelector(':scope > b'),node.querySelector(':scope > span'),node.querySelector(':scope > i')]:[node.firstElementChild,node.querySelector('.report-toc-page')];
       if(children.some(e=>!e))throw Error('HWP 목차 제목·쪽번호를 확인하지 못했습니다.');
       const contents=await Promise.all(children.map(e=>paragraph(e!,[...e!.childNodes],0,0)));
@@ -145,16 +145,36 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
       if(widths.some(width=>width<=0)||padding.some(p=>Object.values(p).some(value=>value<-.1)))throw Error('HWP 목차 열 배치를 확인하지 못했습니다.');
       append(result,layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding));continue;
     }
-    if(node instanceof HTMLTableElement){await flush();append(result,await table(node));continue;}
-    if(node instanceof HTMLImageElement){await flush();append(result,await image(node));continue;}
+    if(node instanceof HTMLTableElement){await flush();previous=null;append(result,await table(node));continue;}
+    if(node instanceof HTMLImageElement){await flush();previous=null;append(result,await image(node));continue;}
     const css=style(node);
     if(['inline','inline-block','inline-flex'].includes(css.display)||node.tagName==='BR'){pending.push(node);continue;}
     await flush();
-    if(/^(P|H[1-6]|PRE|FIGCAPTION)$/u.test(node.tagName))append(result,await paragraph(node));
+    if(/^(P|H[1-6]|PRE|FIGCAPTION)$/u.test(node.tagName)){
+      const ordinary=node instanceof HTMLElement&&/^(P|H[1-6])$/u.test(node.tagName)&&!parent.closest('td,th,li')&&['block','flow-root'].includes(style(parent).display)&&css.display==='block'&&css.position==='static'&&css.cssFloat==='none'&&css.clear==='none'&&css.transform==='none'&&!node.querySelector('img,table,svg,canvas,iframe,video,audio,object,embed,input,textarea,button')&&px(css.marginTop)>=0&&px(css.marginBottom)>=0&&['top','bottom'].every(side=>px(css.getPropertyValue(`padding-${side}`))===0&&px(css.getPropertyValue(`border-${side}-width`))===0);
+      // Bare zero-height paragraphs collapse through their neighbours in CSS;
+      // creating a native line for them adds content height absent from the DOM.
+      if(previous&&ordinary&&node.tagName==='P'&&!node.attributes.length&&!node.childNodes.length&&node.getBoundingClientRect().height===0&&['::before','::after'].every(side=>['none','normal','""',"''"].includes(node.ownerDocument.defaultView!.getComputedStyle(node,side).content)))continue;
+      const content=await paragraph(node);
+      if(previous&&ordinary){
+        const scale=parent.getBoundingClientRect().width/(parent as HTMLElement).offsetWidth||1;
+        const gap=(node.getBoundingClientRect().top-previous.getBoundingClientRect().bottom)/scale;
+        // Resolve CSS sibling margin collapse, retaining paragraph()'s existing
+        // half-leading transfer exactly once and leaving source nodes untouched.
+        const difference=gap-px(style(previous).marginBottom)-px(css.marginTop);
+        content.html=content.html.replace(/margin-top:([\d.]+)px/u,(_,value:string)=>{
+          const before=Number(value)+difference;
+          if(before<-.1)throw Error('HWP 문단의 겹친 간격을 보존하지 못했습니다.');
+          return `margin-top:${Math.max(0,before)}px`;
+        });
+      }
+      append(result,content);previous=ordinary&&content.text.trim()?node:null;
+    }
     else if(node.tagName==='LI'){
+      previous=null;
       append(result,await paragraph(node,[...node.childNodes].filter(n=>!(n instanceof Element&&/^(UL|OL)$/u.test(n.tagName))),undefined,undefined,listMarker(node)));
       for(const child of node.children)if(/^(UL|OL)$/u.test(child.tagName))append(result,await blocks(child));
-    }else append(result,await blocks(node));
+    }else {previous=null;append(result,await blocks(node));}
   }
   await flush();return result;
 }

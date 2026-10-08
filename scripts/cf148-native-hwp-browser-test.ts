@@ -8,7 +8,7 @@ import test from 'node:test';
 test('reviewed browser DOM downloads native HWP using the pinned same-origin runtime',async t=>{
   assert.match(readFileSync('apps/web/src/theme-system.css','utf8'),/@font-face\s*\{[^}]*font-family:'HY헤드라인M'[^}]*local\('HYHeadLine-Medium'\)/u,'Resolve the existing HY font alias without redistributing font bytes');
   const {createServer}=await import('../apps/web/qa/vite-server.js');
-  const server=await createServer({root:resolve('apps/web'),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error'});
+  const server=await createServer({root:resolve('apps/web'),...(process.env.CF149_CACHE_ROOT?{cacheDir:process.env.CF149_CACHE_ROOT}:{}),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error'});
   await server.listen();
   const origin='http://127.0.0.1:'+(server.httpServer!.address() as {port:number}).port;
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Google/Chrome/Application/chrome.exe'].find(p=>p&&existsSync(p));
@@ -16,6 +16,7 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
   const engineDir=process.env.CF148_ENGINE_DIR??'pinned-runtime/pkg';
   const wasm=readFileSync(resolve(engineDir,'rhwp_bg.wasm')),binding=readFileSync(resolve(engineDir,'rhwp.js'));
   const sha=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
+  console.log('CF205 collector read-point SHA',sha(readFileSync('apps/web/src/documents/native-hwp-pages.ts')),'native exporter SHA',sha(readFileSync('apps/web/src/documents/editable-hwp-export.ts')));
   assert.equal(sha(wasm),process.env.CF148_ENGINE_SHA??'bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44','Verify the exact deployed engine, not a historical test copy');
   const manifest={wasm:sha(wasm),files:[{path:'assets/rhwp_bg-test.wasm',sha256:sha(wasm)},{path:'native/rhwp-ad01e939079e.js',sha256:sha(binding)}]};
   try{
@@ -32,7 +33,7 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
     });
     await page.goto(origin+'/native-qa.html');await page.waitForFunction(()=>document.styleSheets.length>0);
     await page.evaluate('globalThis.__name = value => value');
-    for(const name of ['letterSpacing','normalLine','inlineBreaks','photoWhitespace','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc'])await t.test(name,async()=>{
+    for(const name of ['letterSpacing','normalLine','inlineBreaks','photoWhitespace','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs'])await t.test(name,async()=>{
       await page.evaluate(()=>document.querySelectorAll('#native-source').forEach(node=>node.remove()));
       const download=page.waitForEvent('download');
       const result=await page.evaluate(async name=>{
@@ -51,11 +52,25 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           collapsedPhotoMargins:`<section data-export-page style="width:794px;height:1123px;padding:40px"><p style="margin:0 0 16px;min-height:28.8px;text-align:center"><img style="display:block;margin:18px auto 24px" src="${src}" width="120" height="72"></p></section>`,
           mergedFooter:`<section data-export-page style="position:relative;width:794px;height:1123px;padding:40px"><p>원문 123,456원</p><table style="width:600px"><tr><td rowspan="2">병합</td><td>120</td></tr><tr><td>${photo}</td></tr></table><footer class="report-page-number" style="position:absolute;bottom:20px">- 1 -</footer></section>`,
           cover:`<section class="proposal-final-cover" data-export-page><div class="proposal-cover-frame" aria-hidden="true"></div><div class="proposal-cover-heading"><p>합성 검수 프로젝트</p><div><h2>기술용역 제안</h2><strong>용역 제안서</strong></div></div><time>2026. 09. 15</time><footer><img class="proposal-template-logo" src="${src}" alt="회사 로고"><div><b>검수 회사</b><span>주소 원문</span><span>전화 원문</span><small>제출처 원문</small></div></footer></section>`,
-          toc:'<section class="proposal-final-toc" data-export-page data-page-number="2"><h3>목 차</h3><ol><li><b>04</b><span>전문가 현황</span><i>03</i></li></ol></section>'
+          toc:'<section class="proposal-final-toc" data-export-page data-page-number="2"><h3>목 차</h3><ol><li><b>04</b><span>전문가 현황</span><i>03</i></li></ol></section>',
+          denseH2ParagraphMargins:'<section data-export-page data-export-page-policy="fit" style="width:794px;height:1123px;padding:96px 80px 76px;font:16px/29.6px Arial"><article style="display:flow-root">'+Array.from({length:8},(_,i)=>`<h2 style="font:20px/32px Arial;margin:28px 0 16px"><strong>CF205 제목 ${i+1}</strong></h2><p style="font:16px/29.6px Arial;margin:16px 0">CF205 본문 ${i+1} <em>금액 123,456원</em>.</p>`).join('')+'</article></section>',
+          collapsedBlankParagraphs:'<style>#native-source .cf205-collapse h2{font:20px/32px Arial;margin:28px 0 16px}#native-source .cf205-collapse p{font:16px/29.6px Arial;margin:16px 0}#native-source .cf205-collapse p:empty{height:0;min-height:0}</style><section data-export-page data-export-page-policy="fit" style="width:794px;height:1123px;padding:96px 80px 76px;font:16px/29.6px Arial"><article class="cf205-collapse" style="display:flow-root">'+Array.from({length:6},(_,i)=>`<h2><strong>CF205 짧은 제목 ${i+1}</strong></h2><p>CF205 본문 ${i+1} 첫째 줄 123,456원.<br>둘째 줄 <em>246.90 보존</em>.</p><p></p>`).join('')+'<p></p><p></p></article></section>'
         };
         root.innerHTML=contents[name];root.style.cssText='background:#fff;color:#17263a';root.querySelectorAll<HTMLElement>('[data-export-page]').forEach(p=>p.style.boxSizing='border-box');document.body.append(root);
         await Promise.all([...root.querySelectorAll('img')].map(i=>i.decode()));
         root.id='native-source';
+        const before=root.innerHTML;
+        let metrics:any;
+        if(name==='denseH2ParagraphMargins'||name==='collapsedBlankParagraphs'){
+          await document.fonts.ready;
+          const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
+          const section=root.querySelector<HTMLElement>('[data-export-page]')!,article=section.querySelector<HTMLElement>('article')!;
+          const nodes=[...article.children] as HTMLElement[],visible=nodes.filter(node=>node.getBoundingClientRect().height>0.1);
+          const [collected]=await collectNativeHwpPages(root,'portrait');
+          const parsed=new DOMParser().parseFromString(collected.html,'text/html');
+          metrics={available:section.clientHeight-96-76,articleHeight:article.getBoundingClientRect().height,heights:nodes.map(node=>node.getBoundingClientRect().height),gaps:visible.slice(1).map((node,i)=>node.getBoundingClientRect().top-visible[i].getBoundingClientRect().bottom),zeroParagraphs:nodes.filter(node=>node.tagName==='P'&&!node.childNodes.length&&!node.attributes.length&&node.offsetHeight===0).length,nativeParagraphs:parsed.querySelectorAll('p').length,spacing:[...parsed.querySelectorAll<HTMLElement>('p')].map(node=>({top:parseFloat(node.style.marginTop)||0,bottom:parseFloat(node.style.marginBottom)||0,line:parseFloat(node.style.lineHeight)||0})),sourceUnchanged:root.innerHTML===before};
+          if(metrics.available!==951||metrics.articleHeight>951||!metrics.sourceUnchanged)throw Error('CF205 synthetic source geometry failed: '+JSON.stringify(metrics));
+        }
         if(name==='letterSpacing'){
           const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
           const [collected]=await collectNativeHwpPages(root,'portrait');
@@ -89,13 +104,56 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           if(Math.abs(geometry.cells[0].width+geometry.cells[1].padding.left-expected)>0.1)throw Error('목차 열 간격 누락');
         }
         const progress:string[]=[];
-        const exported=await downloadFinalDocument({root,format:'hwp',fileName:'native-'+name,orientation:'portrait',onProgress:(message:string)=>progress.push(message)});
+        let exported;
+        try{exported=await downloadFinalDocument({root,format:'hwp',fileName:'native-'+name,orientation:'portrait',onProgress:(message:string)=>progress.push(message)});}
+        catch(error){throw Error(String(error)+(metrics?' CF205 measured DOM/collector: '+JSON.stringify(metrics):''));}
         if(name==='sourcePage' && (!progress.some(message=>message.includes('문장·표 개별 편집 불가')) || progress.some(message=>message.includes('편집 가능한 HWP'))))throw Error('원본 페이지 이미지를 편집 가능한 문장·표로 안내함');
-        return exported;
+        return {...exported,...(metrics?{metrics,sourceUnchanged:root.innerHTML===before}:{})};
       },name).catch(error=>{download.catch(()=>{});throw error;});
       const artifact=await download;
       assert.equal(result.pageCount,1);assert.ok(result.byteSize>512);assert.equal(artifact.suggestedFilename(),'native-'+name+'.hwp');
       const path=await artifact.path();assert.ok(path);assert.equal(sha(readFileSync(path)),result.sha256);
+      if(name==='denseH2ParagraphMargins'||name==='collapsedBlankParagraphs'){
+        assert.equal(result.sourceUnchanged,true);assert.equal(result.metrics.nativeParagraphs,name==='denseH2ParagraphMargins'?16:12);
+        assert.equal(result.metrics.zeroParagraphs,name==='denseH2ParagraphMargins'?0:8);
+        assert.ok(result.metrics.gaps.every((gap:number,i:number)=>Math.abs(gap-(i%2===0?16:28))<.1),JSON.stringify(result.metrics.gaps));
+        const reopened=await page.evaluate(async bytes=>{const {loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string);const {verifyNativeHwpContent}=await import('/src/documents/editable-hwp-export.ts' as string);const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);const source=document.querySelector<HTMLElement>('#native-source')!,before=source.innerHTML,pages=await collectNativeHwpPages(source,'portrait');const Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));try{verifyNativeHwpContent(doc.exportHwpx(),pages);return{count:doc.pageCount(),sourceUnchanged:source.innerHTML===before,svg:doc.renderPageSvg(0)};}finally{doc.free();}},[...readFileSync(path)]);
+        assert.equal(reopened.count,1);assert.equal(reopened.sourceUnchanged,true);assert.match(reopened.svg,/<svg\b/u);
+        const glyphs=await page.evaluate(async svg=>{
+          const source=document.querySelector<HTMLElement>('#native-source [data-export-page]')!,paperBox=source.getBoundingClientRect();
+          const targets=[...source.querySelectorAll<HTMLElement>('article > h2,article > p')].filter(node=>node.textContent?.trim()).map(node=>{
+            const walk=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);let text:Node|null=null;
+            while(walk.nextNode())if(walk.currentNode.textContent?.trim()){text=walk.currentNode;break;}
+            if(!text)throw Error('CF205 source first glyph missing');
+            const range=document.createRange();range.setStart(text,0);range.setEnd(text,1);
+            return{tag:node.tagName,text:text.textContent!.trim(),domY:range.getBoundingClientRect().top-paperBox.top};
+          });
+          const probe=document.createElement('div');probe.style.cssText='position:absolute;left:-5000px;top:0;width:794px;height:1123px';probe.innerHTML=svg;document.body.append(probe);
+          try {
+            await document.fonts.ready;
+            const paper=probe.querySelector('svg')!,box=paper.getBoundingClientRect();
+            const rows=new Map<number,{text:string;node:SVGTextContentElement}>();
+            for(const node of paper.querySelectorAll<SVGTextContentElement>('text')){
+              if(!node.getNumberOfChars())continue;
+              const start=node.getStartPositionOfChar(0),position=new DOMPoint(start.x,start.y).matrixTransform(node.getScreenCTM()!);
+              const key=Math.round((position.y-box.top)*10),row=rows.get(key);
+              if(row)row.text+=node.textContent??'';else rows.set(key,{text:node.textContent??'',node});
+            }
+            return targets.map(target=>{
+              const matches=[...rows.values()].filter(row=>row.text.replace(/\s+/gu,'').startsWith(target.text.replace(/\s+/gu,'')));
+              if(matches.length!==1)throw Error('CF205 native first glyph ambiguous: '+target.text+' ('+matches.length+') '+JSON.stringify([...rows.values()].slice(0,4).map(row=>row.text)));
+              const node=matches[0].node,glyph=node.getExtentOfChar(0),matrix=node.getScreenCTM()!;
+              const y=new DOMPoint(glyph.x,glyph.y).matrixTransform(matrix).y-box.top;
+              return{...target,svgY:y,delta:y-target.domY,font:getComputedStyle(node).fontFamily,fontSize:getComputedStyle(node).fontSize};
+            });
+          } finally {probe.remove();}
+        },reopened.svg);
+        assert.equal(glyphs.length,name==='denseH2ParagraphMargins'?16:12);
+        assert.ok(glyphs.every(glyph=>Number.isFinite(glyph.domY)&&Number.isFinite(glyph.svgY)));
+        const progression=glyphs.map(glyph=>{const first=glyphs.find(node=>node.tag===glyph.tag)!;return{tag:glyph.tag,text:glyph.text,dom: glyph.domY-first.domY,svg:glyph.svgY-first.svgY,delta:(glyph.svgY-first.svgY)-(glyph.domY-first.domY)};});
+        assert.ok(progression.every(node=>Math.abs(node.delta)<=0.1),'Repeated H2/P progression must retain the existing 0.1px DOM geometry bound');
+        console.log('CF205 actual save/reopen measurement',name,JSON.stringify({metrics:result.metrics,pageCount:reopened.count,glyphs,progression,maxProgressionError:Math.max(...progression.map(node=>Math.abs(node.delta))),coordinateScope:'Raw same-pixel DOM Range / reopened SVG glyph comparison; not a new cross-font visual tolerance PASS'}));
+      }
       if(process.env.CF148_HWP_ARTIFACTS==='1'){
         mkdirSync('output/cf148/native-browser',{recursive:true});writeFileSync('output/cf148/native-browser/'+artifact.suggestedFilename(),readFileSync(path));
         await page.locator('#native-source').screenshot({path:`output/cf148/native-browser/${name}-source.png`});
@@ -107,6 +165,24 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
         await page.locator('#native-source').screenshot({path:`output/cf148/native-browser/${name}-hwp.png`});
       }
       await page.evaluate(()=>document.querySelector('#native-source')?.remove());
+    });
+    await t.test('CF205 visible or explicitly authored blank paragraphs remain represented in native collection',async()=>{
+      const results=await page.evaluate(async()=>{
+        const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
+        return await Promise.all([
+          {name:'height',blank:'<p style="height:24px;min-height:0"></p>'},
+          {name:'minHeight',blank:'<p></p>',rule:'p:nth-child(2){min-height:24px}'},
+          {name:'br',blank:'<p><br></p>'},
+          {name:'spacer',blank:'<p><span data-document-spacer="24" style="display:block;height:24px"></span></p>'},
+          {name:'authoredZero',blank:'<p data-review-blank="true" style="height:0;min-height:0"></p>'}
+        ].map(async({name,blank,rule})=>{
+          const root=document.createElement('div');root.id='cf205-blank-'+name;root.innerHTML='<style>#'+root.id+' p{font:16px/29.6px Arial;margin:16px 0}'+(rule?'#'+root.id+' '+rule:'')+'</style><section data-export-page style="box-sizing:border-box;width:794px;height:1123px;padding:40px"><article style="display:flow-root"><p>CF205 before 0</p>'+blank+'<p>CF205 after 246.90</p></article></section>';document.body.append(root);
+          const before=root.innerHTML,height=root.querySelector<HTMLElement>('p:nth-child(2)')!.offsetHeight;
+          try{const [page]=await collectNativeHwpPages(root,'portrait');return{name,height,paragraphs:new DOMParser().parseFromString(page.html,'text/html').querySelectorAll('p').length,text:page.text,unchanged:root.innerHTML===before};}
+          finally{root.remove();}
+        }));
+      });
+      for(const result of results){assert.equal(result.paragraphs,3,result.name);assert.equal(result.unchanged,true,result.name);assert.ok(result.text.includes('CF205 before 0')&&result.text.includes('CF205 after 246.90'));if(result.name!=='authoredZero')assert.ok(result.height>0,result.name);}
     });
     assert.ok(requests.includes(origin+'/rhwp/native/rhwp-ad01e939079e.js'));
     assert.ok(requests.every(url=>url.startsWith(origin+'/')),'No source document is sent to another service');
