@@ -1,6 +1,15 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF209 일정 보호 개발 반영·계약 검사 통과, 실제 후속 검수 및 전체 A–Z는 미합격, 2026-10-08
+## 현재 판정 — CF210 일정 출력 언어 수정 검증 통과·개발 반영 준비, 전체 A–Z는 미합격, 2026-10-08
+
+### CF210 일정 출력 언어·원자료·실제 로컬 PDF 검수
+
+- 단신 Chrome의 CC7 실제 일정 출력에서 `lang=vi`와 Tiếng Việt 선택을 확인했지만 H1은 `2026년 10월 프로젝트 상세 일정표`, 메타정보·범례는 한국어로 남았다. 기존 VI 동작은 출력 기준 시각 locale만 바꿨다. 기존 통과 검사 CF145도 페이지 수/query만 대조해 문구 누락을 잡지 못했다. 실제 보고서839125259는 여전히 v7/14:38:51/159단어715자/시작9·2열/실등록0 첨부창을 보존했다. 동일 schedule839125591의 취소 후 note DOM은 다시 시간 초과해 미검증을 유지하며, 보고서와 새 출력 탭839125601은 정상 읽혔다. 제품 실패와 특정 브라우저 탭의 조작 제한을 혼동하지 않는다.
+- 최소 수정은 ProjectSchedulePrint.tsx 한 제품 파일의 고정 VI 문구·요일·알려진 단계/6유형·휴일 tooltip·인쇄 안내/접근성 언어를 연결한 것이다. 한국어 표기와 월 범위·페이지 계산·holiday 날짜/판정·query/GET/print 호출 코드는 보존했다. 프로젝트명·직원명·owner·코드·ISO 날짜·저장 원문은 번역 helper를 통과하지 않는다. `미지정 원문직원` 같은 동명 원자료와 unknown 유형/단계도 그대로다. 제품 CSS·용지 크기·쪽나눔·HWP 엔진·DB·권한·키ENV·원본·고객자료 변경0. 기존 CF145는 올바른 VI 버튼명3곳만 수정했다.
+- 새 CF210은 실제 앱 JSX와 합성 원자료9개로 통합4쪽/한달2쪽/상세2쪽, KO→VI→KO 원 HTML(시각만 정규화)·원자료 JSON·사람·날짜·막대·요일·공휴일 class·흑백/컬러·tooltip·known6유형/unknown·인쇄 호출을 검증한다. root 독립4/4 및 전문가4/4 PASS/skipped0, 기존6/6·실제 CF145 UI1/1 PASS. 정확 Git `3cc821d` 이전 Print를 Vite 메모리에서만 사용한 음성 검사는 root·전문가 모두0/4/exit1. 이전 Git LF source SHA `0dec239b52fa6926e6f2e82234c2fc7e67466305916a7ff6344765da00918927`과 당시 Windows CRLF working SHA782eeefd… 차이는 줄끝 표현 차이로 구분한다.
+- 초기 PDF5쪽 FAIL은 실제 앱 index.html의 `body margin:0`/전체 border-box를 새 fixture가 누락한 검사 오류였다. body margin8px/top8에 첫 쪽 footer가 분리됐으며 제품 CSS/210mm/guard를 바꾸지 않았다. 실패 파일·5PNG는 `E200/cf210/proof-gh2ofS`에 보존하고, 실제 index style·lang/data-theme 원본을 fixture에 재사용한 뒤 이전 KO 직접 PDF도4쪽, 현재 VI도4쪽임을 확인했다. 초기 __name helper 누락·unpdf transferable buffer로 인한 빈 SHA 로그도 검사 코드 오류로 분리했다. 실제 파일 해시는 정상이고 최종 검사는 copy를 전달하며 file/bytes 지문을 대조한다.
+- 전4쪽 PNG를 root·독립 검수자가 직접 열어 9월8+1/10월8+1개·1/4~4/4·VI 성조·메타정보·요일·범례 및 머리글/달력/하단 사이 잘림·겹침·추가 쪽 없음 범위를 확인했다. 독립 성공 PDF `E200/cf210/proof-PIDOad/CF210-local-synthetic-vi.pdf`555,104B/SHA `2915a4ae39da44a0fcf95fd6dc67d9bd20c10db424094db205da6da8cb13ee42`; root 별도 생성 `E200/cf210/root-proof/proof-5Bfpsc/CF210-local-synthetic-vi.pdf`555,110B/SHA `e1b4cebabe77ed68a48c8221ddf364e66d394cf06a4d656a07b9000eee7b9879`/4쪽 A4가로. 생성 시각이 달라 bytes/pixel exact를 주장하지 않는다. 검수는 외부font/network0의 로컬 글꼴 fallback 합성 Chromium 출력이며 실제 development OS 인쇄·한컴/Word/전체 베트남어 자모/원형32·전체 A–Z 합격이 아니다. Type3 font의 BaseFont/FontFile 부재만으로 글꼴 누락 판정하지 않고 실제 glyph·ToUnicode·PNG를 대조했다.
+- 최종 제품 SHA `ac8a830ccc6fdf6b2588e0a669183d385e0d67f47eee144c3cf4cd4e5b1faf28`, 새 검사 SHA `e0e34ce8a2bb92e5f849ddb57753c4dcbd00ec78e01b7336fd1c5aef79c5b7fc`. root/web 타입·fresh Vite·runtime28 pin·Worker dry-run PASS. 산출물 `E200/cf210/dist-checked/index-DFugdOgU.js`; 아래 CF209는 현재 개발 배포 기준이고 CF210 commit/push·개발 반영·public43·실제 CC7 VI→KO 화면 재검수는 다음 단계다. 가오픈·직원영상·현장조사회의록개편HOLD·최종 업무승인은 변경하지 않았다. 첨부4개 선택 응답 전 중복 업로드·저장0을 유지한다.
 
 ### CF209 일정 선택·미저장 입력·조회 실패 보호
 

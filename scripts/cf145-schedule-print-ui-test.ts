@@ -24,13 +24,13 @@ test('CF145 real print UI defaults to every month and preserves range through la
     await page.getByRole('button',{name:'흑백',exact:true}).click();await page.getByRole('button',{name:'Tiếng Việt',exact:true}).click();
     assert.equal(await sheets.count(),2);assert.ok(page.url().includes('scope=all'));
     await page.evaluate(()=>{(window as any).printPages=[];window.print=()=>{(window as any).printPages.push(document.querySelectorAll('.schedule-print-sheet').length);};});
-    await page.getByRole('button',{name:'PDF 저장',exact:true}).click();await page.waitForFunction(()=>(window as any).printPages.length===1);
-    await page.getByRole('button',{name:'인쇄',exact:true}).click();await page.waitForFunction(()=>(window as any).printPages.length===2);
+    await page.getByRole('button',{name:'Lưu PDF',exact:true}).click();await page.waitForFunction(()=>(window as any).printPages.length===1);
+    await page.getByRole('button',{name:'In',exact:true}).click();await page.waitForFunction(()=>(window as any).printPages.length===2);
     assert.deepEqual(await page.evaluate(()=>(window as any).printPages),[2,2]);
     await page.emulateMedia({media:'print'});assert.equal(await page.locator('.schedule-print-toolbar').isVisible(),false);
     const sizes=await sheets.evaluateAll(els=>els.map(el=>({width:el.getBoundingClientRect().width,height:el.getBoundingClientRect().height,overflow:el.scrollHeight>el.clientHeight+1})));
     assert.ok(sizes.every(s=>s.width>1120&&s.width<1125&&s.height>790&&s.height<797&&!s.overflow));
-    await page.emulateMedia({media:'screen'});await page.getByRole('button',{name:'컬러',exact:true}).click();
+    await page.emulateMedia({media:'screen'});await page.getByRole('button',{name:'Màu',exact:true}).click();
     mkdirSync('output/playwright',{recursive:true});await page.screenshot({path:'output/playwright/cf145-print-all.png',fullPage:true});
   } finally {await browser.close();await server.close();}
 });
