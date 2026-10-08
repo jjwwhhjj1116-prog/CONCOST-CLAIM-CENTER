@@ -98,9 +98,19 @@ async function paragraph(nodes: readonly Node[], element: Element, marker = '', 
   // Direct cell text already gets this padding from tcMar. A nested authored
   // paragraph still retains its own independent indentation.
   const cellText=element.matches('td,th');
+  let paragraphAlignment=alignment(css.textAlign);
+  const visibleNodes=nodes.filter(node=>node instanceof Element?!ignored(node):Boolean(node.textContent?.trim()));
+  const onlyImage=!marker&&visibleNodes.length===1&&visibleNodes[0] instanceof HTMLImageElement?visibleNodes[0]:null;
+  if(onlyImage&&style(onlyImage).display==='block'){
+    const imageCss=style(onlyImage),authored=onlyImage.getAttribute('data-image-align'),left=imageCss.marginLeft,right=imageCss.marginRight;
+    if(authored&&['left','center','right'].includes(authored))paragraphAlignment=alignment(authored);
+    else if(left==='auto'&&right==='auto'||px(left)>0&&px(right)>0&&Math.abs(px(left)-px(right))<.5)paragraphAlignment=AlignmentType.CENTER;
+    else if((left==='auto'||px(left)>0)&&right!=='auto'&&px(right)===0)paragraphAlignment=AlignmentType.RIGHT;
+    else if(left!=='auto'&&px(left)===0&&(right==='auto'||px(right)>0))paragraphAlignment=AlignmentType.LEFT;
+  }
   // CSS line-height is an absolute length here, not Word's 240ths-of-a-line.
   // Inline photographs must still be allowed to grow their line box.
-  return new Paragraph({ children, outlineLevel: heading && !element.closest('.report-final-cover') ? Number(element.tagName[1]) - 1 : undefined, alignment: alignment(css.textAlign), spacing: { before: twips(spacing?.before??px(css.marginTop)), after: twips(spacing?.after??px(css.marginBottom)), ...(px(css.lineHeight) ? { line: twips(px(css.lineHeight)), lineRule: children.some(child => child instanceof ImageRun) ? LineRuleType.AT_LEAST : LineRuleType.EXACT } : {}) }, indent: { left: cellText?0:twips(px(css.paddingLeft)), right: cellText?0:twips(px(css.paddingRight)) }, keepNext: heading });
+  return new Paragraph({ children, outlineLevel: heading && !element.closest('.report-final-cover') ? Number(element.tagName[1]) - 1 : undefined, alignment: paragraphAlignment, spacing: { before: twips(spacing?.before??px(css.marginTop)), after: twips(spacing?.after??px(css.marginBottom)), ...(px(css.lineHeight) ? { line: twips(px(css.lineHeight)), lineRule: children.some(child => child instanceof ImageRun) ? LineRuleType.AT_LEAST : LineRuleType.EXACT } : {}) }, indent: { left: cellText?0:twips(px(css.paddingLeft)), right: cellText?0:twips(px(css.paddingRight)) }, keepNext: heading });
 }
 
 async function table(element: HTMLTableElement): Promise<Table> {

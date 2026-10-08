@@ -1,5 +1,56 @@
 // Canonical company modules recovered from the 2026-07-28 Pyeongtaek Segyo 1 HWP source.
 // Cost figures are intentionally masked before this content is bundled or persisted.
+interface ProposalCompanyImage {
+  assetKey:string;chapterNumber:number;displayOrder:number;title:string;altText:string;version:number;isActive:boolean;hasContent:boolean;
+}
+const proposalAssetAnchor:Record<string,RegExp>={
+  CH04_EXPERT_PROFILE:/대표이사|전문가 현황|현동명/u,
+  CH06_ORG_CHART:/조직도|조직 구성|조직 체계/u,
+  CH06_BUSINESS_AREAS:/업무 영역/u,
+  CH10_DEGREE:/학위/u,CH10_APPRAISER:/감정사|자격증/u,CH10_PUBLICATIONS:/저서|논문/u
+};
+// Creation and explicit company-default application only; never hydrate a saved snapshot.
+export function proposalBodyWithCompanyImages(body:string,chapterNumber:number,assets:readonly ProposalCompanyImage[],excluded:readonly string[]=[]):string{
+  const present=new Set([...body.matchAll(/\/api\/proposal-studio\/assets\/([A-Z0-9_]+)/gu)].map(match=>match[1]));
+  const selected=assets.filter(asset=>asset.chapterNumber===chapterNumber&&asset.hasContent&&asset.isActive&&asset.assetKey!=='BRAND_LOGO'&&!excluded.includes(asset.assetKey)&&!present.has(asset.assetKey)).sort((a,b)=>a.displayOrder-b.displayOrder||(a.assetKey<b.assetKey?-1:a.assetKey>b.assetKey?1:0));
+  if(!selected.length)return body;
+  const lines=body.replaceAll('\r\n','\n').split('\n'),insertions=new Map<number,string[]>(),tail:string[]=[];
+  let fence:{character:string;length:number}|null=null;
+  const anchorLines=lines.map(line=>{const marker=line.match(/^\s{0,3}(`{3,}|~{3,})/u)?.[1];if(marker){if(!fence)fence={character:marker[0],length:marker.length};else if(marker[0]===fence.character&&marker.length>=fence.length)fence=null;return false;}return !fence&&!line.includes('|')&&!/^\s{4}|^\t/u.test(line);});
+  for(const asset of selected){
+    const image=`![${asset.altText.replace(/[\[\]\r\n]/gu,' ')}](/api/proposal-studio/assets/${asset.assetKey}?v=${asset.version} "${asset.title.replace(/["\r\n]/gu,'')}")`;
+    const anchor=proposalAssetAnchor[asset.assetKey],index=anchor?lines.findIndex((line,index)=>anchorLines[index]&&anchor.test(line)):-1;
+    if(index>=0){const images=insertions.get(index+1)??[];images.push(image);insertions.set(index+1,images);}else tail.push(image);
+  }
+  for(const [index,images] of [...insertions].sort((a,b)=>b[0]-a[0]))lines.splice(index,0,'',images.join('\n\n'),'');
+  if(tail.length)lines.push('',tail.join('\n\n'));
+  return lines.join('\n').trimEnd();
+}
+const PROPOSAL_PUBLISHED_STRENGTH_FACTS = [
+  { literal:'700만원', token:'[[PUBLIC_FACT_CH05_GIMPO_ASK]]' },
+  { literal:'599만원', token:'[[PUBLIC_FACT_CH05_GIMPO_RESULT]]' },
+  { literal:'750만원', token:'[[PUBLIC_FACT_CH05_CHEONGDAM_ASK]]' },
+  { literal:'615만원', token:'[[PUBLIC_FACT_CH05_CHEONGDAM_RESULT]]' }
+] as const;
+// One unchanged masking rule for Worker persistence and save-acknowledgement checks.
+export function sanitizeProposalCostData(source: string): { value: string; count: number } {
+  let value = source;
+  let count = 0;
+  const preserveApprovedStrengthFacts = value.includes('김포현장에서 시공사의 평당 700만원 요구를 599만원으로 조정하였고')
+    && value.includes('청담현장은 평당 750만원 요구를 615만원으로 협상하는');
+  if (preserveApprovedStrengthFacts) PROPOSAL_PUBLISHED_STRENGTH_FACTS.forEach(({literal,token})=>{value=value.replaceAll(literal,token);});
+  const mask = () => { count += 1; return '[비공개 협의금액]'; };
+  value = value.replace(/₩\s*\d[\d,]*(?:\.\d+)?/gu, mask);
+  value = value.replace(/\bKRW\s*\d[\d,]*(?:\.\d+)?/giu, mask);
+  value = value.replace(/\d[\d,]*(?:\.\d+)?\s*(?:억원|천만원|백만원|만원|원)/gu, mask);
+  value = value.replace(/(계약금액|제안금액|견적금액|수주금액|용역대가)\s*[:：]?\s*\d[\d,]*(?:\.\d+)?/gu, (_all, label: string) => `${label}: ${mask()}`);
+  return { value, count };
+}
+export function hydrateProposalPublishedFacts(source:string):string{
+  let value=source;
+  for(const {literal,token} of PROPOSAL_PUBLISHED_STRENGTH_FACTS)value=value.replaceAll(token,literal);
+  return value;
+}
 export const PROPOSAL_COMPANY_MODULE_CONTENT: Readonly<Record<string,string>> = {
   CH04_EXPERTS: `### 대표이사 / 재개발·재건축 공사비 전문 법학박사
 

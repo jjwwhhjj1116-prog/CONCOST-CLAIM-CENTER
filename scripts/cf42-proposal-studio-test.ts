@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import test from 'node:test';
+import { getDocumentProxy } from 'unpdf';
 import initSqlJs, { type Database } from 'sql.js';
 import worker, { type CloudflareEnv } from '../apps/cloudflare/src/index.js';
-import { PROPOSAL_COMPANY_MODULE_CONTENT } from '../apps/cloudflare/src/proposal-company-content.js';
+import { PROPOSAL_COMPANY_MODULE_CONTENT, proposalBodyWithCompanyImages } from '../apps/cloudflare/src/proposal-company-content.js';
 import { proposalStudioWorkbook, readProposalDocx, readProposalStudioWorkbook, type ProposalStudioExcelValues } from '../apps/web/src/proposals/proposal-excel.js';
 
 const read=(path:string)=>readFileSync(join(process.cwd(),path),'utf8');
@@ -20,8 +22,47 @@ const ADMIN='00000000-0000-4000-8000-000000000042'; const REVIEWER='00000000-000
 async function sha256(value:string){const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));return [...new Uint8Array(digest)].map((byte)=>byte.toString(16).padStart(2,'0')).join('');}
 class SqlStatement{private values:unknown[]=[];constructor(private readonly db:Database,private readonly sql:string){}bind(...values:unknown[]){this.values=values;return this;}async first<T>():Promise<T|null>{const statement=this.db.prepare(this.sql);try{statement.bind(this.values as any[]);return statement.step()?statement.getAsObject() as T:null;}finally{statement.free();}}async all<T>():Promise<{results:T[]}>{const statement=this.db.prepare(this.sql);const results:T[]=[];try{statement.bind(this.values as any[]);while(statement.step())results.push(statement.getAsObject() as T);return{results};}finally{statement.free();}}async run(){this.db.run(this.sql,this.values as any[]);const row=this.db.exec('SELECT last_insert_rowid() AS id')[0]?.values[0]?.[0];return{success:true,meta:{changes:this.db.getRowsModified(),last_row_id:Number(row??0)}};}}
 class SqlD1{constructor(readonly database:Database){}prepare(sql:string){return new SqlStatement(this.database,sql);}async batch(statements:SqlStatement[]){this.database.run('BEGIN IMMEDIATE');try{const results=[];for(const statement of statements)results.push(await statement.run());this.database.run('COMMIT');return results;}catch(reason){this.database.run('ROLLBACK');throw reason;}}}
-const request=(path:string,token=ADMIN_TOKEN,init:RequestInit={})=>{const headers=new Headers(init.headers);headers.set('X-Session-Token',token);if(init.body&&!(init.body instanceof FormData))headers.set('Content-Type','application/json');return new Request(`https://preview.example${path}`,{...init,headers});};
+const request=(path:string,token=ADMIN_TOKEN,init:RequestInit={})=>{const headers=new Headers(init.headers);headers.set('X-Session-Token',token);if(init.body&&!(init.body instanceof FormData)&&!headers.has('Content-Type'))headers.set('Content-Type','application/json');return new Request(`https://preview.example${path}`,{...init,headers});};
 async function setup(){const SQL=await initSqlJs();const sql=new SQL.Database();sql.run('PRAGMA foreign_keys=ON');for(const name of ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql','0014_cf14_proposal_award_workflow.sql','0019_cf27_proposal_authoring.sql','0033_cf42_proposal_studio.sql','0034_cf42_proposal_template_catalog.sql','0036_cf44_proposal_pdf_template_source.sql','0038_cf48_proposal_company_assets.sql','0040_cf52_hermes_bridge_intake_catalog.sql','0044_cf64_proposal_full_chapter_editing.sql','0045_cf65_proposal_common_chapter_12.sql','0046_cf69_proposal_asset_versions.sql','0047_cf72_project_members_calendar.sql'])sql.exec(read(`apps/cloudflare/migrations/${name}`));const now=new Date().toISOString();for(const [id,login,name,roles] of [[ADMIN,'admin@example.invalid','CF42 Admin','["admin"]'],[REVIEWER,'reviewer@example.invalid','CF42 Reviewer','["reviewer"]']] as const)sql.run('INSERT INTO preview_users VALUES (?,?,?,?,?,?,?,?,1,?)',[id,login,'1'.repeat(32),'2'.repeat(64),100000,name,login,roles,now]);sql.exec(read('apps/cloudflare/migrations/0039_cf51_proposal_prompt_management.sql'));const seededPrompts=[['제안(용역)의 목적','서로 중복되지 않는 목적 5~7개를 작성한다. 각 항목은 프로젝트 문제, 수행 행동, 기대 성과를 충분히 설명하고 없는 사실은 [확인 필요]로 표시하며 최소 450자 이상 작성한다. 의뢰 배경과 클라이언트 관점을 우선 근거로 삼고 확인되지 않은 계약조건이나 수치를 만들지 않는다.'],['당 현장의 핵심 쟁점 분석','의뢰 자료에서 3~5개 핵심 쟁점을 선정하고 상황, 검증 자료와 기준, 클라이언트 영향, 대응 방향을 상세하게 기술하며 근거 없는 사실은 [확인 필요]로 표시한다. 최소 600자 이상 작성하고 각 쟁점마다 실제 확인해야 할 자료와 의사결정 영향을 분명히 구분한다.'],['업무 수행 내용 및 추진 계획','단계, 수행 업무, 세부 내용, 주요 산출물의 네 열로 구성된 Markdown 표를 작성하고 정확한 네 단계의 행동과 산출물을 구체적으로 설명한다. 최소 450자 이상 작성하고 각 단계에는 두 개 이상의 수행 행동과 담당자가 검수할 수 있는 명확한 산출물을 기재한다.']] as const;seededPrompts.forEach(([title,instruction],index)=>sql.run('INSERT INTO preview_proposal_writing_prompts (chapter_number,chapter_title,instruction_text,is_active,version,updated_by,updated_at) VALUES (?,?,?,?,?,?,?)',[index+1,title,instruction,1,1,ADMIN,now]));sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)',[await sha256(ADMIN_TOKEN),ADMIN,now,new Date(Date.now()+3_600_000).toISOString()]);sql.run('INSERT INTO preview_sessions VALUES (?,?,?,?)',[await sha256(REVIEW_TOKEN),REVIEWER,now,new Date(Date.now()+3_600_000).toISOString()]);return{sql,env:{DB:new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>} as CloudflareEnv};}
+
+test('CF198 common image registration reaches the administrator route and stores current plus immutable history atomically',async()=>{
+  const {sql,env}=await setup();const jpeg=new Uint8Array(160);jpeg.set([255,216,255,192,0,17,8,1,44,2,88,3,1,17,0,2,17,0,3,17,0]);jpeg.set([255,217],158);
+  const upload=(token=ADMIN_TOKEN,title='합성 추가 학위',chapter='10',order='4')=>{const form=new FormData();form.append('file',new File([jpeg],'synthetic-qualification.jpg',{type:'image/jpeg'}));form.append('chapterNumber',chapter);form.append('title',title);form.append('altText',title);form.append('displayOrder',order);return worker.fetch(request('/api/proposal-studio/assets',token,{method:'POST',body:form}),env);};
+  try{const response=await upload();assert.equal(response.status,201,await response.clone().text());const asset=(await response.json() as any).asset;assert.equal(asset.chapterNumber,10);assert.equal(asset.title,'합성 추가 학위');assert.equal(asset.hasContent,true);assert.equal(asset.version,1);assert.match(asset.assetKey,/^CH10_[A-Z0-9_]+$/u);
+    const history=sql.exec('SELECT version,file_data,file_sha256 FROM preview_proposal_company_asset_versions WHERE asset_key=?',[asset.assetKey])[0].values;assert.equal(history.length,1);assert.deepEqual(history[0][1],jpeg);
+    const original=sql.export();const denied=await upload(REVIEW_TOKEN);assert.equal(denied.status,403);assert.deepEqual(sql.export(),original);
+    const downloaded=await worker.fetch(request('/api/proposal-studio/assets/'+asset.assetKey+'?v=1',REVIEW_TOKEN),env);assert.equal(downloaded.status,200);assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()),jpeg);
+    const repeat=await upload();assert.equal(repeat.status,201);assert.equal((await repeat.json() as any).asset.assetKey,asset.assetKey);assert.deepEqual(sql.export(),original,'The same image and description must not add duplicate defaults');
+    for(const [title,chapter,order] of [['','10','4'],['x'.repeat(161),'10','4'],['합성','3','1'],['합성','11','1'],['합성','4','100']]){assert.equal((await upload(ADMIN_TOKEN,title,chapter,order)).status,400);assert.deepEqual(sql.export(),original);}
+    sql.run("CREATE TRIGGER cf198_fail_history BEFORE INSERT ON preview_proposal_company_asset_versions BEGIN SELECT RAISE(ABORT,'CF198 history failure'); END;");const beforeFailure=sql.export();const failed=await upload(ADMIN_TOKEN,'합성 원자 실패');assert.equal(failed.status,409);assert.deepEqual(sql.export(),beforeFailure,'Image/current metadata must roll back when immutable history insertion fails');sql.run('DROP TRIGGER cf198_fail_history');assert.equal((await upload(ADMIN_TOKEN,'합성 원자 실패')).status,201);
+    const createdCase=await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf198-common-history'},body:JSON.stringify({title:'공통 개정 보존 합성 검수',claimType:'TYPE-03',description:'합성 자료',category:{major:'건설 클레임',middle:'TYPE-03',minor:'제안'}})}),env);assert.equal(createdCase.status,201);const caseId=(await createdCase.json() as any).case.id,config=await (await worker.fetch(request('/api/proposal-studio/config'),env)).json() as any;
+    const create=(sourceId:string)=>worker.fetch(request(`/api/cases/${caseId}/proposals`,ADMIN_TOKEN,{method:'POST',body:JSON.stringify({templateId:'CF27-TYPE-03',sourceId})}),env);
+    const oldResponse=await create(config.templateTypes[0].representativeSourceId);assert.equal(oldResponse.status,201);const old=(await oldResponse.json() as any).proposal,oldSnapshot=old.versions[0].structuredInputsJson;assert.ok(JSON.parse(oldSnapshot).chapters[9].body.includes('/'+asset.assetKey+'?v=1'));
+    const replacement=jpeg.slice();replacement[100]=1;const replacementForm=new FormData();replacementForm.append('file',new File([replacement],'synthetic-updated.jpg',{type:'image/jpeg'}));assert.equal((await worker.fetch(request('/api/proposal-studio/assets/'+asset.assetKey,ADMIN_TOKEN,{method:'PUT',body:replacementForm}),env)).status,200);
+    assert.deepEqual(new Uint8Array(await (await worker.fetch(request('/api/proposal-studio/assets/'+asset.assetKey+'?v=1'),env)).arrayBuffer()),jpeg);assert.deepEqual(new Uint8Array(await (await worker.fetch(request('/api/proposal-studio/assets/'+asset.assetKey+'?v=2'),env)).arrayBuffer()),replacement);
+    let commonSnapshot='';for(const type of config.templateTypes){const next=await create(type.representativeSourceId);assert.equal(next.status,201);const chapters=JSON.parse((await next.json() as any).proposal.versions[0].structuredInputsJson).chapters;assert.ok(chapters[9].body.includes('/'+asset.assetKey+'?v=2'));const fixed=JSON.stringify(chapters.slice(3));if(commonSnapshot)assert.equal(fixed,commonSnapshot,'All six named types use the same revised common content and images');else commonSnapshot=fixed;}
+    const oldRead=await worker.fetch(request(`/api/cases/${caseId}/proposals/${old.id}`),env);assert.equal(oldRead.status,200);assert.equal((await oldRead.json() as any).proposal.versions[0].structuredInputsJson,oldSnapshot,'Central image revision must not rewrite existing proposal snapshots');
+  }finally{sql.close();}
+});
+
+test('CF198 new drafts place the exact same common defaults at their canonical image anchors',async()=>{
+  const {sql,env}=await setup();
+  try{
+    const config=await (await worker.fetch(request('/api/proposal-studio/config'),env)).json() as any,org=config.modules.find((item:any)=>item.chapterNumber===6),body='### 조직 체계\n\n합성 조직 설명\n\n### 업무 영역\n\n합성 업무 설명';
+    assert.equal((await worker.fetch(request('/api/proposal-studio/modules/'+org.code,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({title:org.title,bodyMarkdown:body,isActive:true,version:org.version})}),env)).status,200);
+    sql.run("UPDATE preview_proposal_company_assets SET file_data=?,version=2 WHERE chapter_number=6",[new Uint8Array([255,216,255,217])]);
+    const created=await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf198-anchor-case'},body:JSON.stringify({title:'합성 이미지 위치 검수',claimType:'TYPE-03',description:'합성 자료',category:{major:'건설 클레임',middle:'TYPE-03',minor:'제안'}})}),env);assert.equal(created.status,201);const caseId=(await created.json() as any).case.id;
+    const next=await worker.fetch(request(`/api/cases/${caseId}/proposals`,ADMIN_TOKEN,{method:'POST',body:JSON.stringify({templateId:'CF27-TYPE-03',sourceId:config.sources[0].id})}),env);assert.equal(next.status,201);const stored=JSON.parse((await next.json() as any).proposal.versions[0].structuredInputsJson).chapters[5].body;
+    assert.ok(stored.indexOf('/CH06_ORG_CHART?')<stored.indexOf('### 업무 영역'));assert.ok(stored.indexOf('/CH06_BUSINESS_AREAS?')>stored.indexOf('### 업무 영역'));
+    const {proposalBodyWithCompanyImages}=await import('../apps/cloudflare/src/proposal-company-content');const assets=(await (await worker.fetch(request('/api/proposal-studio/config'),env)).json() as any).assets;assert.equal(stored,proposalBodyWithCompanyImages(body,6,assets));assert.equal(proposalBodyWithCompanyImages(stored,6,assets),stored);
+  }finally{sql.close();}
+});
+
+test('CF198 company image anchors preserve Markdown tables and fenced code',()=>{
+  const assets=[{assetKey:'CH10_DEGREE',chapterNumber:10,displayOrder:1,title:'합성 학위',altText:'합성 학위',version:1,isActive:true,hasContent:true}];
+  for(const body of ['| 항목 | 확인 |\n|---|---|\n| 학위 | 확인 |\n| 자격증 | 확인 |','항목 | 확인\n---|---\n학위 | 확인\n자격증 | 확인','```text\n학위\n```','~~~text\n학위\n~~~','    학위']){const output=proposalBodyWithCompanyImages(body,10,assets);assert.ok(output.startsWith(body+'\n\n'),'Image must not split a table or code block');assert.equal(proposalBodyWithCompanyImages(output,10,assets),output);}
+  const heading='```text\n학위\n```\n\n### 학위\n\n증명 설명';assert.ok(proposalBodyWithCompanyImages(heading,10,assets).includes('### 학위\n\n![합성 학위]'));
+});
 
 test('CF148 every source template stores fixed chapters and company image references in the initial version',async()=>{
   const {sql,env}=await setup();
@@ -94,21 +135,28 @@ test('CF166 new drafts in all six named template types keep inputs empty and pre
   } finally {sql.close();}
 });
 
-test('CF166 real proposal screen saves typed issues and plan without replacing fixed chapters',async()=>{
+test('CF166 CF198 real proposal screen preserves reviewed content, common images and saved recipient through reopening',{timeout:180_000},async()=>{
   const {sql,env}=await setup();
   const {chromium}=await import('playwright-core');
   const {createServer}=await import('../apps/web/qa/vite-server.js');
-  const server=await createServer({root:join(process.cwd(),'apps/web'),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{
+  const mainPath=join(process.cwd(),'apps/web/src/proposals/ProposalView.tsx').replaceAll('\\','/'),main=readFileSync(mainPath,'utf8'),cleanReturn='  return <div className="proposal-view-container proposal-studio-v2">';assert.equal(main.split(cleanReturn).length,2);
+  const oldCapture=`  return <div className="proposal-view-container proposal-studio-v2" onInputCapture={(event)=>{const target=event.target as HTMLElement;if(target.closest('.proposal-stage'))setDirty(true);}} onChangeCapture={(event)=>{const target=event.target as HTMLElement;if(target.closest('.proposal-stage')&&target.matches('input, textarea, select, [contenteditable="true"]'))setDirty(true);}}>`;
+  const withOldCapture=process.env.CF198_CAPTURE_NEGATIVE==='1'?main.replace(cleanReturn,oldCapture):null;
+  const shellStyle=read('apps/web/index.html').match(/<style>([\s\S]*?)<\/style>/)?.[1]??'';
+  const server=await createServer({root:join(process.cwd(),'apps/web'),...(process.env.CF149_CACHE_ROOT?{cacheDir:process.env.CF149_CACHE_ROOT}:{}),server:{host:'127.0.0.1',port:0,hmr:false},logLevel:'error',plugins:[{
     name:'proposal-input-regression',
+    enforce:'pre',
     configureServer(s:any){s.middlewares.use(async(req:any,res:any,next:any)=>{
       if(!req.url?.startsWith('/proposal-input-test?'))return next();
       res.setHeader('Content-Type','text/html; charset=utf-8');
-      res.end(await s.transformIndexHtml(req.url,'<html lang="ko"><meta charset="utf-8"><body><div id="root"></div><script>window.__CLAIM_API_ORIGIN__=location.origin;</script><script type="module" src="/proposal-input-entry.js"></script></body></html>'));
+      res.end(await s.transformIndexHtml(req.url,'<html lang="ko" data-theme="light"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+shellStyle+'</style><body><div id="root"></div><script>window.__CLAIM_API_ORIGIN__=location.origin;</script><script type="module" src="/proposal-input-entry.js"></script></body></html>'));
     });},
     resolveId:(id:string)=>id==='/proposal-input-entry.js'?'\0proposal-input-entry':undefined,
-    load:(id:string)=>id==='\0proposal-input-entry'?`
+    load:(id:string)=>withOldCapture&&id.replaceAll('\\','/').split('?')[0].toLowerCase()===mainPath.toLowerCase()?withOldCapture:id==='\0proposal-input-entry'?`
       import React from 'react';import {createRoot} from 'react-dom/client';
       import {ProposalView} from '/src/proposals/ProposalView.tsx';
+      import '/src/documents/StructuredDocumentEditor.css';import '/src/workflow/ProposalAwardWorkflow.css';
+      import '/src/preview-theme.css';
       import '/src/theme-system.css';
       const root=createRoot(document.getElementById('root'));window.paths=[];
       root.render(React.createElement(ProposalView,{routeId:'PROP-03',roles:['admin'],onNavigate:path=>window.paths.push(path)}));
@@ -116,22 +164,52 @@ test('CF166 real proposal screen saves typed issues and plan without replacing f
   }]});
   await server.listen();
   const browser=await chromium.launch({executablePath:process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
+  let releaseSave:(()=>void)|undefined;
   try{
-    const created=await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf166-proposal-screen'},body:JSON.stringify({title:'화면 입력 합성 검수',claimType:'TYPE-03',description:'입력 반영 검수',category:{major:'건설 클레임',middle:'TYPE-03',minor:'제안'}})}),env);
+    sql.exec(read('apps/cloudflare/migrations/0053_cf83_practitioner_review.sql'));
+    sql.exec(read('apps/cloudflare/migrations/0028_cf36_workflow_integrity_tutorial_approval_intake.sql').split('ALTER TABLE preview_user_tutorial_state')[0]);
+    const created=await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'cf166-proposal-screen'},body:JSON.stringify({title:'화면 입력 합성 검수',clientName:'의뢰 원본 거래처',clientLegalPosition:'VICTIM',clientPositionDetail:'',claimType:'TYPE-03',description:'입력 반영 검수',category:{major:'건설 클레임',middle:'TYPE-03',minor:'제안'}})}),env);
     assert.equal(created.status,201,await created.clone().text());
     const caseId=(await created.json() as any).case.id;
-    // Valid synthetic images; no customer data or external provider is used.
-    sql.run("UPDATE preview_proposal_company_assets SET file_data=?,mime_type='image/png',version=2 WHERE asset_key<>'BRAND_LOGO'",[new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aE3sAAAAASUVORK5CYII=','base64'))]);
+    const intake=(await (await worker.fetch(request('/api/cases/'+caseId),env)).json() as any).case;assert.equal(intake.clientName,'의뢰 원본 거래처');
     const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(15_000);
+    // Use real decodable JPEGs and the actual PUT/history path, not URL-only SQL fixtures.
+    const jpeg=Buffer.from(await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=600;canvas.height=300;const context=canvas.getContext('2d')!;context.fillStyle='#f3f6fb';context.fillRect(0,0,600,300);context.fillStyle='#193a65';context.font='36px sans-serif';context.fillText('CF198 SYNTHETIC IMAGE',40,120);return canvas.toDataURL('image/jpeg',.9).split(',')[1];}),'base64');
+    const initialConfig=await (await worker.fetch(request('/api/proposal-studio/config'),env)).json() as any;
+    const historicalImages=new Map<string,Buffer>();
+    for(const asset of initialConfig.assets){const image=Buffer.from(await page.evaluate(key=>{const canvas=document.createElement('canvas');canvas.width=600;canvas.height=300;const context=canvas.getContext('2d')!;context.fillStyle='#f3f6fb';context.fillRect(0,0,600,300);context.fillStyle='#193a65';context.font='28px sans-serif';context.fillText('SYNTHETIC '+key,20,120);return canvas.toDataURL('image/jpeg',.9).split(',')[1];},asset.assetKey),'base64');historicalImages.set(asset.assetKey,image);const form=new FormData();form.append('file',new File([image],'synthetic-'+asset.assetKey+'.jpg',{type:'image/jpeg'}));const uploaded=await worker.fetch(request('/api/proposal-studio/assets/'+asset.assetKey,ADMIN_TOKEN,{method:'PUT',body:form}),env);assert.equal(uploaded.status,200,await uploaded.clone().text());const historical=await worker.fetch(request('/api/proposal-studio/assets/'+asset.assetKey+'?v=2'),env);assert.equal(historical.status,200);assert.deepEqual(Buffer.from(await historical.arrayBuffer()),image);}
+    assert.equal(new Set([...historicalImages.values()].map(image=>image.toString('base64'))).size,initialConfig.assets.length,'Every synthetic asset has distinct real JPEG bytes');
+    // The cover pins the original bundled logo v1. Node cannot import Worker
+    // binary modules, so seed only that canonical history in this owned fixture.
+    // All edited company images above still use the real PUT/history path.
+    const logo=readFileSync(join(process.cwd(),'apps/cloudflare/src/proposal-template-assets/BRAND_LOGO.jpg')),logoSha=Buffer.from(await crypto.subtle.digest('SHA-256',logo)).toString('hex');
+    sql.run("INSERT INTO preview_proposal_company_asset_versions (organization_id,asset_key,version,mime_type,file_name,file_data,file_sha256,width,height,created_by,created_at) SELECT organization_id,asset_key,1,'image/jpeg','CONCOST-logo.jpg',?,?,341,239,?,? FROM preview_proposal_company_assets WHERE asset_key='BRAND_LOGO'",[logo,logoSha,ADMIN,new Date().toISOString()]);
+    const coverLogo=await worker.fetch(request('/api/proposal-studio/assets/BRAND_LOGO?v=1'),env);assert.equal(coverLogo.status,200);assert.deepEqual(Buffer.from(await coverLogo.arrayBuffer()),logo);
     const errors:string[]=[];const requests:Array<{path:string;method:string;body:any}>=[];let initialFixed='';
+    let acknowledgement='normal',holdSave:Promise<void>|null=null,saveEntered:(()=>void)|undefined;
     const fixedSnapshot=(chapters:any[])=>JSON.stringify(chapters.map(chapter=>({...chapter,excludedCompanyAssetKeys:chapter.excludedCompanyAssetKeys??[]})));
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/api/**',async(route:any)=>{
       const incoming=route.request();const url=new URL(incoming.url());
       const path=url.pathname+url.search;const method=incoming.method();
-      const bytes=incoming.postDataBuffer();const body=bytes?.toString('utf8');
-      requests.push({path,method,body:body?JSON.parse(body):null});
-      const response=await worker.fetch(request(path,ADMIN_TOKEN,{method,headers:incoming.headers(),...(body?{body}:{})}),env);
+      const bytes=incoming.postDataBuffer();
+      requests.push({path,method,body:bytes&&incoming.headers()['content-type']?.includes('application/json')?JSON.parse(bytes.toString('utf8')):null});
+      if(method==='POST'&&path.endsWith('/versions')&&acknowledgement!=='normal'){
+        if(acknowledgement==='hold'){saveEntered?.();await holdSave;}
+        else{
+          const input=JSON.parse(bytes!.toString('utf8'));
+          if(acknowledgement==='500'||acknowledgement==='409'){await route.fulfill({status:Number(acknowledgement),contentType:'application/json',body:JSON.stringify({error:'CF198 합성 저장 거부',code:'CF198_NEGATIVE_ACK'})});return;}
+          const revisionId='cf198-negative-ack',proposalId=path.split('/')[5],snapshot={...input};
+          if(acknowledgement==='chapters11')snapshot.chapters=snapshot.chapters.slice(0,11);
+          if(acknowledgement==='recipient')snapshot.clientName='잘못된 제출처';
+          if(acknowledgement==='body')snapshot.chapters=snapshot.chapters.map((chapter:any)=>chapter.number===6?{...chapter,body:'손상된 본문'}:chapter);
+          if(acknowledgement==='table')snapshot.chapters=snapshot.chapters.map((chapter:any)=>chapter.number===6?{...chapter,editorJson:{type:'doc',content:[]}}:chapter);
+          if(acknowledgement==='image')snapshot.chapters=snapshot.chapters.map((chapter:any)=>chapter.number===10?{...chapter,excludedCompanyAssetKeys:[]}:chapter);
+          const structured=acknowledgement==='invalid-json'?'{':acknowledgement==='empty'?'{}':JSON.stringify(snapshot);
+          await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({proposal:{id:acknowledgement==='wrong-id'?'different-proposal':proposalId,caseId,version:input.version+1,currentVersionId:revisionId,versions:[{id:revisionId,versionNumber:input.version+1,generationMode:input.generationMode,structuredInputsJson:structured}]}})});return;
+        }
+      }
+      const response=await worker.fetch(request(path,ADMIN_TOKEN,{method,headers:incoming.headers(),...(bytes?{body:bytes}:{})}),env);
       if(method==='POST'&&path===`/api/cases/${caseId}/proposals`&&response.status===201){
         const payload=await response.clone().json() as any;
         initialFixed=fixedSnapshot(JSON.parse(payload.proposal.versions[0].structuredInputsJson).chapters.slice(3));
@@ -144,9 +222,11 @@ test('CF166 real proposal screen saves typed issues and plan without replacing f
     await page.getByRole('button',{name:'이 유형으로 제안서 시작',exact:true}).click();
     await page.getByRole('heading',{name:'클라이언트와 프로젝트 사실을 입력하세요.',exact:true}).waitFor();
     await page.getByLabel('클라이언트명',{exact:false}).fill('합성 발주처');
+    assert.equal(await page.getByLabel('클라이언트명',{exact:false}).inputValue(),'합성 발주처','Typed recipient stays in the controlled input');
     await page.getByLabel('당 현장의 핵심 쟁점 분석',{exact:false}).fill('입력한 쟁점: 계약 기준일과 변경 내역 대조');
     await page.getByLabel('제안 목적·의뢰 배경',{exact:false}).fill('입력한 목적: 확인된 사실을 기준으로 검토');
     await page.getByLabel('업무 수행 내용',{exact:false}).fill('입력한 계획: 원가계산서와 현장 사진 대조');
+    assert.equal(await page.getByLabel('클라이언트명',{exact:false}).inputValue(),'합성 발주처','Recipient survives editing the other input fields');
     await page.getByRole('button',{name:'입력 완료 · 초안 작성 방식 선택 →',exact:true}).click();
     await page.getByRole('radio',{name:/수동·외부 LLM/u}).click();
     const manual=page.locator('.proposal-manual-draft');
@@ -170,6 +250,8 @@ test('CF166 real proposal screen saves typed issues and plan without replacing f
     assert.deepEqual(await cells.allTextContents(),expectedCells);
     await page.getByRole('button',{name:'수동 초안 저장 · 담당자 검수로 →',exact:true}).click();
     await page.getByRole('heading',{name:'갑지·목차와 1~12장 전체를 직접 검수·수정하세요.',exact:true}).waitFor();
+    assert.equal(requests.find(item=>item.method==='POST'&&item.path.endsWith('/versions'))?.body.clientName,'합성 발주처','The authored recipient must reach the actual save request');
+    assert.equal(await page.getByLabel('제출처').inputValue(),'합성 발주처','The saved proposal recipient must not be replaced by the intake client');
     const createPost=requests.find(item=>item.method==='POST'&&item.path===`/api/cases/${caseId}/proposals`);
     const savePost=requests.find(item=>item.method==='POST'&&item.path.endsWith('/versions'));
     assert.ok(createPost);assert.ok(savePost);assert.equal(savePost.body.generationMode,'MANUAL');
@@ -208,8 +290,72 @@ test('CF166 real proposal screen saves typed issues and plan without replacing f
     assert.match(await manual.locator('.ProseMirror').innerText(),/입력한 계획/u);
     assert.deepEqual(await manual.locator('.ProseMirror table th,.ProseMirror table td').allTextContents(),expectedCells,'Reopened editor must retain all cells in their original order');
     assert.equal(requests.filter(item=>item.method==='POST'&&item.path.endsWith('/versions')).length,1,'reopen must not silently save or regenerate');
+    await page.locator('.proposal-step-button').nth(2).click();
+    await page.getByRole('heading',{name:'갑지·목차와 1~12장 전체를 직접 검수·수정하세요.',exact:true}).waitFor();
+    assert.equal(await page.getByLabel('제출처').inputValue(),'합성 발주처');
+    const common=page.getByRole('region',{name:'새 공통 이미지 등록'}),module10=initialConfig.modules.find((item:any)=>item.chapterNumber===10);
+    await page.getByLabel('편집할 기본 챕터').selectOption(module10.code);
+    await common.getByLabel('추가할 공통 이미지 제목').fill('합성 추가 학위자료');
+    await common.getByLabel('공통 이미지 파일 · JPG/PNG/WebP, 변환 후 2MB 이하').setInputFiles({name:'synthetic-degree.jpg',mimeType:'image/jpeg',buffer:jpeg});
+    await common.getByRole('button',{name:'공통 기본 이미지 추가',exact:true}).click();
+    await page.waitForFunction(()=>Boolean(document.querySelector('[role="dialog"]')||document.querySelector('.proposal-success')?.textContent?.includes('합성 추가 학위자료')));
+    assert.equal(await page.getByRole('dialog').count(),0,(await page.getByRole('dialog').allTextContents()).join(' '));
+    await page.getByRole('status').filter({hasText:'합성 추가 학위자료'}).waitFor();
+    const updatedConfig=await (await worker.fetch(request('/api/proposal-studio/config'),env)).json() as any,added=updatedConfig.assets.find((item:any)=>item.title==='합성 추가 학위자료');assert.ok(added?.hasContent);assert.equal(added.version,1);
+    await page.getByLabel('관리자 승인 원문 · Markdown 표 지원').fill('### 합성 학위 증명\n\n담당자가 확인한 학위자료 설명\n\n### 합성 추가 자료\n\n신규 증빙은 원문을 대조한다.');
+    await page.getByRole('button',{name:'공통 DB 새 버전 저장 · 현재 장 적용',exact:true}).click();
+    await page.getByRole('status').filter({hasText:'관리자 회사 DB 모듈 v2 저장 완료'}).waitFor();
+    const toc=page.locator('.proposal-toc'),edit=page.locator('.proposal-chapter-editor');
+    await toc.getByRole('button',{name:/^10\s/u}).click();
+    const addedImage=edit.locator(`.ProseMirror img[src*="/${added.assetKey}?"]`);await addedImage.waitFor();
+    await page.waitForFunction(key=>{const image=document.querySelector<HTMLImageElement>('.proposal-chapter-editor .ProseMirror img[src*="/'+key+'?"]');return image?.complete&&image.naturalWidth===600;},added.assetKey);
+    await addedImage.click();await edit.getByRole('button',{name:'선택 이미지 삭제',exact:true}).first().click();assert.equal(await addedImage.count(),0);
+    await edit.locator('.ProseMirror').click();await page.keyboard.press('Control+End');await page.keyboard.press('Enter');await page.keyboard.insertText('CH10 담당자 확인 · 이미지 제외 보존');
+    await toc.getByRole('button',{name:/^06\s/u}).click();
+    const orgImage=edit.locator('.ProseMirror img[src*="/CH06_ORG_CHART?"]');await orgImage.waitFor();await orgImage.click();await edit.getByRole('button',{name:'이미지 너비 50%',exact:true}).first().click();await edit.getByRole('button',{name:'이미지 오른쪽 정렬',exact:true}).first().click();
+    const reviewedWidth=Number(await edit.getByLabel('이미지 가로 px').inputValue()),reviewedHeight=Number(await edit.getByLabel('이미지 세로 px').inputValue());assert.ok(reviewedWidth>=80&&reviewedWidth<600);assert.ok(reviewedHeight>0);
+    await toc.getByRole('button',{name:/^05\s/u}).click();await edit.locator('.ProseMirror').click();await page.keyboard.press('Control+Home');await page.keyboard.press('Control+Shift+End');await page.keyboard.insertText('김포현장에서 시공사의 평당 700만원 요구를 599만원으로 조정하였고 청담현장은 평당 750만원 요구를 615만원으로 협상하는');
+    await toc.getByRole('button',{name:/^06\s/u}).click();await edit.locator('.ProseMirror').click();await page.keyboard.press('Control+End');await page.keyboard.press('Enter');await page.keyboard.insertText('CH06 담당자 확인 · 표와 사진 배치 · 정규화 검수 문자열 700만원');await page.keyboard.press('Enter');await edit.getByRole('button',{name:'표 삽입',exact:true}).click();
+    const commonTableDialog=page.getByRole('dialog',{name:'표 크기 설정',exact:true});await commonTableDialog.getByLabel('행 수',{exact:true}).fill('2');await commonTableDialog.getByLabel('열 수',{exact:true}).fill('2');await commonTableDialog.getByRole('button',{name:'▦ 2행 × 2열 표 만들기',exact:true}).click();
+    const commonCells=edit.locator('.ProseMirror table th,.ProseMirror table td'),commonValues=['검토 항목','자료 위치','서면 원본','사진 부록'];assert.equal(await commonCells.count(),4);for(let i=0;i<4;i++){await commonCells.nth(i).click();await page.keyboard.insertText(commonValues[i]);}
+    for(const type of updatedConfig.templateTypes){await page.getByLabel('제안서 유형',{exact:true}).selectOption(type.id);assert.deepEqual(await commonCells.allTextContents(),commonValues);await toc.getByRole('button',{name:/^10\s/u}).click();assert.equal(await addedImage.count(),0);assert.ok((await edit.locator('.ProseMirror').innerText()).includes('CH10 담당자 확인'));await toc.getByRole('button',{name:/^06\s/u}).click();}
+    assert.equal(await page.locator('.proposal-step-button').nth(3).getAttribute('aria-disabled'),'true','A type-only change requires saving before final preview');
+    await page.locator('.proposal-step-button').nth(3).focus();await page.keyboard.press('Enter');await page.getByRole('alert').filter({hasText:'변경 내용을 저장한 뒤'}).waitFor();assert.equal(await page.locator('.proposal-final-document').count(),0);
+    const beforeRejected=sql.export(),confirmSave=page.getByRole('button',{name:'검수 완료 · 전체 합본 미리보기 →',exact:true});
+    for(const negative of ['500','409','wrong-id','invalid-json','empty','chapters11','recipient','body','table','image']){acknowledgement=negative;await confirmSave.click();const dialog=page.getByRole('dialog',{name:'제안서 작업 확인',exact:true});await dialog.waitFor();assert.equal(await page.locator('.proposal-final-document').count(),0);assert.deepEqual(await commonCells.allTextContents(),commonValues);assert.ok((await edit.locator('.ProseMirror').innerText()).includes('CH06 담당자 확인'));assert.equal(await page.locator('.proposal-step-button').nth(3).getAttribute('aria-disabled'),'true');assert.deepEqual(sql.export(),beforeRejected,'The negative frontend transport fixture does not invoke a DB write');await dialog.getByRole('button',{name:'확인',exact:true}).click();}
+    acknowledgement='hold';holdSave=new Promise(resolve=>{releaseSave=resolve;});const entered=new Promise<void>(resolve=>{saveEntered=resolve;});await confirmSave.click();await entered;
+    await toc.getByRole('button',{name:/^갑\s/u}).click();assert.equal(await page.getByLabel('제출처').isDisabled(),true);assert.equal(await page.getByLabel('제안서 제목',{exact:false}).isDisabled(),true);
+    await toc.getByRole('button',{name:/^목\s/u}).click();assert.equal(await page.locator('.proposal-toc-editor-list input:disabled').count(),12);
+    assert.equal(await page.locator('.proposal-step-button:disabled').count(),5);assert.equal(await page.getByLabel('편집할 기본 챕터').isDisabled(),true);assert.equal(await page.getByLabel('챕터 제목',{exact:true}).isDisabled(),true);
+    await toc.getByRole('button',{name:/^06\s/u}).click();assert.equal(await edit.locator('.ProseMirror').getAttribute('contenteditable'),'false');assert.ok(releaseSave);releaseSave();releaseSave=undefined;acknowledgement='normal';await page.waitForFunction(()=>document.querySelector('[role="dialog"]')||document.querySelector('.proposal-final-document'));assert.equal(await page.getByRole('dialog').count(),0,'Valid Worker normalization must not be rejected after saving');await page.locator('.proposal-final-document').waitFor();
+    const reviewedResponse=await worker.fetch(request(`/api/cases/${caseId}/proposals/${proposalId}`),env);assert.equal(reviewedResponse.status,200);const reviewed=(await reviewedResponse.json() as any).proposal,reviewedInputs=JSON.parse(reviewed.versions[0].structuredInputsJson),chapter6=reviewedInputs.chapters[5],chapter10=reviewedInputs.chapters[9];
+    assert.ok(chapter10.excludedCompanyAssetKeys.includes(added.assetKey));assert.ok(!JSON.stringify(chapter10).replace(JSON.stringify(chapter10.excludedCompanyAssetKeys),'').includes(added.assetKey));assert.ok(chapter10.body.includes('CH10 담당자 확인'));
+    const reviewedOrg=textNodes(chapter6.editorJson).find(node=>node.type==='image'&&node.attrs?.src.includes('/CH06_ORG_CHART?'));assert.equal(reviewedOrg.attrs.width,reviewedWidth);assert.equal(reviewedOrg.attrs.height,reviewedHeight);assert.equal(reviewedOrg.attrs.alignment,'right');for(const value of commonValues)assert.ok(chapter6.body.includes(value));
+    assert.equal(reviewedInputs.clientName,'합성 발주처');assert.equal(reviewedInputs.templateSourceId,updatedConfig.templateTypes.at(-1).representativeSourceId);
+    try{await page.waitForFunction(()=>{const host=document.querySelector('.proposal-final-document'),pages=host?.querySelectorAll('[data-export-page]');return Boolean(pages?.length&&[...pages].every(page=>page.getAttribute('data-page-fit-overflow')!=='true')&&[...host!.querySelectorAll<HTMLImageElement>('img')].every(image=>image.complete&&image.naturalWidth>0));});}catch(reason){const state=await page.locator('.proposal-final-document').evaluate(host=>({images:[...host.querySelectorAll<HTMLImageElement>('img')].map(image=>({src:image.getAttribute('src'),loaded:image.complete,width:image.naturalWidth})),overflow:[...host.querySelectorAll('[data-export-page][data-page-fit-overflow="true"]')].map(page=>page.getAttribute('data-chapter-number'))}));throw new Error('Final preview images/layout not ready: '+JSON.stringify(state),{cause:reason});}
+    const final=page.locator('.proposal-final-document');assert.ok((await final.innerText()).includes('CH06 담당자 확인'));assert.ok((await final.innerText()).includes('CH10 담당자 확인'));assert.equal(await final.locator(`img[src*="/${added.assetKey}?"]`).count(),0);assert.equal(await final.locator('[data-chapter-number="6"] img[src*="/CH06_ORG_CHART?"]').count(),1);
+    for(let n=1;n<=12;n++)assert.ok(await final.locator(`[data-chapter-number="${n}"]`).count()>0);
+    for(const asset of initialConfig.assets.filter((asset:any)=>asset.assetKey!=='BRAND_LOGO')){const retained=final.locator(`[data-export-page] img[src*="/${asset.assetKey}?v=2"]`);assert.equal(await retained.count(),1,'Retained image must not disappear: '+asset.assetKey);assert.equal(await retained.evaluate((image:HTMLImageElement)=>image.naturalWidth),600);}
+    assert.deepEqual(await final.locator('[data-chapter-number="6"] table th,[data-chapter-number="6"] table td').allTextContents(),commonValues);const finalOrg=final.locator('[data-chapter-number="6"] img[src*="/CH06_ORG_CHART?"]');assert.equal(Number(await finalOrg.getAttribute('width')),reviewedWidth);assert.equal(Number(await finalOrg.getAttribute('height')),reviewedHeight);assert.equal(await finalOrg.getAttribute('data-image-align'),'right');
+    assert.ok(await finalOrg.evaluate(image=>Math.abs(image.parentElement!.getBoundingClientRect().right-image.getBoundingClientRect().right)<1),'Actual preview geometry must retain the authored right alignment, not merely its data attribute');
+    await page.reload();await page.getByLabel('클라이언트명',{exact:false}).waitFor();assert.equal(await page.getByLabel('클라이언트명',{exact:false}).inputValue(),'합성 발주처');await page.locator('.proposal-step-button').nth(2).click();await toc.getByRole('button',{name:/^06\s/u}).click();assert.deepEqual(await edit.locator('.ProseMirror table th,.ProseMirror table td').allTextContents(),commonValues);await orgImage.click();assert.equal(Number(await edit.getByLabel('이미지 가로 px').inputValue()),reviewedWidth);await toc.getByRole('button',{name:/^10\s/u}).click();assert.equal(await addedImage.count(),0);assert.ok((await edit.locator('.ProseMirror').innerText()).includes('CH10 담당자 확인'));
+    assert.equal(await page.locator('.proposal-step-button').nth(3).getAttribute('aria-disabled'),'false');await page.getByLabel('제안서 유형',{exact:true}).selectOption(updatedConfig.templateTypes[0].id);assert.equal(await page.locator('.proposal-step-button').nth(3).getAttribute('aria-disabled'),'true','Changing only the template type must set dirty');await confirmSave.click();await final.waitFor();
+    await page.waitForFunction(()=>{const host=document.querySelector('.proposal-final-document');return Boolean(host?.querySelectorAll('[data-export-page]').length&&[...host.querySelectorAll<HTMLImageElement>('img')].every(image=>image.complete&&image.naturalWidth>0));});
+    const outputRoot=process.env.CF198_OUTPUT_ROOT;if(outputRoot)mkdirSync(outputRoot,{recursive:true});
+    const pageCount=await final.locator('[data-export-page]').count();assert.ok(pageCount>=14);const previewText=await final.innerText();for(const value of commonValues)assert.ok(previewText.includes(value));
+    if(outputRoot){await page.screenshot({path:join(outputRoot,'final-1440.png')});await page.locator('.proposal-step-button').nth(2).click();await toc.getByRole('button',{name:/^06\s/u}).click();await edit.scrollIntoViewIfNeeded();await page.screenshot({path:join(outputRoot,'editor-1440.png')});await page.setViewportSize({width:390,height:844});await edit.scrollIntoViewIfNeeded();await page.screenshot({path:join(outputRoot,'editor-390.png')});await page.setViewportSize({width:1440,height:1000});await page.locator('.proposal-step-button').nth(3).click();await final.waitFor();}
+    await page.getByRole('button',{name:'확정 · 프로젝트 접수로',exact:true}).first().click();await page.getByRole('dialog',{name:'제안서를 최종 확정할까요?',exact:true}).getByRole('button',{name:'네 · 제안서 확정',exact:true}).click();await page.getByRole('button',{name:'확정 제안서 Word DOCX 내려받기',exact:true}).first().waitFor();
+    const downloadBytes=async(label:string,extension:string)=>{const waiting=page.waitForEvent('download',{timeout:120_000});await page.getByRole('button',{name:label,exact:true}).first().click();const download=await waiting,path=await download.path();assert.ok(path);assert.ok(download.suggestedFilename().endsWith('.'+extension));const bytes=readFileSync(path);assert.ok(bytes.length>1000);if(outputRoot)writeFileSync(join(outputRoot,'reviewed.'+extension),bytes,{flag:'wx'});return bytes;};
+    const docx=await downloadBytes('확정 제안서 Word DOCX 내려받기','docx');assert.deepEqual([...docx.subarray(0,4)],[80,75,3,4]);
+    const webRequire=createRequire(join(process.cwd(),'apps/web/package.json')),zip=webRequire('fflate').unzipSync(docx) as Record<string,Uint8Array>,documentXml=Buffer.from(zip['word/document.xml']).toString('utf8'),relations=Buffer.from(zip['word/_rels/document.xml.rels']).toString('utf8');
+    const footerXml=Object.entries(zip).filter(([path])=>/^word\/footer\d+\.xml$/u.test(path)).map(([,bytes])=>Buffer.from(bytes).toString('utf8')).join('\n'),editableText=[...(documentXml+'\n'+footerXml).matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/gu)].map(match=>match[1]).join('');for(const text of ['합성 발주처','CH06 담당자 확인','CH10 담당자 확인',...commonValues])assert.ok(editableText.includes(text),'Editable DOCX must contain authored text: '+text);assert.ok(footerXml.includes('합성 발주처'),'The native cover footer must retain its recipient');
+    assert.ok((documentXml.match(/<w:tbl>/gu)??[]).length>=2);assert.ok(documentXml.includes('w:w="11906"')&&documentXml.includes('w:h="16838"'));assert.ok(!documentXml.includes(added.assetKey));assert.ok(Object.keys(zip).filter(path=>path.startsWith('word/media/')).length>=2);assert.ok(relations.includes('relationships/image'));
+    const mediaBytes=Object.entries(zip).filter(([path])=>path.startsWith('word/media/')&&!path.endsWith('/')).map(([,bytes])=>Buffer.from(bytes));for(const [key,image] of historicalImages)if(key!=='BRAND_LOGO')assert.ok(mediaBytes.some(bytes=>bytes.equals(image)),'DOCX retains the exact historical image bytes: '+key);assert.ok(!mediaBytes.some(bytes=>bytes.equals(jpeg)),'Deleted extra image bytes must not return in DOCX');
+    const nativeImageParagraph=(key:string)=>{const media=Object.entries(zip).find(([path,bytes])=>path.startsWith('word/media/')&&Buffer.from(bytes).equals(historicalImages.get(key)!))![0],relation=[...relations.matchAll(/<Relationship\b[^>]*\/>/gu)].find(match=>match[0].includes('Target="'+media.slice(5)+'"'))?.[0],id=relation?.match(/\bId="([^"]+)"/u)?.[1];assert.ok(id);return [...documentXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/gu)].find(match=>match[0].includes('r:embed="'+id+'"'))?.[0];};assert.ok(nativeImageParagraph('CH06_ORG_CHART')?.includes('<w:jc w:val="right"'),'DOCX native image paragraph must retain the authored right alignment');assert.ok(nativeImageParagraph('CH04_EXPERT_PROFILE')?.includes('<w:jc w:val="center"'),'Markdown-only default image must retain its actual centered placement');
+    const pdf=await downloadBytes('확정 제안서 PDF 내려받기','pdf');assert.equal(pdf.subarray(0,5).toString('ascii'),'%PDF-');const pdfDocument=await getDocumentProxy(new Uint8Array(pdf));assert.equal(pdfDocument.numPages,pageCount);for(let n=1;n<=pdfDocument.numPages;n++){const current=await pdfDocument.getPage(n),view=current.getViewport({scale:1});assert.ok(Math.abs(view.width-595.28)<1&&Math.abs(view.height-841.89)<1,'Every exported PDF page must be A4 portrait');assert.ok((await current.getOperatorList()).fnArray.length>0,'Exported PDF page must not be empty');}await pdfDocument.cleanup();
+    if(outputRoot)writeFileSync(join(outputRoot,'result.json'),JSON.stringify({pass:true,fixture:'synthetic React / real Worker / memory SQLite',pageCount,negativeAcknowledgements:10,typeOnlyDirty:true,commonImageDeleted:true,docxEditableTables:true,pdfA4Portrait:true,independentOfficeRender:'NOT_RUN'},null,2),{flag:'wx'});
     assert.deepEqual(errors,[]);
-  }finally{await browser.close();await server.close();sql.close();}
+  }finally{releaseSave?.();await browser.close();await server.close();sql.close();}
 });
 
 test('CF44 stores the exact source template, masks costs, approves, and exports DOCX/PDF/Markdown',async()=>{

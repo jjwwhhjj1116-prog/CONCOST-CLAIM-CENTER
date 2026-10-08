@@ -1,20 +1,20 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF197, 2026-10-08
+## 현재 판정 — CF198, 2026-10-08
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~197은 로컬 검증본으로 아직 미전송·미배포다. CF197은 검토2 의견33의 여러 인원 일괄 지정과 TEAM 저장 차단을 수정했다. PERSON의 인원별 N기록+N이력은 하나의 원자적 DB 저장으로 처리하고, 실패 후 같은 요청 재시도·중복 방지·선택/초안 보존·저장결과 대조·사건 조회 응답 역전을 검증했다. **최종 관련65/65 PASS, skipped0**(API/실제 localhost React·기존 업무 회귀42 + staging23), root/web 타입검사·프로덕션 빌드·Worker dry-run PASS다. 65는 시험 집계이며 실업무65카테고리 합격이 아니다. 기존 일정 PUT과 투입 POST는 별도 저장이므로 전체 동작을 하나의 거래라고 표현하지 않는다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** CF196에서 닫은 HWP 커서 구간은 이번에 반복하지 않고 승인 runtime으로 유지했다. 실제 직원 배정·원격 DB·서버 변경은0이며 Cloudflare 구현을 원래 배정 경로가 없는 Node 서버의 지원 완료로 확대하지 않는다.
+아래 과거 기록은 당시 이력이다. CF185가 마지막 실제 GitHub/development 반영 확인이며 CF186~198은 로컬 검증본으로 미전송·미배포다. CF197의 검토2 의견33 일괄 배정은 보존하고, CF198에서 제안서 공통 이미지 신규 등록503·기본 이미지 위치 차이·동적 삭제 제외 누락·입력 복원·제출처 재열기 덮기·유형 dirty·저장 응답 및 저장중 입력 보호·PDF/DOCX 이미지 정렬을 수정했다. **관련41/41와 승인 runtime staging23/23, 합계64/64 PASS, skipped0**; 실제 React→Worker→메모리 SQLite→저장·reload→실제 버튼 DOCX/PDF 단일 동선과 전쪽 A4세로15p를 확인했다. 64는 시험 집계이지 A–Z64기능 합격이 아니다. 원본 HWP와 한컴 독립 동일성·전체 A–Z·가오픈 승격은 아직 합격이 아니며 Node 서버의 공통 모듈 지원까지 확대하지 않는다. schema/migration·원격 DB·직원/승인·키/ENV 변경0.
 
 ### 현재 완료 순서 — 과거 미체크 목록과 구분
 
 1. **검토2 의견33의 여러 인원 일괄 지정은 CF197 로컬 구현·회귀 PASS로 닫았다.** 단일 PM은 유지하고 투입 인원만 여러 명 선택한다. PERSON N기록+N이력 원자 저장·멱등 재시도·TEAM1건·사건/권한/ACK 보호를 확인했다. 실제 서버 반영·직원 배정 검수는 아직 미실행이며 같은 로컬 구간을 다시 기본부터 반복하지 않는다.
-2. 제안서 4~12장 유형 변경→편집→저장→재진입→실제 출력, 쟁점 첨부 및 A–Z에서 증거가 없는 동선만 검수한다. 현재 선택목록의 첫100건 제한은 공유 전페이지 로더로 해소됐으므로 옛 의견13을 현재 미구현으로 세지 않는다.
+2. **제안서 4~12장 유형 변경→공통 이미지 신규·삭제·크기/정렬·표→저장·재진입→실제 DOCX/PDF는 CF198 로컬 동선 PASS로 닫았다.** 6유형 같은 신규 공통값·중앙 이미지 개정 후 기존 snapshot/바이트 불변도 확인했다. 다음은 원본 HWP/독립 Word·한컴 대조와 보고서 쟁점 첨부·A–Z의 증거가 없는 구간이다. 현장조사 양식 의견32 HOLD는 유지한다.
 3. 원형 목차 문구/field·사진 배치, PC 한컴 독립 대조 및 CF186 정식 엔진 승격을 구분해 진행한다. native DOCX의 페이지 그림 편집성 제한은 남아 있다. 이번 JS 교정은 전체 Studio 소스 재빌드나 CF186 WASM 승인으로 가장하지 않는다.
 4. 최신 소스/승인 runtime의 development 실화면 검수→환경·DB 및 필요한 보호 백업/리허설→동일 검증 artifact의 가오픈 승격·양서버 대조 순서다. 기존 Docker 기동·지정3커밋 전송·Hwp.exe 경로 질문의 승인/답변 대기는 확대·우회하지 않는다.
 5. 관리자 개발 QA에 직원 최종승인을 선행조건으로 요구하지 않는다. 실제 납품의 CEO/DIRECTOR·자기승인 차단은 유지하며, 현장조사 양식 의견32는 HOLD, 직원 영상은 안정된 배포 이후다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
-| 연결·배포 | 마지막 실제 확인 CF185의 development·승인 runtime28/28 일치. CF197 로컬 빌드에 CF196 승인 JS 교정 유지·Worker dry-run PASS | CF186~197 서버 미반영. 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
+| 연결·배포 | 마지막 실제 확인 CF185. CF198 최종 E198 dist-r2/승인runtime28자산·CF196 cursor patch 연결·Worker dry-run PASS | CF186~198 서버 미반영. 가오픈 승격·비밀값 동일성은 미실행/미증명 |
 | 물량·인원 배정 | 검토2#33 PERSON 여러 인원+단일 PM, N기록/N이력 원자 저장·멱등 재시도·TEAM1건·103건 재조회·실제 React 실패/권한/사건 전환 보호 PASS | 합성 localhost UI와 Worker 메모리 DB 증거를 분리. 실제 서버/직원 배정·Node 배정 경로는 미실행/미구현. 일정과 배정은 별도 저장 |
 | 유형·목차 선택 | 유형명/CH 코드 제거 유지. CF188 항목↔물리 쪽 연결. CF190 숫자 갱신에 CF191 후행공백 보존·원본 1행2열 Roman/제목 읽기 위치 확인·제외 사유 표시 추가. 실제017 사본09→01 복원 뒤47쪽 내부 렌더 exact | 원형 자동 의미 추출·목차 문구/표·필드 재생성 미완료. 실제017 4행 확인/6행 제외,025는 지원 목차 없음으로 임의 생성0. 신규 연결은 서버 미반영 |
 | 구조형 챕터 이동 | CF187 코드 없는 고유 제목 이동 누락을 실제 React에서 FAIL 재현→공유 제목 접두어 규칙과 정확 제목 fallback으로 수정.1440/390px 키보드·캐럿·편집기 스크롤·JSON/change 불변 PASS | 로컬 검증본/서버 미반영. 중복·부분 제목/표 내부/원형 쪽 이미지는 추정 연결 금지. 실제 서비스 선택 메뉴·자동저장 전구간 검증과 별개 |
@@ -41,6 +41,19 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF198 — 제안서 공통 이미지 등록·편집 보존과 실제 출력 정렬
+
+- 시작 HEAD `5c665f3565e586a34e1815b76377292b6004ec21`, recovery/`feat/CF123-es-v2`, 사용자 삭제22 unstaged 보존. 전문3명이 읽기 코드·회귀·브라우저 검사 범위를 독립 검수하고 총괄이 수정·실행했다. ponytail 최소 변경, impeccable/UX hardening·키보드 보호, documents/pdf의 구조와 실제 렌더 검증을 적용했다. 별도 localhost headless Chrome만 사용했고 단신 사용자 Chrome·외부 서버·회사 Drive/DB·고객 원본은 변경하지 않았다.
+- `/api/proposal-studio/assets` collection POST가 dispatcher와 구현에 없어 실제 신규 등록이 migration fallback503에 도달했다. 관리자만 4~10장/1~99순서/제목1~160·alt1~500/2MB JPG·100~6000px를 등록하며 SHA 기반 안정키로 current+immutable v1를 단일 batch 저장한다. 같은 파일/설명 반복은 중복0, 기존 key의 현재/초기 SHA를 확인하지 못하면409. history INSERT의 진짜 SQLite ABORT에서 전체 export byte 불변·동일 요청 retry PASS. 제목·차원 등 검사는 shared JPEG header validation 범위이며 모든 손상 JPG decoder 검증을 증명하는 것은 아니다. 11~12장 신규 공통 이미지 등록은 기존 schema 제한 그대로 미지원, 공통 본문 편집은 유지한다.
+- Worker 신규 초안은 이미지를 뒤에 몰아 넣고 UI 공통 적용은 anchor에 넣는 차이를 shared helper로 통일했다. stable key로 버전/쿼리 차이 중복을 차단하고 같은 anchor는 displayOrder→key 순서를 유지한다. 표 행·fenced/indented code는 삽입 anchor에서 제외해 관리자 Markdown 표가 끊기지 않게 했다. 중앙값은 신규 생성/명시 적용 때만 복사하며 saved snapshot·최종 preview 재수화0. 동적 제외key는 실제 조직 asset metadata로 저장해 삭제 이미지가 재열기/출력 때 복원되지 않는다. 6유형 신규본 same fixed snapshot·중앙 v2 개정 뒤 최초 v1 snapshot/GET bytes exact PASS.
+- 실제 controlled input이 다른 필드 편집 전에 원래 값으로 돌아가는 원인은 root capture의 `setDirty` 재렌더였다. 개별 onChange의 dirty를 유지하고 capture만 제거; 관리자 임시5필드는 직접 dirty를 보완했다. 시험 Vite에서 그 capture만 복원하면 typed recipient FAIL, 현재본 입력→payload→DB→reload recipient PASS. 저장된 제안서 제출처를 intake 고객명보다 우선한다. 유형만 바꿔도 dirty가 되어 미저장4단계/이탈을 차단한다. 갑지4필드·목차12개·본문·관리자 필드/유형/사건과 step 이동을 busy 동안 잠가 ACK 뒤 늦은 입력 덮기를 막았다.
+- 저장 성공은 실제 POST ACK의 사건/제안서/version/revision 및 갑지·12장 구조, MANUAL 본문·JSON·제외 이미지의 기존 마스킹 정규화 결과까지 일치해야 한다. 잘못된 ACK/500/409는 입력 유지·성공/4단계0. 10종 음성 응답은 frontend transport fault 주입이며 DB rollback 증거와 구분한다. 정상 Worker 저장의 CH05 공표 보호문구+다른장 editorJSON 반례도 실제 FAIL 재현 후 필드 pass→전체 inputs JSON pass→hydrate로 기대값 단위를 맞춰 PASS. 기존 마스킹 regex/공표값 규칙은 그대로 이동·공유했으며 금액 기준 변경0. 응답 불명확 시 재저장 전에 저장본 확인 안내를 유지한다.
+- 실제 다운로드 PDF를 bundled Poppler로15쪽 렌더하니 right dataset은 맞아도 CSS455의 뒤 `margin-inline:auto`가 중앙을 강제했다. 해당 margin만 제거→actual physical image right edge/폭·높이/표4셀·전체 retained6이미지·최종 PDF PASS. DOCX도 image-only paragraph가 inherited textAlign을 읽어 right→left가 되어 실제 native XML에서 FAIL; 유일한 block 이미지/공백만 있는 문단에서 authored 정렬→used margin을 반영한다. Markdown `<p><img></p>` 기본center도 확인하며 mixed text·목록 marker·일반 paragraph/table 정렬은 기존 유지한다.
+- 최종 related **41/41 PASS/skipped0**(cf42 10+cf54 2+cf66 2+cf67 4+cf68 1+cf69 4+cf91 3+cf93 3+cf94 4+cf95 4+cf182 4), 승인 staging23/23. root/web tsc0·diffcheck PASS, 최종 production build/Worker dry-run0. E198 `ui-output-r7/result.json` pass=true/15p/음성ACK10/type-only dirty/삭제 보존; SHA `be57f39a0efa3e29e8d6aee2a737b0687c808be8469ab6e2b1584f0b9935314a`. 실제 버튼 DOCX의 본문·cover footer 제출처·native tables2이상·retained6 JPEG bytes exact·삭제extra bytes0·org native right/default profile center를 확인했다. PDF SHA `c28b630b98ce59b771481cf962f811772172708aa98f689276cdb0fbf16f46af`,15p/595.28×841.89pt/A4/blank op0. 단순 외형 검사·memory API 증거를 원본 HWP 충실도나 실제 서버 저장으로 확대하지 않는다.
+- 문서 dependency loader 기본 호출 정지는 plugin 경로 재호출로 회복했다. 공식 bundle `26.905.11957`의 Python/Pillow와 Poppler를 사용해 PDF15p contact sheet/표·이미지·갑지 대표페이지를 육안 확인했고, 사용자 설치 LibreOffice는 사용0. 이 bundle에는 LibreOffice가 없어 DOCX 독립 Office 렌더는 NOT_RUN; 실제 Word/한컴 재열기·전원본32 동일성은 미검증이다. 헤더-only JPG API fixture와 browser decoder용 고유600×300 JPEG7개를 구분한다. cover v1 로고는 Node binary-import 제한 때문에 canonical bundled logo의 역사만 owned fixture에 seed하고 실제 GET bytes를 확인했다. 초기 QA multipart boundary 변경400/필수label/중복action locator/XML footer 구간 착오·fixture missing v1·default sandbox loopback 거부는 제품 결함과 구분해 원장을 유지한다.
+- 최종 E198 `dist-r2`43파일/37,679,535B, canonical SHA `3a932d2172c8d50c5ec220220d41d222f97b4e3e13735bc67e1eea4bd22c8b2c`(ordinal 상대경로+TAB+SHA+LF), main `index-DbleSGbS.js` SHA `727b58002dd864c5fae6977cab41fed7c986c579e2806c6e4d58d84340a17680`, CSS `index-DDRADc7D.css` SHA `20a61406a37f0760174aef21275e69dec9340a313c9dd0ea4e5bdc5eabf78c6d`. 승인 runtime28+manifest/CF196 Studio·renderer 지문 유지, WASM bcc40a79…/binding ad01e939…/CF186 diagnostic0. 기존 large chunk 경고 유지. build 초기 CLI경로 착오와 새 QA 괄호/변수shadow 타입 오류는 총괄이 수정·최종 재실행했고 OS/ACL/설정 변경0. 실제 deploy/upload/push0, 이전 E빌드·원본·CC6v5/3출력·CC4/CC5·직원/승인/ENV/키/DB/schema/migration·Docker·C정리 변화0.
+- 다음은 닫은 CF197/CF198 로컬 동선 반복이 아니라 원본 HWP/독립 PC 출력과 검토2/A–Z 미증명 구간, 그리고 지정 외부전송 승인 범위 확정 뒤 development 실제 화면→보호 환경/DB 리허설→같은 artifact 가오픈 승격·대조→직원 영상이다. 전체 합격·완성률·완료시각을 단정하지 않는다. 현장조사 양식#32 HOLD와 관리자 개발 QA≠CEO/DIRECTOR 업무 최종승인·자기승인 차단을 유지한다.
 
 ### CF197 — 여러 인원 일괄 배정·팀 저장·저장 확인 및 오래된 조회 응답 차단
 

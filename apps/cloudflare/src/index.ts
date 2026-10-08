@@ -41,7 +41,7 @@ import { generateProposalDocx, generateProposalMarkdown, generateProposalPdf, ty
 import { extractIntakeSource, extractEvidenceText, IntakeSourceError, type IntakeSource } from './intake-source';
 import { categoryEvidence, evidenceDisplayName, evidenceVersions, evidenceVersionStatements, parseVersionAnalysis, prepareEvidenceVersion, type EvidenceRecord, type EvidenceVersionPlan } from './evidence-versioning';
 import { evidenceRetryApprovals, evidenceRetryAvailable } from './evidence-retry';
-import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING } from './proposal-company-content';
+import { PROPOSAL_COMPANY_MODULE_CONTENT, PROPOSAL_STANDARD_CLOSING, proposalBodyWithCompanyImages, sanitizeProposalCostData, hydrateProposalPublishedFacts } from './proposal-company-content';
 import { ErpBridgeError, registerProjectInErp } from './erp-bridge';
 import { normalizeMinutesFields } from './company-minutes';
 import { parseWorkflowAiImport, localWorkflowAiImport, extractWorkflowImportSource, type WorkflowImportKind, type WorkflowImportDataClass, type WorkflowAiImportResult } from './workflow-import';
@@ -2476,33 +2476,6 @@ async function bundledProposalAssets(env:CloudflareEnv):Promise<Map<string,Bundl
   }catch{return new Map();}
 }
 
-function sanitizeProposalCostData(source: string): { value: string; count: number } {
-  let value = source;
-  let count = 0;
-  const preserveApprovedStrengthFacts = value.includes('김포현장에서 시공사의 평당 700만원 요구를 599만원으로 조정하였고')
-    && value.includes('청담현장은 평당 750만원 요구를 615만원으로 협상하는');
-  if (preserveApprovedStrengthFacts) PROPOSAL_PUBLISHED_STRENGTH_FACTS.forEach(({literal,token})=>{value=value.replaceAll(literal,token);});
-  const mask = () => { count += 1; return '[비공개 협의금액]'; };
-  value = value.replace(/₩\s*\d[\d,]*(?:\.\d+)?/gu, mask);
-  value = value.replace(/\bKRW\s*\d[\d,]*(?:\.\d+)?/giu, mask);
-  value = value.replace(/\d[\d,]*(?:\.\d+)?\s*(?:억원|천만원|백만원|만원|원)/gu, mask);
-  value = value.replace(/(계약금액|제안금액|견적금액|수주금액|용역대가)\s*[:：]?\s*\d[\d,]*(?:\.\d+)?/gu, (_all, label: string) => `${label}: ${mask()}`);
-  return { value, count };
-}
-
-const PROPOSAL_PUBLISHED_STRENGTH_FACTS = [
-  { literal:'700만원', token:'[[PUBLIC_FACT_CH05_GIMPO_ASK]]' },
-  { literal:'599만원', token:'[[PUBLIC_FACT_CH05_GIMPO_RESULT]]' },
-  { literal:'750만원', token:'[[PUBLIC_FACT_CH05_CHEONGDAM_ASK]]' },
-  { literal:'615만원', token:'[[PUBLIC_FACT_CH05_CHEONGDAM_RESULT]]' }
-] as const;
-
-function hydrateProposalPublishedFacts(source:string):string{
-  let value=source;
-  for(const {literal,token} of PROPOSAL_PUBLISHED_STRENGTH_FACTS)value=value.replaceAll(token,literal);
-  return value;
-}
-
 function proposalStudioText(value: unknown, maxLength: number, fallback = ''): string {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : fallback;
 }
@@ -2651,10 +2624,7 @@ function defaultProposalChapters(caseRow: PreviewCaseRow, modules: ProposalCompa
     if (number === 3) body = `1. Fact Finding: 계약서·도면·내역·회의록 및 현장자료 수집\n2. 법리·원가 검증: 쟁점별 계약·수량·단가 검토\n3. 협상 지원: 검토 결과와 대응 논리 정리\n4. 총회·의결 지원: 의사결정 자료와 최종 성과물 제공`;
     if (module) body = module.bodyMarkdown;
     // Store company images with the initial draft, not as a render-time repair.
-    if (number >= 4) for (const asset of assets.filter(asset => asset.chapterNumber === number && asset.isActive && asset.hasContent && asset.assetKey !== 'BRAND_LOGO')) {
-      const source = `/api/proposal-studio/assets/${asset.assetKey}`;
-      if (!body.includes(source)) body += `\n\n![${asset.altText.replace(/[\[\]\r\n]/gu, ' ')}](${source}?v=${asset.version})`;
-    }
+    if (number >= 4) body=proposalBodyWithCompanyImages(body,number,assets);
     return { number, title:module?.title ?? title, kind:number>=4 ? 'FIXED' : 'VARIABLE', ...(module ? {moduleCode:module.code} : {}), body:sanitizeProposalCostData(body).value };
   });
 }
@@ -2826,6 +2796,26 @@ async function handlePreviewProposalStudio(request: Request, env: CloudflareEnv,
       if(result.meta?.changes!==1)return json({error:'Proposal writing prompt changed in another session',code:'VERSION_CONFLICT'},409);
       return json({prompt:(await proposalWritingPrompts(env)).find((prompt)=>prompt.chapterNumber===chapterNumber),phase:'CF51_PROPOSAL_PROMPT_MANAGEMENT'});
     }catch{return json({error:'Proposal writing prompt could not be updated',code:'PROPOSAL_PROMPT_UPDATE_FAILED'},409);}
+  }
+  if(url.pathname==='/api/proposal-studio/assets'&&request.method==='POST'){
+    if(!isAdmin)return json({error:'관리자만 회사 공통 이미지를 등록할 수 있습니다.',code:'FORBIDDEN'},403);
+    const form=await request.formData().catch(()=>null),file=form?.get('file');
+    const chapterNumber=Number(form?.get('chapterNumber')),displayOrder=Number(form?.get('displayOrder')),title=String(form?.get('title')??'').trim(),altText=String(form?.get('altText')??'').trim();
+    if(!(file instanceof File)||file.size<100||file.size>2_000_000||!Number.isInteger(chapterNumber)||chapterNumber<4||chapterNumber>10||!Number.isInteger(displayOrder)||displayOrder<1||displayOrder>99||!title||title.length>160||!altText||altText.length>500)return json({error:'4~10장 위치·이미지 제목과 2MB 이하 JPG 파일이 필요합니다.',code:'INVALID_PROPOSAL_ASSET'},400);
+    const bytes=new Uint8Array(await file.arrayBuffer()),dimensions=jpegDimensions(bytes);
+    if(file.type!=='image/jpeg'||!dimensions||dimensions.width<100||dimensions.height<100||dimensions.width>6000||dimensions.height>6000)return json({error:'유효한 JPG 이미지(100~6000px)만 등록할 수 있습니다.',code:'INVALID_PROPOSAL_ASSET'},415);
+    if(!env.DB.batch)return json({error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED'},503);
+    const sha256=await sha256Hex(bytes),assetKey=`CH${String(chapterNumber).padStart(2,'0')}_EXTRA_${(await sha256Hex(JSON.stringify({chapterNumber,title,altText,sha256}))).toUpperCase()}`,now=new Date().toISOString();
+    try{
+      let asset=(await proposalCompanyAssets(env)).find(item=>item.assetKey===assetKey);
+      if(!asset){await env.DB.batch([
+        env.DB.prepare("INSERT INTO preview_proposal_company_assets (asset_key,organization_id,chapter_number,display_order,title,alt_text,mime_type,file_name,file_data,file_sha256,width,height,is_active,version,updated_by,updated_at) VALUES (?,?,?,?,?,?,'image/jpeg',?,?,?,?,?,1,1,?,?)").bind(assetKey,PREVIEW_ORGANIZATION_ID,chapterNumber,displayOrder,title,altText,file.name.slice(0,200),bytes,sha256,dimensions.width,dimensions.height,user.id,now),
+        env.DB.prepare("INSERT INTO preview_proposal_company_asset_versions (organization_id,asset_key,version,mime_type,file_name,file_data,file_sha256,width,height,created_by,created_at) VALUES (?,?,1,'image/jpeg',?,?,?,?,?,?,?)").bind(PREVIEW_ORGANIZATION_ID,assetKey,file.name.slice(0,200),bytes,sha256,dimensions.width,dimensions.height,user.id,now)
+      ]);asset=(await proposalCompanyAssets(env)).find(item=>item.assetKey===assetKey);}
+      const initial=await env.DB.prepare('SELECT file_sha256 AS sha256 FROM preview_proposal_company_asset_versions WHERE organization_id=? AND asset_key=? AND version=1').bind(PREVIEW_ORGANIZATION_ID,assetKey).first<{sha256:string}>();
+      if(!asset?.hasContent||asset.sha256!==sha256||initial?.sha256!==sha256)return json({error:'공통 이미지와 최초 이력의 저장 결과를 확인하지 못했습니다. 기존 이미지는 유지됩니다. 관리자 이미지 목록을 확인해 주세요.',code:'PROPOSAL_ASSET_SAVE_UNCONFIRMED'},409);
+      return json({asset,phase:'CF198_PROPOSAL_COMMON_IMAGE'},201);
+    }catch{return json({error:'공통 이미지를 저장하지 못했습니다. 같은 파일·제목으로 다시 등록해 주세요. 기존 이미지는 유지됩니다.',code:'PROPOSAL_ASSET_SAVE_FAILED'},409);}
   }
   const assetMatch=url.pathname.match(/^\/api\/proposal-studio\/assets\/([A-Z0-9_]+)$/u);
   if(assetMatch&&request.method==='GET'){
@@ -3006,8 +2996,9 @@ async function handlePreviewProposalAuthoring(request: Request, env: CloudflareE
       const submitted=body.chapters as ProposalStudioChapter[];
       const closingModule=modules.find((item)=>item.chapterNumber===12);
       if(closingModule&&submitted[11]&&!submitted[11].body.includes('현재 제안서에서 제외'))requestedModules.add(closingModule.code);
+      const companyAssets=await proposalCompanyAssets(env);
       const chapters=submitted.map((chapter)=>{
-        const excludedCompanyAssetKeys=(chapter.excludedCompanyAssetKeys??[]).filter((key)=>FALLBACK_PROPOSAL_ASSETS.some((asset)=>asset.assetKey===key));
+        const excludedCompanyAssetKeys=(chapter.excludedCompanyAssetKeys??[]).filter((key)=>companyAssets.some((asset)=>asset.assetKey===key));
         if(chapter.number>=4&&chapter.number<=12){
           const expected=modules.find((item)=>item.chapterNumber===chapter.number);
           // Central defaults cannot delete an already reviewed chapter during save.
@@ -8861,7 +8852,7 @@ const worker = {
       return handleProjectWorkflowManagement(request, env, url);
     }
 
-    if (url.pathname === '/api/proposal-studio/config' || url.pathname === '/api/proposal-studio/improve' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/') || url.pathname.startsWith('/api/proposal-studio/writing-prompts/') || url.pathname.startsWith('/api/proposal-studio/prompt-profiles/')) {
+    if (url.pathname === '/api/proposal-studio/config' || url.pathname === '/api/proposal-studio/improve' || url.pathname === '/api/proposal-studio/assets' || url.pathname.startsWith('/api/proposal-studio/modules/') || url.pathname.startsWith('/api/proposal-studio/assets/') || url.pathname.startsWith('/api/proposal-studio/writing-prompts/') || url.pathname.startsWith('/api/proposal-studio/prompt-profiles/')) {
       return handlePreviewProposalStudio(request, env, url);
     }
 
