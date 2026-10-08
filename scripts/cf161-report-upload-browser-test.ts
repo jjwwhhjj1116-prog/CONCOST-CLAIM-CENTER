@@ -15,7 +15,7 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
     transform(code, id) {
       if (!id.endsWith('/report-evidence-upload.ts')) return;
       if (process.env.CF161_UNSAFE_RETRY === '1') return code.replace('if (uncertainCases.has(caseId)) throw new Error(UNKNOWN_UPLOAD);', '');
-      if (process.env.CF161_UNSAFE_CURRENT === '1') return code.replace('{ reuseExact: true, isCurrent }', '{ reuseExact: true }');
+      if (process.env.CF161_UNSAFE_CURRENT === '1') return code.replace('{ reuseExact: true, isCurrent, signal }', '{ reuseExact: true }');
     },
     configureServer(s) { s.middlewares.use(async (req, res, next) => {
       if (req.url !== '/report-upload-test') return next();

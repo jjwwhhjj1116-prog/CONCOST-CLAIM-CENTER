@@ -8,8 +8,8 @@ test('CF146 actual evidence dialog inserts photos and document locators; JSON su
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf146-evidence',
     configureServer(server) { server.middlewares.use(async (req, res, next) => {
-      if (req.url === '/photo.svg') { res.setHeader('Content-Type', 'image/svg+xml'); res.end('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#555"/></svg>'); return; }
-      if (req.url === '/api/cases/test-case/evidence') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ files: [1,2,3].map(id => ({id:String(id),originalName:`사진${id}`,mimeType:'image/svg+xml',category:'SITE_PHOTO',downloadUrl:'/photo.svg'})).concat([{id:'4',originalName:'내역.pdf',mimeType:'application/pdf',category:'REPORT_REFERENCE',downloadUrl:'/original.pdf'}]) })); return; }
+      if (/^\/api\/cases\/evidence\/[123]\/download$/u.test(req.url ?? '')) { res.setHeader('Content-Type', 'image/svg+xml'); res.end('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#555"/></svg>'); return; }
+      if (req.url === '/api/cases/test-case/evidence') { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ files: [1,2,3].map(id => ({id:String(id),originalName:`사진${id}`,mimeType:'image/svg+xml',category:'SITE_PHOTO',downloadUrl:`/api/cases/evidence/${id}/download`})).concat([{id:'4',originalName:'내역.pdf',mimeType:'application/pdf',category:'REPORT_REFERENCE',downloadUrl:'/api/cases/evidence/4/download'}]) })); return; }
       if (req.url !== '/cf146-evidence.html') return next();
       res.setHeader('Content-Type','text/html');
       res.end(await server.transformIndexHtml(req.url,'<!doctype html><html><body><div id="root"></div><script>window.__CLAIM_API_ORIGIN__=location.origin;</script><script type="module" src="/cf146-evidence.js"></script></body></html>'));

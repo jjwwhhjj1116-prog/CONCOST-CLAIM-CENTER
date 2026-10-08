@@ -443,7 +443,8 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
   const parsed = new DOMParser().parseFromString(`<main>${html}</main>`, 'text/html');
   parsed.querySelectorAll<HTMLImageElement>('img').forEach(image => syncImageDimensions(image, {
     width: image.getAttribute('width') ?? image.style.width.match(/^(\d+(?:\.\d+)?)px$/)?.[1],
-    height: image.getAttribute('height') ?? image.style.height.match(/^(\d+(?:\.\d+)?)px$/)?.[1]
+    height: image.getAttribute('height') ?? image.style.height.match(/^(\d+(?:\.\d+)?)px$/)?.[1],
+    reportPhoto: image.getAttribute('data-report-photo') === 'true'
   }, false));
   parsed.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
     table.dataset.documentDefaultsVersion ||= '2';

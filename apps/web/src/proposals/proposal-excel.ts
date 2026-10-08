@@ -397,26 +397,32 @@ async function workbookSharedStrings(bytes: Uint8Array): Promise<string[]> {
   );
 }
 
-async function workbookFirstSheetPath(bytes: Uint8Array): Promise<string> {
+async function workbookFirstSheetPath(bytes: Uint8Array, requestedSheet = '', strict = false): Promise<string> {
   const [workbookXml, relationshipsXml] = await Promise.all([
     zipEntry(bytes, 'xl/workbook.xml', true),
     zipEntry(bytes, 'xl/_rels/workbook.xml.rels', true),
   ]);
-  const relationshipId = workbookXml.match(/<sheet\b[^>]*\br:id="([^"]+)"/u)?.[1];
-  if (!relationshipId || !relationshipsXml) return 'xl/worksheets/sheet1.xml';
+  const sheets = [...workbookXml.matchAll(/<sheet\b([^>]*)\/?\s*>/gu)];
+  const selected = requestedSheet ? sheets.find(sheet => unescapeXml(sheet[1].match(/\bname="([^"]+)"/u)?.[1] ?? '') === requestedSheet) : sheets[0];
+  if (requestedSheet && !selected) throw new Error('지정한 시트를 찾지 못했습니다. 원본의 시트 이름을 확인해 주세요.');
+  const relationshipId = selected?.[1].match(/\br:id="([^"]+)"/u)?.[1];
+  if (!relationshipId || !relationshipsXml) { if (strict || requestedSheet) throw new Error('지정 시트의 원본 연결을 확인하지 못했습니다. 원본을 다시 저장해 주세요.'); return 'xl/worksheets/sheet1.xml'; }
   const escapedId = relationshipId.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const target = relationshipsXml.match(new RegExp(`<Relationship\\b(?=[^>]*\\bId="${escapedId}")(?=[^>]*\\bTarget="([^"]+)")[^>]*/?>`, 'u'))?.[1];
-  if (!target) return 'xl/worksheets/sheet1.xml';
+  if (!target) { if (strict || requestedSheet) throw new Error('지정 시트의 원본 연결을 확인하지 못했습니다. 원본을 다시 저장해 주세요.'); return 'xl/worksheets/sheet1.xml'; }
   const decodedTarget = unescapeXml(target).replaceAll('\\', '/').replace(/^\//u, '');
   if (decodedTarget.startsWith('xl/')) return decodedTarget;
   return `xl/${decodedTarget.replace(/^\.\//u, '')}`;
 }
 
-function worksheetRows(sheetXml: string, sharedStrings: readonly string[]): Array<Map<string, string>> {
+function worksheetRows(sheetXml: string, sharedStrings: readonly string[], addressedRows?: Map<number, Map<string, string>>): Array<Map<string, string>> {
   const rows: Array<Map<string, string>> = [];
-  for (const rowMatch of sheetXml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gu)) {
+  for (const rowMatch of sheetXml.matchAll(/<row\b(?![^>]*\/>)([^>]*)>([\s\S]*?)<\/row>/gu)) {
     const cellValues = new Map<string, string>();
-    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)\br="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/gu)) {
+    const rowNumber = Number(rowMatch[1].match(/\br="(\d+)"/u)?.[1] ?? rowMatch[2].match(/\br="[A-Z]+(\d+)"/u)?.[1]);
+    if (addressedRows && (!Number.isSafeInteger(rowNumber) || rowNumber < 1 || rowNumber > 1_048_576 || addressedRows.has(rowNumber))) throw new Error('XLSX 행 주소가 올바르지 않습니다. 원본을 다시 저장해 주세요.');
+    for (const cellMatch of rowMatch[2].matchAll(/<c\b(?![^>]*\/>)([^>]*)\br="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/gu)) {
+      if (addressedRows && (Number(cellMatch[0].match(/\br="[A-Z]+(\d+)"/u)?.[1]) !== rowNumber || cellValues.has(cellMatch[2]))) throw new Error('XLSX 셀 주소가 행과 다르거나 중복됩니다. 원본을 다시 저장해 주세요.');
       const attributes = `${cellMatch[1]} ${cellMatch[3]}`;
       const body = cellMatch[4];
       const type = attributes.match(/\bt="([^"]+)"/u)?.[1] ?? '';
@@ -424,12 +430,16 @@ function worksheetRows(sheetXml: string, sharedStrings: readonly string[]): Arra
         .map((text) => unescapeXml(text[1]))
         .join('');
       const rawValue = unescapeXml(body.match(/<v\b[^>]*>([\s\S]*?)<\/v>/u)?.[1] ?? '');
+      if (addressedRows && type === 's' && (!/^\d+$/u.test(rawValue) || Number(rawValue) >= sharedStrings.length)) throw new Error('XLSX 문자열 연결을 확인하지 못했습니다. 원본을 다시 저장해 주세요.');
       const value = type === 's'
         ? sharedStrings[Number.parseInt(rawValue, 10)] ?? ''
         : inlineText || rawValue;
       cellValues.set(cellMatch[2], value);
     }
     rows.push(cellValues);
+    if (addressedRows) {
+      addressedRows.set(rowNumber, cellValues);
+    }
   }
   return rows;
 }
@@ -539,26 +549,35 @@ const excelColumnLetters = (number: number): string => {
   return result;
 };
 
-export async function readSpreadsheetExcerpt(file: File, requestedRange = ''): Promise<{ markdown: string; range: string }> {
+export async function readSpreadsheetExcerpt(file: File, requestedRange = '', requestedSheet = ''): Promise<{ markdown: string; range: string; rows: string[][]; sheetName: string }> {
   if (!file.name.toLowerCase().endsWith('.xlsx') || file.size > 15_000_000) throw new Error('15MB 이하의 XLSX 산출·내역자료만 첨부할 수 있습니다.');
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const sheetPath = await workbookFirstSheetPath(bytes);
+  const sheetPath = await workbookFirstSheetPath(bytes, requestedSheet, true);
   const [sheetXml, sharedStrings] = await Promise.all([zipEntry(bytes, sheetPath), workbookSharedStrings(bytes)]);
-  const rows = worksheetRows(sheetXml, sharedStrings);
-  const populatedColumns = rows.flatMap((row) => [...row.keys()].map(excelColumnNumber));
-  if (!rows.length || !populatedColumns.length) throw new Error('XLSX 첫 번째 시트에서 첨부할 셀 내용을 찾지 못했습니다.');
+  const addressedRows = new Map<number, Map<string, string>>();
+  const rows = worksheetRows(sheetXml, sharedStrings, addressedRows);
+  let minColumn = Infinity, maxColumn = 0, minRow = Infinity, maxRow = 0;
+  for (const [rowNumber, row] of addressedRows) for (const column of row.keys()) {
+    const number = excelColumnNumber(column); minColumn = Math.min(minColumn, number); maxColumn = Math.max(maxColumn, number); minRow = Math.min(minRow, rowNumber); maxRow = Math.max(maxRow, rowNumber);
+  }
+  if (!rows.length || !maxColumn) throw new Error('XLSX 시트에서 첨부할 셀 내용을 찾지 못했습니다.');
   const normalizedRange = requestedRange.trim().toUpperCase().replaceAll('$', '');
   const match = normalizedRange.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/u);
   if (normalizedRange && !match) throw new Error('발췌 범위는 A1:H40 형식으로 입력해 주세요.');
-  const firstColumn = match ? excelColumnNumber(match[1]) : Math.min(...populatedColumns);
-  const firstRow = match ? Number(match[2]) : 1;
-  const lastColumn = match ? excelColumnNumber(match[3]) : Math.max(...populatedColumns);
-  const lastRow = match ? Number(match[4]) : rows.length;
-  if (firstColumn > lastColumn || firstRow > lastRow || lastColumn - firstColumn > 49 || lastRow - firstRow > 299) throw new Error('한 번에 최대 50열·300행까지만 보고서에 발췌할 수 있습니다.');
+  const firstColumn = match ? excelColumnNumber(match[1]) : minColumn;
+  const firstRow = match ? Number(match[2]) : minRow;
+  const lastColumn = match ? excelColumnNumber(match[3]) : maxColumn;
+  const lastRow = match ? Number(match[4]) : maxRow;
+  if (![firstColumn, lastColumn, firstRow, lastRow].every(Number.isSafeInteger) || firstRow < 1 || firstColumn < 1 || lastColumn > 16_384 || lastRow > 1_048_576 || firstColumn > lastColumn || firstRow > lastRow || lastColumn - firstColumn > 49 || lastRow - firstRow > 299) throw new Error('유효한 셀 범위를 입력해 주세요. 한 번에 최대 50열·300행까지만 보고서에 발췌할 수 있습니다.');
+  // Read stored cell text/cached formula results only. Never recalculate or infer a missing result.
+  for (const cell of sheetXml.matchAll(/<c\b(?![^>]*\/>)[^>]*\br="([A-Z]+)(\d+)"[^>]*>([\s\S]*?)<\/c>/gu)) {
+    const column = excelColumnNumber(cell[1]), row = Number(cell[2]);
+    if (column >= firstColumn && column <= lastColumn && row >= firstRow && row <= lastRow && /<f\b/u.test(cell[3]) && !/<v\b[^>]*>[^<]+<\/v>/u.test(cell[3])) throw new Error('선택 범위에 저장된 계산 결과가 없는 수식이 있습니다. Excel에서 계산·저장한 뒤 다시 발췌해 주세요.');
+  }
   const matrix: string[][] = [];
-  for (let rowNumber = firstRow; rowNumber <= Math.min(lastRow, rows.length); rowNumber += 1) {
-    const row = rows[rowNumber - 1] ?? new Map<string, string>();
-    matrix.push(Array.from({ length: lastColumn - firstColumn + 1 }, (_unused, index) => (row.get(excelColumnLetters(firstColumn + index)) ?? '').replace(/\s+/gu, ' ').trim()));
+  for (let rowNumber = firstRow; rowNumber <= lastRow; rowNumber += 1) {
+    const row = addressedRows.get(rowNumber);
+    matrix.push(Array.from({ length: lastColumn - firstColumn + 1 }, (_unused, index) => row?.get(excelColumnLetters(firstColumn + index)) ?? ''));
   }
   while (matrix.length && matrix[matrix.length - 1].every((value) => !value)) matrix.pop();
   if (!matrix.length) throw new Error('선택한 발췌 범위에 값이 없습니다.');
@@ -567,7 +586,9 @@ export async function readSpreadsheetExcerpt(file: File, requestedRange = ''): P
   const header = matrix[0].map((value, index) => escapeMarkdown(value || `열 ${excelColumnLetters(firstColumn + index)}`));
   const body = matrix.slice(1).map((row) => `| ${Array.from({ length: width }, (_unused, index) => escapeMarkdown(row[index] ?? '')).join(' | ')} |`);
   const markdown = [`| ${header.join(' | ')} |`, `| ${header.map(() => '---').join(' | ')} |`, ...body].join('\n');
-  return { markdown, range: `${excelColumnLetters(firstColumn)}${firstRow}:${excelColumnLetters(lastColumn)}${firstRow + matrix.length - 1}` };
+  const workbookXml = await zipEntry(bytes, 'xl/workbook.xml', true);
+  const sheetName = requestedSheet || unescapeXml(workbookXml.match(/<sheet\b[^>]*\bname="([^"]+)"/u)?.[1] ?? '') || '첫 번째 시트';
+  return { markdown, rows: matrix, sheetName, range: `${excelColumnLetters(firstColumn)}${firstRow}:${excelColumnLetters(lastColumn)}${firstRow + matrix.length - 1}` };
 }
 
 const proposalDocxChapterAliases: ReadonlyArray<ReadonlyArray<string>> = [

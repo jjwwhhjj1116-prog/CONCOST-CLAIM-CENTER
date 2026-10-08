@@ -11,8 +11,9 @@ const COMPARISON_UNAVAILABLE_CODES = new Set([
 ]);
 
 /** A native modal also works for uploads launched from report/meeting tools outside the library. */
-function confirmVersion(conflict: UploadConflict | { status: 'COMPARISON_UNAVAILABLE'; error?: string }): Promise<Choice | null> {
+function confirmVersion(conflict: UploadConflict | { status: 'COMPARISON_UNAVAILABLE'; error?: string }, signal?: AbortSignal): Promise<Choice | null> {
   return new Promise((resolve) => {
+    if (signal?.aborted) { resolve(null); return; }
     const dialog = document.createElement('dialog'); dialog.className = 'evidence-version-dialog';
     const title = document.createElement('h2'); title.id = `evidence-review-${crypto.randomUUID()}`;
     title.textContent = conflict.status === 'COMPARISON_UNAVAILABLE' ? 'AI 비교 없이 별도 자료로 저장할까요?' : conflict.status === 'DUPLICATE_EXACT' ? '동일한 내용의 파일이 이미 등록되어 있습니다' : '이 문서를 최신본으로 바꿀까요?';
@@ -34,7 +35,7 @@ function confirmVersion(conflict: UploadConflict | { status: 'COMPARISON_UNAVAIL
     const actions = document.createElement('div'); actions.className = 'evidence-version-actions'; dialog.append(actions);
     let finished = false;
     const close = (choice: Choice | null = null) => {
-      if (finished) return; finished = true; window.removeEventListener('popstate', cancel);
+      if (finished) return; finished = true; window.removeEventListener('popstate', cancel); signal?.removeEventListener('abort', cancel);
       dialog.close(); dialog.remove(); resolve(choice);
     };
     const cancel = () => close();
@@ -43,11 +44,11 @@ function confirmVersion(conflict: UploadConflict | { status: 'COMPARISON_UNAVAIL
     else if (conflict.status === 'VERSION_CONFLICT_CONFIRMATION') { button(`최신본으로 대체 · v${conflict.nextVersion}`, 'REPLACE_AS_LATEST', true); button('별도 신규 파일로 저장', 'KEEP_AS_NEW_SEPARATE'); button('취소', null); }
     else button('확인', null, true);
     dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
-    window.addEventListener('popstate', cancel); document.body.append(dialog); dialog.showModal();
+    window.addEventListener('popstate', cancel); signal?.addEventListener('abort', cancel, { once: true }); document.body.append(dialog); dialog.showModal();
   });
 }
 
-export async function fetchEvidenceUpload(url: string, init: RequestInit, options: { isCurrent?: () => boolean; reuseExact?: boolean } = {}): Promise<Response> {
+export async function fetchEvidenceUpload(url: string, init: RequestInit, options: { isCurrent?: () => boolean; reuseExact?: boolean; signal?: AbortSignal } = {}): Promise<Response> {
   const isCurrent = options.isCurrent ?? (() => true);
   if (!/^\/api\/cases\/[0-9a-f-]+\/evidence$/iu.test(url) || !(init.body instanceof FormData)) throw new Error('프로젝트 업로드 요청이 올바르지 않습니다.');
   while (isCurrent()) {
@@ -56,7 +57,7 @@ export async function fetchEvidenceUpload(url: string, init: RequestInit, option
     const payload = await response.clone().json().catch(() => null) as (Partial<UploadConflict> & { code?: string; error?: string }) | null;
     if (!payload) return response;
     if (COMPARISON_UNAVAILABLE_CODES.has(payload.code ?? '') && init.body.get('versionMode') !== 'SEPARATE') {
-      const choice = await confirmVersion({ status: 'COMPARISON_UNAVAILABLE', error: payload.error });
+      const choice = await confirmVersion({ status: 'COMPARISON_UNAVAILABLE', error: payload.error }, options.signal);
       if (!choice || !isCurrent()) return Response.json({ error: '파일 저장을 취소했습니다.', code: 'UPLOAD_CANCELLED' }, { status: 409 });
       init.body.delete('reviewId'); init.body.delete('versionChoice'); init.body.set('versionMode', 'SEPARATE');
       continue;
@@ -67,10 +68,10 @@ export async function fetchEvidenceUpload(url: string, init: RequestInit, option
       // this exact stored file without another modal; callers verify its receipt.
       // Ordinary library uploads still display the duplicate notice. No API write.
       if (options.reuseExact && payload.file && isCurrent()) return Response.json({ file: payload.file, reusedExisting: true });
-      await confirmVersion(payload as UploadConflict);
+      await confirmVersion(payload as UploadConflict, options.signal);
       return response;
     }
-    const choice = await confirmVersion(payload as UploadConflict);
+    const choice = await confirmVersion(payload as UploadConflict, options.signal);
     if (!choice || !isCurrent()) return Response.json({ error: '파일 저장을 취소했습니다.', code: 'UPLOAD_CANCELLED' }, { status: 409 });
     init.body.set('reviewId', payload.reviewId!); init.body.set('versionChoice', choice);
   }

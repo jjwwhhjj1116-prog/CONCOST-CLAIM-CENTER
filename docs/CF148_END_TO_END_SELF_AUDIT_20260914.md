@@ -1,13 +1,13 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF198, 2026-10-08
+## 현재 판정 — CF199, 2026-10-08
 
-아래 과거 기록은 당시 이력이다. CF185가 마지막 실제 GitHub/development 반영 확인이며 CF186~198은 로컬 검증본으로 미전송·미배포다. CF197의 검토2 의견33 일괄 배정은 보존하고, CF198에서 제안서 공통 이미지 신규 등록503·기본 이미지 위치 차이·동적 삭제 제외 누락·입력 복원·제출처 재열기 덮기·유형 dirty·저장 응답 및 저장중 입력 보호·PDF/DOCX 이미지 정렬을 수정했다. **관련41/41와 승인 runtime staging23/23, 합계64/64 PASS, skipped0**; 실제 React→Worker→메모리 SQLite→저장·reload→실제 버튼 DOCX/PDF 단일 동선과 전쪽 A4세로15p를 확인했다. 64는 시험 집계이지 A–Z64기능 합격이 아니다. 원본 HWP와 한컴 독립 동일성·전체 A–Z·가오픈 승격은 아직 합격이 아니며 Node 서버의 공통 모듈 지원까지 확대하지 않는다. schema/migration·원격 DB·직원/승인·키/ENV 변경0.
+아래 과거 기록은 당시 이력이다. CF185가 마지막 실제 GitHub/development 반영 확인이며 CF186~199은 로컬 검증본으로 미전송·미배포다. CF197의 검토2 의견33과 CF198의 제안서 공통양식·실제 출력 검수를 보존하고, CF199에서 보고서 쟁점 첨부의 업로드 확인·닫힌 화면의 늦은 버전확인·선택 순서·번호·버전 표시와 XLSX 지정 시트/셀 표 발췌를 연결했다. 실제 편집/미리보기 정규화와 PDF 변환의 서로 다른 사진 늘림도 재현·수정했다. **최종 관련71/71와 승인 runtime staging23/23, 합계94/94 PASS, skipped0**; 사진·셀 표→메모리 HTTP 저장·reload→실제 DOCX/PDF 3쪽과 실제 PDF 사진 영역 비율을 확인했다. 94는 시험 집계이지 A–Z94기능 합격이 아니다. 실제 Worker DB 저장·원본 HWP와 한컴 독립 동일성·전체 A–Z·가오픈 승격은 아직 합격이 아니다. schema/migration·원격 DB·직원/승인·키/ENV 변경0.
 
 ### 현재 완료 순서 — 과거 미체크 목록과 구분
 
 1. **검토2 의견33의 여러 인원 일괄 지정은 CF197 로컬 구현·회귀 PASS로 닫았다.** 단일 PM은 유지하고 투입 인원만 여러 명 선택한다. PERSON N기록+N이력 원자 저장·멱등 재시도·TEAM1건·사건/권한/ACK 보호를 확인했다. 실제 서버 반영·직원 배정 검수는 아직 미실행이며 같은 로컬 구간을 다시 기본부터 반복하지 않는다.
-2. **제안서 4~12장 유형 변경→공통 이미지 신규·삭제·크기/정렬·표→저장·재진입→실제 DOCX/PDF는 CF198 로컬 동선 PASS로 닫았다.** 6유형 같은 신규 공통값·중앙 이미지 개정 후 기존 snapshot/바이트 불변도 확인했다. 다음은 원본 HWP/독립 Word·한컴 대조와 보고서 쟁점 첨부·A–Z의 증거가 없는 구간이다. 현장조사 양식 의견32 HOLD는 유지한다.
+2. **제안서 4~12장 CF198 동선과 보고서 쟁점 첨부 CF199 로컬 동선 PASS를 구분해 닫았다.** 공통모듈 변경 뒤 기존 snapshot/바이트 보존은 유지한다. CF199는 사진 번호9~11·선택 순서·세로/가로 비율 및 구조내역!A25:C27의 주소·저장된 값·원본 링크·편집 가능한 DOCX 표를 검증했다. 실제 서버 저장과 원본 HWP/독립 Word·한컴 대조 및 A–Z의 증거가 없는 구간은 남는다. 현장조사 양식 의견32 HOLD는 유지한다.
 3. 원형 목차 문구/field·사진 배치, PC 한컴 독립 대조 및 CF186 정식 엔진 승격을 구분해 진행한다. native DOCX의 페이지 그림 편집성 제한은 남아 있다. 이번 JS 교정은 전체 Studio 소스 재빌드나 CF186 WASM 승인으로 가장하지 않는다.
 4. 최신 소스/승인 runtime의 development 실화면 검수→환경·DB 및 필요한 보호 백업/리허설→동일 검증 artifact의 가오픈 승격·양서버 대조 순서다. 기존 Docker 기동·지정3커밋 전송·Hwp.exe 경로 질문의 승인/답변 대기는 확대·우회하지 않는다.
 5. 관리자 개발 QA에 직원 최종승인을 선행조건으로 요구하지 않는다. 실제 납품의 CEO/DIRECTOR·자기승인 차단은 유지하며, 현장조사 양식 의견32는 HOLD, 직원 영상은 안정된 배포 이후다.
@@ -33,6 +33,7 @@
 | PDF 원본 용지 | CF185 실제 A3/A5·혼합 쪽이 비율만으로 A4에 통과하는 FAIL→실제 pt 치수 검사. 합성7+실제PDF15 검사 PASS, 원본 SHA 보존 | 원본14개 A4389쪽 허용, 세로/가로 혼합 PDF013은 기존처럼 전체 적용 전 거부. 한컴 HWP 동일성 증명과 구분 |
 | 원형 HWPX 실제 배치 | CF186 격리 후보에서 저장된 Square 표 뒤 간격을 paint·pagination 공통 계산으로 수정. 실제01724쪽 누적22.48px/36.96px 과다 간격 해소, 대표9쪽 중 나머지8쪽 SVG exact 보존. 후보의 실제 native16개·855쪽 무편집 재저장 검사 PASS | **후보 수정·회귀 통과, 서버 미반영. 전체 원형 동일성은 여전히 미합격.** 정식 Docker 빌드·승인 runtime 승격과 PC 한컴·글꼴/전체 원점 대조 필요. 일괄 좌표 이동·원본 축소0 |
 | 나머지 업무 | 기존 의뢰→제안서→일정→착수회의→현장조사→물량→검토·납품 체크리스트 유지 | 이번에는 전구간 재실행하지 않음. 현장조사 회의록 개편 HOLD 유지 |
+| 보고서 쟁점·첨부 | CF199 업로드 영수증·결과불명 재전송 차단·닫힌 화면의 버전확인 취소·최신/이전본·선택 순서·시작번호·XLSX 시트/실주소 발췌·메모리 저장/reload·실제 3쪽 DOCX/PDF와 사진 비율 PASS | 실제 서버/D1/Drive 동선은 미실행. 쟁점은 작성자가 입력한 제목이며 등록 쟁점ID 자동 연결은 미구현. PDF/HWP 파일 선택쪽 내용 삽입은 이 창에서 미지원. XLSX 수식 재계산·숫자 표시형식·병합·그림 복제는 하지 않음. 독립 Word/한컴 렌더 NOT_RUN |
 
 이전 CF182 제품 소스 `b01695a46120635d734f614ff1e207419bbb0991`, development 버전 `55ca68ca-36db-407a-8567-f623726adcc8`. 쪽별 DOCX 진행 안내까지 회귀·타입·빌드 후 development에만 반영했다. 실제 CC6 3종 파일 검수는 직전 `53db79d`/`81de46ae`에서 완료됐고 후속은 안내 callback만 변경하여 파일을 중복 생성하지 않았다. 상세 근거는 문서 하단 CF181/182 기록을 따른다. 과거 CF179/180의 ‘두 표식 승인 대기’는 직접 승인·실저장으로 해소됐다.
 
@@ -41,6 +42,21 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF199 — 쟁점 첨부 안전 저장·XLSX 실주소 표와 사진 출력 비율
+
+- 시작 HEAD `401518115a1a26edba5014f5aaecaad9815f6de3`, recovery/`feat/CF123-es-v2`. 총괄만 수정하고 전문3명의 실제 격리 Chrome·코드 매핑·회귀 검토 결과를 수렴했다. 사용자 삭제22는 unstaged로 보존, 고객 원고·CC6v5·CC4/5·원본32·직원/업무승인·원격 서버/DB·schema/migration·ENV/키·Docker/OS/ACL/C정리 변화0. 기존 인수인계/감사 문서만 갱신했다.
+- 확정 업로드 결함: 첨부창은 HTTP200+file 유무만 확인해 잘못된 SHA/크기/URL도 선택 가능했다. 기존 보고서 업로더를 부모 수명 동안 공유하고 SITE_PHOTO/REPORT_REFERENCE 구분·동일 지문·실제 영수증·결과불명 차단·화면 수명 확인을 재사용했다. 닫았다 다시 열어도 재전송 차단, 다른 범위를 임의 재업로드하지 않는다. 서버의 기존 RECONCILIATION_REQUIRED도 보존하므로 ‘반드시 중복 저장된다’고 주장하지 않는다.
+- 독립 BEFORE: git show4015181을 메모리 Vite로 실행해 POST 대기→첨부 화면 unmount→늦은409→버전확인창 잔류→이전 사건에 추가POST를 실제 재현했다. isCurrent만으로는 응답과 React cleanup 사이에 이미 열린 modal이 남을 수 있어 기존 confirmVersion에 optional AbortSignal을 연결했다. 화면 제거 시 확인창만 취소하며 진행 중인 POST를 강제 취소하지 않는다. AFTER 늦은409/이미 열린 modal 둘 다 후속POST0·본문 반영0, 정상 영수증·저장중 입력잠금·읽기전용 PASS. 일반 자료실/기존 HWP 업로드 기본 동작은 유지한다.
+- 자료 UI: 서버의 displayName/versionNumber/isLatest를 표시하고 refresh는 최신 응답을 우선한다. 파일 체크 순서로 삽입하고 시작번호를 직접 정할 수 있다. 초기 목록 로딩·빈 상태·재조회·에러·진행 상태를 표시하며, 잘못된 목록은 조용히 빈 자료실로 표시하지 않는다. 실제 1440/390px 표시·넘침 검사와 합성 화면 육안 확인. 기존 인터페이스를 보존하는 hardening과 최소 변경 지침을 적용했다.
+- XLSX 미연결 기능을 실제 첨부창에 연결: 원본 다운로드의 SHA/크기와 자료실 기록이 일치할 때만 지정 시트·셀 범위의 저장된 값을 편집 가능한 표로 넣는다. 기존 worksheetRows는 행번호를 버려 A25를 A2로 오인했다. 발췌 경로만 주소 Map·strict 시트 관계·범위를 사용하며 shared string/문자 원문·0·cached formula 결과를 보존한다. self-closing 행/셀의 값 이동, 기본/명시 시트 관계 누락 추정, 행/셀 불일치·중복·없는 문자열 참조는 실제 메모리 원본으로 재현하고 차단했다. 15MB/50열/300행·표 범위 및 원본 지문 검사를 유지한다. 수식은 재계산하지 않으며 저장된 계산 결과가 없으면 반영하지 않는다. 숫자 표시형식·병합·그림 미복제는 UI에 명시하고 원본 대조를 안내한다. 업무 수량·금액 기준 변경0.
+- 비이미지 원본 링크가 DOCX에서 글자로만 남던 경로를 native ExternalHyperlink로 보완했다. http(s)·상대주소를 유효한 절대 링크로 저장하고 javascript/file/유효하지 않은 링크는 원문 글자만 보존한다. 링크 이미지가 wrapper 때문에 ImageRun 직접 검사에서 빠지는 회귀도 실제 24px 문단/180px 이미지에서 AT_LEAST로 검사했다. 보통 텍스트 문단의 EXACT·원문과 표는 유지한다. 회사 인증이 필요한 링크만으로 법원 제출본에 원본 내용이 포함되는 것으로 표시하지 않는다.
+- 사진 늘림 2단계: normalizeStructuredDocumentHtml의 syncImageDimensions 호출에서 reportPhoto가 빠져 preview에 object-fit:fill이 강제됐다. 속성1개를 전달해 contain을 보존했다. 이후 실제 PDF를 Poppler로 열어보니 설치 html2canvas의 replaced-element 캡처도 contain을 무시했다. 기존 documentImageData의 사진 박스 변환을 PDF 출력 clone에만 재사용하고 원본 src/JSON/바이트는 변경하지 않는다. 최종 실제 PDF의 사용된 페이지 XObject 픽셀에서 3개 색상 사진 영역의 비율 `[2.006172839506173,0.5,2.012422360248447]` PASS, 같은 검사에서 수정 전 세로 사진은 약1.446으로 FAIL. 초기 픽셀 검수는 page.images[0]가 cover 이미지였고, 색상 단순 bounding box는 작은 테두리 잡음을 포함해 실패했다. 실제 Do가 사용하는 이미지 객체와 연속 사진 영역을 판별하도록 검수기를 수정했으며 기준 비율·허용오차는 약화하지 않았다.
+- 표의 흰색 글자는 제품 결함이 아니었다. 새 QA HTML의 DOCTYPE 누락으로 BackCompat가 기본 테마색을 상속했다. 독립 Chrome의 Standards/Quirks 대비로 확인해 검수 HTML을 실앱과 같게 하고 임시 제품 color 규칙은 전부 제거했다. 사용자 지정 색상도 유지했다. 초기 fflate/pdf-lib 의존성 위치·기본 샌드박스 타입 파일 읽기·음성 재현 CLI top-await 오류는 QA/실행환경 오류로 제품 실패와 구분해 보존한다. OS/권한 우회0.
+- 최종 직렬 **관련71/71 PASS/skipped0**, runtime staging23/23. CF19914+CF1144+CF1153+CF1173+CF146 evidence1/contract5+CF16115+CF42 10+CF674+CF694+CF944+CF994. 실제 React/Tiptap→합성 HTTP 저장→reload→실제 출력 함수/다운로드3쪽이며 실제 Worker/D1 저장을 가장하지 않는다. 기존 CF114 API 메모리 SQL 증거와 별개다. root/web tsc0·diffcheck·build·Worker dry-run0; 실제 upload/deploy/push0. 신규 dependency0/금액 기준0/원형 엔진 교체0.
+- 최종 E `claim-center-cf199-20261008/ui-final-r6/result.json` SHA `40f53c0f5a705f9efac8dce9af87fdb65160814cdd62ec9e7f059222ddb18d50`, DOCX `37c50155e9b8f50f364c40c631f887b4ba4a3591ab582a773a4b93594c4ab843`, PDF `644a34ff30aa21fd802307c2213293a5ce8e8d787bc72869f4a0a7c89fd046cf`. PDF3쪽/A4세로/실사용 이미지 비율·갑지/목차/사진/표/번호를 bundled Poppler로 전쪽 렌더·육안 확인했다. DOCX는 native 표·문단·링크 구조만 PASS이며 독립 Office render NOT_RUN; bundled LibreOffice가 없어 사용자 설치본은 사용하지 않았다. 원본 HWP 충실도와 전체 A–Z 합격으로 확대하지 않는다.
+- 최종 E `dist-final`43파일/37,689,331B/canonical SHA `6c6d4477cd555fee213a9af88dd25640aebe86e0d05b3fc3f1d23096a17f22c6`, main index-6aC_fXed.js SHA `91bce6851ddf50ff501e31c7bb5ea43b535e1cd21f0ca7f0360bf29a20da2f29`, CSS index-Dzi8pu1z.css SHA `5e608ecf85dfbdacb98dc212f1a73507a957020b914d300601bd38a81ef601ae`. 승인 runtime28·CF196 cursor·WASMbcc40a79… 유지, engineRebuilt=false/CF186진단본0. 앞선dist·QA 실패 산출물은 보존하며 최종본과 구분한다. 큰 chunk 경고는 기존과 같고 서버 배포 성공으로 표시하지 않는다.
+- 다음: CF186~199의 외부 전송 범위 승인 확정→development 최신 소스 실화면/실제 저장 검수→원본/PC 한컴 독립 대조 및 기존 A–Z 잔여→같은 artifact 가오픈 승격·양서버 대조→직원 영상. 현장조사#32 HOLD, 관리자 개발 QA와 업무 CEO/DIRECTOR 최종승인·자기승인 차단 유지. 전체 완성률·완료 시각을 단정하지 않는다.
 
 ### CF198 — 제안서 공통 이미지 등록·편집 보존과 실제 출력 정렬
 

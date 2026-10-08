@@ -1,8 +1,8 @@
-import { AlignmentType, BorderStyle, Document, Footer, ImageRun, LeaderType, LineRuleType, Packer, PageOrientation, Paragraph, ShadingType, Tab, Table, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, VerticalAlign, WidthType } from 'docx';
+import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, ImageRun, LeaderType, LineRuleType, Packer, PageOrientation, Paragraph, ShadingType, Tab, Table, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, VerticalAlign, WidthType } from 'docx';
 import {strFromU8,strToU8,unzipSync,zipSync} from 'fflate';
 
 type Block = Paragraph | Table;
-type Run = TextRun | ImageRun;
+type Run = TextRun | ImageRun | ExternalHyperlink;
 const px = (value: string): number => Number.parseFloat(value) || 0;
 const twips = (value: number): number => Math.max(0, Math.round(value * 15));
 const style = (node: Element): CSSStyleDeclaration => node.ownerDocument.defaultView!.getComputedStyle(node);
@@ -84,7 +84,12 @@ async function runs(nodes: readonly Node[], inherited: Element): Promise<Run[]> 
     } else if (node instanceof Element && !ignored(node)) {
       if (node instanceof HTMLImageElement) result.push(await imageRun(node));
       else if (node.tagName === 'BR') result.push(new TextRun({ break: 1 }));
-      else result.push(...await runs([...node.childNodes], node));
+      else if (node instanceof HTMLAnchorElement && node.getAttribute('href')) {
+        const children = await runs([...node.childNodes], node);
+        let link: URL | undefined;
+        try { const candidate = new URL(node.getAttribute('href')!, node.ownerDocument.baseURI); if (['http:', 'https:'].includes(candidate.protocol) && !candidate.username && !candidate.password) link = candidate; } catch { /* Invalid links keep their visible text. */ }
+        result.push(...(link ? [new ExternalHyperlink({ children, link: link.href })] : children));
+      } else result.push(...await runs([...node.childNodes], node));
     }
   }
   return result;
@@ -93,6 +98,7 @@ async function runs(nodes: readonly Node[], inherited: Element): Promise<Run[]> 
 async function paragraph(nodes: readonly Node[], element: Element, marker = '', spacing?: {before:number;after:number}): Promise<Paragraph> {
   const css = style(element);
   const children = await runs(nodes, element);
+  const containsImage = children.some(child => child instanceof ImageRun) || nodes.some(node => node instanceof Element && !ignored(node) && [...node.querySelectorAll('img')].some(image => !ignored(image)));
   if (marker) children.unshift(new TextRun(marker));
   const heading = /^H[1-6]$/u.test(element.tagName);
   // Direct cell text already gets this padding from tcMar. A nested authored
@@ -110,7 +116,7 @@ async function paragraph(nodes: readonly Node[], element: Element, marker = '', 
   }
   // CSS line-height is an absolute length here, not Word's 240ths-of-a-line.
   // Inline photographs must still be allowed to grow their line box.
-  return new Paragraph({ children, outlineLevel: heading && !element.closest('.report-final-cover') ? Number(element.tagName[1]) - 1 : undefined, alignment: paragraphAlignment, spacing: { before: twips(spacing?.before??px(css.marginTop)), after: twips(spacing?.after??px(css.marginBottom)), ...(px(css.lineHeight) ? { line: twips(px(css.lineHeight)), lineRule: children.some(child => child instanceof ImageRun) ? LineRuleType.AT_LEAST : LineRuleType.EXACT } : {}) }, indent: { left: cellText?0:twips(px(css.paddingLeft)), right: cellText?0:twips(px(css.paddingRight)) }, keepNext: heading });
+  return new Paragraph({ children, outlineLevel: heading && !element.closest('.report-final-cover') ? Number(element.tagName[1]) - 1 : undefined, alignment: paragraphAlignment, spacing: { before: twips(spacing?.before??px(css.marginTop)), after: twips(spacing?.after??px(css.marginBottom)), ...(px(css.lineHeight) ? { line: twips(px(css.lineHeight)), lineRule: containsImage ? LineRuleType.AT_LEAST : LineRuleType.EXACT } : {}) }, indent: { left: cellText?0:twips(px(css.paddingLeft)), right: cellText?0:twips(px(css.paddingRight)) }, keepNext: heading });
 }
 
 async function table(element: HTMLTableElement): Promise<Table> {

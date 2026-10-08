@@ -1,7 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { createEditableDocx } from './editable-docx-export';
+import { createEditableDocx, documentImageData } from './editable-docx-export';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 import { createNativeHwp, type NativeHwpPage } from './editable-hwp-export';
 import { collectNativeHwpPages } from './native-hwp-pages';
@@ -171,6 +171,16 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
       continue;
     }
     const captureId = `final-export-page-${Date.now()}-${index}`;
+    // The installed canvas renderer stretches replaced elements and does not
+    // implement object-fit. Reuse the DOCX photo-box conversion in the clone
+    // only; never change the reviewed document or the original image bytes.
+    const fittedImages = await Promise.all([...sheet.querySelectorAll<HTMLImageElement>('img')].map(async image => {
+      const css = getComputedStyle(image);
+      if (!['contain', 'scale-down'].includes(css.objectFit)) return null;
+      const data = await documentImageData(image);
+      const blob = new Blob([data.bytes.buffer.slice(data.bytes.byteOffset, data.bytes.byteOffset + data.bytes.byteLength) as ArrayBuffer], { type: `image/${data.type === 'jpg' ? 'jpeg' : data.type}` });
+      return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('출력 사진의 비율 유지 변환에 실패했습니다. 원본은 보존됩니다.')); reader.readAsDataURL(blob); });
+    }));
     // html2canvas's cloned document can apply a different list reset. Preserve
     // the reviewed markers, continuation markers and indentation explicitly.
     const listProperties = ['display', 'list-style-type', 'list-style-position',
@@ -189,7 +199,7 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
       scale: 1.25,
       useCORS: true,
       windowWidth: 1400,
-      onclone: (clonedDocument) => {
+      onclone: async (clonedDocument) => {
         const clonedPage = clonedDocument.querySelector<HTMLElement>(`[data-final-export-capture="${captureId}"]`);
         if (!clonedPage) return;
         clonedPage.style.width = `${layout.widthPx}px`;
@@ -199,12 +209,12 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
         if (isFittedSheet) clonedPage.style.overflow = 'hidden';
         clonedPage.style.margin = '0';
         clonedPage.style.boxSizing = 'border-box';
+        await Promise.all([...clonedPage.querySelectorAll<HTMLImageElement>('img')].map(async (image, imageIndex) => { const fitted = fittedImages[imageIndex]; if (fitted) { image.src = fitted; image.removeAttribute('srcset'); await image.decode(); } }));
         clonedPage.querySelectorAll<HTMLElement>('ol, ul, li').forEach((node, listIndex) => {
           listStyles[listIndex]?.forEach(([property, value]) => node.style.setProperty(property, value, 'important'));
         });
       },
-    });
-    delete elements[index].dataset.finalExportCapture;
+    }).finally(() => { delete elements[index].dataset.finalExportCapture; });
     if (isFittedSheet) {
       // One reviewed proposal sheet is one physical A4 page. Never cut it at an
       // arbitrary pixel boundary: the proposal preview must fit before capture.
