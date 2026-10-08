@@ -1,8 +1,14 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF209 일정 입력 손실 수정 검증 중, 전체 A–Z는 미합격, 2026-10-08
+## 현재 판정 — CF209 일정 보호 개발 반영·계약 검사 통과, 실제 후속 검수 및 전체 A–Z는 미합격, 2026-10-08
 
 ### CF209 일정 선택·미저장 입력·조회 실패 보호
+
+- 제품 `1e71d8b` GitHub push→development Worker `92c97da3-15c6-44a8-9df3-48308fe3b13e` 정상 반영했다. 정확히 검증한 `E200/cf209/dist-checked`를 keep-vars로 사용했고 공개43파일/37,704,892B byte·SHA exact/canonical `405833eb83aecadec96f8629196f9b021031ddfd92d7c56436f69450d4c5294b`, health/readiness200·Drive true다. 승인runtime28/WASM 불변, DB/schema·키ENV·가오픈·고객 원고·직원 배정·업무승인·메일·ERP 변경0. 검수표 기록 추가는 별도 문서 커밋으로 구분한다.
+- 실제 단신 Chrome에서 `index-DyqQbWCe.js`와 동일 CC7을 재열었다. 기존 메모·날짜·PM 모두 빈 값인 상태를 확인한 뒤 reload했고 수주 팝업은 ‘나중에 다시 보기’만 닫았다. PM 후보5명 정상 조회를 확인했지만 지정/저장하지 않았다. 같은 합성 임시 메모를 입력→X를 눌렀을 때 실제 JS confirm을 읽어 확인창 생성 PASS다. dismiss 후 confirm은 없고 URL은 같은 CC7이지만 DOM 읽기가 Emulation focus timeout으로 중단되어 실제 취소 후 메모값 보존까지는 PASS로 확대하지 않았다. root Cua 세션만 재초기화했고 동일 extensionInstanceId `d9cb0cc6-3a2f-4c07-862e-d6441bda9044`의 Chrome ID는3→2로 재배정됐다. unrelated Chrome4/IAB3으로 전환하지 않았다. 같은 탭 재연결도 시간 초과하여 반복 입력·저장·reload는 하지 않았다. 보고서839125259/제안서839125444/일정839125591은 문서화된 tabs.get과 handoff로 보존했다. native 확인창 뒤 자동 조작 연결 제한과 앱 입력 손실은 구분하며, 실제 취소 후 값·잘못된ID 화면은 후속 미검증이다.
+- 새 검사 최종 SHA `12cfbbe5cc85d46f665dfbcfa889bdf86c80a3fc0a778d63b823d69b7fb0c337`. root 최종 신규·기존 묶음20/20 PASS와 별도 실제 출력UI1/1 PASS/skipped0, 독립전문가14/14·전체 타입 PASS다. optional proof 이미지는 `E200/cf209/screenshotguard-current.png`/205,378B/SHA `30ed05062cca236e7b57d82d69cd09cbfbcdfd8c9e14730c3806a2b98d72eaa3`이고 root·독립 검수자가 직접 열었다. 합성 CF209 표식·PM2 선택/수정 날짜·지연·미저장 경고/취소 후 팝업 보존이 보이며 실제 development 화면 증거로 혼동하지 않는다. 선택4파일의 새 비차단 안내를 보냈으며 실제 ACK 전 같은파일 재업로드0이다.
+
+아래 배포 전 문구는 CF209 수정 경위이며 현재 개발 반영은 위 결과를 기준으로 한다.
 
 - 단신 Chrome의 development CC7 상세 일정에서 첫 일정 메모에 `CF209 미저장 보존 검수 — 합성 임시값`을 입력하고 X로 닫았다. 경고·확인창 없이 목록으로 이동했고 같은 CC7을 재열기하니 메모가 빈 값이었다. 실제 입력 손실 FAIL이며 날짜·PM·원격 기록 저장은 수행하지 않았다. 기존 고객 건·CC4~6·보고서 첨부창은 변경하지 않았다.
 - 원인: 지정 projectId가 없어도 `projects[0]`로 대체되는 선택 경로, 일정 상세 컴포넌트의 이동 차단기 누락, 서버 재조회 시 모든 로컬 draft를 초기화하는 effect였다. 일정 화면 한 파일만 최소 수정했다. 지정한 프로젝트를 찾지 못하면 오류와 목록 복귀만 제공한다. 기존 공통 이동 차단기·beforeunload를 사용해 X/Escape/배경/닫기/메뉴 이동과 저장 응답 대기 중 이탈을 보호한다. 명시적 최신 조회는 사용자가 변경 폐기를 확인한 경우만 초기화한다.
