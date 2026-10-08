@@ -357,10 +357,10 @@ async function zipEntry(bytes: Uint8Array, wantedName: string, optional = false)
       const localExtraLength = read16(view, localOffset + 28);
       const start = localOffset + 30 + localNameLength + localExtraLength;
       const compressed = bytes.slice(start, start + compressedSize);
-      if (method === 0) return decoder.decode(compressed);
+      if (method === 0) return xlsxPartXml(decoder.decode(compressed), wantedName);
       if (method === 8 && typeof DecompressionStream !== 'undefined') {
         const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-        return decoder.decode(new Uint8Array(await new Response(stream).arrayBuffer()));
+        return xlsxPartXml(decoder.decode(new Uint8Array(await new Response(stream).arrayBuffer())), wantedName);
       }
       throw new Error('이 XLSX 압축 방식은 현재 브라우저에서 읽을 수 없습니다. Chrome 최신 버전을 사용하세요.');
     }
@@ -380,6 +380,62 @@ const unescapeXml = (value: string) => value.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|q
   return String.fromCodePoint(point);
 });
 
+// XLSX prefixes are aliases, not part of a sheet/cell's name. Normalize only
+// the audited part's tags, never cell text or the uploaded file's bytes.
+function xlsxPartXml(xml: string, part: string): string {
+  const root = part === 'xl/workbook.xml' ? 'workbook' : part === 'xl/sharedStrings.xml' ? 'sst'
+    : part === 'xl/_rels/workbook.xml.rels' ? 'Relationships' : /^xl\/worksheets\/[^/]+\.xml$/u.test(part) ? 'worksheet' : '';
+  if (!xml || !root) return xml;
+  const main = root === 'Relationships' ? 'http://schemas.openxmlformats.org/package/2006/relationships' : 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const office = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const frames: Array<{ name: string; namespaces: Map<string, string> }> = [];
+  let seenRoot = false, legacy = false;
+  const invalid = () => { throw new Error('XLSX XML 이름공간·구조를 확인하지 못했습니다. 원본을 다시 저장해 주세요. 기존 내용은 유지됩니다.'); };
+  const normalizedXml = xml.replace(/<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<(?:"[^"]*"|'[^']*'|[^'">])*>/gu, token => {
+    if (token.startsWith('<!--') || token.startsWith('<?')) return '';
+    if (token.startsWith('<![CDATA[')) { if (!frames.length) invalid(); return token.slice(9, -3).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'); }
+    const name = token.match(/^<\/?([\p{L}_][\p{L}\p{N}_.:-]*)(?=[\s/>])/u)?.[1];
+    if (!name) return invalid();
+    const declarations = [...token.matchAll(/\s([^\s=<>]+)\s*=\s*(["'])([\s\S]*?)\2/gu)].filter(match => match[1] === 'xmlns' || match[1].startsWith('xmlns:'));
+    const closing = token.startsWith('</'), selfClosing = /\/\s*>$/u.test(token);
+    const frame = closing ? frames.pop() : frames.at(-1);
+    if (closing && (!frame || frame.name !== name || declarations.length)) invalid();
+    if (!closing && seenRoot && !frames.length) invalid();
+    const namespaces = new Map(frame?.namespaces);
+    const declared = new Set<string>();
+    for (const match of declarations) {
+      const alias = match[1] === 'xmlns' ? '' : match[1].slice(6), uri = unescapeXml(match[3]);
+      if (declared.has(alias) || (namespaces.has(alias) && namespaces.get(alias) !== uri)) invalid();
+      declared.add(alias); namespaces.set(alias, uri);
+    }
+    if (!seenRoot) {
+      legacy = !name.includes(':') && !namespaces.has('');
+      if (name.split(':').at(-1) !== root || token.startsWith('</')) invalid();
+      seenRoot = true;
+    }
+    const [prefix, local] = name.includes(':') ? name.split(':') : ['', name];
+    if (name.split(':').length > 2 || ((prefix || !legacy || namespaces.has('')) && namespaces.get(prefix) !== main)) invalid();
+    if (!closing && !selfClosing) frames.push({ name, namespaces });
+    let normalized = token.replace(/^<(\/?)[^\s/>]+/u, `<$1${local}`);
+    const attributeNames = new Set<string>();
+    normalized = normalized.replace(/(\s)([^\s=<>]+)\s*=\s*(["'])([\s\S]*?)\3/gu, (_all, space: string, attribute: string, _quote: string, value: string) => {
+      if (attribute.includes(':') && !attribute.startsWith('xmlns:') && attribute !== 'xml:space') {
+        const [alias, key] = attribute.split(':');
+        if (attribute.split(':').length > 2 || ['r', 't', 'name', 'Id', 'Target', 'Type', 'TargetMode'].includes(key)) invalid();
+        if (key === 'id') { if (namespaces.get(alias) !== office && !(legacy && alias === 'r' && !namespaces.has(alias))) invalid(); attribute = 'r:id'; }
+        else if (!namespaces.has(alias)) invalid();
+      }
+      if (attributeNames.has(attribute)) invalid();
+      attributeNames.add(attribute);
+      if (value.includes('<')) invalid();
+      return `${space}${attribute}="${value.replaceAll('"', '&quot;').replaceAll('>', '&gt;')}"`;
+    });
+    return normalized;
+  });
+  if (!seenRoot || frames.length) invalid();
+  return normalizedXml;
+}
+
 /**
  * Excel rewrites inline strings to a shared string table when a user opens and
  * saves an exported workbook.  Reading only `<t>` from the worksheet therefore
@@ -390,8 +446,8 @@ const unescapeXml = (value: string) => value.replace(/&(#x[0-9a-f]+|#\d+|lt|gt|q
 async function workbookSharedStrings(bytes: Uint8Array): Promise<string[]> {
   const sharedXml = await zipEntry(bytes, 'xl/sharedStrings.xml', true);
   if (!sharedXml) return [];
-  return [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gu)].map((item) =>
-    [...item[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gu)]
+  return [...sharedXml.matchAll(/<si(?=[\s/>])[^>]*>([\s\S]*?)<\/si>/gu)].map((item) =>
+    [...item[1].matchAll(/<t(?=[\s/>])[^>]*>([\s\S]*?)<\/t>/gu)]
       .map((text) => unescapeXml(text[1]))
       .join(''),
   );
@@ -402,34 +458,38 @@ async function workbookFirstSheetPath(bytes: Uint8Array, requestedSheet = '', st
     zipEntry(bytes, 'xl/workbook.xml', true),
     zipEntry(bytes, 'xl/_rels/workbook.xml.rels', true),
   ]);
-  const sheets = [...workbookXml.matchAll(/<sheet\b([^>]*)\/?\s*>/gu)];
-  const selected = requestedSheet ? sheets.find(sheet => unescapeXml(sheet[1].match(/\bname="([^"]+)"/u)?.[1] ?? '') === requestedSheet) : sheets[0];
+  const sheets = [...workbookXml.matchAll(/<sheet(?=[\s/>])([^>]*)\/?\s*>/gu)];
+  const selected = requestedSheet ? sheets.find(sheet => unescapeXml(sheet[1].match(/\sname="([^"]+)"/u)?.[1] ?? '') === requestedSheet) : sheets[0];
   if (requestedSheet && !selected) throw new Error('지정한 시트를 찾지 못했습니다. 원본의 시트 이름을 확인해 주세요.');
-  const relationshipId = selected?.[1].match(/\br:id="([^"]+)"/u)?.[1];
+  const relationshipId = selected?.[1].match(/\sr:id="([^"]+)"/u)?.[1];
   if (!relationshipId || !relationshipsXml) { if (strict || requestedSheet) throw new Error('지정 시트의 원본 연결을 확인하지 못했습니다. 원본을 다시 저장해 주세요.'); return 'xl/worksheets/sheet1.xml'; }
   const escapedId = relationshipId.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
-  const target = relationshipsXml.match(new RegExp(`<Relationship\\b(?=[^>]*\\bId="${escapedId}")(?=[^>]*\\bTarget="([^"]+)")[^>]*/?>`, 'u'))?.[1];
+  const relationship = relationshipsXml.match(new RegExp(`<Relationship(?=[\\s/>])(?=[^>]*\\sId="${escapedId}")[^>]*/?>`, 'u'))?.[0];
+  const target = relationship?.match(/\sTarget="([^"]+)"/u)?.[1];
   if (!target) { if (strict || requestedSheet) throw new Error('지정 시트의 원본 연결을 확인하지 못했습니다. 원본을 다시 저장해 주세요.'); return 'xl/worksheets/sheet1.xml'; }
   const decodedTarget = unescapeXml(target).replaceAll('\\', '/').replace(/^\//u, '');
+  const relationshipType = relationship?.match(/\sType="([^"]*)"/u)?.[1];
+  const targetMode = relationship?.match(/\sTargetMode="([^"]*)"/u)?.[1];
+  if (strict && ((targetMode !== undefined && unescapeXml(targetMode) !== 'Internal') || /[:?#]/u.test(decodedTarget) || decodedTarget.split('/').some(segment => segment === '..') || (relationshipType !== undefined && unescapeXml(relationshipType) !== 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet'))) throw new Error('지정 시트의 원본 연결이 worksheet 내부 자료가 아닙니다. 기존 내용은 유지됩니다.');
   if (decodedTarget.startsWith('xl/')) return decodedTarget;
   return `xl/${decodedTarget.replace(/^\.\//u, '')}`;
 }
 
 function worksheetRows(sheetXml: string, sharedStrings: readonly string[], addressedRows?: Map<number, Map<string, string>>): Array<Map<string, string>> {
   const rows: Array<Map<string, string>> = [];
-  for (const rowMatch of sheetXml.matchAll(/<row\b(?![^>]*\/>)([^>]*)>([\s\S]*?)<\/row>/gu)) {
+  for (const rowMatch of sheetXml.matchAll(/<row(?=[\s/>])(?![^>]*\/>)([^>]*)>([\s\S]*?)<\/row>/gu)) {
     const cellValues = new Map<string, string>();
-    const rowNumber = Number(rowMatch[1].match(/\br="(\d+)"/u)?.[1] ?? rowMatch[2].match(/\br="[A-Z]+(\d+)"/u)?.[1]);
+    const rowNumber = Number(rowMatch[1].match(/\sr="(\d+)"/u)?.[1] ?? rowMatch[2].match(/\sr="[A-Z]+(\d+)"/u)?.[1]);
     if (addressedRows && (!Number.isSafeInteger(rowNumber) || rowNumber < 1 || rowNumber > 1_048_576 || addressedRows.has(rowNumber))) throw new Error('XLSX 행 주소가 올바르지 않습니다. 원본을 다시 저장해 주세요.');
-    for (const cellMatch of rowMatch[2].matchAll(/<c\b(?![^>]*\/>)([^>]*)\br="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/gu)) {
-      if (addressedRows && (Number(cellMatch[0].match(/\br="[A-Z]+(\d+)"/u)?.[1]) !== rowNumber || cellValues.has(cellMatch[2]))) throw new Error('XLSX 셀 주소가 행과 다르거나 중복됩니다. 원본을 다시 저장해 주세요.');
+    for (const cellMatch of rowMatch[2].matchAll(/<c(?=[\s/>])(?![^>]*\/>)([^>]*)\sr="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/gu)) {
+      if (addressedRows && (Number(cellMatch[0].match(/\sr="[A-Z]+(\d+)"/u)?.[1]) !== rowNumber || cellValues.has(cellMatch[2]))) throw new Error('XLSX 셀 주소가 행과 다르거나 중복됩니다. 원본을 다시 저장해 주세요.');
       const attributes = `${cellMatch[1]} ${cellMatch[3]}`;
       const body = cellMatch[4];
-      const type = attributes.match(/\bt="([^"]+)"/u)?.[1] ?? '';
-      const inlineText = [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/gu)]
+      const type = attributes.match(/\st="([^"]+)"/u)?.[1] ?? '';
+      const inlineText = [...body.matchAll(/<t(?=[\s/>])[^>]*>([\s\S]*?)<\/t>/gu)]
         .map((text) => unescapeXml(text[1]))
         .join('');
-      const rawValue = unescapeXml(body.match(/<v\b[^>]*>([\s\S]*?)<\/v>/u)?.[1] ?? '');
+      const rawValue = unescapeXml(body.match(/<v(?=[\s/>])[^>]*>([\s\S]*?)<\/v>/u)?.[1] ?? '');
       if (addressedRows && type === 's' && (!/^\d+$/u.test(rawValue) || Number(rawValue) >= sharedStrings.length)) throw new Error('XLSX 문자열 연결을 확인하지 못했습니다. 원본을 다시 저장해 주세요.');
       const value = type === 's'
         ? sharedStrings[Number.parseInt(rawValue, 10)] ?? ''
@@ -570,9 +630,9 @@ export async function readSpreadsheetExcerpt(file: File, requestedRange = '', re
   const lastRow = match ? Number(match[4]) : maxRow;
   if (![firstColumn, lastColumn, firstRow, lastRow].every(Number.isSafeInteger) || firstRow < 1 || firstColumn < 1 || lastColumn > 16_384 || lastRow > 1_048_576 || firstColumn > lastColumn || firstRow > lastRow || lastColumn - firstColumn > 49 || lastRow - firstRow > 299) throw new Error('유효한 셀 범위를 입력해 주세요. 한 번에 최대 50열·300행까지만 보고서에 발췌할 수 있습니다.');
   // Read stored cell text/cached formula results only. Never recalculate or infer a missing result.
-  for (const cell of sheetXml.matchAll(/<c\b(?![^>]*\/>)[^>]*\br="([A-Z]+)(\d+)"[^>]*>([\s\S]*?)<\/c>/gu)) {
+  for (const cell of sheetXml.matchAll(/<c(?=[\s/>])(?![^>]*\/>)[^>]*\sr="([A-Z]+)(\d+)"[^>]*>([\s\S]*?)<\/c>/gu)) {
     const column = excelColumnNumber(cell[1]), row = Number(cell[2]);
-    if (column >= firstColumn && column <= lastColumn && row >= firstRow && row <= lastRow && /<f\b/u.test(cell[3]) && !/<v\b[^>]*>[^<]+<\/v>/u.test(cell[3])) throw new Error('선택 범위에 저장된 계산 결과가 없는 수식이 있습니다. Excel에서 계산·저장한 뒤 다시 발췌해 주세요.');
+    if (column >= firstColumn && column <= lastColumn && row >= firstRow && row <= lastRow && /<f(?=[\s/>])/u.test(cell[3]) && !/<v(?=[\s/>])[^>]*>[^<]+<\/v>/u.test(cell[3])) throw new Error('선택 범위에 저장된 계산 결과가 없는 수식이 있습니다. Excel에서 계산·저장한 뒤 다시 발췌해 주세요.');
   }
   const matrix: string[][] = [];
   for (let rowNumber = firstRow; rowNumber <= lastRow; rowNumber += 1) {
@@ -587,7 +647,7 @@ export async function readSpreadsheetExcerpt(file: File, requestedRange = '', re
   const body = matrix.slice(1).map((row) => `| ${Array.from({ length: width }, (_unused, index) => escapeMarkdown(row[index] ?? '')).join(' | ')} |`);
   const markdown = [`| ${header.join(' | ')} |`, `| ${header.map(() => '---').join(' | ')} |`, ...body].join('\n');
   const workbookXml = await zipEntry(bytes, 'xl/workbook.xml', true);
-  const sheetName = requestedSheet || unescapeXml(workbookXml.match(/<sheet\b[^>]*\bname="([^"]+)"/u)?.[1] ?? '') || '첫 번째 시트';
+  const sheetName = requestedSheet || unescapeXml(workbookXml.match(/<sheet(?=[\s/>])[^>]*\sname="([^"]+)"/u)?.[1] ?? '') || '첫 번째 시트';
   return { markdown, rows: matrix, sheetName, range: `${excelColumnLetters(firstColumn)}${firstRow}:${excelColumnLetters(lastColumn)}${firstRow + matrix.length - 1}` };
 }
 

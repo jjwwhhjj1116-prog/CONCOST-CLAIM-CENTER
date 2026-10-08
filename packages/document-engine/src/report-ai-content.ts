@@ -23,7 +23,7 @@ function assertReportBodyFormat(content: string): void {
   if (/AI-CHAPTER:|MANUAL-CHAPTER:|MANUAL-WHOLE-DOCUMENT:|WHOLE_DOCUMENT/iu.test(content)
     || /^(?:(?:`{3,}|~{3,})(?:json|markdown|md)\b|[\[{]\s*[\{"\[]|\\#{1,6}\s)/imu.test(content)
     || /\b(?:case|workflow|processWorkflow|proposalWorkflow|shortTermMemory|longTermMemory|outlinePlanning|caseLawGrounding|codePolicy)\.[A-Za-z_][\w.]*/u.test(content)
-    || /\b(?:verifiedProcessDocuments|sourcePolicy|source_register|source_locator|source_excerpts|evidenceCatalog|approved_previous_chapters|baseline_date)\b/u.test(content)) {
+    || /\b(?:verifiedProcessDocuments|sourcePolicy|source_register|source_locator|source_excerpts|evidenceCatalog|approved_previous_chapters|baseline_date|confirmedInternalProposalSnapshots|proposalSourceErrors|INTERNAL_CONFIRMED_PROPOSAL|sourceBoundary)\b/u.test(content)) {
     throw new Error('AI가 제출용 본문 대신 내부 데이터·코드 형식을 반환하여 반영을 중단했습니다. 기존 원고는 유지됩니다. 자료 연결과 작성 지침을 확인한 뒤 다시 작성해 주세요.');
   }
 }

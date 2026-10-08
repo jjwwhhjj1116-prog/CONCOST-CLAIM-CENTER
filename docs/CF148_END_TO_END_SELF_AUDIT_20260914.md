@@ -1,6 +1,17 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF199, 2026-10-08
+## 현재 판정 — CF200, 2026-10-08
+
+최신 제품 소스 `dde7cf191bcd553768bd888d2863f4c93775fa13`를 정상 GitHub push 후 **development에만** Worker `9ab8b7a9-6c6d-4a85-824f-0a29b606fb3c`로 반영했다. `--assets E:/Codex-QA/claim-center-cf200-20261008/dist --keep-vars` 사용. 공개 전체43파일/37,689,127B의 byte·SHA 대조 PASS, canonical `d1e30ba2470254290f636cc987111d1fccaec87529ec183a5a4718832b9a5357`, main `index-BtXxWHzp.js` SHA `b1c2c2f0dc2c0771766e0fc2e98e920ff00ef0f7e76a37aaf669f24a0bcd910c`. health/readiness200·Drive 연결 true 전후 보존. 승인 runtime28/WASM/CF196 JS 지문 불변이며 CF186 진단 후보 엔진은 배포하지 않았다. DB/schema/migration·키/ENV·가오픈 변경0.
+
+- 원형 HWP에도 구조형 첨부창 진입이 열리던 경계를 수정했다. 상단·3/4단계 이미지 툴바가 같은 현재 문서 검사로 원형이면 연결 HWP를 열고, 일반 원고만 기존 첨부창을 연다. 지연 callback도 최신 원형이면 삽입을 거부한다. 원형 지문을 재작성하여 우회하지 않는다. 실제 부모 React/합성 API 신규7/7 PASS/skipped0를 총괄도 독립 실행했다. 분기 제거 음성 대조는 예상 FAIL. root/web 타입·build·diff check·Worker dry-run PASS. 원형 첨부 자체의 새 실저장 합격과는 구분한다.
+- 지정 단신 Chrome(extension d9cb…, ID2/tab839125205)에서 새 module을 로드하고 CC6/4단계/저장13:11:19, 편집17+실제 출력17쪽, 모든 쪽 이미지 complete/1587×2244·순서 및 주소 대응, 가로 넘침/alert/console 오류0을 확인했다. 숨김 pagination 측정본17은 출력17과 구분한다. 새 첨부 버튼→실제 연결 HWP17쪽 열기→표지 ‘검수’와8쪽 표 시각 확인→적용·저장 없이 닫았다. 페이지 이동·33% 맞춤은 화면 조작일 뿐 원고 입력이 아니다. PC 한컴 대조는 미실행.
+- 배포 전후 D1 SELECT 대조: CC6 v5/updatedAt `2026-10-06T04:11:19.766Z`/content SHA `da774a287e43d28de833425a642b56e1500a876edc039878ebdefeda4c3eaf05`/editor SHA `da5671645562c467b51fa0b7915bc2f22fdba8f2023600ad144211219029c9a8`/body SHA `d14b26a40ec6cb10a65b7f2bee241fe38574bf35d1e8699858a2e4023001991a` exact. 연결35840B/SHA d617d19e…·최초원본44544B/SHA803a7dac… 및 v1~v5 각1건 보존. 원본32·CC4/5·직원/승인·ERP/메일 변경0.
+- 승인된 별도 시험 사건 **CC-2026-00007** (`c5364831-e0e0-4d65-95bd-6cd31f6b77cb`)을 실제 UI에서 생성했다. 합성 제안서 **PROP-DA202696 v3** 저장·재열기·최종 확정·수주 성공. ERP URL/secret 설정0 확인 후 진행했고 전송·재시도0. 4~12 공통양식 및7개 미리보기 이미지 complete·안정된19쪽 확인. 보고서는 목차 확정→AI 없이 직접작성→4단계10개 H2 합성 본문·표지 제목/날짜/작성자·첫 목차 문구 입력. CC6·CC4/5·원본32 쓰기0. 직원 결재요청·이메일0이며 시험 수주는 조직의 조회형 수주 안내에 보일 수 있다.
+- **CF201 진행 중**: 정상 XLSX qualified XML 읽기·내부 확정제안서 PROPOSAL/AI context 누락·신규 사건 자료카드 caseId 누락 수정. raw body/input SHA·APPROVED 동일 버전·같은사건/org·삭제 원장을 확인하고 외부UNVERIFIED는 보존. 양AI 원문 전송동의/조직Gemini/공용키 경계 및 목차60k 초과413, 새 진단키 출력차단 적용. XLSX19+기존 CF14/18/200 합계35/35/skipped0 로컬PASS(첫 fixture env 누락1FAIL은 검수 설정 오류로 구분). root/web 타입·새 Vite build PASS, 새 개발 배포는 아직 미완료.
+- CC7 실첨부 **아직0건**: 단신 Chrome ID3/tab839125247 자동 fileChooser 전달이 업로드 전에 거부됐고 사용자에게 E:/Codex-QA/claim-center-cf200-20261008/test-fixtures의 사진3+XLSX1 직접 선택을 요청했다. 고객자료 없는 공식도구 합성 XLSX4728B/SHA50da2468…의 `구조내역!A25:C27`123.45/246.9/0/빈26행 로컬대조PASS. 실제 삽입→저장→재열기→검수용3출력·한컴독립대조·전체A–Z·가오픈승격은 미합격이다.
+
+### CF199 이전 판정 이력
 
 아래 과거 기록은 당시 이력이다. CF185가 마지막 실제 GitHub/development 반영 확인이며 CF186~199은 로컬 검증본으로 미전송·미배포다. CF197의 검토2 의견33과 CF198의 제안서 공통양식·실제 출력 검수를 보존하고, CF199에서 보고서 쟁점 첨부의 업로드 확인·닫힌 화면의 늦은 버전확인·선택 순서·번호·버전 표시와 XLSX 지정 시트/셀 표 발췌를 연결했다. 실제 편집/미리보기 정규화와 PDF 변환의 서로 다른 사진 늘림도 재현·수정했다. **최종 관련71/71와 승인 runtime staging23/23, 합계94/94 PASS, skipped0**; 사진·셀 표→메모리 HTTP 저장·reload→실제 DOCX/PDF 3쪽과 실제 PDF 사진 영역 비율을 확인했다. 94는 시험 집계이지 A–Z94기능 합격이 아니다. 실제 Worker DB 저장·원본 HWP와 한컴 독립 동일성·전체 A–Z·가오픈 승격은 아직 합격이 아니다. schema/migration·원격 DB·직원/승인·키/ENV 변경0.
 

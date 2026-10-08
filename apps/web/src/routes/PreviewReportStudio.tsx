@@ -722,10 +722,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const withProjectContext = (route: string) => {
-    if (!selectedWorkflowProject) return route;
     const target = new URL(route, window.location.origin);
-    target.searchParams.set('projectId', selectedWorkflowProject.id);
-    target.searchParams.set('caseId', selectedWorkflowProject.caseId);
+    if (selectedWorkflowProject) target.searchParams.set('projectId', selectedWorkflowProject.id);
+    if (selectedCaseId) target.searchParams.set('caseId', selectedCaseId);
     return `${target.pathname}${target.search}`;
   };
 
