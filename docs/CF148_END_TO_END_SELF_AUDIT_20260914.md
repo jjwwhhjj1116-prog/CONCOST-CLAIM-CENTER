@@ -1,19 +1,27 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF195, 2026-10-08
+## 현재 판정 — CF196, 2026-10-08
 
-아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~195은 로컬 검증본으로 아직 미전송·미배포다. CF195은 제품 변경 없이 실제 HWP5 원본007(17쪽)의 표·본문, 원본005(9쪽)의 TAB 포함 본문을 별도 메모리 사본에서 UI 입력·Undo/Redo·전체 적용·동일 형식·새 SDK 재열기로 검수했다. 기존 합성2경로/실제017 HWPX47쪽도 포함한 **6/6 UI 경로, 직접 관련 회귀43/43 PASS, skipped0**다. 직전85/85는 CF194 당시 전체 관련 실행이며 이번에 다시85개를 실행하지 않았다. 같은 파서 자기대조/선정한 원본·위치의 검수이며 실업무43카테고리 합격이 아니다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 기존 미체크 항목은 일괄 완료하지 않는다. 원형 줄경계 캐럿 방향·실제 글꼴 잉크 경계·최초 SDK 내용 손실 보고의 미증명 범위도 유지한다.
+아래 과거 기록의 미인증·구버전 배포 표시는 당시 이력이다. CF185까지의 GitHub push와 development 반영은 완료했고, CF186~196은 로컬 검증본으로 아직 미전송·미배포다. CF196은 실제 HWP5 원본007의 표에서 첫 줄 End 커서가 셀 밖으로 나가는 오류와 End→아래 방향키가 같은 줄에 머무는 오류를 재현해 수정했다. 변환 WASM·binding·SDK를 교체하지 않고 Studio의 두 커서 메서드만 교정했다. **최종 관련41/41 PASS, skipped0**(실제 SDK 6경로 포함18 + staging23)이며 007의19개 좌표/입력 오프셋/Undo도 통과했다. 같은 파서 내부 자기대조이며 실업무41카테고리 합격이 아니다. **전체 A–Z, PC 한컴 원형 동일성, 원형 목차 전체 지원, 가오픈 승격은 아직 합격이 아니다.** 실제 UI 줄경계 검사는 이번에 완료한 제한 범위로 닫고, 같은 위치를 반복하지 않는다. 글꼴 잉크 경계·PC 한컴 대조·최초 SDK 내용 손실 보고는 별도 미증명으로 유지한다.
+
+### 현재 완료 순서 — 과거 미체크 목록과 구분
+
+1. **다음 구현은 검토2 의견33의 여러 인원 일괄 지정이다.** 현재 WorkflowOperations의 단일 담당자 선택/단일 allocation POST가 실제 남아 있다. PERSON의 인원별 기록·원자 저장·멱등 재시도와 TEAM의 기존 팀 단위를 보존해야 한다. 이번에는 배정을 실행하거나 해당 기능을 구현하지 않았다.
+2. 제안서 4~12장 유형 변경→편집→저장→재진입→실제 출력, 쟁점 첨부 및 A–Z에서 증거가 없는 동선만 검수한다. 현재 선택목록의 첫100건 제한은 공유 전페이지 로더로 해소됐으므로 옛 의견13을 현재 미구현으로 세지 않는다.
+3. 원형 목차 문구/field·사진 배치, PC 한컴 독립 대조 및 CF186 정식 엔진 승격을 구분해 진행한다. native DOCX의 페이지 그림 편집성 제한은 남아 있다. 이번 JS 교정은 전체 Studio 소스 재빌드나 CF186 WASM 승인으로 가장하지 않는다.
+4. 최신 소스/승인 runtime의 development 실화면 검수→환경·DB 및 필요한 보호 백업/리허설→동일 검증 artifact의 가오픈 승격·양서버 대조 순서다. 기존 Docker 기동·지정3커밋 전송·Hwp.exe 경로 질문의 승인/답변 대기는 확대·우회하지 않는다.
+5. 관리자 개발 QA에 직원 최종승인을 선행조건으로 요구하지 않는다. 실제 납품의 CEO/DIRECTOR·자기승인 차단은 유지하며, 현장조사 양식 의견32는 HOLD, 직원 영상은 안정된 배포 이후다.
 
 | 구간 | 이번 확인 | 남은 범위 |
 |---|---|---|
-| 연결·배포 | 지정 단신 Chrome 로그인, 원 Git 이력 정상 push, development 최신 소스·승인 runtime28/28 일치 | 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
+| 연결·배포 | 마지막 실제 확인 CF185의 development·승인 runtime28/28 일치. CF196 로컬 빌드에 별도 승인 JS 교정 연결 | CF186~196 서버 미반영. 가오픈 소스/DB 승격·비밀값 동일성은 미실행/미증명 |
 | 유형·목차 선택 | 유형명/CH 코드 제거 유지. CF188 항목↔물리 쪽 연결. CF190 숫자 갱신에 CF191 후행공백 보존·원본 1행2열 Roman/제목 읽기 위치 확인·제외 사유 표시 추가. 실제017 사본09→01 복원 뒤47쪽 내부 렌더 exact | 원형 자동 의미 추출·목차 문구/표·필드 재생성 미완료. 실제017 4행 확인/6행 제외,025는 지원 목차 없음으로 임의 생성0. 신규 연결은 서버 미반영 |
 | 구조형 챕터 이동 | CF187 코드 없는 고유 제목 이동 누락을 실제 React에서 FAIL 재현→공유 제목 접두어 규칙과 정확 제목 fallback으로 수정.1440/390px 키보드·캐럿·편집기 스크롤·JSON/change 불변 PASS | 로컬 검증본/서버 미반영. 중복·부분 제목/표 내부/원형 쪽 이미지는 추정 연결 금지. 실제 서비스 선택 메뉴·자동저장 전구간 검증과 별개 |
 | 원형 쪽 탐색 | 원본17쪽 편집·출력 동시 이동의 과거 실제 Chrome 결과 유지. CF188 같은17쪽 다른 원형에서9쪽 선택 잔류 FAIL→초기화 수정; 확인된 챕터 이동·오래된 출력URL/미완료 이미지/이전 원본 지문 차단 PASS | 신규 검사는 localhost 합성 원고/실제 React 경로. 원형 목차 재생성·실제 서버 저장 왕복과 별개 |
 | 표지·목차 편집 | 구조형 폼 유지, 원형 HWP 왼쪽 편집 진입 추가, 실제17쪽 표지·목차·표 보기 및 목차 입력→Undo | 모든 원본32개·한컴에서 글꼴/여백/쪽 나눔 대조 미완료 |
 | 파일 무결성·엔진 | 실다운로드35,840B가 저장 evidence와 SHA 동일,17쪽 A4세로, 실제 문단/표 셀 메모리 수정→저장→재열기 | 이 검사는 전체 실사용 저장·최종 DOCX/PDF 제출본 검수와 별개 |
 | 원형 편집 안정성 | 실제 React/Tiptap에서 끝 마커 뒤 자동 빈 문단, 전체 교체와 첫 편집의 Undo 병합, 문서 전환 시 이전 여백 유지 FAIL→최소 수정→PASS. 일반 표·사진·빈 문단·서식 Undo·문서 키 전환 보존 | 합성 localhost 검사. 실제 HWP 수정본의 영구저장·Yjs 다중 사용자 Undo·한컴 전수 대조와 별개 |
-| 원형 표·본문 실제 입력 | CF195 실제007 HWP의 셀/본문을 독립 사본에서 입력→Undo 원래17쪽→Redo→전체 적용·재열기 PASS. 표 입력은146셀·다른16쪽/원래셀 경계·서식 및2줄 가운데 배치를 검증. 실제005 HWP9쪽 TAB 본문 입력도6셀·다른8쪽·그림/TAB 속성 보존 PASS. 실제017 HWPX47쪽도 재통과 | 개별 평면표·본문 위치/로컬 메모리 저장 검수다. 누적 동시 수정·중첩표·PC 한컴·D1/Drive 영구저장·모든32원본 합격으로 확대하지 않음. 줄경계 query 보정1곳을 별도 명시하며 실제 UI 캐럿 방향은 미검증 |
+| 원형 표·본문 실제 입력 | 실제007/005/017 등6 SDK 경로 유지. CF196 첫 줄 End·End 후 아래 방향키 오류 수정, 007의19개 실제 marker 입력·Undo에서 모든146셀/17쪽 보존 PASS | 개별 평면표·본문/로컬 메모리 저장이다. 중첩·세로쓰기·셀/쪽 경계 이동은 원래 경로를 유지한다. 누적 동시 수정·PC 한컴·D1/Drive·모든32원본 합격으로 확대하지 않음 |
 | 저장·재열기 | 구체 승인 후 CC6 표지·8쪽 표 각 ‘검수’ 추가→17쪽 전체 적용1회→실제 v5 저장→reload→연결 HWP 재열기 PASS. 원래 제목·17쪽·2표식 유지, 중복 확인·오류0 | PC 한컴 및 독립승인 후 제출용 파일 검수는 별도 |
 | 원본·기존 이력 | 이번 CC6 v1~v5 보존, 최초 원본44,544B/SHA 불변, 15쪽 자료 참조와 모든 페이지 속성 불변. 새 작업본+변경1·8쪽만 추가해23건 SUCCEEDED | 전체DB 복제는 승인 범위 밖으로 거절·미실행. 과거124/120테이블 대조를 이번 전수 결과로 확대하지 않음. CC5 복구/재업로드0 |
 | 검토·최종 출력 | 자기승인·CEO/DIRECTOR 규칙 유지. 승인 snapshot과 연결 지문을 검증한 원형 HWP/HWPX 동일바이트 출력·A4 실제 크기·불일치 차단 구현/격리 검사 PASS | 실제 독립승인·확정 DOCX/PDF/HWP 대조 미완료. 원형 없는 페이지그림 DOCX의 개별 문장·표 편집은 불가하며 안내를 정정 |
@@ -32,6 +40,18 @@
 직전 CF184 제품 소스 `5d70f62b85060f6416f24ab28e6879cf1a7ef2cd`를 정상 commit/push하고 development Worker `b7a10bb4-6c48-4b42-a59b-c6344877f4fd`에만 반영했다. `--assets E:/Codex-QA/claim-center-cf184-20261006/dist --keep-vars` 사용, health/readiness200·entry3/runtime28 exact SHA PASS. main `/assets/index-BtEgmOJA.js` SHA `e7ce400339833ac3d007c8bba8e81f029669de2d2bfb74ef14d7037dd17fe538`. DB/migration/환경값·키/가오픈 변경0. 아래 과거 통과 범위를 이번 실제 원형 배치 FAIL로 확대 해석하지 않는다.
 
 현재 CF185 제품 소스 `9df783aa1f050a3ae25f783f25f3a2a58d26583a` 정상 commit/push 후 development Worker `10c2e684-b114-4dd6-9252-262b8c9e5693`에만 반영했다. 신규 main index-BRkdxuoG.js/CSS8yhsWmje, health/readiness200·entry3/runtime28 exact SHA PASS. 기존 서버값 `--keep-vars` 유지, 원형 엔진·DB·키·가오픈 변경0. 지정 단신 Chrome에서 미저장 없음 확인 후1회 reload해 신규 module·CC6/4단계/저장13:11:19·편집17+visible출력17의순서/complete/1587×2244원그림/794×1123표시·주소/크기대응·잘림/가로넘침0·console/alert0 확인. 기존 원고 입력·저장·다운로드·출력·승인·단계 이동0. 원형 배치 FAIL은 그대로 유지한다.
+
+### CF196 — 실제 줄 경계 End·수직 이동 수정과 검증된 빌드 연결
+
+- 시작 HEAD `e972e001c455179e04c8ad31a57f245f8f4f57d9`, 기존 recovery/`feat/CF123-es-v2`, 사용자 삭제22 보존. ponytail 최소 변경과 UI hardening/키보드 접근성 지침을 적용했으며 ES 전용 디자인·출력 형식·데이터는 바꾸지 않았다. 전문3명이 읽기 코드/지문/원장을 독립 확인했다.
+- 실제007 17쪽의 물리5쪽 s0host123/control0/cell8/para0에서 첫 줄 End의 DOM 커서가 셀 밖으로 나갔다. 기존 line-aware getter가 native 셀 경계 보정을 우회하는 원인이다. 가로 평면 셀의 End만 같은 쪽·줄·높이·명시 overflow/경계의 native safe x를 사용하며 논리 offset과 visual y는 보존한다. Home/본문/중첩/세로쓰기/글상자는 변경하지 않고 불확실하면 기존 fallback으로 간다.
+- End→Down은 실제 DOM y562에 머물렀고 공개 native probe도 ByPath9→10/y562, 기존 flat API는9→12/y581.2였다. exact c3의 inclusive 이전 줄 끝 조회가 다음 줄 후보에 섞이는 원인을 확인했다. End affinity가 있는 같은 평면·가로 셀 문단/같은 물리쪽의 다음 visual line만 flat API로 읽고, section/paragraph/parent/control/cell/cellPara·정확한 scalar 줄끝을 검증해 기존 cellPath를 보존한다. Up의 첫 줄 끝도 End 보정을 재사용한다. 보조 probe throw/undefined·다른 문단·셀/쪽·범위밖은 원래 path로 복귀한다. native 엔진·SDK/RPC/본문·서식 변경0.
+- 원형19개 UI 검사는 방향키 양방향, Home/End, End→Down/Up(두 키 사이 export/Undo0), glyph 시작/끝 클릭에서 실제 `Z` marker를 정해진 scalar에 넣고 공개 export로 확인→Undo 후 모든 셀/17쪽 SVG exact를 확인한다. 임시 marker가 최종 작업본에 남지 않는다. 합성HWP/HWPX 및 실제017 HWPX47쪽/007 HWP 셀·본문/005 TAB 본문의 기존 입력·저장·재열기도 통과, 원본32 지문 대조와 선택 원본 파일 SHA 불변이다. 기존 CC6 v5/3출력은 재실행하지 않았다.
+- 최종 SDK+unit **18/18 skipped0**(67.80초), 기존 base 승인·교정 approval/source/script/output 변조·쓰고 난 오류/설정 commit/이중 rollback 보호 **staging23/23 skipped0**. 합계41은 시험 집계이지 A–Z41기능 합격이 아니다. root/web tsc0, diffcheck PASS. QA의 잘못된 renderer export 이름은 실제 `CanvasKitLayerRenderer`로 바로잡았고, 이전 실패 원장은 보존했다. 최종 원장 `E:\Codex-QA\claim-center-cf196-20261008\final-r5\native-table-result.json` SHA `5a11ac28f29bdbd2d819ec40437231ea34a407de5da6bda70ec396d23f18abce`; runtimeProof가 실제 served Studio `126d4d602a68f5b05c9675fb9717514ce1eb2bba4990aa11557b74098366a50c`에 연결돼 있다. 1440px 합성 화면만 캡처·육안 확인, 고객 본문/사진 공개0.
+- Studio의 두 메서드·source `.patch`는 정확 c3 객체에 `git apply --check` PASS/기계 교정의 역치환은 나머지 JS bytes exact. source patch SHA `0b7f940db43ccff738fb2f0cf00f14742a35259b3cd35ebae31c1296b70dde9e`, transform script SHA `4f355688a06befd9942cf9c63e2a8af5b284f9f2045787ade0bf0494730325b6`. 전체 Studio source/deps 재빌드는 미실행이다. 원래 CF149 manifest/원본28자산/pinned pkg와 Rust patch pin은 불변이고, 별도 검수 승인 fixture `aec217d468455d11421f94fd15ed3f0ad3911a51b3ed488db51fd88a0fb615b2`를 base 전체 검증 뒤에만 적용한다. `.gitattributes`는 새 byte-pin3파일만 줄끝 자동변환을 막아 다른 PC에서도 지문을 보존한다.
+- 새 JS 파일명과 CanvasKit renderer 파일명은 동일 source-patch 버전으로 구분하고 HTML/main↔renderer 참조 각각1곳만 교정했다. 이전 참조0/역치환 exact, 실제 public lazy import PASS. renderer SHA `91c1adabf5a5c9bf6c4319d99e3fd7a009a9dde618135680548cb44ca324f18e`. 기존 filename 캐시를 재사용하거나 main/renderer 순환 지문을 반복 생성하지 않는다. 기본 `cf:build`의 snapshot staging도 `--approved-caret`를 명시해 다음 빌드에서 수정이 빠지지 않는다.
+- 로컬 `E:\Codex-QA\claim-center-cf196-20261008\dist`43파일/37,669,798B, 기존 CF195 대비 Studio/renderer/index/manifest4경로만 변화(옛2asset은 없음), 나머지 앱·CSS·runtime25 bytes exact. 새 manifest SHA `caa93fef1b362f878032e6e27231d197132a08b00e1b1bb05a0d1b8f1f0c7932`, runtime28/28 SHA PASS, WASMbcc40a79…/bindingad01e939…불변·CF186候補0. 기존 chunk 경고 유지. 세 전문의 지문 한정 로컬 검수와 실제 staging 통과는 라이브 배포 승인·원형 전수 합격과 다르다.
+- 원본/고객 원고/CC4/CC5/CC6v5·직원 배정/검토/승인·DB/migration·ENV/키·Docker/OS/ACL·GitHub/development/가오픈 변경0. 현장조사 양식HOLD·자기승인 차단 유지. 이 커서 항목은 닫는다. **다음 시작은 의견33 다중 인원 지정 최소 구현과 관련 일정·원자 저장/중복 재시도 검수**, 이후 위 완료 순서의 실자료 미검증 범위다. 완료한 동일 커서/855쪽/CC6 다운로드를 무조건 반복하지 않는다.
 
 ### CF195 — 실제 HWP5 표·본문·TAB 입력과 정상 줄바꿈 구분
 

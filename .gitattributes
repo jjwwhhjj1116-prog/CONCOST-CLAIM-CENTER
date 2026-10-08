@@ -1,2 +1,6 @@
 # Preserve the byte-pinned candidate diff; blank context records encode one space.
 patches/cf186-stored-hwpx-square-gap.candidate.patch -text whitespace=-blank-at-eol
+# CF196 approval hashes cover exact bytes on every workstation.
+patches/cf196-studio-cell-caret.patch -text whitespace=-blank-at-eol
+scripts/cf196-studio-caret-patch.mjs -text
+scripts/fixtures/cf196-approved-studio-caret.json -text

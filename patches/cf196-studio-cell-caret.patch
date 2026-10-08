@@ -1,0 +1,90 @@
+diff --git a/rhwp-studio/src/engine/cursor.ts b/rhwp-studio/src/engine/cursor.ts
+--- a/rhwp-studio/src/engine/cursor.ts
++++ b/rhwp-studio/src/engine/cursor.ts
+@@ -789,7 +789,31 @@
+ 
+     try {
+       let result;
+-      if ((queryPos.cellPath?.length ?? 0) > 0 && queryPos.parentParaIndex !== undefined) {
++      let targetVisualLine: number | null = null;
++      // The path query includes the previous line's endpoint in its next-line
++      // candidate range. Keep the existing flat API only for an End-affinity
++      // move to another line of this same flat, horizontal cell paragraph.
++      if (preserveLineEndAffinity && queryPos.cellPath?.length === 1 && !this.isInTextBox() && !this.isInVerticalCell()) {
++        try {
++        const line = this.getLineInfoForOffset(queryPos, queryPos.charOffset);
++        const targetLine = line.lineIndex + delta;
++        if (targetLine >= 0 && targetLine < line.lineCount) {
++          const moved = this.wasm.moveVertical(queryPos.sectionIndex, queryPos.paragraphIndex, queryPos.charOffset, delta, px,
++            queryPos.parentParaIndex!, queryPos.controlIndex!, queryPos.cellIndex!, queryPos.cellParaIndex!);
++          if (moved.sectionIndex === queryPos.sectionIndex && moved.paragraphIndex === queryPos.paragraphIndex && moved.parentParaIndex === queryPos.parentParaIndex &&
++              moved.controlIndex === queryPos.controlIndex && moved.cellIndex === queryPos.cellIndex &&
++              moved.cellParaIndex === queryPos.cellParaIndex && moved.pageIndex === this.rect?.pageIndex &&
++              Number.isSafeInteger(moved.charOffset) && moved.charOffset > 0) {
++            const end = this.getLineInfoForOffset(queryPos, moved.charOffset - 1);
++            if (end.lineIndex === targetLine && end.charEnd === moved.charOffset) {
++              result = { ...moved, cellPath: queryPos.cellPath };
++              targetVisualLine = targetLine;
++            }
++          }
++        }
++        } catch { /* Keep the original path navigation if this optional probe fails. */ }
++      }
++      if (!result) { if ((queryPos.cellPath?.length ?? 0) > 0 && queryPos.parentParaIndex !== undefined) {
+         // cellPath가 있으면 1-depth 표/글상자도 경로 기반 API 사용
+         const pathJson = JSON.stringify(queryPos.cellPath);
+         result = this.wasm.moveVerticalByPath(
+@@ -807,7 +831,7 @@
+           ppi, ci, cei, cpi,
+         );
+       }
+-
++      }
+       // 위치 갱신
+       this.position = {
+         sectionIndex: result.sectionIndex,
+@@ -821,7 +845,11 @@
+       };
+ 
+       // 캐럿 좌표 갱신
+-      if (result.rectValid === false) {
++      if (targetVisualLine !== null) {
++        const visual = this.getCursorRectOnVisualLine(targetVisualLine, true);
++        if (visual) this.rect = visual;
++        else this.updateRect();
++      } else if (result.rectValid === false) {
+         // 좌표 조회 실패 → updateRect()로 별도 조회 시도
+         this.updateRect();
+       } else {
+@@ -920,7 +920,7 @@
+   private getCursorRectOnVisualLine(lineIndex: number, atEnd: boolean): CursorRect | null {
+     const pos = this.position;
+     try {
+-      return this.wasm.getCursorRectOnLine(
++      const rect = this.wasm.getCursorRectOnLine(
+         pos.sectionIndex,
+         pos.paragraphIndex,
+         lineIndex,
+@@ -931,6 +931,22 @@
+         pos.cellIndex ?? 0xFFFFFFFF,
+         pos.cellParaIndex ?? 0xFFFFFFFF,
+       );
++      // A soft-wrap separator can advance outside a horizontal table cell.
++      // Keep the selected visual line and logical offset; use the native cell
++      // query's safe x only when this exact flat-cell End endpoint is outside.
++      if (atEnd && pos.cellPath?.length === 1 && !this.isInTextBox() && !this.isInVerticalCell()) {
++        const safe = this.wasm.getCursorRectByPathNear(pos.sectionIndex, pos.parentParaIndex!, JSON.stringify(pos.cellPath), pos.charOffset, rect.pageIndex);
++        const bounds = safe.cellBounds;
++        if (!bounds || safe.pageIndex !== rect.pageIndex ||
++            ![rect.x, rect.y, rect.height, safe.x, safe.y, safe.height, bounds.x, bounds.y, bounds.w, bounds.h].every(Number.isFinite) ||
++            bounds.w <= 0 || bounds.h <= 0 || safe.x < bounds.x || safe.x > bounds.x + bounds.w ||
++            rect.y < bounds.y || rect.y + rect.height > bounds.y + bounds.h) return null;
++        if (rect.x < bounds.x || rect.x > bounds.x + bounds.w) {
++          if (safe.cellOverflowed !== true || Math.abs(safe.y - rect.y) > 0.1 || Math.abs(safe.height - rect.height) > 0.1) return null;
++          return { ...rect, x: safe.x, cellBounds: bounds, cellOverflowed: true };
++        }
++      }
++      return rect;
+     } catch {
+       return null;
+     }

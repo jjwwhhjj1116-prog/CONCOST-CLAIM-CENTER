@@ -4,12 +4,14 @@ import {readFileSync,readdirSync,mkdirSync,writeFileSync,existsSync,lstatSync,mk
 import {resolve,join,relative,dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {applyReviewedCaretPatch} from './cf196-studio-caret-patch.mjs';
 
 const repo=fileURLToPath(new URL('../',import.meta.url));
 const [distArg,engineArg,nativePkgArg]=process.argv.slice(2);
 assert.ok(distArg && engineArg && nativePkgArg,'Pass the /rhwp/ Studio dist, pinned engine source directory (or --approved-snapshot) and matching native pkg directory');
 const source=resolve(distArg),engine=resolve(engineArg),web=resolve(process.env.CF146_WEB_DIST || join(repo,'apps/web/dist')),target=join(web,'rhwp');
 const snapshot=engineArg==='--approved-snapshot';
+const caret=process.argv[5]==='--approved-caret';assert.ok(process.argv.length===5||(process.argv.length===6&&caret),'Unknown runtime staging option');
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const approved=JSON.parse(readFileSync(join(repo,'scripts/fixtures/cf149-approved-runtime-manifest.json'),'utf8'));
 assert.equal(sha(readFileSync(join(repo,'scripts/fixtures/cf149-approved-runtime-manifest.json'),'utf8').replace(/\r\n/g,'\n').trimEnd()),'452b06bd8aa4a4161a09f87fc5a54e6558bdab587179438f7ddb2410280fb5c3','Approved runtime manifest changed; independent approval required');
@@ -68,6 +70,9 @@ for(const [file,destination] of extraFiles){assert.ok(!contents.has(destination)
 contents.set('index.html',Buffer.from(html));
 assert.deepEqual([...contents.keys()].sort(),approved.files.map(f=>f.path).sort(),'Runtime file set differs from the approved build');
 for(const file of approved.files)assert.equal(sha(contents.get(file.path)),file.sha256,'Runtime asset differs from the approved build: '+file.path);
+// The original CF149 approval remains immutable. This separately reviewed JS
+// correction never admits a different native engine, font or source build.
+const finalManifest=caret?applyReviewedCaretPatch(contents,approved,readFileSync(join(repo,'scripts/fixtures/cf196-approved-studio-caret.json')),'aec217d468455d11421f94fd15ed3f0ad3911a51b3ed488db51fd88a0fb615b2'):approved;
 // Never leave a partial deployable runtime after a disk or permission failure.
 const stagingRoot=mkdtempSync(join(web,'.rhwp-stage-'));
 assert.equal(dirname(stagingRoot),web);
@@ -77,10 +82,10 @@ let moved=false,committed=false;
 try{
   mkdirSync(preparedTarget);
   for(const [destination,bytes] of contents){mkdirSync(dirname(join(preparedTarget,destination)),{recursive:true});writeFileSync(join(preparedTarget,destination),bytes);}
-  const manifestBytes=JSON.stringify(approved,null,2);
+  const manifestBytes=JSON.stringify(finalManifest,null,2);
   writeFileSync(join(preparedTarget,'build-manifest.json'),manifestBytes);
   writeFileSync(preparedConfig,nextConfig);
-  for(const file of approved.files)assert.equal(sha(readFileSync(join(preparedTarget,file.path))),file.sha256,'Written runtime asset differs: '+file.path);
+  for(const file of finalManifest.files)assert.equal(sha(readFileSync(join(preparedTarget,file.path))),file.sha256,'Written runtime asset differs: '+file.path);
   assert.equal(readFileSync(join(preparedTarget,'build-manifest.json'),'utf8'),manifestBytes);
   assert.equal(readFileSync(preparedConfig,'utf8'),nextConfig,'Written runtime config differs');
   assert.equal(readFileSync(config,'utf8'),previous,'Runtime config changed during staging; do not overwrite it');
@@ -97,4 +102,4 @@ try{
   // If rollback itself fails, preserve the completed files and diagnostics.
   if(!moved||committed)rmSync(stagingRoot,{recursive:true,force:true});
 }
-console.log(JSON.stringify({staged:relative(repo,target),files:contents.size,wasm:expected,samplesIncluded:false,serviceWorker:false,sourceMode:snapshot?'verified-deployment-snapshot':'verified-source-build',engineRebuilt:false}));
+console.log(JSON.stringify({staged:relative(repo,target),files:contents.size,wasm:expected,samplesIncluded:false,serviceWorker:false,sourceMode:caret?'verified-snapshot-with-reviewed-cursor-patch':snapshot?'verified-deployment-snapshot':'verified-source-build',engineRebuilt:false}));

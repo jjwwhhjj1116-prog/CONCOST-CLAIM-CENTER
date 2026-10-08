@@ -1,0 +1,17 @@
+{
+  "status": "INDEPENDENTLY_REVIEWED_LOCAL",
+  "reviews": ["browser_verifier", "code_mapper", "regression_qa"],
+  "scope": "Two source-mapped Studio cursor methods; no native engine rebuild",
+  "baseManifestSha256": "452b06bd8aa4a4161a09f87fc5a54e6558bdab587179438f7ddb2410280fb5c3",
+  "studioFile": "assets/index-BmypLIfn.js",
+  "baseStudioSha256": "b8e8f07ba2b2980242d6d22ae81304323142f0f2a98a13ebb2f29fca7b19ec8e",
+  "studioSha256": "126d4d602a68f5b05c9675fb9717514ce1eb2bba4990aa11557b74098366a50c",
+  "targetStudioFile": "assets/index-cf196-0b7f940db43c.js",
+  "indexSha256": "6c63726e02a0b180bceea53bb24c3d5880fb847145dc06fc5846ccdfabe40dc0",
+  "rendererFile": "assets/canvaskit-renderer-C-8opVrU.js",
+  "targetRendererFile": "assets/canvaskit-renderer-cf196-0b7f940db43c.js",
+  "rendererSha256": "91c1adabf5a5c9bf6c4319d99e3fd7a009a9dde618135680548cb44ca324f18e",
+  "wasm": "bcc40a79bcd9be813cb231c6d8a0376b803ab8a6c189a09bcccabb8a249f3c44",
+  "patchScriptSha256": "4f355688a06befd9942cf9c63e2a8af5b284f9f2045787ade0bf0494730325b6",
+  "sourcePatchSha256": "0b7f940db43ccff738fb2f0cf00f14742a35259b3cd35ebae31c1296b70dde9e"
+}

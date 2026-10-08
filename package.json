@@ -105,7 +105,7 @@
     "test:cf95": "tsx --test scripts/cf95-proposal-pagination-hwp-test.ts",
     "test:cf96": "tsx --test scripts/cf96-document-spacing-test.ts",
     "test:cf:documents": "node --test scripts/cf167-stage-runtime-test.mjs && tsx --test --test-concurrency=1 scripts/cf167-native-runtime-test.ts scripts/cf42-proposal-studio-test.ts scripts/cf158-reception-browser-test.ts scripts/cf146-report-contract-test.ts scripts/cf146-report-browser-test.ts scripts/cf146-evidence-editor-test.ts scripts/cf148-native-hwp-test.ts scripts/cf148-native-hwp-browser-test.ts scripts/cf149-report-editing-test.ts scripts/cf162-native-pdf-browser-test.ts",
-    "cf:stage:rhwp:snapshot": "node scripts/cf146-stage-rhwp.mjs pinned-runtime/rhwp --approved-snapshot pinned-runtime/pkg"
+    "cf:stage:rhwp:snapshot": "node scripts/cf146-stage-rhwp.mjs pinned-runtime/rhwp --approved-snapshot pinned-runtime/pkg --approved-caret"
   },
   "dependencies": {
     "unpdf": "1.8.1",
