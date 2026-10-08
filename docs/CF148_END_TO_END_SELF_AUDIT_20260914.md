@@ -1,6 +1,28 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF205 실제 후속 FAIL·CF206 목차 보존 수정 중, 2026-10-08
+## 현재 판정 — CF206 출력 확인·CF207 실제 제안서 후속 수정 검수 중, 전체 A–Z는 미합격, 2026-10-08
+
+### CF207 — 실제 제안서 공통 양식 전쪽 검수 및 소제목 고립 수정
+
+development에서 이미 확정한 CC7 제안서(저장 v3, 편집 버전 5)를 읽기·다운로드만 했다. 실제 PDF 2,140,380B/SHA `dd120ee93e9c76cabe214a27ec6d2d5c414960cc0b543168fec5dcfd8e635c20`, A4 세로 19쪽/rotation0. `E:/Codex-QA/claim-center-cf200-20261008/cc7-proposal-v3-output`에 원본 사본과 공식 Poppler PNG19쪽을 보존했다. 총괄·독립 검수자가 전19쪽을 열어 공통 이미지6개(전문가6쪽, 조직도8쪽, 업무영역9쪽, 학위15쪽, 자격16쪽, 출판17쪽)와 갑지 로고, 표 행1~16→17~22/반복 머리글, 10장 연속쪽, 12장 맺음말19쪽/목차쪽수 일치를 확인했다. 숨은 측정본 이미지6개는 실제 출력7개에 더해 중복 출력으로 세지 않았다. CSS contain 슬롯은 사진의 변형으로 판정하지 않았다.
+
+실제 결함1건: 8쪽 끝의 ‘업무 영역’ H3만 남고 그림은9쪽으로 이동했다. 새 출력용 clone 경로는 제목+첫그림이 새 쪽에 들어갈 때만 동일 sibling 배치로 함께 이동하며 원고/스타일/회사 이미지/DB/승인은 수정하지 않는다. 명시적 쪽나눔·oversized guard·기존 표/목록 나눔은 유지한다. 제안서 현재 프로젝트에도 코드만 나오던 `TYPE-01`을 기존 공식 `claimTypeLabel()`로 표시하도록 최소 수정했다(저장 코드·CONTRACT 상태는 그대로).
+
+현재 관련 계약·실제 편집 회귀19/19와 승인 HWP25/25 skipped0 통과, root/web 타입·fresh build·승인runtime28·dry-run 통과. 신규 실제 React 페이지나눔 검사7/7 skipped0은 총괄이 별도 캐시에서 독립 통과했고, 새 제품 block만 메모리에서 제거한 음성 대조는 wrapped/direct 두 경우에 제목0쪽·그림1쪽 분리를 정확히 검출해 기대 FAIL했다(부모 포함3FAIL, 다른4경계PASS). 동결 test SHA `fb18c40bc492b92d168a454f060152f031976357ede2d738b6c92b5a294778aa`. 첫 CF96 검사는 정상 forwardRef 컴포넌트를 예전 함수 선언 문자열과 비교해1FAIL이었으며 공개 forwardRef+명명된 구현 계약을 정확히 검사하도록 테스트만 수정하고 실제 원형 쪽 탐색 CF149를 포함해 재검수했다. 신규 harness의 tsx 보조 함수/void callback 및 oversized fixture의 height속성 우선 적용(실제200px) 오류는 제품 오류와 구분해 수정했으며, 최종 actual1000px 사진의 출력 차단·다운로드0을 확인했다. 첫 stage 명령의 작업 디렉터리 오류는 도구 호출 오류이며 정확한 repo 경로에서 같은 빌드에 stage/dry-run을 마쳤다. 최종 산출물은 `E:/Codex-QA/claim-center-cf200-20261008/dist-cf207-checked`/`index-Cmvibmat.js`. development 반영 후 p8/p9 실제 PDF 대조는 다음 항목이며 기존 실패 PDF는 보존한다.
+
+HWP 줄바꿈의 별도 원인 범위: 실제 화면의 한글 advance15.4583px/공백4.9583px와 승인 SDK의15.9216px/공백7.92px 차이를 확보했다. HWP 본문폭634px는 DOM631.333px보다 넓으므로 폭 축소 문제가 아니다. 승인 upstream `edwardkim/rhwp` 커밋 `c3bc96a6cc5aa852228ce157c2aa5104014a539e`의 `src/renderer/layout/text_measurement.rs`에서 공백 overlay가 없을 때 em/2(`metricHalfSpace`)를 사용하는 경계를 확인했다. collector의 첫family만 전달 및 CSS fallback 차이도 남아 있다. 실제 validation 경고0인 `reflowLinesegs()` 반환0은 재계산 미실행이므로 등록 글꼴 기능 실패로 단정하지 않는다. KEEP_WORD는 이 엔진에서 한글 글자단위이며 이름만 보고 BREAK_WORD로 바꾸지 않는다. 기존 원본의 LINE_SEG/전역 공백 규칙·승인 엔진 변경0; 정확한 새 HTML→HWP metric 경계 수정 효과는 미검증으로 유지한다.
+
+### CF206 실제 배포·파일 재열기 검수 결과
+
+- 제품 `38e77be`를 정상 push하고 development에만 Worker `8193b801-1616-4054-b909-39b071fd8175`로 반영했다. 최종 자산은 `E:/Codex-QA/claim-center-cf200-20261008/dist-cf206-checked`, main `index-CkCp8I3i.js`다. 공개 43파일/37,698,964B의 byte·SHA가 정확히 일치했다(canonical `a37227fd3bebd8d01978dab8710d76b4063826818d81e2fd1b34fd7316ef225c`). health/readiness 200·Drive 연결 true. 승인 WASM/binding/runtime 28파일 불변, DB 구조·키/ENV·가오픈·업무 최종승인 변경 없음.
+- 단신 Chrome에서 CC7 v7 저장본을 실제 재열기한 뒤 HWP와 DOCX를 각각 한 번 출력했다. 성공 UI와 실제 Downloads 파일을 모두 대조했다. 기존 저장 시각 `2026-10-08 14:38:51 KST`·본문 10개·편집한 표지/목차는 유지됐고 직원 검토 요청·메일·ERP 전송은 하지 않았다.
+- 실제 HWP: 16,384B, SHA `9133d51e0a40dc39b0fb983998da19f897b440214d005415984176f81c501772`, 4쪽. 동일 승인 SDK로 다시 읽어 갑지·수정 목차·본문 10문단 각각 1회·목차 30셀·점선 10개·A4 세로·하단 쪽번호를 확인했다. 파일 SHA 전후 동일. `E:/Codex-QA/claim-center-cf200-20261008/cc7-v7-cf206-hwp-render/result.json` 및 전4쪽 JPG/SVG를 보존하고 총괄·독립 검수자가 모두 열람했다. 목차/본문의 누락·잘림·겹침·제목 고립은 발견되지 않았으며 7장 제목과 문단은 같은 다음 쪽에 유지됐다.
+- 실제 최신 DOCX: 13,299B, SHA `a80f962ed1b760486770f81fca163082332addbcc3ea485148774868a4047d1d`, A4 세로 4구역, 갑지·수정 목차·본문 1~10장 각각 1회, 내부 WHOLE/CH-01/진단 필드 노출 없음. 이는 실제 다운로드 및 ZIP/XML 검수이며 Word의 독립 시각 렌더는 미실행이다. media 0은 현재 시험 원고에 실제 첨부가 0건인 것과 일치한다.
+- 실제 PDF는 앞선 CF204의 336,455B/SHA `73bc391f5e2914aabc6c1da1973c21447ed39b2457f641810bf055c8bb382a5f`/A4 세로 4쪽을 공식 Poppler로 전쪽 렌더해 확인한 결과를 유지한다. CF205/206은 HWP 변환에만 적용됐고 PDF 제품 코드는 변경되지 않았다. HWP의 본문 줄끝은 PDF와 일부 다르므로 폰트·줄바꿈 완전 동일성은 PARTIAL이다. nonLatin 줄바꿈 속성만 바꾼 메모리 대조에서도 차이는 해소되지 않아 원인을 단정하지 않는다. 한컴/Word 독립 대조, 원본32개 전수 동일성, 실제 사진·산출표 왕복은 아직 합격 처리하지 않는다.
+- 검증 범위: HWP 실제 브라우저+Node 25/25, 본문·목차·PDF/DOCX 27/27, 관련 업무/원형/첨부 경계 71/71 모두 skipped 0으로 통과했다. 숫자는 시험 개수이며 A–Z 업무 기능 개수나 전체 완료율이 아니다. 아래 CF205/206의 실패 및 후보 미적용 기록은 과거 경위로 보존한다.
+- 다음 실제 검수는 CC7의 합성 사진 3개와 XLSX 1개를 사용자 PC 파일 선택으로 등록한 뒤 사진 순서·시작번호 9~11·종횡비·설명 및 `구조내역!A25:C27`의 원문/빈행/0/캐시값을 넣고 저장·재열기·3종 출력하는 것이다. 자동 파일 전달은 전송 전에 거부되어 실제 등록 0건이며, 중복 업로드·결과불명 재전송은 하지 않는다. 최신 탭 `839125259`의 첨부창만 유지하고 오래된 중복 탭 `839125247`은 닫았다. CC4~6/원본32/보류 건·사용자 삭제22건은 보존했다. 현장조사 회의록 개편 HOLD, 전체 합격 전 가오픈 승격 금지.
+
+### CF205/206 이전 경위 — 아래 미배포 문구는 당시 상태
 
 CF206 최종 로컬 판정: 보고서10행3열·점선10개·cellCap오류수정후에도carrier 기본160%에 의해행37px(원문42.796875px)·누적52.171844px축소FAIL을새SVG검수가잡았다. 표carrier만PERCENT100＋after=실측advance−native行높이로매핑·기존자체위치cache만확인후무효화하여재열기진행최대오차0.028106689px로수정했다. 실패했던FIXED전체advance후보는59.8px중복진행이므로채택하지않았다. case75/default150 단위각각정확검증하며필수lineSpacing/prev/next 누락도차단한다. 최종HWP25/25+body27/27 skipped0·root/webtsc PASS. 전문가동결test SHA `d0379eea63851ff5269cccd4a91dbd388c6ebe60c97258df1a94bcbcf46046eb`, 제품collector aaeef724…/exporter a04538f6… . 점선SOLID변조/advance+1/CASEnext삭제/비정상입력차단과기존갑지·그라데이션·표·사진·원형 경계유지. 원형전체폰트대조와별개로raw첫glyph absoluteY차이최대3.1312px·X약−1px를미검증범위로기록(반복간격합격과구분). 최종산출물은 E200/dist-cf206-checked이며오래된dist-cf206-final 후보는배포하지않는다. 새development반영·CC7v7실제4쪽HWP생성/재열기/전쪽시각검수는이후확인할항목이다.
 

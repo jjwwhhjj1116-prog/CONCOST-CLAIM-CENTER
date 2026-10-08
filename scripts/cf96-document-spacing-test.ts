@@ -36,5 +36,6 @@ test('CF96 reviewer and preview share output renderer and preserve explicit spac
   assert.doesNotMatch(editor,/runLength >= 3/u);
   assert.doesNotMatch(pane,/contentEditable|StructuredDocumentEditor/u);
   assert.match(pane,/transform: `scale/u);
-  assert.match(pane,/export function DocumentReviewPages/u);
+  assert.match(pane,/export const DocumentReviewPages = forwardRef<DocumentReviewPagesHandle,/u);
+  assert.match(pane,/\}>\(function DocumentReviewPages\(/u);
 });

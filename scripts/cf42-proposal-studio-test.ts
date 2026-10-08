@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {claimTypeLabel} from '../apps/web/src/claim-types';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -418,6 +419,16 @@ test('CF49 Gemini proposal chapters must satisfy the 260728 density, issue, and 
   const rejected=await worker.fetch(request(`/api/cases/${caseId}/proposals/${proposal.id}/versions`,ADMIN_TOKEN,{method:'POST',body:JSON.stringify({...payload,chapters:savedInputs.chapters,version:proposal.version})}),env);assert.equal(rejected.status,409);const failure=await rejected.json() as any;assert.equal(failure.code,'PROPOSAL_AI_DRAFT_ALREADY_CREATED');assert.match(failure.error,/사람이 직접 수정/u);assert.equal(Number(sql.exec(`SELECT COUNT(*) FROM preview_proposal_versions WHERE proposal_id='${proposal.id}'`)[0].values[0][0]),versionCount);
   const confirmed=await worker.fetch(request(`/api/cases/${caseId}/proposals/${proposal.id}/reviews`,ADMIN_TOKEN,{method:'POST',body:JSON.stringify({action:'CONFIRM',comment:'4단계 합본 확인',versionId:proposal.currentVersionId,version:proposal.version})}),env);assert.equal(confirmed.status,200,await confirmed.clone().text());const confirmation=await confirmed.json() as any;assert.equal(confirmation.status,'APPROVED');assert.equal(confirmation.phase,'CF50_DIRECT_PROPOSAL_CONFIRMATION');
   sql.close();
+});
+
+test('CF207 proposal project context uses the shared type names without changing stored codes',()=>{
+  const ui=read('apps/web/src/proposals/ProposalView.tsx');
+  assert.match(ui,/import \{ claimTypeLabel \} from '\.\.\/claim-types';/u);
+  assert.match(ui,/<span>\{claimTypeLabel\(selectedCase\.claimType\)\} · \{selectedCase\.status\}<\/span>/u);
+  assert.doesNotMatch(ui,/<span>\{selectedCase\.claimType\} · \{selectedCase\.status\}<\/span>/u);
+  const names=['현장조사 및 수량산출 클레임','분석 보고서 작성 클레임','일반적인 클레임','재건축·재개발 공사비 협상','사감정보고서','물가변동'];
+  for(let i=0;i<names.length;i++)assert.equal(claimTypeLabel(`TYPE-0${i+1}`),names[i]);
+  assert.equal(claimTypeLabel('UNREGISTERED-TYPE'),'UNREGISTERED-TYPE');
 });
 
 test('CF42 Excel input round-trips all standard proposal fields and UI exposes the real 4-step editor',async()=>{
