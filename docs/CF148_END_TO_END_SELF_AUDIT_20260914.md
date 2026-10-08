@@ -1,6 +1,10 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF202 배포·CF203 실제 출력 수정, 2026-10-08
+## 현재 판정 — CF204 출력 준비 상태 수정, 2026-10-08
+
+CF203 제품 `8b9eb89` 정상 push·development Worker `7d6ab5d9-a709-45a4-bc1a-10d335d91c98` 반영. 공개 전체43파일/37,694,082B canonical `c51ee9733b40b47b1ef441aad58594d77758aa08b366c52701c44aaba364eb26` byte/SHA exact·health/readiness200·Drive true. 실제 CC7v7 새모듈에서 본문2쪽의 고립 ‘니다.’가 사라지고 7장 제목+문단이 통째 이동·목차7장 쪽수2로 일치했다. 그러나 실제 PDF 출력 버튼을 누르면 동일 내용의 새 tocTitles 객체 때문에 ready가 다시 false가 되어 ‘2페이지 넘침’으로 차단됐다. 이는 안정된 화면의 실제 넘침과 구분한다.
+
+CF204는 ReportBodyPages 효과 의존성을 목차 객체 참조에서 JSON 내용 서명으로 바꾸는2줄 최소수정이다. 실제 목차·본문 변경, font/image/resize/refit 재측정과 실제 overflow 차단은 유지했다. 총괄 독립 actual React/출력 full **27/27 PASS, skipped0**, 관련 제안서·수주·수동저장·원형경계·XLSX/AI동의 **71/71 PASS, skipped0**, root/web 타입·fresh Vite·승인runtime28·Worker dry-run PASS. 실제 새 PDF/HWP 다운로드는 다음 개발 반영 후 검사할 항목이며 전체출력 합격으로 보고하지 않는다. 고객원고/CC4~6/원본32·업무승인·가오픈·키/ENV·migration 변경0. 실제 사진3/XLSX1 등록0·사용자 직접 선택 대기 유지.
 
 CF202 제품 `8cd8e36` push·development Worker `92bb1a1d-a189-4c1a-9d6c-596113a6b1ec` 실제 반영. `dist-cf202-final` 전체43파일/37,693,618B canonical `08f86caeb230b9e91b1bac11b602c966256bf3526d5e21166a6b15846c315d3f` public byte/SHA exact·health/readiness200·Drive true. 승인runtime28/WASM 불변·keep-vars·migration/키/ENV/가오픈0. 실제 새모듈 `index-ClsmGbGa.js`에서 CC7의 이미표식없는 원고를 자동복구하지 않고 명시적 수동선택→AI 없이 이동으로 본문10 H2/표지/목차를 보존한v7 저장·4단계 완료 확인. 관리자QA 저장본v7 읽기까지 실제 성공(업무승인/직원검토요청0).
 

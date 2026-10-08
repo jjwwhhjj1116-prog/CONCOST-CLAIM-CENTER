@@ -5,6 +5,7 @@ import { prepareReportPrint, reportContentsPages } from './report-print-structur
 export function ReportBodyPages({ html, header, contents = false, tocTitle = '목 차', tocTitles }: { html: string; header?: ReactNode; contents?: boolean; tocTitle?: string; tocTitles?: Record<string,string> }): React.ReactElement {
   const sourceRef = useRef<HTMLElement>(null);
   const tocRef = useRef<HTMLElement>(null);
+  const tocTitlesSignature = JSON.stringify(tocTitles ?? {});
   const [layout, setLayout] = useState({ pages: [''], toc: [] as string[], overflow: false, ready: false });
   useLayoutEffect(() => {
     const source = sourceRef.current?.querySelector<HTMLElement>('.structured-editor__preview');
@@ -31,7 +32,7 @@ export function ReportBodyPages({ html, header, contents = false, tocTitle = '�
     window.addEventListener('resize', paginate); window.addEventListener('final-document:refit', paginate);
     void document.fonts?.ready.then(paginate); paginate();
     return () => { active = false; cancelAnimationFrame(frame); window.removeEventListener('resize', paginate); window.removeEventListener('final-document:refit', paginate); images.forEach(image => { image.removeEventListener('load', paginate); image.removeEventListener('error', paginate); }); };
-  }, [html, header, contents, tocTitle, tocTitles]);
+  }, [html, header, contents, tocTitle, tocTitlesSignature]);
   return <>
     <section ref={sourceRef} className="report-final-body report-pagination-source" aria-hidden="true">{header}<article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: html }}/></section>
     {contents && <section ref={tocRef} className="report-final-body report-final-toc report-pagination-source" aria-hidden="true"><h2>{tocTitle}</h2><article className="report-toc-content"/></section>}

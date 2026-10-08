@@ -31,6 +31,10 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
   const server = await createServer({ root: fileURLToPath(new URL('../apps/web', import.meta.url)), ...(process.env.CF149_CACHE_ROOT ? {cacheDir:process.env.CF149_CACHE_ROOT} : {}), server: { host: '127.0.0.1', port: 0 }, logLevel: 'error', plugins: [{
     name: 'cf146-render', enforce:'pre',
     transform(code, id) {
+      if (process.env.CF204_LEGACY_TOC_REFERENCE === '1' && id.replaceAll('\\','/').endsWith('/ReportBodyPages.tsx')) {
+        assert.ok(code.includes('const tocTitlesSignature = JSON.stringify(tocTitles ?? {});') && code.includes('tocTitle, tocTitlesSignature]'));
+        return code.replace('const tocTitlesSignature = JSON.stringify(tocTitles ?? {});','').replace('tocTitle, tocTitlesSignature]','tocTitle, tocTitles]');
+      }
       if (process.env.CF203_LEGACY_PARAGRAPH_SPLIT === '1' && id.replaceAll('\\','/').endsWith('/report-pagination.ts')) {
         const start=code.indexOf('// A paragraph that fits a fresh sheet');
         const end=code.indexOf('const positions: Array<[Node, number]> = [];',start);
@@ -65,7 +69,7 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
     }); },
     resolveId: id => id === '/cf146-entry.js' ? '\0cf146-entry' : undefined,
     load: id => id === '\0cf146-entry' ? `
-      import React, {useState,useEffect} from 'react'; import {createRoot} from 'react-dom/client';
+      import React, {useState,useEffect} from 'react'; import {createRoot} from 'react-dom/client'; import {flushSync} from 'react-dom';
       import {Editor} from '@tiptap/core'; import StarterKit from '@tiptap/starter-kit';
       globalThis.cf146Editor = {Editor, StarterKit};
       import {RhwpEditorDialog} from '/src/documents/RhwpEditorDialog.tsx';
@@ -81,7 +85,7 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
       const files=Array.from({length:6},(_,i)=>({id:String(i),originalName:'현장사진 '+(i+1),category:'SITE_PHOTO',mimeType:'image/svg+xml',downloadUrl:photo}));
       const photos=reportEvidenceHtml(files,'현장조사 사진대지',Object.fromEntries(files.map((f,i)=>[f.id,'현장 확인 위치 '+(i+1)])),2,'');
       const html='<h1>CH-01 감정의 목적 및 기준</h1><h2>감정의 목적 및 기준</h2><p>계약서 원문과 현장조사 자료를 대조합니다. 확정 금액 12,345원.</p><table><tbody><tr><td rowspan="2">구조</td><td>120</td></tr><tr><td>145</td></tr></tbody></table><h1>CH-02 첨부자료</h1>'+photos;
-      function App(){const [doc,setDoc]=useState(parseStructuredDocumentMarkdown(html)); const [open,setOpen]=useState(false);const [sourceFile,setSourceFile]=useState(null);const [applyProgress,setApplyProgress]=useState('');
+      function App(){const [doc,setDoc]=useState(parseStructuredDocumentMarkdown(html)); const [open,setOpen]=useState(false);const [sourceFile,setSourceFile]=useState(null);const [applyProgress,setApplyProgress]=useState('');const [parentCounter,setParentCounter]=useState(0);const [exportBusy,setExportBusy]=useState(false);
         useEffect(()=>{fetch('/cf146-draft').then(r=>r.json()).then(saved=>{if(saved){const parts=splitReportPresentation(saved);setDoc(joinReportPresentation(parts.body,parts.header,parts.frontMatter));}});},[]);
         async function applyPages(pages,native,original){
           if(!native)throw Error('Native snapshot missing');
@@ -103,8 +107,8 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
           const response=await fetch('/cf146-draft',{method:'PUT',body:JSON.stringify(saved)});if(!response.ok)throw Error('Local test save failed');
           setDoc(saved);setOpen(false);
         }
-        globalThis.cf146={setDoc,parse:parseStructuredDocumentMarkdown,render:renderStructuredDocumentHtml,markdown:editorHtmlToMarkdown,photo,photos,reportDraftMethod};
-        return React.createElement(React.Fragment,null,React.createElement('button',{onClick:()=>setOpen(true)},'로컬 HWP 연결 검수'),React.createElement('button',{onClick:async()=>{const blob=await(await fetch('/cf146-native')).blob();setSourceFile(new File([blob],doc.attrs.reportNativeSource.name));setOpen(true);}},'저장된 편집본 재열기'),React.createElement(RhwpEditorDialog,{isOpen:open,sourceFile,preserveAppliedSource:true,suggestedName:'local-test',documentLabel:'로컬 검수',onClose:()=>setOpen(false),onApplyPages:applyPages,applyLabel:'로컬 저장 검수',applyProgress}),React.createElement(ReportFinalDocumentPreview,{caseNumber:'PRIVATE-ID',caseTitle:'합성 검수 프로젝트',title:'감정 보고서',content:'',editorJson:doc}));
+        globalThis.cf146={setDoc,parse:parseStructuredDocumentMarkdown,render:renderStructuredDocumentHtml,markdown:editorHtmlToMarkdown,photo,photos,reportDraftMethod,flushSync,setParentCounter,setExportBusy,getDoc:()=>doc};
+        return React.createElement(React.Fragment,null,React.createElement('span',{id:'cf204-parent-state'},parentCounter+':'+exportBusy),React.createElement('button',{onClick:()=>setOpen(true)},'로컬 HWP 연결 검수'),React.createElement('button',{onClick:async()=>{const blob=await(await fetch('/cf146-native')).blob();setSourceFile(new File([blob],doc.attrs.reportNativeSource.name));setOpen(true);}},'저장된 편집본 재열기'),React.createElement(RhwpEditorDialog,{isOpen:open,sourceFile,preserveAppliedSource:true,suggestedName:'local-test',documentLabel:'로컬 검수',onClose:()=>setOpen(false),onApplyPages:applyPages,applyLabel:'로컬 저장 검수',applyProgress}),React.createElement(ReportFinalDocumentPreview,{caseNumber:'PRIVATE-ID',caseTitle:'합성 검수 프로젝트',title:'감정 보고서',content:'',editorJson:doc}));
       }
       createRoot(document.getElementById('root')).render(React.createElement(App));
     ` : undefined
@@ -352,6 +356,42 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
       assert.equal(result.text,expected);
       assert.equal(result.overflow,false);
       assert.ok(result.pages<=12,`Long source was fragmented into ${result.pages} pages`);
+    });
+    await t.test('CF204 edited TOC stays ready through parent counter and busy rerenders, exports four PDF pages, and reflows real edits',async()=>{
+      await page.evaluate('globalThis.__name = (value) => value'); // Match existing PDF callback serialization without depending on earlier subtests.
+      await page.evaluate(()=>{const api=(globalThis as any).cf146;const doc=api.parse('<h1>CF204 본문 첫 장</h1><p>첫 본문 금액 123,456원.</p><div data-document-page-break="true"></div><h1>CF204 본문 둘째 장</h1><p>두 번째 본문 246.90 보존.</p>');doc.attrs={reportHeader:{enabled:false,text:null},reportFrontMatter:{enabled:true,date:'2026-10-08',author:'합성 검수자',tocTitles:{'1:CF204 본문 첫 장#1':'CF204 편집한 목차'}}};api.setDoc(doc);});
+      await page.waitForFunction(()=>document.querySelectorAll('[data-export-page]').length===4&&!document.querySelector('[data-page-fit-overflow="true"]')&&document.querySelector('.report-paginated-sheet.report-final-toc')?.textContent?.includes('CF204 편집한 목차'));
+      const stable=await page.evaluate(()=>{
+        const api=(globalThis as any).cf146,root=document.querySelector('.report-final-document')!;
+        const draft=JSON.stringify(api.getDoc()),samples=[];
+        for(let i=0;i<=4;i++){
+          if(i)api.flushSync(()=>{api.setParentCounter((value:number)=>value+1);api.setExportBusy(i%2===0);});
+          samples.push({pages:root.querySelectorAll('[data-export-page]').length,blocked:root.querySelectorAll('[data-page-fit-overflow="true"]').length,body:[...root.querySelectorAll('[data-report-body-page] article')].map(node=>node.innerHTML),toc:root.querySelector('.report-paginated-sheet.report-final-toc')!.innerHTML});
+        }
+        return{before:samples[0],samples:samples.slice(1),draftUnchanged:JSON.stringify((globalThis as any).cf146.getDoc())===draft};
+      });
+      assert.equal(stable.before.pages,4);assert.equal(stable.before.blocked,0);assert.equal(stable.draftUnchanged,true);
+      assert.deepEqual(stable.samples,Array(4).fill(stable.before),'Byte-identical edited TOC maps must not reset readiness during flushSync parent renders');
+      const pdf=await page.evaluate(async()=>{
+        const {downloadFinalDocument}=await import('/src/documents/final-document-export.ts' as string) as typeof import('../apps/web/src/documents/final-document-export');
+        const api=(globalThis as any).cf146,root=document.querySelector<HTMLElement>('.report-final-document')!,original=HTMLAnchorElement.prototype.click;
+        let payload:Promise<ArrayBuffer>|undefined;const progressBlocked:number[]=[];
+        HTMLAnchorElement.prototype.click=function(){payload=fetch(this.href).then(response=>response.arrayBuffer());};
+        try {
+          api.flushSync(()=>api.setExportBusy(true));
+          const result=await downloadFinalDocument({root,format:'pdf',fileName:'CF204 synthetic rerender',purpose:'ADMIN_QA',onProgress:()=>{api.flushSync(()=>api.setParentCounter((value:number)=>value+1));progressBlocked.push(root.querySelectorAll('[data-page-fit-overflow="true"]').length);}});
+          const bytes=new Uint8Array(await payload!),text=new TextDecoder().decode(bytes);
+          return{result,signature:text.slice(0,5),actualPages:[...text.matchAll(/\/Type\s*\/Page\b/g)].length,boxes:[...text.matchAll(/\/MediaBox\s*\[([^\]]+)\]/g)].map(match=>match[1].trim().split(/\s+/).map(Number)),progressBlocked,previewPages:root.querySelectorAll('[data-export-page]').length};
+        } finally {HTMLAnchorElement.prototype.click=original;api.flushSync(()=>api.setExportBusy(false));}
+      });
+      assert.equal(pdf.signature,'%PDF-');assert.equal(pdf.result.pageCount,4);assert.equal(pdf.actualPages,4);assert.equal(pdf.previewPages,4);assert.ok(pdf.result.byteSize>512);
+      assert.ok(pdf.boxes.length===4&&pdf.boxes.every(box=>box.length===4&&Math.abs(box[2]-595.28)<1&&Math.abs(box[3]-841.89)<1),'Actual PDF page objects remain A4 portrait');
+      assert.ok(pdf.progressBlocked.length>0&&pdf.progressBlocked.every(count=>count===0),'Export progress rerenders do not invalidate captured sheets');
+      await page.evaluate(()=>{const api=(globalThis as any).cf146;api.flushSync(()=>api.setDoc((doc:any)=>({...doc,attrs:{...doc.attrs,reportFrontMatter:{...doc.attrs.reportFrontMatter,tocTitles:{'1:CF204 본문 첫 장#1':'CF204 실제 변경한 목차'}}}})));});
+      await page.waitForFunction(()=>document.querySelectorAll('[data-export-page]').length===4&&!document.querySelector('[data-page-fit-overflow="true"]')&&document.querySelector('.report-paginated-sheet.report-final-toc')?.textContent?.includes('CF204 실제 변경한 목차'));
+      const edited=await page.locator('[data-report-body-page] article').evaluateAll(nodes=>nodes.map(node=>node.innerHTML));
+      assert.deepEqual(edited,stable.before.body,'A real TOC edit reflows the contents without rewriting body pages');
+      assert.equal(await page.locator('.report-paginated-sheet.report-final-toc').innerText().then(text=>text.includes('CF204 편집한 목차')),false);
     });
     await t.test('CF203 fresh-sheet paragraphs keep two and seven lines whole with contiguous headings and exact inline evidence',async()=>{
       const results=await page.evaluate(async()=>{
