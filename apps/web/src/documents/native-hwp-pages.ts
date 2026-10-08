@@ -1,4 +1,4 @@
-import {documentImageData,listMarker} from './editable-docx-export';
+import {documentBlockImageAlignment,documentImageData,listMarker} from './editable-docx-export';
 import type {NativeHwpContent,NativeHwpPage} from './editable-hwp-export';
 
 const px=(v:string)=>Number.parseFloat(v)||0;
@@ -23,8 +23,12 @@ const base64=(bytes:Uint8Array)=>{let binary='';for(let i=0;i<bytes.length;i+=32
 
 async function image(source:HTMLImageElement):Promise<NativeHwpContent>{
   const {bytes,type,width,height}=await documentImageData(source),result=empty(),css=style(source);
+  // CF208 reviewed image alignment: ordinary solitary block photographs only.
+  const parent=source.parentElement,visible=parent?[...parent.childNodes].filter(n=>n instanceof Element?!ignored(n):Boolean(n.textContent?.trim())):[];
+  const solitary=parent?.tagName!=='P'||visible.length===1&&visible[0]===source;
+  const alignment=solitary&&!source.closest('td,th,li')&&!source.matches('[data-report-source-page="true"]')?documentBlockImageAlignment(source):undefined;
   const margins=['top','bottom'].filter(side=>px(css.getPropertyValue(`margin-${side}`))!==0).map(side=>`margin-${side}:${css.getPropertyValue(`margin-${side}`)}`).join(';');
-  result.html=`<img src="data:image/${type==='jpg'?'jpeg':type};base64,${base64(bytes)}" width="${width}" height="${height}" style="text-align:${css.textAlign};${margins}">`;
+  result.html=`<img src="data:image/${type==='jpg'?'jpeg':type};base64,${base64(bytes)}" width="${width}" height="${height}" style="text-align:${alignment??css.textAlign};${margins}">`;
   result.images=1;result.pictures!.push({bytes,width,height});return result;
 }
 
@@ -91,7 +95,7 @@ async function paragraph(element:Element,nodes:readonly Node[]=[...element.child
 }
 
 async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
-  const result=empty(),cells:NonNullable<NativeHwpContent['tableCells']>[number]=[],geometry:NonNullable<NativeHwpContent['tableGeometry']>[number]={width:source.offsetWidth,cells:[]};
+  const result=empty(),cells:NonNullable<NativeHwpContent['tableCells']>[number]=[],geometry:NonNullable<NativeHwpContent['tableGeometry']>[number]={width:source.offsetWidth,reflowCellLines:true,cells:[]};
   result.tables=1;result.tableCells!.push(cells);result.tableGeometry!.push(geometry);
   let rows='';const occupied:boolean[][]=[];
   const visibleRows=[...source.rows].filter(row=>!ignored(row));
@@ -126,7 +130,7 @@ function layoutRow(contents:NativeHwpContent[],widths:number[],height:number,pad
 }
 
 async function blocks(parent:Element):Promise<NativeHwpContent>{
-  const result=empty();let pending:Node[]=[],previous:HTMLElement|null=null;
+  const result=empty();let pending:Node[]=[],previous:HTMLElement|null=null,previousBottom=0;
   const flush=async()=>{if(pending.some(n=>n instanceof Element||n.textContent?.trim())){append(result,await paragraph(parent,pending));previous=null;}pending=[];};
   for(const node of [...parent.childNodes]){
     if(!(node instanceof Element)){pending.push(node);continue;}
@@ -145,34 +149,52 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
       const padding=boxes.map((box,i)=>reportToc&&i===1?{left:0,right:0,top:0,bottom:0}:{left:(box.left-rect.left)/scale-starts[i],right:ends[i]-(box.right-rect.left)/scale,top:(box.top-rect.top)/scale,bottom:(rect.bottom-box.bottom)/scale});
       if(widths.some(width=>width<=0)||padding.some(p=>Object.values(p).some(value=>value<-.1)))throw Error('HWP 목차 열 배치를 확인하지 못했습니다.');
       const page=node.closest<HTMLElement>('[data-export-page]'),pageScale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):scale;
-      const next=reportToc&&node.nextElementSibling?.matches('.report-toc-entry')?node.nextElementSibling:null;
-      const advance=reportToc?(next?(next.getBoundingClientRect().top-rect.top)/pageScale:rect.height/pageScale+px(style(node).marginBottom)):undefined;
+      const next=node.nextElementSibling?.matches(reportToc?'.report-toc-entry':'.proposal-final-toc li')?node.nextElementSibling:null;
+      const advance=next?(next.getBoundingClientRect().top-rect.top)/pageScale:rect.height/pageScale+px(style(node).marginBottom);
       append(result,layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding,advance));continue;
     }
     if(node instanceof HTMLTableElement){await flush();previous=null;append(result,await table(node));continue;}
     if(node instanceof HTMLImageElement){await flush();previous=null;append(result,await image(node));continue;}
+    // CF208 reviewed proposal header flow: the label uses the header line box;
+    // its outer gap belongs after the title, not after the inline label.
+    if(node.matches('.proposal-final-chapter > header')){
+      await flush();previous=null;
+      const [label,title]=[...node.children],css=style(node),titleCss=title&&style(title);
+      if(node.children.length!==2||label?.tagName!=='SPAN'||title?.tagName!=='H3'||px(css.paddingTop)!==0||!titleCss)throw Error('HWP 제안서 머리구간 배치를 확인하지 못했습니다.');
+      const page=node.closest<HTMLElement>('[data-export-page]'),scale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):1;
+      const labelHeight=(title.getBoundingClientRect().top-node.getBoundingClientRect().top)/scale-px(titleCss.marginTop);
+      if(labelHeight<=0)throw Error('HWP 제안서 머리구간 줄 높이를 확인하지 못했습니다.');
+      const caption=await paragraph(label,[...label.childNodes],0,0);
+      caption.html=caption.html.replace(/line-height:[^;]+/u,`line-height:${labelHeight}px`);
+      append(result,caption);
+      append(result,await paragraph(title,[...title.childNodes],px(titleCss.marginTop),px(titleCss.marginBottom)+px(css.paddingBottom)+px(css.borderBottomWidth)+px(css.marginBottom)));
+      continue;
+    }
     const css=style(node);
     if(['inline','inline-block','inline-flex'].includes(css.display)||node.tagName==='BR'){pending.push(node);continue;}
     await flush();
     if(/^(P|H[1-6]|PRE|FIGCAPTION)$/u.test(node.tagName)){
-      const ordinary=node instanceof HTMLElement&&/^(P|H[1-6])$/u.test(node.tagName)&&!parent.closest('td,th,li')&&['block','flow-root'].includes(style(parent).display)&&css.display==='block'&&css.position==='static'&&css.cssFloat==='none'&&css.clear==='none'&&css.transform==='none'&&!node.querySelector('img,table,svg,canvas,iframe,video,audio,object,embed,input,textarea,button')&&px(css.marginTop)>=0&&px(css.marginBottom)>=0&&['top','bottom'].every(side=>px(css.getPropertyValue(`padding-${side}`))===0&&px(css.getPropertyValue(`border-${side}-width`))===0);
+      const block=node instanceof HTMLElement&&/^(P|H[1-6])$/u.test(node.tagName)&&!parent.closest('td,th,li')&&['block','flow-root'].includes(style(parent).display)&&css.display==='block'&&css.position==='static'&&css.cssFloat==='none'&&css.clear==='none'&&css.transform==='none'&&px(css.marginTop)>=0&&px(css.marginBottom)>=0&&['top','bottom'].every(side=>px(css.getPropertyValue(`padding-${side}`))===0&&px(css.getPropertyValue(`border-${side}-width`))===0);
+      const ordinary=block&&!node.querySelector('img,table,svg,canvas,iframe,video,audio,object,embed,input,textarea,button');
       // Bare zero-height paragraphs collapse through their neighbours in CSS;
       // creating a native line for them adds content height absent from the DOM.
       if(previous&&ordinary&&node.tagName==='P'&&!node.attributes.length&&!node.childNodes.length&&node.getBoundingClientRect().height===0&&['::before','::after'].every(side=>['none','normal','""',"''"].includes(node.ownerDocument.defaultView!.getComputedStyle(node,side).content)))continue;
       const content=await paragraph(node);
-      if(previous&&ordinary){
+      const picture=node.querySelector('img'),photo=block&&node.tagName==='P'&&content.html.startsWith('<img ')&&content.images===1&&!content.text.trim()&&picture&&Math.abs(node.getBoundingClientRect().height-picture.getBoundingClientRect().height)<.1;
+      const photoMargin=(side:'top'|'bottom')=>px(content.html.match(new RegExp(`margin-${side}:([^;"\\s]+)`,'u'))?.[1]||'0');
+      if(previous&&(ordinary||photo)){
         const scale=parent.getBoundingClientRect().width/(parent as HTMLElement).offsetWidth||1;
         const gap=(node.getBoundingClientRect().top-previous.getBoundingClientRect().bottom)/scale;
         // Resolve CSS sibling margin collapse, retaining paragraph()'s existing
         // half-leading transfer exactly once and leaving source nodes untouched.
-        const difference=gap-px(style(previous).marginBottom)-px(css.marginTop);
+        const difference=gap-previousBottom-(photo?photoMargin('top'):px(css.marginTop));
         content.html=content.html.replace(/margin-top:([\d.]+)px/u,(_,value:string)=>{
           const before=Number(value)+difference;
           if(before<-.1)throw Error('HWP 문단의 겹친 간격을 보존하지 못했습니다.');
           return `margin-top:${Math.max(0,before)}px`;
         });
       }
-      append(result,content);previous=ordinary&&content.text.trim()?node:null;
+      append(result,content);previous=(ordinary&&content.text.trim()||photo)?node as HTMLElement:null;previousBottom=photo?photoMargin('bottom'):px(css.marginBottom);
     }
     else if(node.tagName==='LI'){
       previous=null;
@@ -189,7 +211,9 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
   const pages=candidates.filter(page=>!ignored(page)&&!page.parentElement?.closest('[data-export-page]'));
   const results:NativeHwpPage[]=[];
   for(const page of pages){
-    const css=style(page),margins={top:px(css.paddingTop),right:px(css.paddingRight),bottom:px(css.paddingBottom),left:px(css.paddingLeft)};
+    // Native paper has no CSS border box. Its content starts after both the
+    // authored page border and padding, just as in the reviewed DOM.
+    const css=style(page),margins={top:px(css.paddingTop)+px(css.borderTopWidth),right:px(css.paddingRight)+px(css.borderRightWidth),bottom:px(css.paddingBottom)+px(css.borderBottomWidth),left:px(css.paddingLeft)+px(css.borderLeftWidth)};
     const rules:NonNullable<NativeHwpPage['rules']>=[],pageRect=page.getBoundingClientRect(),scale=pageRect.width/page.offsetWidth||1;
     const borderRule=(element:Element,side:'top'|'bottom')=>{
       const computed=style(element),height=px(computed.getPropertyValue(`border-${side}-width`));
@@ -207,7 +231,7 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
     const reportCover=page.matches('.report-final-cover')&&page.querySelector(':scope > .report-cover-heading');
     if(proposalCover||reportCover){
       paragraphInsets=[];
-      const rect=page.getBoundingClientRect(),scale=rect.width/page.offsetWidth||1;let previous=rect.top+(margins.top+px(css.borderTopWidth))*scale;
+      const rect=page.getBoundingClientRect(),scale=rect.width/page.offsetWidth||1;let previous=rect.top+margins.top*scale;
       const selector=proposalCover?':scope > .proposal-cover-heading > p, :scope > .proposal-cover-heading > div > *, :scope > time':':scope > .report-cover-heading > *, :scope > .report-cover-signature > *';
       for(const element of page.querySelectorAll(selector)){
         if(ignored(element))continue;const box=element.getBoundingClientRect();
@@ -231,13 +255,13 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
     }else append(body,await blocks(page));
     for(const element of page.querySelectorAll(':scope > ol > li, :scope > header, .report-toc-leader'))borderRule(element,'bottom');
     const pageNumber=page.querySelector<HTMLElement>(':scope > .report-page-number');
-    if(pageNumber&&!ignored(pageNumber))footer={...await paragraph(pageNumber),distance:px(style(pageNumber).bottom)};
+    if(pageNumber&&!ignored(pageNumber))footer={...await paragraph(pageNumber),distance:px(css.borderBottomWidth)+px(style(pageNumber).bottom)};
     if(page.matches('.proposal-final-toc,.proposal-final-chapter')){
       const pseudo=page.ownerDocument.defaultView!.getComputedStyle(page,'::after');
       if(pseudo.content&&!['none','normal'].includes(pseudo.content)&&pseudo.display!=='none'){
         const text=[...pseudo.content.matchAll(/"([^"]*)"|'([^']*)'/gu)].map(m=>m[1]??m[2]).join('');
         if(!text)throw Error('HWP 하단 쪽번호를 확인하지 못했습니다.');
-        footer={...empty(),html:`<p style="${escape(paragraphStyle(pseudo,0,0))}"><span style="${escape(fontStyle(pseudo))}">${escape(text)}</span></p>`,text,distance:px(pseudo.bottom)};
+        footer={...empty(),html:`<p style="${escape(paragraphStyle(pseudo,0,0))}"><span style="${escape(fontStyle(pseudo))}">${escape(text)}</span></p>`,text,distance:px(css.borderBottomWidth)+px(pseudo.bottom)};
         const thickness=px(pseudo.borderTopWidth);
         if(thickness&&pseudo.borderTopStyle==='solid')rules.push({left:px(css.borderLeftWidth)+px(pseudo.left),top:page.offsetHeight-px(css.borderBottomWidth)-px(pseudo.bottom)-px(pseudo.height)-px(pseudo.paddingTop)-px(pseudo.paddingBottom)-thickness,width:px(pseudo.width),height:thickness,colors:[color(pseudo.borderTopColor)]});
       }

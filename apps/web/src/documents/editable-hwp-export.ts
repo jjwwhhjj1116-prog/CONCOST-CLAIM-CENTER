@@ -24,7 +24,7 @@ export interface NativeHwpContent {
   images: number;
   tableCells?: Array<Array<{ row: number; col: number; rowSpan: number; colSpan: number; text: string }>>;
   pictures?: Array<{ bytes: Uint8Array; width: number; height: number }>;
-  tableGeometry?: Array<{width:number;advance?:number;cells:Array<{width:number;height:number;padding:{top:number;right:number;bottom:number;left:number}}>}>;
+  tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;padding:{top:number;right:number;bottom:number;left:number}}>}>;
 }
 export interface NativeHwpPage extends NativeHwpContent {
   width: number;
@@ -180,6 +180,10 @@ function restoreTableGeometry(xml:string,geometries:NativeHwpContent['tableGeome
       changed=changed.slice(0,sizeOffset)+`<hp:cellSz width="${Math.round(expected.width*75)}" height="${Math.round(expected.height*75)}"/>`+changed.slice(sizeOffset+ownSize.length);
       const marginOffset=changed.lastIndexOf(ownMargin);
       changed=changed.slice(0,marginOffset)+`<hp:cellMargin ${Object.entries(expected.padding).map(([side,value])=>`${side}="${Math.round(value*75)}"`).join(' ')}/>`+changed.slice(marginOffset+ownMargin.length);
+      // The fresh HTML importer's line cache still uses its old cell padding.
+      // Recompute only cell lines after restoring the reviewed geometry; never
+      // discard layout caches from a loaded original HWP document.
+      if(geometry.reflowCellLines)changed=changed.replace(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu,'');
       next=next.replace(cell,changed);
     });
     xml=xml.replace(original,next);

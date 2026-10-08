@@ -190,6 +190,16 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
       const computed = getComputedStyle(node);
       return listProperties.map((property) => [property, computed.getPropertyValue(property)] as const);
     });
+    // The canvas renderer does not paint border-image. Keep the reviewed cover
+    // geometry and reproduce only its supported gradient bands in the clone.
+    const gradientBands = [...sheet.querySelectorAll<HTMLElement>('.proposal-cover-heading > div')].map(node => {
+      const css = getComputedStyle(node);
+      if (css.borderImageSource === 'none') return null;
+      if (!/^linear-gradient\(90deg,\s*rgba?\([^)]+\),\s*rgba?\([^)]+\)\)$/u.test(css.borderImageSource)
+        || parseFloat(css.borderLeftWidth) || parseFloat(css.borderRightWidth)
+        || !['static','relative'].includes(css.position)) throw new Error('PDF 갑지 그라데이션 배치의 추가 검증이 필요합니다.');
+      return {background:css.borderImageSource,top:parseFloat(css.borderTopWidth)||0,bottom:parseFloat(css.borderBottomWidth)||0};
+    });
     elements[index].dataset.finalExportCapture = captureId;
     const canvas = await html2canvas(elements[index], {
       backgroundColor: '#ffffff',
@@ -209,6 +219,16 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
         if (isFittedSheet) clonedPage.style.overflow = 'hidden';
         clonedPage.style.margin = '0';
         clonedPage.style.boxSizing = 'border-box';
+        clonedPage.querySelectorAll<HTMLElement>('.proposal-cover-heading > div').forEach((band,bandIndex) => {
+          const gradient=gradientBands[bandIndex];if(!gradient)return;
+          band.style.borderImageSource='none';band.style.borderColor='transparent';band.style.position='relative';
+          for(const side of ['top','bottom'] as const){
+            if(!gradient[side])continue;
+            const rule=clonedDocument.createElement('div');rule.setAttribute('aria-hidden','true');
+            rule.style.cssText=`position:absolute;left:0;right:0;${side}:${-gradient[side]}px;height:${gradient[side]}px;background-image:${gradient.background};pointer-events:none;`;
+            band.append(rule);
+          }
+        });
         await Promise.all([...clonedPage.querySelectorAll<HTMLImageElement>('img')].map(async (image, imageIndex) => { const fitted = fittedImages[imageIndex]; if (fitted) { image.src = fitted; image.removeAttribute('srcset'); await image.decode(); } }));
         clonedPage.querySelectorAll<HTMLElement>('ol, ul, li').forEach((node, listIndex) => {
           listStyles[listIndex]?.forEach(([property, value]) => node.style.setProperty(property, value, 'important'));

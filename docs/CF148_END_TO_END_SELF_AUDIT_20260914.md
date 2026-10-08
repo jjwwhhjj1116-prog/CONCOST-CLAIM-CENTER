@@ -1,6 +1,27 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF206 출력 확인·CF207 실제 제안서 후속 수정 검수 중, 전체 A–Z는 미합격, 2026-10-08
+## 현재 판정 — CF208 제안서 실제 출력 차이 수정·재검수 중, 전체 A–Z는 미합격, 2026-10-08
+
+### CF208 실제 파일 시각 대조 및 현재 수정 범위
+
+- 배포된 제품은 여전히 CF207 `c9857657`/Worker `ab5520a5-d71d-4437-89c3-ead87c07913d`다. 아래 수정은 아직 로컬이며 가오픈·DB·키/ENV·승인 엔진·고객 원고는 변경하지 않았다. 기존 사용자 삭제22건은 스테이징하지 않는다.
+- 실제 CF207 HWP 4,800,000B/SHA `6ffa514e421651a7571fca472e2aedf6f47937943388a65809243fa5eca1589e`를 승인 SDK로 다시 읽어19쪽·19native표·7사진 원본 bytes·332본문 문단의 순서와 갑지 제출처 보존을 확인했다. `E200/cc7-proposal-cf207-hwp-render`의 result/SVG/JPG를 보존했다. 이는 구조 대조 통과이며 시각 동일성 통과가 아니다. 총괄·독립 검수자가19쪽을 모두 대조해 목차 행간 누적·장 제목 밑 선과 본문 겹침·그림6개의 가운데 정렬 누락을 확인했다. 12~14쪽 긴 셀의 단일행 줄바꿈 손실로 열 경계를 넘고 겹치는 결함도 발견했다. 새 제목 고립·이미지 소실·뚜렷한 비율 변형은 발견하지 않았고 한컴 독립 렌더는 아직 미실행이다.
+- 갑지 파란 그라데이션 띠는 원문에 있는 정상 장식이다. HWP의 임의 테두리로 오판하지 않는다. CF207 실제 PDF에는 이 띠가 빠져 있어 기존19쪽 PDF의 내용·잘림 검수 통과를 전체 외관 동일성으로 확대하지 않는다. PDF 출력 clone에서만 지원되는90도 두 색 그라데이션을 복제하고 원문·페이지 높이는 보존하도록 수정했다.
+- 로컬 최소 수정: 기존 DOCX 블록 사진 정렬 helper를 재사용; 제안서 목차의 실제 다음 행까지 진행을 native carrier에 전달; 제안서 header의 실제 label 줄 높이와 title 뒤 padding10+선4+margin12를 보존. 종래 새 HTML→HWP 경계만 수정하고 loaded 원형 HWP 경로 및 누락/쪽수/표/사진 차단은 유지한다.
+- 추가 실제 위치 검증에서 가운데 사진 X는 상쇄되어 맞지만 오른쪽 사진이 local1px 틀렸다. CSS 용지 border가 native 여백에서 빠져 좌우 content width가2px 넓어진 원문 근거를 확인했다. 실제 단신 Chrome 용지 border는1.33333px이고 local harness는1px이므로 고정값을 넣지 않고 실측 computed border를 padding에 합산한다. cover 첫 위치의 중복 border 합산은 제거하고 absolute footer의 종이 하단 기준도 같은 border만 반영한다. 수정 후 X307/555px가 원문과 같았다.
+- 사진 Y 잔여는 carrier가 임의12px를 붙인 것이 아니었다. 앞 문단의 raw mb16과 IMG mt18은 DOM에서 max18로 겹치지만 native before6.4+after9.6와 IMGbefore18은34로 더해졌다. 지원되는 plain block 사진P의 실높이=사진높이인 경우 기존 인접 문단 gap 대조를 적용해 before18→2로 변환했다. inactive minHeight28.8은 실제 사진80px보다 작으므로 minHeight0 여부로 지원을 잘못 제외하지 않는다. 현재 사진 X/Y/180×80px 및 원문 exact, 목차 실제55px 진행 누적0.0000153px, header26px 여백/본문 겹침 없음, PDF 두 띠의 실제 파란 그라데이션 픽셀을 root4/4 skipped0로 확인했고 기존 승인 HWP25/25도 재통과했다. 글자 glyph의 고정 paint offset은 사진 위치 오차로 숨기지 않고 별도 폰트 미검증 범위를 유지한다.
+- 긴 표 셀 원인도 실제 승인 합성 HWP 메모리 대조로 확인했다. 기존 cache의 내용 폭은 교정한 패딩 대신 수입기의 기본 패딩을 사용했다. 셀 cache만 제외한 메모리 재열기에서12·13쪽 긴 셀이1줄→2줄로 복구되고19쪽·원본 SHA는 유지됐다. 새 HTML TABLE 수집의 geometry에만 `reflowCellLines:true`를 표시하고 교정한 셀 줄 배치를 다시 계산한다. 처음 모든 셀에 적용한 후보는 배치용 목차의 글꼴 차이 줄바꿈으로 기존 검사2FAIL을 일으켜 채택하지 않았다. 실제 표와 목차/갑지 배치용 표를 구분한 최종본은 기존 승인 HWP25/25를 재통과했으며 원형 loaded HWP 경로에는 진입하지 않는다.
+- 최종 root 독립 검사: 신규 actual React→HWP 다운로드·재열기/PDF 픽셀4/4, 기존 승인 HWP25/25, 본문·목차·제안서38/38, 실제 첨부 UI·버전저장·권한40/40 모두 skipped0(합계107개는 시험 수이며 업무 전체 완료율이 아님). root/web 타입·diff check·fresh build·승인runtime28 staging·development dry-run 통과. 신규 test SHA `9cced349a52a8e15fb7be62e02c54df48e46167b96f3ddd98f3da839958425b9`, collector `be216d5437457eb857dd81ce53179a27d1a88dd5ee2727d49f7389d74606590c`, exporter `5173084710e439528163a86d55a6fcb885bc2dc3348654601e05c910590ddf9a`. 허용오차0.1px 유지로 실제4셀의 전체 문자·순서·실측offset치수·상하좌우padding 내 glyph outside0을 검증했다. source fractional→offset 정수 치수는 기존 저장 정책으로 구분하고 pixel exact라고 주장하지 않는다.
+- 음성 검수는 제품 파일을 수정하지 않고 새 block만 메모리에서 제거했다. 사진 gap 제거는Y+16.003px, paper border 제외는rightX+1px, PDF clone 제외는흰 픽셀, cell cache 재계산 제외는55glyph padding 침범을 각각 실패로 잡았다(각2PASS/2FAIL). header/TOC/alignment 이전본 경계는 line overlap·TOC 누적88px·사진left를 잡았다(1PASS/3FAIL). 최종 sourceHTML/이미지 원문·SDK·외부전송0을 확인했고 active min-height가 사진보다 큰 경우·혼합/캡션 사진을 새 지원으로 확대하지 않는다.
+- 최종 로컬 산출물은 `E:/Codex-QA/claim-center-cf200-20261008/dist-cf208-checked`/`index-CoMG8CGh.js`다. 아직 실제 개발 반영 및 CC7 실제3종 재출력19쪽 전체 시각 대조 전이며 가오픈 승격은 금지한다. 합성 사진3+XLSX1의 직접 파일 선택은 계속 대기이고 실제 보고서 첨부는0건이다.
+
+### CF207 실제 개발 반영 및 출력 후속 결과
+
+- 제품 `c98576570934de1394813eee28239390cc7b95a9` 정상 push→development Worker `ab5520a5-d71d-4437-89c3-ead87c07913d`. `dist-cf207-checked`의 공개43파일/37,699,311B byte·SHA exact/canonical `5068fa909afc53285de176a6d625920877406871062d98a43a731a18c480dbe4`, health/readiness200·Drive true. 승인runtime28/WASM 불변·keep-vars, 가오픈/DB/schema/키ENV 변경0.
+- 실제 단신 Chrome의 `index-Cmvibmat.js`에서 CC7 제안서 저장v3/편집버전5/APPROVED 및 유형명 ‘현장조사 및 수량산출 클레임 · CONTRACT’ 확인. 재열기한12장 source HTML·사진src가 수정 전과 정확히 같았다. 8쪽에는 조직 체계만,9쪽에는 업무 영역 제목+그림이 함께 배치됐다. 원고 입력·추가저장·업무승인·메일·ERP전송 없음.
+- 실제 새 PDF 2,142,526B/SHA `9eae6222d6f57c97715cdb175058b1c403756623831c2f8a4a15211e3fdc24a1`, A4세로19쪽/rotation0. `E200/cc7-proposal-cf207-output/proposal.pdf`·공식 Poppler PNG19쪽을 보존하고 총괄·독립 검수자가 전쪽 재열람했다. 제목 고립 해결, 공통6이미지+logo/표·반복header/목차12항목/10장 연속쪽/19쪽 맺음말까지 확인, 새 잘림·겹침·소실 발견0. 이전 PNG와 해시 동일한 쪽은2/7/10/11만이며 다른15쪽도 직접 확인했다. 비변경 쪽의 픽셀 해시 차이 원인은 미확정이고 전체 pixel-exact라고 보고하지 않는다.
+- 실제 DOCX 4,755,893B/SHA `e991cec7c0c3e492f874b97326953a0e79ab72db7a8212a01b48880279bf9a17`, A4세로19구역·본문 표6·media7. 본문 XML만 검사하면 로고와 제출처가 없는 것처럼 보였으나, 갑지의 footer1.xml에서 회사명/주소/연락처/제출처/로고1을 모두 확인했다(본문 그림6+갑지 footer그림1). 총괄의 누락 오판은 사용자에게 즉시 철회했고 제품은 불필요하게 수정하지 않았다. 문서 전체 파트 기준 검수이며 Word 독립 시각 렌더는 미실행이다.
+- 실제 HWP 4,800,000B/19쪽 다운로드 완료 UI와 파일을 확인했고, 동일 승인SDK 재열기에서19구역·사진7·native표19(본문6+갑지1+목차12)·문장/표 편집 구조 및 DOCX 원문/제출처 보존을 확인 중이다. 이는 전체페이지 이미지19개로 대체한 파일이 아니다. 한컴 독립 편집·전쪽 최종 시각 대조·범용 줄바꿈 동일성은 아직 별도 검수이며 전체 A–Z를 합격으로 확대하지 않는다.
 
 ### CF207 — 실제 제안서 공통 양식 전쪽 검수 및 소제목 고립 수정
 

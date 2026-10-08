@@ -17,6 +17,16 @@ const ignored = (node: Element): boolean => {
   return css.display === 'none' || css.visibility === 'hidden' || css.visibility === 'collapse';
 };
 const alignment = (value: string) => value === 'center' ? AlignmentType.CENTER : ['right', 'end'].includes(value) ? AlignmentType.RIGHT : value === 'justify' ? AlignmentType.JUSTIFIED : AlignmentType.LEFT;
+export function documentBlockImageAlignment(image: HTMLImageElement): 'left' | 'center' | 'right' | undefined {
+  const css=style(image);
+  if(css.display!=='block')return undefined;
+  const authored=image.getAttribute('data-image-align'),left=css.marginLeft,right=css.marginRight;
+  if(authored&&['left','center','right'].includes(authored))return authored as 'left' | 'center' | 'right';
+  if(left==='auto'&&right==='auto'||px(left)>0&&px(right)>0&&Math.abs(px(left)-px(right))<.5)return 'center';
+  if((left==='auto'||px(left)>0)&&right!=='auto'&&px(right)===0)return 'right';
+  if(left!=='auto'&&px(left)===0&&(right==='auto'||px(right)>0))return 'left';
+  return undefined;
+}
 const border = (css: CSSStyleDeclaration, side: 'Top' | 'Right' | 'Bottom' | 'Left') => {
   const width = px(css[`border${side}Width`]);
   return { style: !width || css[`border${side}Style`] === 'none' ? BorderStyle.NONE : css[`border${side}Style`] === 'dashed' ? BorderStyle.DASHED : css[`border${side}Style`] === 'dotted' ? BorderStyle.DOTTED : BorderStyle.SINGLE, size: Math.max(1, Math.round(width * 6)), color: color(css[`border${side}Color`]) ?? '000000' };
@@ -108,11 +118,8 @@ async function paragraph(nodes: readonly Node[], element: Element, marker = '', 
   const visibleNodes=nodes.filter(node=>node instanceof Element?!ignored(node):Boolean(node.textContent?.trim()));
   const onlyImage=!marker&&visibleNodes.length===1&&visibleNodes[0] instanceof HTMLImageElement?visibleNodes[0]:null;
   if(onlyImage&&style(onlyImage).display==='block'){
-    const imageCss=style(onlyImage),authored=onlyImage.getAttribute('data-image-align'),left=imageCss.marginLeft,right=imageCss.marginRight;
-    if(authored&&['left','center','right'].includes(authored))paragraphAlignment=alignment(authored);
-    else if(left==='auto'&&right==='auto'||px(left)>0&&px(right)>0&&Math.abs(px(left)-px(right))<.5)paragraphAlignment=AlignmentType.CENTER;
-    else if((left==='auto'||px(left)>0)&&right!=='auto'&&px(right)===0)paragraphAlignment=AlignmentType.RIGHT;
-    else if(left!=='auto'&&px(left)===0&&(right==='auto'||px(right)>0))paragraphAlignment=AlignmentType.LEFT;
+    const imageAlignment=documentBlockImageAlignment(onlyImage);
+    if(imageAlignment)paragraphAlignment=alignment(imageAlignment);
   }
   // CSS line-height is an absolute length here, not Word's 240ths-of-a-line.
   // Inline photographs must still be allowed to grow their line box.
