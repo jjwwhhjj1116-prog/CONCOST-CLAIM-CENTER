@@ -1,5 +1,12 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF216 상단 영역 제거·전 단계/모바일 검수 — 2026-10-13
+
+- 사용자 "이어서 검수해서 완벽하게 구현"에 따라 CF215의 비고정만으로 남았던 상단바를 실제 제거. 계정·다크모드·업데이트·도움말·알림·이용안내·로그아웃은 sidebar/모바일 Drawer footer의 접이식 계정·업무 도구로 이동, 설정은 기존 footer 경로 유지. 반복 BETA 배너도 본문에서 제외하고 이용안내 도구로 접근. 모바일 메뉴 버튼은 본문 안의 작은 비고정 버튼. 도움말/안내 본체는 AppShell에 단일 상시 mount, Drawer 닫기 후 별도 대화상자 열어 키보드 충돌·상태소실을 방지.
+- 실제 AppShell+PreviewReportStudio+기존 CF114 메모리 API 합성검사 `cf216-authoring-ui-browser-test.ts` 전문가·총괄 독립3/3 skip0. 1440/390에서 버튼으로1→2→3→4→5→4·저장 ACK, 단계별 카드1·compact제목1·큰소개/topbar/BETA0·static이동줄·넘침0. 목차/분담/판례 각각실클릭/동일버튼닫기·3열/단일전체폭패널. title/content/editorJson byte exact, 단계/버전만변경. 각도구 대화상자·설정·로그아웃·모바일 메뉴/Escape포커스 확인. root/web타입0·Vite빌드·승인runtime28stage·dryrun0. 기존CF1186/6·최종CF2153/3도PASS(중첩체크를기능수로합산하지않음).
+- 최초CF216 실패는 CF114fixture에 기본표지attrs가 없어 첫저장정규화차이가 난 것; 정본기본attrs만 fixture transform에 선명시, JSON exact검사는 유지. 첫총괄합본9/12의 CF215실패는 삭제한topbar boundingBox대기하던검사오류; 0개조건으로정정 후3/3, 원로그보존. 의미없는제품fallback/문서덮어쓰기0. tmp/cf216-qa/authoring-6y61rh PNG18개/receipt.json 직접1440/390열람. layout detector결과[]이며 전수디자인합격근거로 확대하지 않는다. chunk500KB경고유지.
+- 현재배포전실제CC7SELECT v8/step4/title/content4024자/editorJson8917자 보호스냅샷을 tmp/cf216-qa/cc7-before.json에 보존. 실제전단계검수는 이 고객자료없는합성사건만 사용하고 단계이동이 보고서PUT저장을호출함을 인지해 매 ACK 및 본문/JSON보존을대조한다. 직원업무승인·AI·직접편집·원본첨부·가오픈변경금지 유지. development반영/실제결과는 후속갱신한다.
+
 ## CF215 공통 최상단 고정 해제 — 2026-10-13
 
 - 사용자 "푸시하고 배포해 승인한다" 명시 승인 후 제품 `6699cff`·문서 `4fa462a`를 기존 origin/feat/CF123-es-v2에 정상 push했다. development Worker `416ddc23-e75b-4fba-9849-1514781fa031`에 검증된 `tmp/cf215-qa/web-build`를 --assets/--keep-vars로 반영. 공개43파일/37,738,163B byte·SHA exact, canonical `6f3152419dc0aaab74a0bf7585e0bf69d01a4aa15623a4c09f3eb2b8970099d0`, health/readiness200. 이전 자동승인거절은 사용자 승인 후 해소됐으며 우회0. DB/schema/키ENV/가오픈 변경0.

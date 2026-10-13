@@ -3,9 +3,10 @@ import { Button } from '@claim-studio/ui';
 
 const NOTICE_KEY = 'claim-center-soft-launch-notice-2026-08-31-v1';
 
-export const SoftLaunchNotice: React.FC = () => {
+export const SoftLaunchNotice: React.FC<{ hideBanner?: boolean; openRequest?: number }> = ({ hideBanner = false, openRequest = 0 }) => {
   const [dismissed, setDismissed] = useState(() => window.localStorage.getItem(NOTICE_KEY) === 'dismissed');
   const [detailOpen, setDetailOpen] = useState(false);
+  useEffect(() => { if (openRequest > 0) setDetailOpen(true); }, [openRequest]);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -22,7 +23,7 @@ export const SoftLaunchNotice: React.FC = () => {
   };
 
   return <>
-    {!dismissed && <aside className="soft-launch-banner" aria-label="가오픈 운영 안내">
+    {!hideBanner && !dismissed && <aside className="soft-launch-banner" aria-label="가오픈 운영 안내">
       <span className="soft-launch-badge">BETA</span>
       <div><strong>클레임센터 스튜디오는 현재 가오픈 운영 중입니다.</strong><p>외부 발송 전 확정 문서를 직접 열어 확인해 주세요. 오류가 보이면 입력을 유지한 채 관리자에게 알려주세요.</p></div>
       <Button size="sm" variant="secondary" onClick={() => setDetailOpen(true)}>이용 안내 보기</Button>

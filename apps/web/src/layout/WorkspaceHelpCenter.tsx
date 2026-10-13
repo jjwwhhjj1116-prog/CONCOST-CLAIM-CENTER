@@ -26,15 +26,18 @@ function samePath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
-export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended = false, onNavigate }: {
+export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended = false, onNavigate, hideTrigger = false, openRequest = 0 }: {
   category: string;
   routeId?: string;
   previewMode: boolean;
   suspended?: boolean;
   onNavigate: (path: string) => void;
+  hideTrigger?: boolean;
+  openRequest?: number;
 }): React.ReactElement {
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  useEffect(() => { if (openRequest > 0) setHelpOpen(true); }, [openRequest]);
   const [tutorialStep, setTutorialStep] = useState(0);
   const [tutorialState, setTutorialState] = useState<TutorialState>({ completedTutorialVersion: null, completedAt: null, completionAction: null, version: 0, updatedAt: null });
   const [visitedSteps, setVisitedSteps] = useState<Set<number>>(() => new Set());
@@ -183,9 +186,9 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended 
   };
 
   return <>
-    <button type="button" className="theme-toggle workspace-help-trigger" aria-label="현재 화면 도움말 열기" onClick={() => setHelpOpen(true)}>
+    {!hideTrigger && <button type="button" className="theme-toggle workspace-help-trigger" aria-label="현재 화면 도움말 열기" onClick={() => setHelpOpen(true)}>
       <span aria-hidden="true">?</span><strong>도움말</strong>
-    </button>
+    </button>}
     {tutorialOpen && !suspended && createPortal(<div className={`workspace-tutorial-layer${currentScreenOpen ? ' is-guiding' : ''}`}>
       {currentScreenOpen && targetRect && <>
         <div className="workspace-tutorial-shade is-top" style={{ height: targetRect.top }} onClick={() => setNotice('주황색으로 확대된 기능을 직접 눌러야 다음 포인트로 넘어갑니다.')} />

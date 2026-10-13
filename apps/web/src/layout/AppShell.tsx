@@ -117,6 +117,9 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [expandedSubgroups, setExpandedSubgroups] = useState<Record<string, boolean>>(() => activeSubgroup ? { [activeSubgroup.label]: true } : {});
   const [memberAlerts,setMemberAlerts]=useState<MemberAlertsPayload>({awards:[],todos:[],today:'',available:true});
   const [alertsOpen,setAlertsOpen]=useState(false);
+  const [utilitiesOpen, setUtilitiesOpen] = useState(false);
+  const [helpRequest, setHelpRequest] = useState(0);
+  const [noticeRequest, setNoticeRequest] = useState(0);
   const [alertsBusy,setAlertsBusy]=useState(false);
   const [releaseOpen, setReleaseOpen] = useState(() => !hasSeenRelease(userId));
   const closeRelease = () => { markReleaseSeen(userId); setReleaseOpen(false); };
@@ -146,10 +149,8 @@ export const AppShell: React.FC<AppShellProps> = ({
       const sidebar = sidebarElement.current;
       if (sidebar) sidebar.style.height = `${Math.max(160, window.innerHeight - Math.max(0, sidebar.getBoundingClientRect().top))}px`;
     };
-    const observer = new ResizeObserver(resize);
-    document.querySelectorAll('.topbar, .soft-launch-banner').forEach(element => observer.observe(element));
     resize(); window.addEventListener('resize', resize); window.addEventListener('scroll', resize, true);
-    return () => { observer.disconnect(); window.removeEventListener('resize', resize); window.removeEventListener('scroll', resize, true); };
+    return () => { window.removeEventListener('resize', resize); window.removeEventListener('scroll', resize, true); };
   }, [isTablet]);
 
   useEffect(() => {
@@ -283,47 +284,27 @@ export const AppShell: React.FC<AppShellProps> = ({
         </section>;
       })}
     </nav></div><footer className="sidebar-settings-footer"><section className={`navigation-group navigation-group--single${currentPath === '/settings' ? ' is-current' : ''}`} data-nav-group="settings">
-      <button type="button" className="navigation-single-action" onClick={() => go('/settings')} aria-current={currentPath === '/settings' ? 'page' : undefined}>
+      <button type="button" className="navigation-single-action" aria-label="개인 및 관리자 설정 열기" onClick={() => go('/settings')} aria-current={currentPath === '/settings' ? 'page' : undefined}>
         <span className="navigation-group-icon"><NavigationGroupIcon name="settings" /></span><span><strong>설정</strong></span>
       </button>
-    </section></footer></>
+    </section>
+      <button type="button" className="sidebar-utility-toggle" aria-label="계정·업무 도구 열기" aria-expanded={utilitiesOpen} aria-controls="workspace-utility-panel" onClick={() => setUtilitiesOpen(value => !value)}>
+        <span className="session-identity" aria-label="현재 사용자 역할"><strong>{safeUserName}</strong><small>{roles.join(', ').toUpperCase()}</small></span><span>계정·업무 도구 {utilitiesOpen ? '▴' : '▾'}</span>
+      </button>
+      {utilitiesOpen && <div id="workspace-utility-panel" className="sidebar-utility-panel" role="group" aria-label="계정·업무 도구">
+        <button type="button" className="theme-toggle" aria-label={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-pressed={theme === 'dark'} onClick={() => setTheme(value => value === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '라이트 모드' : '다크 모드'}</button>
+        <button type="button" className="theme-toggle" aria-label={`${RELEASE_DATE_LABEL} 업데이트 내역 보기`} onClick={() => { closeDrawer(); setReleaseOpen(true); }}>업데이트</button>
+        <button type="button" className="theme-toggle" aria-label="현재 화면 도움말 열기" onClick={() => { closeDrawer(); setHelpRequest(value => value + 1); }}>도움말</button>
+        <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${memberAlerts.awards.length + memberAlerts.todos.length}건`} onClick={() => { closeDrawer(); setAlertsOpen(true); }}>알림 {memberAlerts.awards.length + memberAlerts.todos.length}</button>
+        <button type="button" className="theme-toggle" aria-label="가오픈 이용 안내 열기" onClick={() => { closeDrawer(); setNoticeRequest(value => value + 1); }}>이용 안내</button>
+        <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
+      </div>}
+    </footer></>
   );
 
   return (
     <div className="app-shell" data-workspace-section={activeGroup?.icon ?? 'home'}>
       <SkipLink targetId="main-content" />
-      <header className="topbar">
-        <div className="brand-group">
-          {isTablet && <Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button>}
-          <span className="brand-mark" aria-hidden="true"><img src="/assets/claim-center-emblem.png" alt="" /></span>
-          <div className="brand-copy"><h1>클레임센터 스튜디오</h1><small>CLAIM CENTER STUDIO</small></div>
-        </div>
-        <div className="session-tools">
-          {previewMode && <span className="preview-chip" aria-label={currentPath.startsWith('/es') ? 'ES 산출서는 저장 버튼으로 저장합니다' : '업무 기록 자동 저장 활성'}>{currentPath.startsWith('/es') ? 'ES · 직접 저장' : '업무공간 · 자동저장'}</span>}
-          <button
-            type="button"
-            className="theme-toggle"
-            aria-label={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'}
-            aria-pressed={theme === 'dark'}
-            onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
-          >
-            <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
-            <strong>{theme === 'dark' ? '라이트' : '다크'}</strong>
-          </button>
-          <button type="button" className="theme-toggle" aria-label={`${RELEASE_DATE_LABEL} 업데이트 내역 보기`} onClick={() => setReleaseOpen(true)}><span aria-hidden="true">↻</span><strong>업데이트</strong></button>
-          <WorkspaceHelpCenter category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} suspended={releaseOpen || alertsOpen} onNavigate={go} />
-          <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${memberAlerts.awards.length+memberAlerts.todos.length}건`} onClick={()=>setAlertsOpen(true)}>
-            <span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><strong>알림</strong>{memberAlerts.awards.length+memberAlerts.todos.length>0&&<em>{memberAlerts.awards.length+memberAlerts.todos.length}</em>}
-          </button>
-          <button type="button" className="theme-toggle" aria-label="개인 및 관리자 설정 열기" onClick={() => go('/settings')}>
-            <span aria-hidden="true">⚙</span><strong>설정</strong>
-          </button>
-          <span className="session-avatar" aria-hidden="true">{safeUserName.slice(0, 1)}</span>
-          <span className="session-identity" aria-label="현재 사용자 역할"><strong>{userName}</strong><small>{roles.join(', ').toUpperCase()}</small></span>
-          <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
-        </div>
-      </header>
-
       <ReleaseNotice open={releaseOpen} onClose={closeRelease} />
       <Dialog isOpen={alertsOpen && !releaseOpen} size="wide" hideDefaultAction title="신규 수주·오늘의 프로젝트 투입 알림" onClose={()=>!alertsBusy&&setAlertsOpen(false)}>
         <div className="member-alert-dialog">
@@ -334,7 +315,8 @@ export const AppShell: React.FC<AppShellProps> = ({
         </div>
       </Dialog>
 
-      <SoftLaunchNotice />
+      <SoftLaunchNotice hideBanner openRequest={noticeRequest} />
+      <WorkspaceHelpCenter hideTrigger openRequest={helpRequest} category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} suspended={releaseOpen || alertsOpen || isDrawerOpen} onNavigate={go} />
 
       <div className="shell-body">
         {!isTablet && <aside ref={sidebarElement} className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
@@ -372,7 +354,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           ><span aria-hidden="true" /></div>
         </aside>}
         <Drawer isOpen={isDrawerOpen} onClose={closeDrawer} title="전체 내비게이션 메뉴">{navigation}</Drawer>
-        <main id="main-content" className="main-content" tabIndex={-1}>{children}</main>
+        <main id="main-content" className="main-content" tabIndex={-1}>{isTablet && <div className="mobile-workspace-menu"><Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button></div>}{children}</main>
       </div>
     </div>
   );

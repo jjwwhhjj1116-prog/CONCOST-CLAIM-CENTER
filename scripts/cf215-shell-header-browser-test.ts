@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-test('CF215 actual AppShell lets the header leave the viewport while keeping account and navigation controls', { timeout: 120_000 }, async t => {
+test('CF215 actual AppShell removes the header while keeping account and navigation controls', { timeout: 120_000 }, async t => {
   const { createServer } = await import('../apps/web/qa/vite-server.js');
   const html = readFileSync('apps/web/index.html', 'utf8')
     .replace('<script src="/runtime-config.js"></script>', '')
@@ -55,13 +55,10 @@ test('CF215 actual AppShell lets the header leave the viewport while keeping acc
       try {
         await page.goto(origin + '/cf215-shell.html');
         await page.getByRole('heading', { name: 'CF215 합성 긴 작업화면' }).waitFor();
-        assert.equal(await page.locator('.topbar').evaluate(node => getComputedStyle(node).position), 'relative');
-        assert.equal(await page.locator('.session-identity').textContent(), '합성 검수자PM');
-        assert.equal(await page.locator('.session-avatar').textContent(), '합');
-        assert.equal(await page.locator('.soft-launch-banner').count(), 1);
-        assert.equal(await page.locator('.soft-launch-banner').evaluate(node => getComputedStyle(node).position), 'relative');
+        assert.equal(await page.locator('.topbar,.soft-launch-banner').count(), 0);
+        if (width === 1440) assert.equal(await page.locator('.session-identity').textContent(), '합성 검수자PM');
         await scroll(800);
-        const header = await page.locator('.topbar').boundingBox(); assert.ok(header && header.y + header.height < 0, 'The whole header must leave the viewport');
+        const header = null; assert.equal(await page.locator('.topbar').count(), 0);
         if (width === 1440) {
           for (const height of [900, 760]) {
             await page.setViewportSize({ width, height }); await scroll(800);
@@ -72,15 +69,18 @@ test('CF215 actual AppShell lets the header leave the viewport while keeping acc
           }
         } else assert.equal(await page.locator('.shell-body > .sidebar').count(), 0);
         await scroll(0);
+        if (width === 390) await page.getByRole('button', { name: '메인 메뉴 드로어 열기', exact: true }).click();
         const settings = page.getByRole('button', { name: '개인 및 관리자 설정 열기', exact: true });
         await settings.click(); assert.deepEqual(await page.evaluate(() => (window as any).cf215.navigation), ['/settings']);
-        assert.equal(await page.locator('.session-identity').textContent(), '합성 검수자PM');
         if (width === 390) {
           const menu = page.getByRole('button', { name: '메인 메뉴 드로어 열기', exact: true });
           await menu.click(); await page.getByRole('dialog', { name: '전체 내비게이션 메뉴' }).waitFor();
           await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: '전체 내비게이션 메뉴' }).waitFor({ state: 'hidden' });
           assert.equal(await menu.evaluate(node => document.activeElement === node), true, 'Closing the mobile menu restores focus');
+          await menu.click();
         }
+        assert.equal(await page.locator('.session-identity').textContent(), '합성 검수자PM');
+        await page.getByRole('button', { name: '계정·업무 도구 열기', exact: true }).click();
         await page.getByRole('button', { name: '로그아웃', exact: true }).click();
         assert.equal(await page.evaluate(() => (window as any).cf215.expires), 1);
         const geometry = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth }));
