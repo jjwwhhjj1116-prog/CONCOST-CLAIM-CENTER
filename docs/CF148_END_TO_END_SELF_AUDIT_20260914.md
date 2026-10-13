@@ -1,6 +1,18 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF211 실제 3형식 출력 확인, CF212 JPEG 디코더 차이 최소 수정, 전체 A–Z는 미합격, 2026-10-13
+## 현재 판정 — CF213 분담·복구·간결한 UI 로컬 검수 통과, 개발 반영 대기, 전체 A–Z는 미합격, 2026-10-13
+
+### CF213 단일 담당자 분담·서식 보존·작업 복구·상단 UI 정리
+
+- 사용자 확정: 챕터마다 담당자 1명. 전체 보기/선택 챕터 보기를 분리하고 담당자·작성 권한·상태를 표시한다. 분담 원고에 실제 표·사진·서식 편집기를 사용하며 3초 자동 저장, 작성 완료 후 PM·관리자만 전체에 반영한다. 업무 최종승인·자기승인 차단·역할·직원 배정은 변경하지 않았다.
+- 확인한 결함: 기존 SAVE/MARK_READY가 `draft_editor_json=NULL`로 저장했고 UI는 textarea/텍스트만 보냈다. 현재 existing column에 canonical JSON을 보존하고 APPLY는 저장된 READY 원고를 사용한다. 동일 텍스트·다른 JSON 제출은409, 잘못된/중첩 경계는400, 모호한 WHOLE·native에 임의 append는409/DB 불변이다. 일반 전체 문서의 유일한 H2 범위만 연결하며 기존 제목 서식과 다른 챕터 노드는 보존한다. schema/migration0.
+- 보고서·제안서에 동일 IndexedDB 복구 모듈을 연결했다. 계정·사건·탭을 구분하고 명시적으로 복구하며, 정확 snapshot ACK만 정리한다. 읽기/저장 대기 중 계정·사건·입력 변화와 늦은 서식 입력을 보호한다. 보고서는 단계·장·전체/장 보기·커서를, 제안서는 전체12장 JSON/사진·표/제외 자산·표지/목차/선택을 보관한다. 로컬 복구 보관과 서버 저장 완료를 구분하고 용량/권한 오류를 표시한다.
+- UI: 의뢰 NEW PROJECT INTAKE/01 소개 배너 삭제1줄, 보고서 대형 소개 배너 삭제, 단계 안내/작업 버튼을 작게 정리하고 상단 고정 해제. 담당자 검수 도구는 목차 제목/분담/판례 1행3열, 선택 패널1개만 전체폭으로 펼친다. 패널을 닫아도 장 편집기는 유지된다. 고정4~12장 공통 양식과 기존 편집본 재주입 규칙은 변경0이다.
+- 시각검수에서 새 장 preview의 측정용 원고가 표시되어 중복되는 결함을 발견해 기존 report-final-document wrapper로 고쳤다. 사진대지의 editor 약69/31 vs preview50/50 차이도 발견해 새 사진대지의 explicit colgroup과 삽입시 공통 colwidth 정규화로 보정했다. 기존 저장 원고·이미지 크기1열560×330/2열260×180·캡션·빈행·0은 변경하지 않는다. 최초 실패 PNG와 중간 빌드는 보존했다.
+- 총괄 순차 회귀 `E:/Codex-QA/claim-center-cf213-20261013/final-regression.tap` 95/95·skipped0, 첨부/표/의뢰 추가 `final-attachment-regression.tap`27/27·skipped0, 실제 분담 UI `final-chapter-ui.tap`5/5 통과. 독립 공유복구8/8·ProposalView10/10·intake3/3 통과. 최초 CF200 readonly default chapter 실패46/48은 기본 전체보기로 보정 후24/24 및 최종95/95로 확인했다. CF119의 CRLF fixture anchor 실패는 newline 정규화와 새3열 도구 클릭으로 검사 경로만 보정했으며 업무 assertion은 유지했다. CF27의 기존 ProposalView source regex 불일치는 기능 PASS로 둔갑시키지 않는다.
+- 웹/루트 TypeScript·diffcheck·새 Vite 빌드 PASS. 기본 sandbox의 ProseMirror symlink 읽기 오류는 공식 escalated 검사0오류와 구분한다. Impeccable detector는 1회 실행했으며 기존 ES 전용 DESIGN.md palette/type/radius advisory와 문자열 regex의 img warning을 분리했다. 기존 화면 스타일을 유지하고 감지기를 억지로0으로 만들지 않았다. UI desktop1440/mobile390에서 넘침0·3버튼 동일행·선택1패널·편집 내용 유지·사진/캡션1회 표시를 검사했다.
+- 개발 배포 패키지는 E213 전용 폴더에 생성하며 기존 승인 WASM bcc40a79…/binding ad01e939…와 runtime28/caret pin을 해시 대조 스테이징한다. 새0b6 엔진 후보는 미승격 상태 그대로다. Git 삭제22개/가오픈/ENV·API키/DB·기존 고객 원고/메일·ERP·최종 승인 변경0.
+- 미완료: 원형 HWP 전체 파일의 챕터 분담 병합은 지원하지 않는다(빈 협업 편집기로 위장하지 않고 안내한다). HWP 대화상자에서 아직 전체 적용하지 않은 binary 작업본의 crash 복구·한컴/Word 독립 시각·전체32개 템플릿/HWP A–Z·직원 가이드 영상·가오픈은 미완료/미검증이다. 아래 CF212 새 엔진/Studio 승인 경계와 원형 시각 잔여를 이어서 해결해야 한다.
 
 ### CF212 출력 사진 디코더 일치·Docker 데이터 보존 복구
 

@@ -11,6 +11,7 @@ test('CF119 outline candidates remain separate until explicitly applied and save
     name: 'cf119-outline-fixture', enforce: 'pre',
     transform(code: string, id: string) {
       if (!id.replaceAll('\\', '/').endsWith('/qa/cf114-studio.tsx')) return;
+      code = code.replaceAll('\r\n', '\n');
       const replace = (before: string, after: string) => { assert.ok(code.includes(before), `Fixture anchor missing: ${before}`); code = code.replace(before, after); };
       replace('window.fetch = async (input, init) => {', `
         cases.push({ ...cases[0], id:'cf119-other', caseNumber:'CF119-002', title:'다른 합성 프로젝트' });
@@ -115,12 +116,14 @@ test('CF119 outline candidates remain separate until explicitly applied and save
       assert.match(saved.draft.content,/CH-02 AI 제안 제목 2/u);
       assert.equal(saved.outline.version,2);
       await page.locator('.report-wizard-navigation li:nth-child(4) button').click();
+      await page.getByRole('button',{name:'목차 제목 수정',exact:true}).click();
       const reviewTitle=page.getByRole('textbox',{name:'챕터 제목',exact:true});
       await reviewTitle.waitFor();
       await page.getByRole('combobox',{name:'수정할 챕터',exact:true}).selectOption('ch1');
       assert.equal(await reviewTitle.inputValue(),'담당자 확정 제목');
       await page.waitForFunction(()=>(window as any).cf119.snapshot().draft.wizardStep===4);
       await page.evaluate(()=>(window as any).cf119.remount());
+      await page.getByRole('button',{name:'목차 제목 수정',exact:true}).click();
       await reviewTitle.waitFor();
       await page.getByRole('combobox',{name:'수정할 챕터',exact:true}).selectOption('ch1');
       assert.equal(await reviewTitle.inputValue(),'담당자 확정 제목','canonical GET re-entry restores saved titles');

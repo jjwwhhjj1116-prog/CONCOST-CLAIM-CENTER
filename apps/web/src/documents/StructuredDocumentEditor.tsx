@@ -58,6 +58,7 @@ export interface StructuredDocumentEditorHandle {
   getJSON: () => JSONContent | null;
   getMarkdown: () => string;
   getSelection: () => StructuredSelection | null;
+  restoreSelection: (selection: Pick<StructuredSelection, 'from' | 'to'>) => boolean;
   replaceRange: (from: number, to: number, replacement: string, expectedText?: string) => boolean;
   insertTable: (rows?: number, columns?: number) => void;
   insertImage: (image: { src: string; alt: string; title?: string }) => void;
@@ -365,24 +366,15 @@ export class DocumentTableView extends TableView {
     this.table.style.tableLayout = 'fixed';
     const columns = [...this.table.querySelectorAll<HTMLTableColElement>('colgroup > col')];
     if (columns.length) {
-      const rows: ProseMirrorNode[][] = [];
-      node.forEach(row => { const cells: ProseMirrorNode[] = []; row.forEach(cell => cells.push(cell)); rows.push(cells); });
-      const columnIndexes = tableCellColumnIndexes(rows.map(row => row.map(cell => cell.attrs)));
-      const storedWidths: number[] = [], weights: number[] = [];
+      const storedWidths: number[] = [];
       node.firstChild?.forEach(cell => {
         for (let index = 0; index < cell.attrs.colspan; index++) {
           storedWidths.push(Number(cell.attrs.colwidth?.[index]) || 0);
-          let longest = cell.textContent.length;
-          const columnIndex = storedWidths.length - 1;
-          rows.forEach((row, rowIndex) => { row.forEach((value, cellIndex) => {
-            const column = columnIndexes[rowIndex][cellIndex];
-            const span = Number(value.attrs.colspan) || 1;
-            if (column <= columnIndex && columnIndex < column + span) longest = Math.max(longest, Math.ceil(value.textContent.length / span));
-          }); });
-          weights.push(inferredTableColumnWeight(cell.textContent, longest));
         }
       });
-      const proportions = normalizeColumnWidths(storedWidths, 100, weights, Number(node.attrs.documentDefaultsVersion) < 2).widths;
+      // Missing widths use the same equal fallback as HTML preview. Typing must
+      // not silently resize a column; imported or manually resized widths win.
+      const proportions = normalizeColumnWidths(storedWidths, 100, [], Number(node.attrs.documentDefaultsVersion) < 2).widths;
       columns.forEach((column, index) => {
         column.style.width = `${proportions[index].toFixed(4)}%`;
         column.style.minWidth = '';
@@ -1083,7 +1075,11 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     focus: () => { editor?.chain().focus().run(); },
     getJSON: () => editor?.getJSON() ?? null,
     getMarkdown: () => editor ? editorHtmlToMarkdown(editor.getHTML()) : value,
-    getSelection: () => selectionRef.current,
+    getSelection: () => editor ? { from: editor.state.selection.from, to: editor.state.selection.to, text: editor.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, '\n') } : null,
+    restoreSelection: ({ from, to }) => {
+      if (!editor || !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < from || to > editor.state.doc.content.size) return false;
+      editor.chain().focus().setTextSelection({ from, to }).scrollIntoView().run(); return true;
+    },
     replaceRange: (from, to, next, expectedText) => {
       if (!editor) return false;
       if (expectedText !== undefined && editor.state.doc.textBetween(from, to, '\n') !== expectedText) return false;
@@ -1100,7 +1096,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     insertImage: ({ src, alt, title }) => {
       editor?.chain().focus().setImage({ src, alt, title: title ?? alt }).run();
     },
-    insertHtml: (html) => editor?.isEditable ? editor.chain().focus().insertContent(DOMPurify.sanitize(html)).run() : false,
+    insertHtml: (html) => editor?.isEditable ? editor.chain().focus().insertContent(normalizeStructuredDocumentHtml(DOMPurify.sanitize(html, { ADD_ATTR: ['colwidth', 'data-table-width', 'data-table-align', 'data-table-density', 'data-document-defaults-version', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm'] }))).run() : false,
     deleteSelectedTable: () => {
       if (!editor?.isActive('table')) return false;
       runAction({ kind: 'command', command: 'deleteTable' });

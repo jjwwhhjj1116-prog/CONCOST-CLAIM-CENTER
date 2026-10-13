@@ -4405,7 +4405,18 @@ function replacePreviewReportChapter(content: string, chapterCode: string, chapt
   const escaped = chapterCode.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const block = `<!-- MANUAL-CHAPTER:${chapterCode}:START -->\n## ${chapterCode} ${chapterTitle}\n\n${body.trim()}\n<!-- MANUAL-CHAPTER:${chapterCode}:END -->`;
   const pattern = new RegExp(`<!-- (?:AI|MANUAL)-CHAPTER:${escaped}:START -->[\\s\\S]*?<!-- (?:AI|MANUAL)-CHAPTER:${escaped}:END -->`, 'u');
-  return pattern.test(content) ? content.replace(pattern, block) : `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
+  if (pattern.test(content)) return content.replace(pattern, block);
+  if (/<!--[^>]*WHOLE/u.test(content)) {
+    const normalize = (value: string) => value.replace(/^(?:CH-\d+\s*|\d+[.、)]\s*)/u, '').trim();
+    const headings = [...content.matchAll(/^##\s+(.+)$/gmu)].filter(match => normalize(match[1]) === normalize(chapterTitle));
+    if (headings.length === 1) {
+      const start = headings[0].index!;
+      const rest = content.slice(start + headings[0][0].length);
+      const end = rest.search(/^(?:#{1,2}\s|<!--[^>]*WHOLE[^>]*END)/mu);
+      return content.slice(0, start) + block + '\n\n' + (end < 0 ? '' : rest.slice(end));
+    }
+  }
+  return `${content.trim()}${content.trim() ? '\n\n' : ''}${block}`;
 }
 
 async function handlePreviewReportChapterCollaboration(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -4470,8 +4481,8 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
     return json({ error: 'Chapter collaboration payload is invalid', code: 'INVALID_CHAPTER_COLLABORATION' }, 400);
   }
   const current = await env.DB.prepare(
-    'SELECT chapter_code AS chapterCode,chapter_title AS chapterTitle,assignee_id AS assigneeId,status,draft_text AS draftText,version,updated_at AS updatedAt FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=?'
-  ).bind(caseId, body.chapterId).first<{ chapterCode: string; chapterTitle: string; assigneeId: string | null; status: string; draftText: string; version: number; updatedAt: string }>();
+    'SELECT chapter_code AS chapterCode,chapter_title AS chapterTitle,assignee_id AS assigneeId,status,draft_text AS draftText,draft_editor_json AS draftEditorJson,version,updated_at AS updatedAt FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=?'
+  ).bind(caseId, body.chapterId).first<{ chapterCode: string; chapterTitle: string; assigneeId: string | null; status: string; draftText: string; draftEditorJson: string | null; version: number; updatedAt: string }>();
   if (!current) return json({ error: '챕터 담당자를 먼저 지정해 주세요.', code: 'CHAPTER_ASSIGNMENT_REQUIRED' }, 409);
   const canManage = await canManagePreviewProjectReport(env, user, caseId);
   if (!canManage && current.assigneeId !== user.id) return json({ error: '배정된 챕터만 작성·검수할 수 있습니다.', code: 'CHAPTER_ASSIGNEE_REQUIRED' }, 403);
@@ -4483,14 +4494,25 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   const now = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString();
   const nextVersion = expectedVersion + 1;
   const chapterSha = await sha256Hex(draftText);
+  let draftEditorJson = body.draftEditorJson ? JSON.stringify(body.draftEditorJson) : current.draftEditorJson;
+  if (action === 'APPLY' && current.draftEditorJson) {
+    if (body.draftEditorJson && draftEditorJson !== current.draftEditorJson) return json({ error: '챕터 서식이 제출본과 다릅니다. 먼저 저장하고 작성 완료로 다시 제출해 주세요.', code: 'CHAPTER_NOT_READY' }, 409);
+    draftEditorJson = current.draftEditorJson;
+  } else if (action !== 'APPLY' && current.draftEditorJson && !body.draftEditorJson && draftText !== current.draftText.trim()) {
+    return json({ error: '표·이미지·서식 보존을 위해 최신 편집기를 다시 열어 주세요. 원고는 유지됩니다.', code: 'EDITOR_RELOAD_REQUIRED' }, 409);
+  }
+  if (draftEditorJson) {
+    try { mergeGeneratedChapter({ type: 'doc', content: [] }, current.chapterCode, JSON.parse(draftEditorJson)); }
+    catch (reason) { return json({ error: reason instanceof Error ? reason.message : '챕터 서식을 확인해 주세요.', code: 'INVALID_CHAPTER_DOCUMENT' }, 400); }
+  }
 
   if (action !== 'APPLY') {
     const nextStatus = action === 'MARK_READY' ? 'READY' : 'IN_PROGRESS';
     const results = await env.DB.batch([
-      env.DB.prepare('UPDATE preview_report_chapter_assignments SET draft_text=?,draft_editor_json=NULL,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND ' + previewReportActiveSql('preview_report_chapter_assignments.case_id'))
-        .bind(draftText, nextStatus, user.id, now, caseId, body.chapterId, expectedVersion),
-      env.DB.prepare('INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)')
-        .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, nextStatus, draftText, chapterSha, user.id, now, caseId, body.chapterId, nextVersion, now),
+      env.DB.prepare('UPDATE preview_report_chapter_assignments SET draft_text=?,draft_editor_json=?,status=?,version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND ' + previewReportActiveSql('preview_report_chapter_assignments.case_id'))
+        .bind(draftText, draftEditorJson, nextStatus, user.id, now, caseId, body.chapterId, expectedVersion),
+      env.DB.prepare('INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)')
+        .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, nextStatus, draftText, draftEditorJson, chapterSha, user.id, now, caseId, body.chapterId, nextVersion, now),
       env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'REPORT_CHAPTER_SAVED',?,?,? WHERE " + previewReportActiveSql('?'))
         .bind(crypto.randomUUID(), caseId, user.id, action === 'MARK_READY' ? '챕터 검수 완료·PM 반영 대기' : '챕터 협업 초안 저장', `${current.chapterCode} · v${nextVersion}`, now, caseId)
     ]) as Array<{ meta?: { changes?: number } }>;
@@ -4516,9 +4538,9 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   const stored = splitReportPresentation(storedDocument);
   let merged = stored.body as (Record<string, unknown> & ReportNode) | null;
   if (merged) {
-    if (!body.draftEditorJson) return json({ error: '서식 보존을 위해 화면을 새로고침한 뒤 챕터를 다시 반영해 주세요.', code: 'EDITOR_RELOAD_REQUIRED' }, 409);
-    try { merged = mergeGeneratedChapter(merged, current.chapterCode, body.draftEditorJson as ReportNode); }
-    catch (reason) { return json({ error: reason instanceof Error ? reason.message : '챕터 구분을 확인해 주세요.', code: 'INVALID_CHAPTER_DOCUMENT' }, 400); }
+    if (!draftEditorJson) return json({ error: '서식 보존을 위해 화면을 새로고침한 뒤 챕터를 다시 반영해 주세요.', code: 'EDITOR_RELOAD_REQUIRED' }, 409);
+    try { merged = mergeGeneratedChapter(merged, current.chapterCode, JSON.parse(draftEditorJson) as ReportNode, chapterTitle); }
+    catch (reason) { return json({ error: reason instanceof Error ? reason.message : '챕터 구분을 확인해 주세요.', code: 'CHAPTER_RANGE_REQUIRED' }, 409); }
   }
   const presentation = joinReportPresentation(merged, stored.header, Object.prototype.hasOwnProperty.call(storedDocument?.attrs ?? {}, 'reportFrontMatter') ? stored.frontMatter : undefined);
   const editorJson = presentation ? JSON.stringify(presentation) : null;
@@ -4529,8 +4551,8 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
       .bind(crypto.randomUUID(), caseId, nextReportVersion, report.title, nextContent, editorJson, reportSha, user.id, reportNow, caseId, nextReportVersion, reportNow),
     env.DB.prepare("UPDATE preview_report_chapter_assignments SET status='APPLIED',version=version+1,updated_by=?,updated_at=? WHERE case_id=? AND chapter_id=? AND version=? AND status='READY' AND EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)")
       .bind(user.id, reportNow, caseId, body.chapterId, expectedVersion, caseId, nextReportVersion, reportNow),
-    env.DB.prepare("INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,'APPLIED',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)")
-      .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, draftText, chapterSha, user.id, reportNow, caseId, body.chapterId, nextVersion, reportNow),
+    env.DB.prepare("INSERT INTO preview_report_chapter_revisions (id,case_id,chapter_id,version,status,draft_text,draft_editor_json,content_sha256,saved_by,saved_at) SELECT ?,?,?,?,'APPLIED',?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=? AND version=? AND updated_at=?)")
+      .bind(crypto.randomUUID(), caseId, body.chapterId, nextVersion, draftText, current.draftEditorJson, chapterSha, user.id, reportNow, caseId, body.chapterId, nextVersion, reportNow),
     env.DB.prepare("INSERT INTO preview_case_activities (id,case_id,actor_id,event_type,title,description,created_at) SELECT ?,?,?,'REPORT_CHAPTER_APPLIED','검수 챕터 보고서 반영',?,? WHERE EXISTS (SELECT 1 FROM preview_report_drafts WHERE case_id=? AND version=? AND updated_at=?)")
       .bind(crypto.randomUUID(), caseId, user.id, `${current.chapterCode} · 보고서 v${nextReportVersion}`, reportNow, caseId, nextReportVersion, reportNow)
   ]) as Array<{ meta?: { changes?: number } }>;

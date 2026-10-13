@@ -20,7 +20,8 @@ export function reportEvidenceHtml(files: Evidence[], issue: string, captions: R
       if (cells.length < layout) cells.push('<td><p></p></td>');
       rows.push(`<tr>${cells.join('')}</tr>`);
     }
-    chunks.push(`<table style="width:100%;table-layout:fixed"><tbody>${rows.join('')}</tbody></table>`);
+    const columns = Array.from({ length: layout }, () => `<col style="width:${100 / layout}%">`).join('');
+    chunks.push(`<table style="width:100%;table-layout:fixed"><colgroup>${columns}</colgroup><tbody>${rows.join('')}</tbody></table>`);
   }
   for (const file of documents) {
     const excerpt = excerpts[file.id], reference = excerpt ? `${excerpt.sheetName}!${excerpt.range}` : locator;

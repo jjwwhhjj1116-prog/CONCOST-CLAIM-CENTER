@@ -23,6 +23,9 @@ import { ReportBodyPages } from '../documents/ReportBodyPages';
 import { ReportFrontMatterEditor } from '../documents/ReportFrontMatterEditor';
 import { StructuredDocumentEditor, renderStructuredDocumentHtml, normalizeStructuredDocumentHtml, editorHtmlToMarkdown, parseStructuredDocumentMarkdown, type StructuredDocumentEditorHandle, type StructuredSelection } from '../documents/StructuredDocumentEditor';
 import { mergeGeneratedChapter } from '../reports/report-generated-chapter';
+import { extractReportChapter } from '../../../../packages/document-engine/src/report-chapter';
+import { createLocalDocumentRecovery, type RecoveryMetadata } from '../documents/local-document-recovery';
+import type { JSONContent } from '@tiptap/core';
 import { repairReportAiFormatting } from '../reports/report-format-repair';
 import { renameStructuredReportTitles, renameUnstructuredReportTitles } from '../reports/report-outline-sync';
 import { StatusFeedbackState } from '../layout/StatusFeedbackState';
@@ -48,7 +51,7 @@ interface ReportBackup extends ReportRevision { backupHour: string }
 interface ReportPayload { draft: ReportDraft | null; revisions: ReportRevision[]; backups?: ReportBackup[] }
 interface ReportChapterAssignment {
   caseId: string; chapterId: string; chapterCode: string; chapterTitle: string; assigneeId: string | null; assigneeName: string | null;
-  status: 'UNASSIGNED' | 'IN_PROGRESS' | 'READY' | 'APPLIED'; draftText: string; version: number; updatedByName: string; updatedAt: string; canEdit: boolean;
+  status: 'UNASSIGNED' | 'IN_PROGRESS' | 'READY' | 'APPLIED'; draftText: string; draftEditorJson?: JSONContent | null; version: number; updatedByName: string; updatedAt: string; canEdit: boolean;
 }
 interface ReportChapterCollaboration {
   assignments: ReportChapterAssignment[];
@@ -58,10 +61,33 @@ interface ReportChapterCollaboration {
   reportVersion?: number;
   applied?: boolean;
 }
+function chapterBodyDocument(source: JSONContent | null | undefined, code: string, title: string): JSONContent | null {
+  if (!source) return null;
+  try {
+    const chapter = extractReportChapter(source, code, title);
+    if (!chapter) return null;
+    const nodes = chapter.content ?? [];
+    return { type: 'doc', content: nodes[0]?.type === 'heading' ? nodes.slice(1) : nodes };
+  } catch { return null; }
+}
+function wrapChapterDocument(body: JSONContent, code: string, title: string): JSONContent {
+  const shell = parseStructuredDocumentMarkdown(replaceReportChapterBlock('', code, title, ''));
+  return { type: 'doc', content: [...(shell.content ?? []).slice(0, 2), ...(body.content ?? []), (shell.content ?? []).at(-1)!] };
+}
+type ReportReviewToolId = 'outline' | 'collaboration' | 'citations';
+function ReportReviewTool({ id, title, selected, onSelect, className, children }: { id: ReportReviewToolId; title: string; selected: ReportReviewToolId | null; onSelect: (id: ReportReviewToolId | null) => void; className: string; children: React.ReactNode }) {
+  return <><button type="button" className="report-review-tool-tab" aria-expanded={selected === id} aria-controls={'report-review-tool-' + id} onClick={() => onSelect(selected === id ? null : id)}>{title}</button>{selected === id && <section id={'report-review-tool-' + id} className={'report-review-tool-body ' + className} aria-label={title}>{children}</section>}</>;
+}
 interface ReportWorkspace {
   caseId: string; caseNumber: string; caseTitle: string; claimType: string; reportTitle: string;
   version: number; wizardStep: number; selectedChapterId: string | null; updatedAt: string;
   updatedByName: string; contentLength: number;
+}
+interface ReportRecoveryPayload extends Record<string, unknown> {
+  version: number; title: string; content: string; editorJson: JSONContent | null; header: ReportHeader; frontMatter: ReportFrontMatter;
+  dirty: boolean; step: ReportWizardStep; chapterId: string; view: 'whole' | 'chapter'; selection: StructuredSelection | null;
+  chapterDrafts: Record<string, string>; chapterDocuments: Record<string, JSONContent>; chapterVersions: Record<string, number>; dirtyChapters: string[];
+  outlineDirty: boolean; outlineVersion: number; outlineTitles: Record<string, string>; outlineNotes: Record<string, string>;
 }
 interface AuthoringChapter { id: string; chapterCode: string; title: string; agentCode: string; ordinal: number; promptVersion: number }
 interface OutlineItem { chapterId: string; chapterCode: string; chapterTitle: string; promptVersion: number; planningNote: string }
@@ -231,7 +257,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [outlineDirty, setOutlineDirtyState] = useState(false);
   const outlineDirtyRef = useRef(false);
   const setOutlineDirty = useCallback((next: boolean) => { outlineDirtyRef.current = next; setOutlineDirtyState(next); }, []);
-  const [showGuide, setShowGuide] = useState(true);
+  const [showGuide, setShowGuide] = useState(false);
   const [showTemplatePreview, setShowTemplatePreview] = useState(false);
   const [previewTemplateCategoryCode, setPreviewTemplateCategoryCode] = useState('');
   const [activeStep, setActiveStep] = useState<ReportWizardStep>(1);
@@ -260,6 +286,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const [chapterCollaboration, setChapterCollaboration] = useState<ReportChapterCollaboration | null>(null);
   const [chapterDrafts, setChapterDraftsState] = useState<Record<string, string>>({});
+  const [reportView, setReportView] = useState<'whole' | 'chapter'>('whole');
+  const [reviewTool, setReviewTool] = useState<ReportReviewToolId | null>(null);
+  const [chapterDocuments, setChapterDocumentsState] = useState<Record<string, JSONContent>>({});
+  const chapterDocumentsRef = useRef<Record<string, JSONContent>>({});
+  const chapterSavedDocumentsRef = useRef<Record<string, JSONContent>>({});
+  const setChapterDocuments = (value: Record<string, JSONContent>) => { chapterDocumentsRef.current = value; setChapterDocumentsState(value); };
   const chapterDraftsRef = useRef<Record<string, string>>({});
   const chapterSavedRef = useRef<Record<string, string>>({});
   const chapterSaveInFlight = useRef(false);
@@ -267,10 +299,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const value = typeof next === 'function' ? next(chapterDraftsRef.current) : next;
     chapterDraftsRef.current = value; setChapterDraftsState(value);
   };
-  const dirtyChapterIds = (chapterCollaboration?.assignments ?? []).filter(item => item.canEdit && (chapterDrafts[item.chapterId] ?? '') !== (chapterSavedRef.current[item.chapterId] ?? '')).map(item => item.chapterId);
+  const dirtyChapterIds = (chapterCollaboration?.assignments ?? []).filter(item => item.canEdit && ((chapterDrafts[item.chapterId] ?? '') !== (chapterSavedRef.current[item.chapterId] ?? '') || chapterDocuments[item.chapterId] !== chapterSavedDocumentsRef.current[item.chapterId])).map(item => item.chapterId);
   const chaptersDirty = dirtyChapterIds.length > 0;
   const [chapterBusy, setChapterBusy] = useState('');
   const [chapterNotice, setChapterNotice] = useState('');
+  const [chapterSaveError, setChapterSaveError] = useState('');
+  const chapterBodyRef = useRef<StructuredDocumentEditorHandle | null>(null);
   const [finalExportMessage, setFinalExportMessage] = useState('');
   const [qaSnapshot, setQaSnapshot] = useState<{ caseId: string; document: FinalReportSnapshot; loadSequence: number; wizardStep: number; selectedChapterId: string | null } | null>(null);
   const qaSnapshotRef = useRef(qaSnapshot);
@@ -319,6 +353,92 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const selectedWorkflowProject = useMemo(() => WORKFLOW_PROJECTS.find((project) => project.caseId === selectedCaseId) ?? null, [selectedCaseId]);
   const selectedChapter = useMemo(() => authoring?.chapters.find((chapter) => chapter.id === selectedChapterId) ?? null, [authoring, selectedChapterId]);
   const selectedChapterAssignment = useMemo(() => chapterCollaboration?.assignments.find((assignment) => assignment.chapterId === selectedChapterId) ?? null, [chapterCollaboration, selectedChapterId]);
+  const chapterEditing = activeStep === 4 && reportView === 'chapter';
+  const activeChapterEditable = chapterEditing && !readReportNativeSource(editorJson, selectedCaseId) && Boolean(selectedChapterAssignment?.canEdit);
+  const activeDocumentEditable = chapterEditing ? activeChapterEditable : editable;
+  const recoveryJournal = useMemo(() => {
+    if (!chapterCollaboration?.currentUserId || !selectedCaseId) return null;
+    try { return createLocalDocumentRecovery<ReportRecoveryPayload>({ accountId: chapterCollaboration.currentUserId, workspaceId: 'report:' + selectedCaseId }); }
+    catch { return null; }
+  }, [chapterCollaboration?.currentUserId, selectedCaseId]);
+  const recoveryJournalRef = useRef(recoveryJournal); recoveryJournalRef.current = recoveryJournal;
+  const recoveryEditState = useMemo(() => ({ title, content, editorJson, reportHeader, reportFrontMatter, chapterDrafts, chapterDocuments, outlineTitles, outlineNotes }), [title, content, editorJson, reportHeader, reportFrontMatter, chapterDrafts, chapterDocuments, outlineTitles, outlineNotes]);
+  const recoveryEditStateRef = useRef(recoveryEditState); recoveryEditStateRef.current = recoveryEditState;
+  const [restoringLocal, setRestoringLocal] = useState(false);
+  const [recoveryCandidates, setRecoveryCandidates] = useState<RecoveryMetadata[]>([]);
+  const [recoveryError, setRecoveryError] = useState('');
+  const [recoverySavedAt, setRecoverySavedAt] = useState('');
+  const recoveryWriteRef = useRef<ReturnType<NonNullable<typeof recoveryJournal>['write']> | null>(null);
+  const [resumeSelection, setResumeSelection] = useState<StructuredSelection | null>(null);
+  const [cursorEpoch, setCursorEpoch] = useState(0);
+  const recordSelection = (selection: StructuredSelection | null) => { setSelectedTextRange(selection); setCursorEpoch(value => value + 1); };
+  useEffect(() => {
+    setRecoveryCandidates([]); setRecoveryError(''); setRecoverySavedAt(''); recoveryWriteRef.current = null;
+    if (!recoveryJournal || loading || loadedCaseId !== selectedCaseId) return;
+    let active = true;
+    void recoveryJournal.list().then(items => { if (active) setRecoveryCandidates(items.filter(item => item.tabId !== recoveryJournal.tabId)); }).catch(reason => { if (active) setRecoveryError(reason instanceof Error ? reason.message : String(reason)); });
+    return () => { active = false; };
+  }, [recoveryJournal, loadedCaseId, loading]);
+  useEffect(() => {
+    if (!recoveryJournal || loading || loadedCaseId !== selectedCaseId) return;
+    const timer = window.setTimeout(() => {
+      const operation = recoveryJournal.write({ version: versionRef.current, title: titleRef.current, content: contentRef.current, editorJson: editorJsonRef.current,
+        header: reportHeaderRef.current, frontMatter: reportFrontMatterRef.current, dirty: dirtyRef.current,
+        step: activeStepRef.current, chapterId: selectedChapterRef.current, view: reportView,
+        selection: (reportView === 'chapter' ? chapterBodyRef : reportBodyRef).current?.getSelection() ?? null,
+        chapterDrafts: chapterDraftsRef.current, chapterDocuments: chapterDocumentsRef.current,
+        chapterVersions: Object.fromEntries((chapterCollaboration?.assignments ?? []).map(item => [item.chapterId, item.version])), dirtyChapters: dirtyChapterIds,
+        outlineDirty, outlineVersion, outlineTitles, outlineNotes });
+      recoveryWriteRef.current = operation;
+      void operation.then(snapshot => { if (selectedCaseRef.current === selectedCaseId) { setRecoverySavedAt(snapshot.writtenAt); setRecoveryError(''); } }).catch(reason => { if (selectedCaseRef.current === selectedCaseId) setRecoveryError(reason instanceof Error ? reason.message : String(reason)); });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [recoveryJournal, loading, loadedCaseId, title, content, editorJson, reportHeader, reportFrontMatter, version, activeStep, selectedChapterId, reportView, chapterDrafts, chapterDocuments, chapterCollaboration, outlineDirty, outlineVersion, outlineTitles, outlineNotes, cursorEpoch]);
+  useEffect(() => {
+    if (!resumeSelection) return;
+    let stopped = false, attempts = 0;
+    const restore = () => {
+      if (stopped) return;
+      if ((reportView === 'chapter' ? chapterBodyRef : reportBodyRef).current?.restoreSelection(resumeSelection)) { setResumeSelection(null); return; }
+      if (++attempts < 20) window.setTimeout(restore, 100);
+      else { setResumeSelection(null); setRecoveryError('원고와 단계는 복구했습니다. 이전 커서 위치는 확인하지 못했습니다.'); }
+    };
+    restore(); return () => { stopped = true; };
+  }, [resumeSelection, reportView, activeStep]);
+  const restoreLocalReport = async (snapshotId: string) => {
+    if (!recoveryJournal || loading || loadedCaseId !== selectedCaseId || restoringLocal || saving || chapterBusy || evidenceInsertOpen) return;
+    const requestCaseId = selectedCaseId, requestSequence = loadSequence.current, requestJournal = recoveryJournal;
+    const requestEdits = recoveryEditStateRef.current;
+    setRestoringLocal(true);
+    try {
+      const snapshot = await recoveryJournal.read(snapshotId); if (!snapshot) throw new Error('이 복구본은 다른 탭에서 변경되었습니다. 서버 원고는 유지됩니다.');
+      if (selectedCaseRef.current !== requestCaseId || loadSequence.current !== requestSequence || recoveryJournalRef.current !== requestJournal) return;
+      if (recoveryEditStateRef.current !== requestEdits) throw new Error('복구를 기다리는 동안 입력 내용이 바뀌었습니다. 새 입력을 덮어쓰지 않았습니다. 필요한 내용을 저장한 뒤 다시 복구하세요.');
+      const value = snapshot.payload;
+      if (value.version !== versionRef.current || value.outlineVersion !== outlineVersion || typeof value.content !== 'string' || typeof value.title !== 'string'
+        || !Array.isArray(value.dirtyChapters) || value.step < 1 || value.step > 5 || !['whole', 'chapter'].includes(value.view)
+        || (value.dirty && !editable) || (value.chapterId && !authoring?.chapters.some(chapter => chapter.id === value.chapterId))
+        || value.dirtyChapters.some(id => !chapterCollaboration?.assignments.some(item => item.chapterId === id && item.canEdit && item.version === value.chapterVersions[id]))) {
+        throw new Error('서버 버전·담당 권한이 복구본과 다릅니다. 최신 원고를 덮어쓰지 않았습니다. 복구본을 파일로 보관해 대조하세요.');
+      }
+      titleRef.current = value.title; contentRef.current = value.content; setTitle(value.title); setContent(value.content); setEditorJson(value.editorJson);
+      setReportHeader(value.header); setReportFrontMatter(value.frontMatter); setDirty(value.dirty);
+      setChapterDrafts({ ...chapterDraftsRef.current, ...Object.fromEntries(value.dirtyChapters.map(id => [id, value.chapterDrafts[id]])) });
+      setChapterDocuments({ ...chapterDocumentsRef.current, ...Object.fromEntries(value.dirtyChapters.map(id => [id, value.chapterDocuments[id]])) });
+      setOutlineTitles(value.outlineTitles); setOutlineNotes(value.outlineNotes); setOutlineDirty(value.outlineDirty);
+      activeStepRef.current = value.step; selectedChapterRef.current = value.chapterId; setActiveStep(value.step); setSelectedChapterId(value.chapterId); setReportView(value.view);
+      setWorkspaceDirty(true); setResumeSelection(value.selection); setRecoveryError(''); setRecoveryCandidates([]);
+      setChapterNotice('로컬 작업을 복구했습니다. 서버 저장 결과를 확인하세요. 최초 원본과 서버 버전 이력은 유지됩니다.');
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId && recoveryJournalRef.current === requestJournal) setRecoveryError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setRestoringLocal(false); }
+  };
+  const preserveLocalReport = async (snapshotId: string) => {
+    try {
+      const snapshot = await recoveryJournal?.read(snapshotId); if (!snapshot) throw new Error('복구본을 찾지 못했습니다.');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' }));
+      const anchor = document.createElement('a'); anchor.href = url; anchor.download = '보고서-로컬복구본.json'; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (reason) { setRecoveryError(reason instanceof Error ? reason.message : String(reason)); }
+  };
   const selectedTemplateCategory = useMemo(() => authoring?.templateLibrary.find((category) => category.categoryCode === previewTemplateCategoryCode) ?? authoring?.templateLibrary.find((category) => category.matchesCurrentType) ?? authoring?.templateLibrary[0] ?? null, [authoring, previewTemplateCategoryCode]);
   const selectedTemplatePreview = useMemo(() => authoring?.templates.find((template) => template.claimType === selectedTemplateCategory?.primaryClaimType) ?? authoring?.templates.find((template) => template.claimType === authoring.claimType) ?? null, [authoring, selectedTemplateCategory]);
   const filteredSavedWorkspaces = useMemo(() => {
@@ -375,10 +495,18 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       setFinalizations(finalizationResult.finalizations);
       setAuthoring(authoringResult);
       setChapterCollaboration(collaborationResult);
-      const loadedChapterDrafts = Object.fromEntries(collaborationResult.assignments.map((assignment) => [assignment.chapterId, assignment.draftText || reportChapterBlock(loadedContent, assignment.chapterCode)]));
+      const loadedChapterDocuments = Object.fromEntries(collaborationResult.assignments.map(assignment => [assignment.chapterId,
+        chapterBodyDocument(assignment.draftEditorJson, assignment.chapterCode, assignment.chapterTitle)
+        ?? (assignment.draftText ? parseStructuredDocumentMarkdown(assignment.draftText) : chapterBodyDocument(presentation.body, assignment.chapterCode, assignment.chapterTitle))
+        ?? parseStructuredDocumentMarkdown(reportChapterBlock(loadedContent, assignment.chapterCode))]));
+      const loadedChapterDrafts = Object.fromEntries(collaborationResult.assignments.map((assignment) => [assignment.chapterId, assignment.draftText || editorHtmlToMarkdown(renderStructuredDocumentHtml(loadedChapterDocuments[assignment.chapterId]))]));
       chapterSavedRef.current = { ...loadedChapterDrafts };
+      chapterSavedDocumentsRef.current = { ...loadedChapterDocuments };
+      setChapterDocuments(loadedChapterDocuments);
       setChapterDrafts(loadedChapterDrafts);
-      setChapterNotice('');
+      setReportView('whole');
+      setReviewTool(null);
+      setChapterNotice(''); setChapterSaveError('');
       setPreviewTemplateCategoryCode(authoringResult.templateLibrary.find((category) => category.matchesCurrentType)?.categoryCode ?? authoringResult.templateLibrary[0]?.categoryCode ?? '');
       setOutlineStatus(authoringResult.outlinePlan.status);
       setOutlineVersion(authoringResult.outlinePlan.version);
@@ -430,6 +558,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   useEffect(() => { if (selectedCaseId) void loadDraft(selectedCaseId); else setLoading(false); }, [selectedCaseId, loadDraft]);
 
   const saveNow = useCallback(async (saveKind: 'AUTO' | 'MANUAL' | 'NAVIGATION' = 'MANUAL', syncOutline = false, force = false): Promise<boolean> => {
+    if (restoringLocal) return false;
     if (chapterSaveInFlight.current) return false;
     if (generationInFlight.current && !force) return false;
     if (saveError && saveKind !== 'MANUAL') return false;
@@ -443,6 +572,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const requestVersion = versionRef.current;
     const requestWizardStep = activeStepRef.current;
     const requestChapterId = selectedChapterRef.current || null;
+    const requestRecovery = recoveryWriteRef.current;
     draftSaveInFlight.current = true;
     setSaving(true);
     try {
@@ -465,6 +595,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const unsavedChanges = titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current)) !== JSON.stringify(requestEditorJson);
       setDirty(unsavedChanges);
       setWorkspaceDirty(activeStepRef.current !== requestWizardStep || (selectedChapterRef.current || null) !== requestChapterId);
+      if (!unsavedChanges && !outlineDirtyRef.current && !Object.keys(chapterDraftsRef.current).some(id => chapterDraftsRef.current[id] !== chapterSavedRef.current[id] || chapterDocumentsRef.current[id] !== chapterSavedDocumentsRef.current[id])) {
+        void requestRecovery?.then(snapshot => recoveryJournal?.acknowledge(snapshot.snapshotId)).catch(reason => setRecoveryError(reason instanceof Error ? reason.message : String(reason)));
+      }
       outlineSyncPendingRef.current = false; setOutlineSyncPending(false);
       void loadSavedWorkspaces().catch(() => { /* The draft itself is already saved. */ });
       return !unsavedChanges;
@@ -476,7 +609,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       draftSaveInFlight.current = false;
       if (selectedCaseRef.current === requestCaseId) setSaving(false);
     }
-  }, [activeStep, content, dirty, editable, editorJson, reportHeader, reportFrontMatter, loadedCaseId, loadSavedWorkspaces, saveError, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
+  }, [activeStep, content, dirty, editable, editorJson, reportHeader, reportFrontMatter, loadedCaseId, loadSavedWorkspaces, recoveryJournal, restoringLocal, saveError, saving, selectedCaseId, selectedChapterId, title, version, workspaceDirty]);
 
   useEffect(() => {
     if (saveError || generationInFlight.current || chapterSaveInFlight.current || chapterBusy || (!dirty && !workspaceDirty) || saving || savingOutline || outlineSyncPending) return;
@@ -491,6 +624,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [dirty, outlineDirty, workspaceDirty, chaptersDirty, saving, improving, linkingHwp]);
 
   const selectCase = (caseId: string) => {
+    if (evidenceInsertOpen || chapterBusy || restoringLocal) return;
     if (!caseId || caseId === selectedCaseId) return;
     const project = WORKFLOW_PROJECTS.find((candidate) => candidate.caseId === caseId);
     const projectQuery = project ? `&projectId=${encodeURIComponent(project.id)}` : '';
@@ -504,14 +638,20 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const applyCollaborationPayload = (payload: ReportChapterCollaboration) => {
-    setChapterCollaboration(payload);
+    const nextTexts = { ...chapterDraftsRef.current }, nextDocuments = { ...chapterDocumentsRef.current };
     for (const assignment of payload.assignments) {
-      if (!(assignment.chapterId in chapterSavedRef.current)) chapterSavedRef.current[assignment.chapterId] = assignment.draftText ?? '';
+      const id = assignment.chapterId;
+      const previous = chapterCollaboration?.assignments.find(item => item.chapterId === id);
+      const changed = nextTexts[id] !== chapterSavedRef.current[id] || nextDocuments[id] !== chapterSavedDocumentsRef.current[id];
+      if ((!changed || !assignment.canEdit) && previous?.version !== assignment.version) {
+        nextDocuments[id] = chapterBodyDocument(assignment.draftEditorJson, assignment.chapterCode, assignment.chapterTitle)
+          ?? (assignment.version === 1 && !assignment.draftText ? chapterBodyDocument(editorJsonRef.current, assignment.chapterCode, assignment.chapterTitle) : null)
+          ?? parseStructuredDocumentMarkdown(assignment.draftText ?? '');
+        nextTexts[id] = assignment.draftText || (assignment.version === 1 ? editorHtmlToMarkdown(renderStructuredDocumentHtml(nextDocuments[id])) : '');
+        chapterSavedRef.current[id] = nextTexts[id]; chapterSavedDocumentsRef.current[id] = nextDocuments[id];
+      }
     }
-    setChapterDrafts((current) => Object.fromEntries(payload.assignments.map((assignment) => [
-      assignment.chapterId,
-      current[assignment.chapterId] ?? assignment.draftText ?? ''
-    ])));
+    setChapterCollaboration(payload); setChapterDrafts(nextTexts); setChapterDocuments(nextDocuments);
   };
 
   const assignChapter = async (chapterId: string, assigneeId: string) => {
@@ -529,13 +669,16 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const saveChapterCollaboration = async (action: 'SAVE' | 'MARK_READY' | 'APPLY', assignment = selectedChapterAssignment): Promise<boolean> => {
+    if (restoringLocal) return false;
     if (outlineSaveInFlight.current || draftSaveInFlight.current || outlineSyncPendingRef.current || (outlineDirty && action !== 'SAVE') || chapterSaveInFlight.current) return false;
     if (!assignment) { setError('담당 PM이 현재 챕터의 담당자를 먼저 지정해야 합니다.'); return false; }
     if (action === 'APPLY' && (dirty || chaptersDirty)) { setError('편집 중인 본문과 협업 원고를 먼저 저장해 주세요.'); return false; }
     const requestCaseId = selectedCaseId;
     const draftText = chapterDraftsRef.current[assignment.chapterId] ?? '';
     const chapterTitle = outlineTitles[assignment.chapterId]?.trim() || assignment.chapterTitle;
-    const draftEditorJson = action === 'APPLY' ? parseStructuredDocumentMarkdown(replaceReportChapterBlock('', assignment.chapterCode, chapterTitle, draftText)) : undefined;
+    const requestDocument = chapterDocumentsRef.current[assignment.chapterId];
+    const requestRecovery = recoveryWriteRef.current;
+    const draftEditorJson = action === 'APPLY' ? undefined : wrapChapterDocument(requestDocument ?? parseStructuredDocumentMarkdown(draftText), assignment.chapterCode, chapterTitle);
     chapterSaveInFlight.current = true;
     setChapterBusy(`${action}:${assignment.chapterId}`); setError(''); setChapterNotice('');
     try {
@@ -544,18 +687,36 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         body: JSON.stringify({ action, chapterId: assignment.chapterId, draftText, draftEditorJson, expectedVersion: assignment.version, expectedReportVersion: versionRef.current })
       });
       if (selectedCaseRef.current !== requestCaseId) return false;
+      const savedAssignment = payload.assignments.find(item => item.chapterId === assignment.chapterId);
+      if (!savedAssignment || savedAssignment.version !== assignment.version + 1 || (action !== 'APPLY' && (savedAssignment.draftText !== draftText.trim() || JSON.stringify(savedAssignment.draftEditorJson) !== JSON.stringify(draftEditorJson)))) throw new Error('챕터 저장 응답을 확인하지 못했습니다. 편집 원고는 유지됩니다. 다시 저장해 주세요.');
       chapterSavedRef.current[assignment.chapterId] = draftText;
+      if (requestDocument) chapterSavedDocumentsRef.current[assignment.chapterId] = requestDocument;
+      setChapterSaveError('');
       applyCollaborationPayload(payload);
+      if (!dirtyRef.current && !outlineDirtyRef.current && !Object.keys(chapterDraftsRef.current).some(id => chapterDraftsRef.current[id] !== chapterSavedRef.current[id] || chapterDocumentsRef.current[id] !== chapterSavedDocumentsRef.current[id])) {
+        void requestRecovery?.then(snapshot => recoveryJournal?.acknowledge(snapshot.snapshotId)).catch(reason => setRecoveryError(reason instanceof Error ? reason.message : String(reason)));
+      }
       if (action === 'APPLY') {
         await loadDraft(requestCaseId);
-        setChapterNotice(`${assignment.chapterCode} 검수본을 보고서 최신 버전에 반영했습니다. 이전 본문은 버전 이력에 보존됩니다.`);
+        setChapterNotice(`${chapterTitle} 작성 완료본을 전체 보고서에 반영했습니다. 이전 본문은 버전 이력에 보존됩니다.`);
       } else {
-        setChapterNotice(action === 'MARK_READY' ? '담당자 검수를 완료했습니다. 담당 PM의 보고서 반영을 기다립니다.' : '현재 챕터 협업 초안을 새 버전으로 저장했습니다.');
+        setChapterNotice(action === 'MARK_READY' ? '챕터 작성을 완료했습니다. PM·관리자의 전체 보고서 반영을 기다립니다. 최종 업무 승인은 별도입니다.' : '현재 챕터의 텍스트·표·이미지·서식을 저장했습니다.');
       }
       return true;
-    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); return false; }
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) { const message = reason instanceof Error ? reason.message : String(reason); setError(message); setChapterSaveError(message); } return false; }
     finally { chapterSaveInFlight.current = false; if (selectedCaseRef.current === requestCaseId) setChapterBusy(''); }
   };
+
+  useEffect(() => {
+    if (!chaptersDirty || chapterSaveError || loading || chapterBusy || saving || savingOutline || outlineSyncPending || generationInFlight.current) return;
+    const timer = window.setTimeout(() => { void (async () => {
+      for (const id of dirtyChapterIds) {
+        const assignment = chapterCollaboration?.assignments.find(item => item.chapterId === id);
+        if (!assignment || !await saveChapterCollaboration('SAVE', assignment)) return;
+      }
+    })(); }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [chapterDrafts, chapterDocuments, chapterCollaboration, chaptersDirty, chapterSaveError, loading, chapterBusy, saving, savingOutline, outlineSyncPending]);
 
   useEffect(() => {
     const saveShortcut = (event: KeyboardEvent) => {
@@ -574,6 +735,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   }, [saveNow, chapterDrafts, chapterCollaboration, editable]);
 
   const changeWizardStep = async (step: ReportWizardStep) => {
+    if (evidenceInsertOpen || restoringLocal) return;
     if (generatingOutline) { setOutlineProposalError('AI 목차 제안이 끝난 뒤 현재 목차를 저장하고 이동해 주세요. 입력 내용은 유지됩니다.'); return; }
     if (outlineSaveInFlight.current || generationInFlight.current || chapterSaveInFlight.current || improving || saving || loading) return;
     if (step === activeStep) return;
@@ -633,6 +795,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     }
   };
   const changeSelectedChapter = (chapterId: string) => {
+    if (evidenceInsertOpen || chapterBusy || restoringLocal) return;
     const chapter = authoring?.chapters.find(item => item.id === chapterId);
     if (chapter) {
       const native = readReportNativeSource(editorJsonRef.current, selectedCaseId);
@@ -810,7 +973,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         const assignment = chapterCollaboration?.assignments.find(item => item.chapterId === chapterId);
         if (!assignment || !await saveChapterCollaboration('SAVE', assignment)) return;
       }
-      if (Object.entries(chapterDraftsRef.current).some(([id, text]) => text !== chapterSavedRef.current[id])) { setError('저장 중에 추가 입력이 있습니다. 다시 저장해 주세요.'); return; }
+      if (Object.entries(chapterDraftsRef.current).some(([id, text]) => text !== chapterSavedRef.current[id] || chapterDocumentsRef.current[id] !== chapterSavedDocumentsRef.current[id])) { setError('저장 중에 텍스트·서식·첨부 수정이 추가되었습니다. 다시 저장해 주세요.'); return; }
       continuePendingNavigation();
     } finally {
       setNavigationBusy(false);
@@ -1305,7 +1468,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const qaCanReadSavedDraft = (): boolean => qaReadyRef.current && !dirtyRef.current && !workspaceDirtyRef.current && !outlineDirtyRef.current && !saveErrorRef.current
     && !draftSaveInFlight.current && !outlineSaveInFlight.current && !outlineSyncPendingRef.current
     && !pageImportInFlight.current && !generationInFlight.current && !chapterSaveInFlight.current && !linkingHwpRef.current
-    && !(chapterCollaboration?.assignments ?? []).some(item => item.canEdit && (chapterDraftsRef.current[item.chapterId] ?? '') !== (chapterSavedRef.current[item.chapterId] ?? ''));
+    && !restoringLocal && !(chapterCollaboration?.assignments ?? []).some(item => item.canEdit && ((chapterDraftsRef.current[item.chapterId] ?? '') !== (chapterSavedRef.current[item.chapterId] ?? '') || chapterDocumentsRef.current[item.chapterId] !== chapterSavedDocumentsRef.current[item.chapterId]));
   const qaDraftIsCurrent = (snapshot: NonNullable<typeof qaSnapshot>): boolean => {
     const presentation = splitReportPresentation(snapshot.document.editorJson);
     return qaCanReadSavedDraft()
@@ -1453,8 +1616,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     setMemoryNotice(`AI 코드블록 ${repaired}개를 제목·표 서식으로 복구했습니다. 문장·수치의 정확성을 검증한 것은 아닙니다. 내부 데이터 표현과 근거를 대조해 주세요.${skippedNotice}`);
   };
   const requestReportEvidenceInsert = () => {
-    if (!editable || loading || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId || saving || draftSaveInFlight.current || generating || improving || savingOutline || chapterBusy || linkingHwp) return;
-    if (readReportNativeSource(editorJsonRef.current, selectedCaseId)) { void reopenNativeSource(); return; }
+    if (!activeDocumentEditable || loading || loadedCaseId !== selectedCaseId || selectedCaseRef.current !== selectedCaseId || saving || draftSaveInFlight.current || generating || improving || savingOutline || chapterBusy || linkingHwp) return;
+    if (!chapterEditing && readReportNativeSource(editorJsonRef.current, selectedCaseId)) { void reopenNativeSource(); return; }
     setEvidenceInsertOpen(true);
   };
   const renderReportHeaderControls = (_step: 3 | 4) => <div className="report-header-controls">
@@ -1466,11 +1629,31 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const renderStageHeader = (stepId: ReportWizardStep) => {
     const guide = REPORT_WIZARD_STEPS[stepId - 1];
-    return <header className="report-stage-header">
-      <span className="report-stage-header__number" aria-hidden="true">{String(stepId).padStart(2, '0')}</span>
-      <div><small>REPORT STEP {stepId}</small><h3>{guide.title}</h3><p>{guide.shortHelp}</p>{showGuide && <ol>{guide.tasks.map((task, index) => <li key={task}><b>{index + 1}</b>{task}</li>)}</ol>}</div>
-      <div className="report-stage-header__actions">{reportDocumentTools(stepId)}<aside><strong>{stepComplete[stepId] ? '✓ 단계 완료' : '완료 기준'}</strong><p>{guide.doneText}</p></aside></div>
+    return <header className="report-stage-header report-stage-header--compact">
+      <h3>{guide.title}</h3><div className="report-stage-header__actions">{reportDocumentTools(stepId)}</div>
+      {showGuide && <p>{guide.shortHelp}</p>}
     </header>;
+  };
+
+  const renderChapterEditor = () => {
+    if (linkedNative) return <p className="notice-box">현재 원형 HWP는 전체 원본을 유지하는 방식입니다. 챕터별 원고를 자동 합치지 않으며, 분담 수정은 아직 지원하지 않습니다. 전체 보고서 보기에서 연결 HWP를 열어 수정·적용하세요. 챕터 선택에 연결된 쪽 이동은 그대로 사용할 수 있습니다.</p>;
+    const chapterTitle = selectedChapter ? outlineTitles[selectedChapter.id] || selectedChapter.title : '';
+    const body = selectedChapterAssignment?.canEdit
+      ? chapterDocuments[selectedChapterId] ?? parseStructuredDocumentMarkdown(chapterDrafts[selectedChapterId] ?? '')
+      : chapterBodyDocument(editorJson, selectedChapter?.chapterCode ?? '', chapterTitle);
+    if (!body) return <p className="notice-box">전체 보고서에서 이 챕터의 편집 범위를 확인하지 못했습니다. 원형 HWP는 전체 보고서 보기에서 연결 원본을 열어 수정하세요. 원본에 임의의 챕터를 추가하지 않습니다.</p>;
+    return <div data-chapter-document={selectedChapterId}>
+      <StructuredDocumentEditor reportMode ref={chapterBodyRef} documentKey={selectedCaseId + ':chapter:' + selectedChapterId}
+        label="챕터 협업 원고" value={chapterDrafts[selectedChapterId] ?? ''} editorJson={body}
+        readOnly={!activeChapterEditable || savingOutline || (Boolean(chapterBusy) && !chapterBusy.startsWith('SAVE:')) || loading}
+        beforeContent={<><h2>{chapterTitle}</h2><p className="muted">담당: {selectedChapterAssignment?.assigneeName ?? '미지정'} · {activeChapterEditable ? '이 챕터 작성 가능' : '읽기 전용'} · {selectedChapterAssignment?.status === 'READY' ? '작성 완료·전체 반영 대기' : selectedChapterAssignment?.status === 'APPLIED' ? '전체 보고서 반영 완료' : '분담 작성 중'}</p></>} previewWidth={794}
+        previewContent={<article className="report-final-document" aria-label="선택 챕터 출력 미리보기" data-export-orientation="portrait"><ReportBodyPages html={reportPreviewHtml('', { type: 'doc', content: [{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: chapterTitle }] }, ...(body.content ?? [])] })}/></article>}
+        onRequestInsertImage={requestReportEvidenceInsert} onSelectionChange={recordSelection}
+        onChange={(next, json) => { setChapterDrafts(current => ({ ...current, [selectedChapterId]: next })); setChapterDocuments({ ...chapterDocumentsRef.current, [selectedChapterId]: json }); }}
+      />
+      {activeChapterEditable && <Button variant="secondary" onClick={requestReportEvidenceInsert} disabled={Boolean(chapterBusy) || savingOutline || evidenceInsertOpen}>챕터에 사진·근거자료 넣기</Button>}
+      {chapterSaveError && <p className="error-box" role="alert">자동 저장을 완료하지 못했습니다. 원고는 유지됩니다. ‘챕터 중간 저장’으로 다시 시도하세요. {chapterSaveError}</p>}
+    </div>;
   };
 
   if (projectsLoading) return <StatusFeedbackState type="loading" title="프로젝트 조회 중" message="보고서에 연결할 프로젝트와 저장한 작업을 불러오고 있습니다." />;
@@ -1484,7 +1667,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   return (
     <div className="content-stack report-authoring-studio" data-wizard-step={activeStep} aria-label="보고서 자동 저장 스튜디오">
-      {evidenceInsertOpen && !linkedNative && <ReportEvidenceInsert key={selectedCaseId} caseId={selectedCaseId} uploader={reportUploads} disabled={!editable || saving || generating || improving || savingOutline || Boolean(chapterBusy) || linkingHwp} onClose={() => setEvidenceInsertOpen(false)} onInsert={html => !readReportNativeSource(editorJsonRef.current, selectedCaseId) && (reportBodyRef.current?.insertHtml(html) ?? false)}/>}
+      {recoveryCandidates.length > 0 && <section className="notice-box" aria-label="보고서 로컬 작업 복구"><strong>이 브라우저에 이전 작업·위치가 남아 있습니다.</strong><p>최신 서버 원고는 자동으로 덮어쓰지 않습니다. 다른 탭에서 작성 중인 복구본인지도 확인하세요.</p>{recoveryCandidates.map(candidate => <div className="action-row" key={candidate.snapshotId}><span>{new Date(candidate.writtenAt).toLocaleString('ko-KR')}</span><Button variant="secondary" disabled={saving || Boolean(chapterBusy)} onClick={() => void restoreLocalReport(candidate.snapshotId)}>이 로컬 작업 복구</Button><Button variant="secondary" onClick={() => void preserveLocalReport(candidate.snapshotId)}>복구본 파일로 보관</Button><Button variant="secondary" onClick={() => { void recoveryJournal?.acknowledge(candidate.snapshotId).then(() => setRecoveryCandidates(items => items.filter(item => item.snapshotId !== candidate.snapshotId))).catch(reason => setRecoveryError(reason instanceof Error ? reason.message : String(reason))); }}>서버 유지·이 후보 닫기</Button></div>)}</section>}
+      {recoveryError && <p className="error-box" role="alert">{recoveryError}</p>}
+      {recoverySavedAt && <small role="status">브라우저 복구본 보관 {new Date(recoverySavedAt).toLocaleTimeString('ko-KR')} · 서버 저장 완료와는 별도입니다.</small>}
+      {evidenceInsertOpen && (chapterEditing || !linkedNative) && <ReportEvidenceInsert key={selectedCaseId + ':' + reportView + ':' + selectedChapterId} caseId={selectedCaseId} uploader={reportUploads} disabled={!activeDocumentEditable || saving || generating || improving || savingOutline || Boolean(chapterBusy) || linkingHwp} onClose={() => setEvidenceInsertOpen(false)} onInsert={html => chapterEditing ? (chapterBodyRef.current?.insertHtml(html) ?? false) : !readReportNativeSource(editorJsonRef.current, selectedCaseId) && (reportBodyRef.current?.insertHtml(html) ?? false)}/>}
       {readReportNativeSource(editorJson, selectedCaseId) && <div className="notice-box"><Button variant="secondary" disabled={!editable || linkingHwp || saving || generating} onClick={() => void reopenNativeSource()}>연결된 HWP 편집본 다시 열기</Button><Button variant="secondary" disabled={!editable || linkingHwp || saving || generating} onClick={() => void reopenNativeSource('edited')}>HWP 편집본 파일 내려받기</Button>{readReportOriginalSource(editorJson, selectedCaseId) && <Button variant="secondary" disabled={!editable || linkingHwp || saving || generating} onClick={() => void reopenNativeSource('original')}>가져온 HWP 원본 내려받기</Button>}<small> 문장·표는 연결된 HWP 편집기에서 수정한 뒤 전체 페이지를 다시 적용하세요. 다운로드만으로 보고서가 갱신되지는 않습니다. 이후 웹 본문 수정은 HWP 파일에 포함되지 않습니다.</small></div>}
       <RhwpEditorDialog preserveAppliedSource applyProgress={pageImportInFlight.current && linkingHwp ? memoryNotice : undefined} applyDisabled={linkingHwp || saving || generating} isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel="수정 원본 보존·전체 페이지 적용" onApplyPages={editable ? applyHwpPagesToReport : undefined} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
@@ -1492,9 +1678,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
 
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} providerLabel={aiGeneration?.kind==='outline'?authoring?.outlineProviderLabel:aiGeneration?.kind==='improve'?'Gemini':authoring?.providerLabel} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['AI 공급자 응답 대기','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['AI 공급자 응답 대기','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['AI 공급자 응답 대기','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'요청한 챕터 초안이 작성·저장되었습니다. 담당자가 내용과 근거를 검수해 주세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>
-      <section className="report-authoring-hero" aria-labelledby="report-authoring-title">
-        <div><span>CLAIM REPORT AUTHORING SYSTEM</span><h2 id="report-authoring-title">계약·판례와 현장 근거로 클레임 보고서를 완성합니다.</h2><p>회의록·현장조사·물량산출 자료를 검토하고, 관련 계약 조항과 판례를 대조해 쟁점·책임·산정 근거를 정리합니다.</p></div>
-        <div className="report-authoring-hero__actions">
+      <section className="report-workspace-tools" aria-label="보고서 작업 도구">
           <div className="report-resume-control">
             <Button variant="secondary" aria-expanded={showResumePicker} aria-controls="report-resume-menu" onClick={() => { setShowResumePicker((current) => !current); setResumeCaseId(selectedCaseId || savedWorkspaces[0]?.caseId || ''); }}>저장한 보고서 이어쓰기 {savedWorkspaces.length ? `(${savedWorkspaces.length})` : ''}</Button>
             {showResumePicker && <section id="report-resume-menu" className="report-resume-menu" aria-label="저장한 보고서 선택">
@@ -1505,15 +1689,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </section>}
           </div>
           <Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '간단히 보기' : '단계 도움말 보기'}</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}
-        </div>
       </section>
 
       <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계">
-        <div className="report-wizard-navigation__heading">
-          <span>REPORT WIZARD</span>
-          <strong>지금은 {activeStep}단계입니다.</strong>
-          <small>앞 단계가 끝나면 다음 단계 버튼이 열립니다.</small>
-        </div>
         <ol>{REPORT_WIZARD_STEPS.map((step) => {
           const current = step.id === activeStep;
           const complete = stepComplete[step.id];
@@ -1643,8 +1821,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </Card>
         <Card title="" className="report-step-card report-step-card--4 report-stage-card">
           {renderStageHeader(4)}
-          <fieldset className="form-stack report-review-fields" disabled={savingOutline || Boolean(chapterBusy)}>
-            {authoring?.available && selectedChapter && <section className="report-review-outline" aria-labelledby="report-review-outline-heading">
+          <fieldset className="form-stack report-review-fields" disabled={savingOutline || (Boolean(chapterBusy) && !chapterBusy.startsWith('SAVE:'))}>
+            <section className="report-view-switch" aria-label="보고서 작성 보기">
+              <div className="action-row"><Button variant="secondary" aria-pressed={reportView === 'whole'} disabled={Boolean(chapterBusy) || evidenceInsertOpen} onClick={() => setReportView('whole')}>전체 보고서 보기</Button><Button variant="secondary" aria-pressed={reportView === 'chapter'} disabled={Boolean(chapterBusy) || evidenceInsertOpen} onClick={() => { setReportView('chapter'); setReviewTool('collaboration'); }}>선택 챕터 보기</Button></div>
+              <p>{reportView === 'whole' ? (editable ? '전체 원고 통합 · PM·관리자가 표지·목차·본문을 편집합니다.' : '전체 원고는 읽기 전용입니다. 배정된 챕터를 선택해 분담 작성하세요.') : '선택한 챕터만 표시합니다. 담당자 1명 작성 → 작성 완료 → PM·관리자 전체 반영 순서입니다. 최종 승인·납품은 별도입니다.'}</p>
+            </section>
+            <div className="report-review-tools-row" aria-label="담당자 검수 도구">
+            {authoring?.available && selectedChapter && <ReportReviewTool id="outline" title="목차 제목 수정" selected={reviewTool} onSelect={setReviewTool} className="report-review-outline">
               <h3 id="report-review-outline-heading">{linkedNative ? '내부 작업 목차 제목 수정' : '목차 제목 수정'}</h3>
               <p>{linkedNative ? '이곳에서는 작업·탐색용 제목만 저장합니다. 원형 HWP의 인쇄 목차와 본문 제목은 연결 HWP 편집기에서 수정한 뒤 전체 페이지를 적용하세요.' : '검수 중에도 제목을 수정할 수 있습니다. 저장하면 2단계 목차와 본문·미리보기에 함께 반영됩니다.'}</p>
               <div className="report-review-outline__fields">
@@ -1654,9 +1837,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
               </div>
               <small>{linkedNative ? '원형 HWP·페이지 그림·지문은 유지합니다. 이 작업은 HWP 인쇄 목차 자동 갱신이 아닙니다.' : '본문 내용·표·이미지·서식은 유지됩니다. 제목 수정 권한은 기존 보고서 편집 권한과 같습니다.'}</small>
               {outlineFeedback}
-            </section>}
-            <details className="report-chapter-collaboration report-advanced-panel" open={!editable || undefined}><summary>챕터별 협업 · 담당 지정·원고 검수{chaptersDirty ? " · 미저장" : ""}</summary>
-              <header><div><span>CHAPTER COLLABORATION · VERSIONED</span><h3 id="report-chapter-collaboration-title">챕터별 담당 지정·작성·검수</h3><p>담당 PM이 챕터별 회원을 지정합니다. 담당자는 배정된 챕터만 작성·검수하고, PM이 검수 완료본을 전체 보고서에 반영합니다.</p></div><em>{chapterCollaboration?.canManage ? 'PM · ASSIGNMENT CONTROL' : 'MY ASSIGNED CHAPTERS'}</em></header>
+            </ReportReviewTool>}
+            <ReportReviewTool id="collaboration" title={'챕터별 분담' + (chaptersDirty ? ' · 미저장' : '')} selected={reviewTool} onSelect={setReviewTool} className="report-chapter-collaboration report-advanced-panel">
+              <header><div><h3 id="report-chapter-collaboration-title">챕터별 담당 지정·작성·완료</h3><p>챕터마다 담당자 1명이 작성합니다. PM·관리자가 작성 완료본을 전체 보고서에 합칩니다. 최종 승인·납품 권한은 변경하지 않습니다.</p></div><em>{chapterCollaboration?.canManage ? 'PM·관리자 · 배정 및 전체 반영' : '배정된 챕터 작성'}</em></header>
               {chapterCollaboration?.canManage && <div className="report-chapter-assignment-grid">{authoring?.chapters.map((chapter) => {
                 const assignment = chapterCollaboration.assignments.find((item) => item.chapterId === chapter.id);
                 return <label key={chapter.id}><span>{outlineTitles[chapter.id] || chapter.title}</span><select aria-label={`${outlineTitles[chapter.id] || chapter.title} 담당자`} value={assignment?.assigneeId ?? ''} disabled={Boolean(chapterBusy) || saving || savingOutline} onChange={(event) => void assignChapter(chapter.id, event.target.value)}><option value="">담당 미지정</option>{chapterCollaboration.members.map((member) => <option key={member.id} value={member.id}>{member.displayName} · {member.roles.join('/')}</option>)}</select><small data-status={assignment?.status ?? 'UNASSIGNED'}>{assignment?.assigneeName ?? '담당 없음'} · {assignment?.status === 'READY' ? 'PM 반영 대기' : assignment?.status === 'APPLIED' ? '보고서 반영 완료' : assignment?.status === 'IN_PROGRESS' ? `작성 중 · v${assignment.version}` : '미지정'}</small></label>;
@@ -1666,13 +1849,15 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
                   const assignment = chapterCollaboration?.assignments.find((item) => item.chapterId === chapter.id);
                   return { value: chapter.id, label: `${outlineTitles[chapter.id] || chapter.title} · ${assignment?.assigneeName ?? '미지정'}` };
                 })} />
-                {selectedChapterAssignment ? <><div className="report-chapter-workbench__identity"><strong>{outlineTitles[selectedChapterAssignment.chapterId] || selectedChapterAssignment.chapterTitle}</strong><span>담당 {selectedChapterAssignment.assigneeName ?? '미지정'} · v{selectedChapterAssignment.version}</span><em data-status={selectedChapterAssignment.status}>{selectedChapterAssignment.status === 'READY' ? '검수 완료·PM 반영 대기' : selectedChapterAssignment.status === 'APPLIED' ? '전체 보고서 반영 완료' : '작성·검수 중'}</em></div><label className="report-chapter-workbench__editor"><span>챕터 협업 원고{chaptersDirty ? " · 저장하지 않은 변경 있음" : ""}</span><textarea value={chapterDrafts[selectedChapterAssignment.chapterId] ?? ''} readOnly={!selectedChapterAssignment.canEdit || Boolean(chapterBusy)} onChange={(event) => setChapterDrafts((current) => ({ ...current, [selectedChapterAssignment.chapterId]: event.target.value }))} placeholder="현재 챕터의 사실·수치·근거를 검수하며 작성하세요." /></label><div className="report-chapter-workbench__actions">{selectedChapterAssignment.canEdit && <><Button variant="secondary" onClick={() => void saveChapterCollaboration('SAVE')} disabled={Boolean(chapterBusy) || saving || savingOutline}>챕터 중간 저장</Button><Button className="report-action-review" onClick={() => void saveChapterCollaboration('MARK_READY')} disabled={Boolean(chapterBusy) || !(chapterDrafts[selectedChapterAssignment.chapterId] ?? '').trim()}>담당자 검수 완료</Button></>}{chapterCollaboration?.canManage && selectedChapterAssignment.status === 'READY' && <Button className="report-action-confirm" onClick={() => void saveChapterCollaboration('APPLY')} disabled={Boolean(chapterBusy) || chaptersDirty || dirty || outlineDirty || saving || savingOutline || outlineSyncPending}>검수본을 전체 보고서에 반영</Button>}</div></> : <p className="empty-box">현재 챕터는 아직 담당자가 지정되지 않았습니다. 담당 PM 또는 관리자에게 배정을 요청하세요.</p>}
+                {selectedChapterAssignment ? <><div className="report-chapter-workbench__identity"><strong>{outlineTitles[selectedChapterAssignment.chapterId] || selectedChapterAssignment.chapterTitle}</strong><span>담당 {selectedChapterAssignment.assigneeName ?? '미지정'} · v{selectedChapterAssignment.version}</span><em data-status={selectedChapterAssignment.status}>{selectedChapterAssignment.status === 'READY' ? '작성 완료 · PM 반영 대기' : selectedChapterAssignment.status === 'APPLIED' ? '전체 보고서 반영 완료' : '작성 중'}</em></div><p>{selectedChapterAssignment.canEdit ? '담당자와 PM·관리자만 이 챕터 원고를 수정할 수 있습니다. 표·사진·서식을 포함해 3초 후 자동 저장됩니다.' : '배정되지 않은 챕터는 읽기 전용입니다. 담당 지정은 PM·관리자만 할 수 있습니다.'}</p><div className="report-chapter-workbench__actions"><Button variant="secondary" onClick={() => setReportView('chapter')} disabled={Boolean(chapterBusy) || evidenceInsertOpen}>선택 챕터 보기</Button>{selectedChapterAssignment.canEdit && <><Button variant="secondary" onClick={() => void saveChapterCollaboration('SAVE')} disabled={Boolean(chapterBusy) || saving || savingOutline}>챕터 중간 저장</Button><Button className="report-action-review" onClick={() => void saveChapterCollaboration('MARK_READY')} disabled={Boolean(chapterBusy) || !(chapterDrafts[selectedChapterAssignment.chapterId] ?? '').trim()}>챕터 작성 완료</Button></>}{chapterCollaboration?.canManage && selectedChapterAssignment.status === 'READY' && <Button className="report-action-confirm" onClick={() => void saveChapterCollaboration('APPLY')} disabled={Boolean(chapterBusy) || chaptersDirty || dirty || outlineDirty || saving || savingOutline || outlineSyncPending}>작성 완료본을 전체 보고서에 반영</Button>}</div></> : <><p className="empty-box">현재 챕터는 아직 담당자가 지정되지 않았습니다. 전체 보고서의 해당 내용은 읽을 수 있습니다.</p></>}
               </div>
               {chapterNotice && <p className="notice-box" role="status">{chapterNotice}</p>}
-            </details>
-            <details className="report-case-law-review report-advanced-panel"><summary>판례 인용 검수 · {caseLawSources.length}건</summary><header><div><span>CASE-LAW CITATION REVIEW</span><h3 id="report-case-law-review-title">판례 인용 검수</h3><p>선택 판례의 공식 원문과 초안 문장을 대조합니다. 판례는 법리 근거이며 프로젝트 사실관계나 귀책을 자동 확정하지 않습니다.</p></div><em>{caseLawSources.length ? `${caseLawSources.length}건 대조` : '판례 미사용'}</em></header>{caseLawSources.length?<div>{caseLawSources.map((source)=>{const citation=latestCaseLawCitationBySource.get(source.id);const status=citation?.validationStatus??'REVIEW_REQUIRED';const label=status==='VERIFIED'?'ID 연결 정상':status==='INSUFFICIENT'?'근거 연결 불충분':status==='MISMATCH'?'내용 불일치':'사람 확인 필요';return <article key={source.id} data-citation-status={status}><header><div><strong>{source.caseNumber} · {source.caseName}</strong><small>{source.courtName} · {source.decisionDate}</small></div><span>{label}</span></header><p>{citation?.citationText||'이 판례와 연결된 생성 문장이 아직 없습니다. 판례 근거 초안을 생성하거나 직접 인용을 확인해 주세요.'}</p><small>{citation?.validationNote||'공식 판례 원문과 보고서 문장을 사람이 대조해야 합니다.'}</small><footer><a href={source.officialUrl} target="_blank" rel="noreferrer">공식 원문 열기</a><Button variant="secondary" size="sm" onClick={()=>void excludeCaseLaw(source.id)} disabled={Boolean(caseLawBusy)}>판례 교체·제외</Button></footer></article>})}</div>:<p className="empty-box">현재 챕터는 판례를 사용하지 않았습니다. 사실관계 근거만 검수하면 됩니다.</p>}</details>
+            </ReportReviewTool>
+            <ReportReviewTool id="citations" title={'판례 인용 검수 · ' + caseLawSources.length + '건'} selected={reviewTool} onSelect={setReviewTool} className="report-case-law-review report-advanced-panel"><header><div><span>CASE-LAW CITATION REVIEW</span><h3 id="report-case-law-review-title">판례 인용 검수</h3><p>선택 판례의 공식 원문과 초안 문장을 대조합니다. 판례는 법리 근거이며 프로젝트 사실관계나 귀책을 자동 확정하지 않습니다.</p></div><em>{caseLawSources.length ? `${caseLawSources.length}건 대조` : '판례 미사용'}</em></header>{caseLawSources.length?<div>{caseLawSources.map((source)=>{const citation=latestCaseLawCitationBySource.get(source.id);const status=citation?.validationStatus??'REVIEW_REQUIRED';const label=status==='VERIFIED'?'ID 연결 정상':status==='INSUFFICIENT'?'근거 연결 불충분':status==='MISMATCH'?'내용 불일치':'사람 확인 필요';return <article key={source.id} data-citation-status={status}><header><div><strong>{source.caseNumber} · {source.caseName}</strong><small>{source.courtName} · {source.decisionDate}</small></div><span>{label}</span></header><p>{citation?.citationText||'이 판례와 연결된 생성 문장이 아직 없습니다. 판례 근거 초안을 생성하거나 직접 인용을 확인해 주세요.'}</p><small>{citation?.validationNote||'공식 판례 원문과 보고서 문장을 사람이 대조해야 합니다.'}</small><footer><a href={source.officialUrl} target="_blank" rel="noreferrer">공식 원문 열기</a><Button variant="secondary" size="sm" onClick={()=>void excludeCaseLaw(source.id)} disabled={Boolean(caseLawBusy)}>판례 교체·제외</Button></footer></article>})}</div>:<p className="empty-box">현재 챕터는 판례를 사용하지 않았습니다. 사실관계 근거만 검수하면 됩니다.</p>}</ReportReviewTool>
+            </div>
             <Input required label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} />
-            {activeStep === 4 && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor reportMode sourceChapterLinks={sourceChapterLinks} beforeContent={<ReportFrontMatterEditor title={title} caseTitle={selectedCase?.title ?? ''} html={reportPreviewHtml(content, editorJson)} value={reportFrontMatter} disabled={!editable || linkingHwp || saving || generating || improving || Boolean(chapterBusy)} onEditNative={readReportNativeSource(editorJson, selectedCaseId) ? () => void reopenNativeSource() : undefined} onTitle={next => { titleRef.current = next; setTitle(next); setDirty(true); }} onChange={next => { setReportFrontMatter(next); setDirty(true); }}/>} ref={reportBodyRef} previewWidth={794} onRequestInsertImage={requestReportEvidenceInsert} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader, reportFrontMatter)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || saving || Boolean(chapterBusy)} onSelectionChange={setSelectedTextRange} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
+            {activeStep === 4 && reportView === 'chapter' && renderChapterEditor()}
+            {activeStep === 4 && reportView === 'whole' && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor reportMode sourceChapterLinks={sourceChapterLinks} beforeContent={<ReportFrontMatterEditor title={title} caseTitle={selectedCase?.title ?? ''} html={reportPreviewHtml(content, editorJson)} value={reportFrontMatter} disabled={!editable || linkingHwp || saving || generating || improving || Boolean(chapterBusy)} onEditNative={readReportNativeSource(editorJson, selectedCaseId) ? () => void reopenNativeSource() : undefined} onTitle={next => { titleRef.current = next; setTitle(next); setDirty(true); }} onChange={next => { setReportFrontMatter(next); setDirty(true); }}/>} ref={reportBodyRef} previewWidth={794} onRequestInsertImage={requestReportEvidenceInsert} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader, reportFrontMatter)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || Boolean(chapterBusy)} onSelectionChange={recordSelection} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
             {editable && selectedChapter && <details className="report-memory-feedback report-advanced-panel"><summary>AI 개선 피드백 등록</summary><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>APPROVED MEMORY</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</details>}
             <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
           </fieldset>
