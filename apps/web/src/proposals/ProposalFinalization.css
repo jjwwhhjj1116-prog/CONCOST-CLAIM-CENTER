@@ -5,7 +5,7 @@
 .proposal-step-card > .proposal-finalization-workspace { overflow:visible; container-type:inline-size; }
 .proposal-finalization-layout { display:grid; grid-template-columns:minmax(0,1fr) 184px; align-items:start; gap:16px; padding:16px; }
 .proposal-finalization-layout > .proposal-final-export-source { grid-area:1 / 1; min-width:0; overflow-x:auto; }
-.proposal-finalization-layout > .proposal-finalization-actions { grid-area:1 / 2; position:sticky; top:var(--proposal-sticky-top,84px); bottom:auto; align-self:start; display:flex; flex-direction:column; gap:10px; margin:0; padding:12px; background:#fff; max-height:calc(100dvh - var(--proposal-sticky-top,84px) - 16px); overflow-y:auto; }
+.proposal-finalization-layout > .proposal-finalization-actions { grid-area:1 / 2; position:sticky; top:16px; bottom:auto; align-self:start; display:flex; flex-direction:column; gap:10px; margin:0; padding:12px; background:#fff; max-height:calc(100dvh - 16px - 16px); overflow-y:auto; }
 .proposal-finalization-actions > button { width:100%; min-height:42px; justify-content:center; white-space:normal; }
 .proposal-finalization-footer { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; padding:16px; border-top:1px solid #cbd9e7; border-radius:0 0 16px 16px; background:var(--surface-card,#fff); }
 .proposal-finalization-footer > button { min-height:42px; white-space:normal; }

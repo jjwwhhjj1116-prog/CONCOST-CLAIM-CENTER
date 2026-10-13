@@ -388,17 +388,6 @@ export const ProposalView:React.FC<ProposalViewProps>=({routeId,roles,userEmail=
     }catch(reason){setErrorMessage(reason instanceof Error?reason.message:'공통 이미지를 추가하지 못했습니다. 입력을 확인한 뒤 다시 등록하세요.');}finally{setBusy(false);}
   };
 
-  useLayoutEffect(()=>{
-    if(step!==4)return;
-    const workspace=finalPreviewRef.current?.closest<HTMLElement>('.proposal-finalization-workspace');
-    const topbar=document.querySelector<HTMLElement>('.topbar');
-    if(!workspace||!topbar)return;
-    const update=()=>workspace.style.setProperty('--proposal-sticky-top',`${topbar.getBoundingClientRect().height+16}px`);
-    update();
-    const observer=new ResizeObserver(update);observer.observe(topbar);
-    return()=>observer.disconnect();
-  },[step]);
-
   const applyVersion=useCallback((version:ProposalVersion|undefined,caseRow?:CaseItem)=>{
     if(!version){setChapters(blankChapters());setDraftMethod('AI');return;}
     try{

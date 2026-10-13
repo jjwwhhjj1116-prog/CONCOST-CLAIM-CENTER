@@ -1,6 +1,21 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF215 공통 최상단 고정 해제 — 2026-10-13
+
+- 사용자 "남은 수정사항 적용해"에 따라 공통 topbar를 sticky→relative로 변경. 로고·계정·설정·로그아웃·모바일 메뉴 기능은 유지하며 스크롤과 함께 화면 밖으로 이동한다. 사이드바 top68→0/기본height100vh, 기존 실제위치 기반 높이 보정 유지. 제안서 출력 액션의 고정 헤더 높이측정 effect 제거, top16px/높이제한 동기화로 빈68px 제거. BETA는 기존 relative 유지.
+- 실제 AppShell+production CSS 합성검사 `cf215-shell-header-browser-test.ts` 전문가 및 총괄 독립3/3 skip0: 1440/390에서800px 스크롤 후 header y-800, 계정/설정/로그아웃·모바일메뉴/Escape포커스 정상, 가로넘침0, sidebar top0 및900→760 높이 보존. 실제 ProposalView CF1186/6: 출력레일16px·확정취소/성공/실패·접수흐름 보존. root/web 타입0·빌드·승인runtime28 stage·Worker dry-run0. 이전 1행3열/단일패널은 변경0.
+- 산출물 repo/tmp/cf215-qa/web-build/main index-D0rKedIx.js. 기존 CF214/E213 출력·WASM 승인pin·후보엔진 불변. Impeccable detector는 parser 누락으로 regex 축소검사 및 기존스타일 경고; 완전 디자인 합격으로 보지 않는다. chunk500KB 경고 유지. 실제 development 반영 결과는 후속 기록한다.
+
 ## CF214 새 대화 후속 — HWP 다운로드 저장 ACK 분리, 2026-10-13
+
+### 사용자 스크린샷 3장 UI 요구 재검수 — 제품 변경 없음
+
+- 사용자 요청은 적용 여부 검수. `fb41686` 및 실제 development index-Z5iggfNI.js 대조: 의뢰 NEW PROJECT INTAKE/01 큰 소개 DOM0, 사건 기본정보부터 시작. 보고서 큰 소개 DOM0, stepper·현재 프로젝트는 static, 1~5단계는 소스상 공통 compact 헤더 사용. 모든 단계 실제 화면 전수 방문은 하지 않았다.
+- 담당자 검수 도구는 실제 CC7에서 1행3열, 버튼 높이43.99px/동일 y/동일폭463.17px(현재1867px viewport). 목차→분담→판례 클릭마다 선택 패널1개만 전체폭1405.5px로 표시; 입력/저장 없이 모두 접힌 상태로 복원. 합성 CF213 의뢰+분담 UI를 1440/390 조건 활성화하여 재실행8/8 skip0, 큰소개0/stepper static/3버튼한행/단일패널/가로넘침0. 이 harness에는 AppShell이 없다.
+- **잔여(P2): 공통 최상단 로고·설정·사용자 헤더는 삭제/고정해제되지 않았다.** 실제 의뢰·보고서 모두 .topbar sticky/top0/높이67.99px, 소스 apps/web/index.html19 min-height68px. BETA도 계속 표시되지만 relative로 비고정이다. 따라서 소개 삭제·보고서 내부 고정해제는 적용, 공통 상단까지 모두 삭제 요구는 일부 적용으로 판정한다. Chrome의 디버깅 안내줄은 제품 UI가 아니다.
+- 이번 검수에서 제품 수정·배포·사건 저장·직원 배정0. 다음 UI 작업은 사용자가 지적한 공통 상단 범위를 기준으로 기존 필수 계정/설정 기능을 보존하며 제거·고정해제할 위치를 정하는 것이다. HWP 자동복구 등 이전 잔여 과제는 별도 유지한다.
+
+### 다운로드 ACK 수정 및 배포 기록
 
 - 최종 제품 `4c7c829` 정상 push 후 development Worker `640b99e4-8c7f-4158-a5e1-d296a6629060`에 `--keep-vars` 반영. 공개43파일/37,738,627B byte·SHA exact/canonical `e285bf8eeecf71963c67f3af189a9f5a06e6bef0e8fb7522413785adf6c8eb88`, health/readiness200. 검증 영수증 `tmp/cf214-qa/public-verification.json`; 실제 배포 폴더는 아래 web-build다. DB/schema/키ENV/가오픈 변경0.
 - `RhwpEditorDialog`의 다운로드 직후 `notifySaved()` 호출을 제거했다. SDK 0.8.4와 승인 Studio 모두 이 호출을 dirty 해제·복구 draft 삭제로 처리하지만 anchor.click에는 파일 영속화 ACK가 없다. 안내를 다운로드 요청/브라우저 파일 저장 확인으로 바꾸고 닫기 확인과 전체 적용 경계는 유지했다. 이것은 계정·사건별 native binary 복구 구현이 아니다.

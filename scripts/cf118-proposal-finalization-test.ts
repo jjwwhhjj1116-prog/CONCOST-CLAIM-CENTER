@@ -61,7 +61,8 @@ test('CF118 proposal finalization keeps its actions reachable without changing c
     const railBox = await rail().boundingBox();
     const topbar = await page.locator('.topbar').boundingBox();
     assert.ok(railBox && topbar);
-    assert.ok(Math.abs(railBox.y - (topbar.y + topbar.height + 16)) < 2, `Rail must remain 16px below the live topbar: ${JSON.stringify({ y: railBox.y, topbarBottom: topbar.y + topbar.height })}`);
+    assert.ok(topbar.y + topbar.height < 0, 'The nonfixed header must scroll out of the viewport');
+    assert.ok(Math.abs(railBox.y - 16) < 2, `Rail must remain 16px from viewport top: ${railBox.y}`);
   };
 
   try {
