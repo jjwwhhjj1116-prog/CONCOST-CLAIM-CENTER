@@ -1,6 +1,16 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF210 일정 출력 언어 개발 반영·실제 화면 왕복 통과, 전체 A–Z는 미합격, 2026-10-08
+## 현재 판정 — CF211 실제 첨부 저장·재열기 통과, HWP 갑지 소수점 오류 최소 수정, 전체 A–Z는 미합격, 2026-10-13
+
+### CF211 CC7 실제 첨부 왕복·갑지 HU 반올림 수정
+
+- 지정 단신 Chrome의 이전 검수 탭은 없었고 새 탭 로그인 뒤 CC7 v7(2026-10-08 14:38:51)의 표지·수정 목차·본문10개를 확인했다. 새 연결의 표준 chooser는 multiple=true였으나 setFiles가 전송 전에 file-URL 안내로 거부됐다. 설정 OFF를 단정하거나 우회하지 않았다. 사용자 직접 선택으로 합성 JPG3/XLSX1이 등록됐고 재업로드0, 목록 재열기에서 기존4개만 선택 순서01→02→03→XLSX로 사용했다.
+- CC7 본문 끝에 `CF211 합성 현장 사진·산출 근거 — 고객 자료 없음`을 한 번 삽입했다. 첨부9/10/11·2열/마지막 빈칸·사진 natural 비율2/.5/2와 contain, `구조내역!A25:C27`의 `<합성>`·줄바꿈·123.45·저장 수식값246.9·빈26행·0을 실제 화면에서 대조했다. 자동 저장 2026-10-13 09:20:52 후 실제 reload에서 editor HTML/표지/목차/사진/셀 before-after exact, 원래10본문 보존. 저장본 관리자 QA는 v8/5쪽이며 업무 승인·납품용이 아니다.
+- development D1 SELECT6개 독립 readback: 4파일 size/SHA가 실제 E200 fixture와4/4 exact, 업로드 operation4 SUCCEEDED/unknown0/lock0/latest v1 4개. draft v8 content5285B/SHA `03c4df6e2e252a18c43a7a3d63bc7cbb939a49010072298e3d2ec368cad2d473`, editor10242B/SHA `fd9f3a009e25b021b47840ae3533d241addea0395c575adc5d7b395f51a1c61b`, revision1~8 각1·최신 원문/JSON·동시간 backup exact. review/finalization/chapter배정/인력투입0. 전용 증거 `E211/receipt-readback/receipt-readback.json` SHA `05b3472786d7fc4de6bfff1047841f9256a8326995b2e41763e2f4320aef51af`이며 원격쓰기·고객 원문 로그0. E211은 `E:\Codex-QA\claim-center-cf211-20261013`이다.
+- 실제 v8 DOCX240038B/PDF449476B는5쪽 완료 UI와 Downloads 파일이 확인됐다. DOCX download-event 대기의 도구 timeout/reset과 제품 성공을 분리했고 중복 출력하지 않았다. 실제 HWP 클릭1회는 파일0/`HWP 갑지 문단 가로 위치가 원문과 다릅니다.`로 FAIL. 실제 cover insets −0.007010656197px에서 case75 표현−1HU/default150 표현−1half-HU가 모순돼 binary 재열기0으로 변했다. 소수점 갑지 재현 검사는 수정 전0/1 FAIL로 같은 오류를 확인했다.
+- 제품 `editable-hwp-export.ts`의 기존 두 소비처만 공통 `Math.round(px*75)*(factor/75)`를 사용한다. 한 native HU로 한 번 양자화한 뒤 두 저장 표현을 변환해 실제 값−1/−2를 일치시킨다. 좌표 clamping/전체 이동/글꼴 축소/사진 fallback/guard 완화0. loaded 원형 파일 직접 다운로드·승인 WASM·collector·원본32/고객·CC4~6/가오픈·DB/schema/키ENV 불변이다. 원형017p24의 CF186 표 간격 결함은 이 생성 갑지 오류와 별도이며 진단 후보의 정식 승격은 아직 필요하다.
+- root 실제 native12/12·관련 실제 browser/편집/목차/표·사진44/44 PASS/skipped0, 전체root/web tsc·fresh Vite·runtime28 지문·Worker dry-run PASS. 독립 검수는 실제 SDK ±12.125/±31.375px4경계 저장·재열기 PASS, 1px 변조4/4 reject와 helper 두 소비처/원형 경로 영향0을 확인했다. exporter SHA `ce9507062eb0e74c50a3f44b059637c942a1ce9bcd2281402356167517162041`, test `1206593c1402f2f9c44b22227e9fa707b12a24f703e0655ed87eaac48258f85a`. 새 빌드 E211/dist-checked의 index-bQtrmmqi.js, engineRebuilt=false이다. 이 시점 개발 반영·실제 수정후 HWP 재출력·전쪽 검수는 다음 단계이며 로컬 통과만으로 완료 처리하지 않는다.
+- Docker4.79 기동1회는 최신 로그의 initializing Inference manager/dockerInference 파일 접근 오류로 실제 종료됐고, 정확 대상은0B ReparsePoint였다. ACL/삭제/초기화/prune/WSL unregister0. 사용자가 데이터 보존 공식4.95 업데이트를 승인했으며 별도 보호 백업/공식 checksum·서명 검증 뒤에만 설치한다. 새 제품 HWP 엔진 pin에는 진단 CF186을 섞지 않는다. 현장조사회의록#32 HOLD·CEO/DIRECTOR 최종승인·자기승인 차단 유지, 가오픈·전체 A–Z·직원 영상은 미완료다.
 
 ### CF210 일정 출력 언어·원자료·실제 로컬 PDF 검수
 

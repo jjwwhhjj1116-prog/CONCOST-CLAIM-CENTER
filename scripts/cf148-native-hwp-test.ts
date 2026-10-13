@@ -127,6 +127,25 @@ test('measured cover insets retain negative right inset after HWP save',async()=
   }finally{opened.free();}
 });
 
+test('fractional measured cover insets use one whole-HU value across native representations',async()=>{
+  const Engine=await engine;
+  for(const inset of [-0.007010656197422804,0.007010656197422804,-10.007010656197423,30.007010656197423]){
+    const source=page('<p style="text-align:center">소수점 갑지</p>','소수점 갑지');
+    source.paragraphInsets=[{left:inset,right:inset}];
+    const opened=new Engine(createNativeHwp([source],Engine));
+    try{
+      const bytes=opened.exportHwpx();
+      verifyNativeHwpContent(bytes,[source]);
+      const files=unzipSync(bytes),section=strFromU8(files['Contents/section0.xml']);
+      const ref=section.match(/<hp:p\b[^>]*paraPrIDRef="(\d+)"/u)![1];
+      const definition=[...strFromU8(files['Contents/header.xml']).matchAll(/<hh:paraPr\b[^>]*>[\s\S]*?<\/hh:paraPr>/gu)].find(m=>m[0].includes(`id="${ref}"`))![0];
+      const factor=definition.includes('<hp:case')?1:2;
+      for(const side of ['left','right'])assert.equal(Number(definition.match(new RegExp(`<hc:${side}\\b[^>]*value="(-?\\d+)"`,'u'))![1]),Math.round(inset*75)*factor);
+      assert.throws(()=>verifyNativeHwpContent(bytes,[{...source,paragraphInsets:[{left:inset+1,right:inset}]}]),/가로 위치/);
+    }finally{opened.free();}
+  }
+});
+
 test('first paragraph keeps its actual center style and individual photo survives HWP save', async () => {
   const Engine = await engine;
   const image = '<img width="40" height="40" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5V8AAAAASUVORK5CYII=">';

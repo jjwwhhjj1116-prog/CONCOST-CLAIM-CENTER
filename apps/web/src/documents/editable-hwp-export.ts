@@ -46,6 +46,8 @@ const decodeXml = (value: string) => value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|
 });
 const textOf = (xml: string) => [...xml.matchAll(/<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>/gu)].map(match => decodeXml(match[1].replace(/<hp:lineBreak\b[^>]*\/>/gu, '\n').replace(/<[^>]+>/gu, ''))).join('');
 const attribute = (xml: string, name: string) => xml.match(new RegExp(`\\b${name}="([^"]*)"`, 'u'))?.[1];
+// Quantize once in native HU; the default representation stores twice that value.
+const paragraphInsetValue=(pixels:number,factor:number)=>Math.round(pixels*75)*(factor/75);
 // Balanced extraction handles nested tables; a flat non-greedy table regex does not.
 const elements = (xml: string, tag: string, outerOnly=false): string[] => {
   const found: Array<{ start: number; xml: string }> = [], stack: number[] = [];
@@ -84,7 +86,7 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
       paragraphs.forEach((paragraph,i)=>{
         const definition=[...header.matchAll(/<hh:paraPr\b[^>]*>[\s\S]*?<\/hh:paraPr>/gu)].find(m=>attribute(m[0],'id')===attribute(paragraph,'paraPrIDRef'))?.[0]||'';
         const factor=definition.includes('<hp:case')?75:150;
-        for(const side of ['left','right'] as const)if(Number(attribute(definition.match(new RegExp(`<hc:${side}\\b[^>]*\\/>`,'u'))?.[0]||'','value'))!==Math.round(source.paragraphInsets![i][side]*factor))throw Error('HWP 갑지 문단 가로 위치가 원문과 다릅니다.');
+        for(const side of ['left','right'] as const)if(Number(attribute(definition.match(new RegExp(`<hc:${side}\\b[^>]*\\/>`,'u'))?.[0]||'','value'))!==paragraphInsetValue(source.paragraphInsets![i][side],factor))throw Error('HWP 갑지 문단 가로 위치가 원문과 다릅니다.');
       });
     }
     if(verifyFrame&&pageShapes(source).length){
@@ -256,7 +258,7 @@ function restoreParagraphInsets(xml:string,files:Record<string,Uint8Array>,inset
     const definition=definitions.find(p=>attribute(p,'id')===attribute(paragraph,'paraPrIDRef'));
     if(!definition||!Object.values(insets[index]).every(Number.isFinite))throw Error('HWP 갑지 문단 여백을 확인하지 못했습니다.');
     // HWPX case margins are effective HU; switch/default margins use 2x HU.
-    const set=(part:string,factor:number)=>part.replace(/<hc:(left|right)\b[^>]*\/>/gu,(tag,side:'left'|'right')=>tag.replace(/value="[^"]*"/u,`value="${Math.round(insets[index][side]*factor)}"`));
+    const set=(part:string,factor:number)=>part.replace(/<hc:(left|right)\b[^>]*\/>/gu,(tag,side:'left'|'right')=>tag.replace(/value="[^"]*"/u,`value="${paragraphInsetValue(insets[index][side],factor)}"`));
     const updated=set(definition.replace(/\bid="[^"]*"/u,`id="${id}"`),150).replace(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu,part=>set(part,75));
     header=header.replace('</hh:paraProperties>',`${updated}</hh:paraProperties>`);
     xml=xml.replace(paragraph,paragraph.replace(/(<hp:p\b[^>]*paraPrIDRef=")[^"]*/u,`$1${id++}`));
