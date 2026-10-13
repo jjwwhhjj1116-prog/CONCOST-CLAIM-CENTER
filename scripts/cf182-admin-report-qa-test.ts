@@ -25,8 +25,10 @@ function fixture() {
     Number, Date, JSON, Error, encodeURIComponent, joinReportPresentation, splitReportPresentation,
     roles: ['admin'], selectedCaseId: 'qa-case', loadedCaseId: 'qa-case', version: 5, content: draft.content,
     loading: false, dirty: false, workspaceDirty: false, saveError: '', saving: false, outlineDirty: false, chaptersDirty: false, outlineSyncPending: false, generating: false, improving: false, linkingHwp: false, chapterBusy: '', submittingReview: false,
+    restoringLocal: false,
     selectedCase: { id: 'qa-case', caseNumber: 'QA-6', title: '시험 사건' },
     chapterCollaboration: { assignments: [{ chapterId: 'qa-chapter', canEdit: true }] }, chapterDraftsRef: ref({ 'qa-chapter': '' }), chapterSavedRef: ref({ 'qa-chapter': '' }),
+    chapterDocumentsRef: ref({}), chapterSavedDocumentsRef: ref({}),
     selectedCaseRef: ref('qa-case'), versionRef: ref(5), titleRef: ref('검수 제목'), contentRef: ref(draft.content),
     editorJsonRef: ref(json), reportHeaderRef: ref(header), reportFrontMatterRef: ref(frontMatter), loadSequence: ref(1), activeStepRef: ref(4), selectedChapterRef: ref(''),
     qaReadyRef: ref(true), qaSnapshotRef: ref(null), qaPreviewRef: ref({ isConnected: true, querySelector: () => null }), qaExportInFlight: ref(false),
@@ -60,6 +62,31 @@ test('CF182 production QA rejects malformed or mismatched saved responses', asyn
     const { context, draft, exports } = fixture(); (draft as any)[key] = value;
     await context.qa.loadQaSnapshot(); assert.equal(context.qaSnapshotRef.current, null, String(key)); assert.ok(context.error, String(key)); assert.equal(exports.length, 0); assert.equal(context.qaExportInFlight.current, false);
   }
+});
+
+test('CF182 production QA blocks local restoration and JSON-only chapter changes', async () => {
+  const restoring = fixture(); restoring.context.restoringLocal = true;
+  await restoring.context.qa.loadQaSnapshot(); assert.equal(restoring.requests.length, 0);
+  restoring.context.restoringLocal = false;
+  await restoring.context.qa.loadQaSnapshot(); assert.ok(restoring.context.qaSnapshotRef.current);
+  restoring.context.restoringLocal = true;
+  for (const format of ['docx', 'pdf', 'hwp']) await restoring.context.qa.downloadQaReport(format);
+  assert.equal(restoring.exports.length, 0, 'Restoration must invalidate an already loaded QA snapshot');
+
+  const chapter = fixture();
+  const saved = { type: 'doc', content: [] };
+  chapter.context.chapterSavedDocumentsRef.current['qa-chapter'] = saved;
+  chapter.context.chapterDocumentsRef.current['qa-chapter'] = { type: 'doc', content: [{ type: 'table', content: [] }] };
+  await chapter.context.qa.loadQaSnapshot();
+  assert.equal(chapter.requests.length, 0, 'Unchanged chapter text must not hide unsaved table/JSON changes');
+  chapter.context.chapterDocumentsRef.current['qa-chapter'] = saved;
+  await chapter.context.qa.loadQaSnapshot(); assert.equal(chapter.requests.length, 1);
+
+  const pending = fixture(); let release = () => {};
+  pending.holdRead(new Promise<void>(resolve => { release = resolve; }));
+  const reading = pending.context.qa.loadQaSnapshot(); pending.context.restoringLocal = true;
+  release(); await reading;
+  assert.equal(pending.context.qaSnapshotRef.current, null, 'Restoration starting during GET rejects the stale snapshot');
 });
 
 test('CF182 production QA keeps saved data separate and exports three unapproved formats without approval writes', async () => {

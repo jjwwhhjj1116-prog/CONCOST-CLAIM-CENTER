@@ -9,7 +9,7 @@ import { getDocumentProxy } from 'unpdf';
 
 test('CF182 real report UI exports unapproved saved DOCX PDF HWP with GET-only access and hides QA from non-admin', async () => {
   const { createServer } = await import('../apps/web/qa/vite-server.js');
-  const runtimeRoot = resolve('apps/web/dist/rhwp');
+  const runtimeRoot = resolve(process.env.CF182_QA_RUNTIME_ROOT || 'apps/web/dist/rhwp');
   const server = await createServer({ root: resolve('apps/web'), server: {host:'127.0.0.1',port:0,hmr:false}, logLevel:'error', plugins:[{
     name: 'admin-qa-report-fixture',
     configureServer(s) { s.middlewares.use(async (req, res, next) => {

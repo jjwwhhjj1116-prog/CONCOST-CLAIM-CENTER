@@ -1,5 +1,14 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF217 PDF 글자 위치 원인 수정·실제 저장 원고 출력 — 2026-10-13
+
+- **배포 전 확인:** 실제 development CC7 v8에서 DOCX/PDF/HWP를 각 한 번 내려받은 보호본 `tmp/cf217-qa/actual-output`을 CF212와 대조했다. DOCX 본문 50문단·표 3개·9셀·스타일·사진 3장 및 HWP 전체 바이트는 보존되지만 PDF 5쪽의 글자 위치가 1~2px 달라 strict FAIL이었다. 최초 파일·비교 결과·실패 PNG를 보존했다.
+- **원인과 최소 수정:** html2canvas 1.4.1의 글꼴 측정 노드를 BODY 끝에 배치하고 절대 좌표를 개별 반올림해 주변 UI 높이/Chrome 66.67% 확대의 소수 좌표가 기준선을 바꿨다. 측정 노드의 좌표 원점을 고정하고 밑줄·윗줄·취소선도 페이지 원점 기준으로 반올림하도록 web Vite 변환 1개를 적용한다. 폰트·용지·원고·표·사진 크기·출력 엔진 pin은 변경하지 않는다. 원본 패키지 1.4.1의 버전/SHA와 각 치환 anchor를 확인하고 달라지면 빌드를 중단한다. Vite dev의 sourceMappingURL 주석 마스킹만 별도 SHA로 허용한다.
+- **음성/양성:** 실제 제품 PDF 경로에서 같은 원고와 스타일에 주변 높이만 바꾼 native Chrome 66.67% 검사: 수정 전 글자·장식선 44,247픽셀 FAIL, 수정 후 모든 RGBA 픽셀 exact. 원본 1문자 변조는 실제 Vite 500으로 차단한다. 총괄 최종 `cf217-final-root.tap` 2/2·skip0, CF182 저장본/복구/JSON-only 미저장 차단과 3형식 실제 UI GET-only 검사 6/6·skip0, 기존 출력 최적화·제안서 회귀 19/19·skip0. 최초 26검사 중 5실패는 구형 VM fixture 변수 및 runtime 경로 누락으로 보존하고 검사 하네스만 보완했다. root/web 타입 0오류, fresh build/stage/dryrun PASS.
+- **실제 저장 원고 로컬 출력:** `local-cc7-fixed`는 실제 CC7 v8 D1 snapshot과 제품 ReportFinalDocumentPreview·CSS·downloadFinalDocument를 사용한 격리 검사다. DOCX 50문단·표 3개·9셀·폰트/사진 exact; localhost 근거 링크·관계 ID·시각만 다르므로 운영 배포 출력과 구별한다. HWP는 CF212와 전체 바이트/SHA f905c328… exact. PDF 5쪽 모두 두 UI 높이 간 픽셀 차이 0개이며 총괄/독립 검수자가 5쪽을 직접 열어 잘림·겹침·문자 소실 관찰 0을 확인했다. 목차 11개·사진 비율 2/0.5/2·홀수 사진 빈칸·원본 9셀의 LF/빈행/0/123.45/246.9 유지. source 7필드 및 승인/최종화/알림 쓰기 0.
+- **정확한 배포 대상:** `tmp/cf217-qa/web-build-verified/assets/index-BoFbUrd2.js`. 중간 web-build-final/index-oNi8salv.js는 최종본이 아니다. 승인 runtime 28파일과 WASM bcc40a79…/binding ad01e939…를 그대로 stage했다. pnpm 정식 patch 후보의 기존 store/offline metadata 제약과 중단 로그는 tmp에 보존하고 package.json/pnpm-lock/package 원본은 변경 0이다. 기존 사용자 삭제 22개는 미스테이징 그대로다.
+- **잔여 검증:** 푸시·development 배포 및 지정 Chrome에서 새 모듈의 실제 다운로드 재검수는 이어서 기록한다. 독립 PC Word/한컴은 실행 환경 제약으로 NOT_RUN이며 전체 원형 32개/HWP A–Z·가오픈 완료로 확대하지 않는다.
+
 ## CF216 상단 영역 제거·전 단계/모바일 검수 — 2026-10-13
 
 - **최종 development 완료:** 제품 `7af87d8`, Worker `fda9c27c-c021-4ac7-82da-938585c30d2d`, 정확한 최종 폴더 `tmp/cf216-qa/web-build-complete`, main `index-CGlDkyfQ.js`. 공개 43파일/37,738,833B의 byte·SHA 일치, canonical `aae2e74c54c5ebdeae20ef66d8831c350533ecde2574a2a6e2ed54e2ff12fc37`, health/readiness 200. keep-vars, DB 구조·키·가오픈 변경 없음.
