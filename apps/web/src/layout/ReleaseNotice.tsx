@@ -56,6 +56,6 @@ export function ReleaseNotice({ open, onClose }: { open: boolean; onClose: () =>
       <div className="release-notice__updates">{RELEASE_UPDATES.map((update) => <section key={update.title}><h3>{update.title}</h3><p>{update.text}</p></section>)}</div>
       <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
     </div>
-    <footer><p>이 브라우저에서 계정별로 한 번 안내합니다.<br/>상단 ‘업데이트’ 버튼으로 다시 볼 수 있습니다.</p><Button onClick={onClose}>확인하고 시작하기</Button></footer>
+    <footer><p>이 브라우저에서 계정별로 한 번 안내합니다.<br/>계정·업무 도구의 ‘업데이트’ 버튼으로 다시 볼 수 있습니다.</p><Button onClick={onClose}>확인하고 시작하기</Button></footer>
   </dialog>;
 }

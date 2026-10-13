@@ -216,7 +216,7 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended 
             ? <Button disabled={!visitedSteps.has(tutorialStep)} onClick={() => moveTutorialStep(Math.min(WORKSPACE_TUTORIAL_STEPS.length - 1, tutorialStep + 1))}>다음 설명 →</Button>
             : <Button disabled={saving || !visitedSteps.has(tutorialStep)} onClick={() => void saveTutorialDecision('COMPLETED')}>{saving ? '완료 저장 중…' : '튜토리얼 완료'}</Button>}
         </footer>
-        <small>실제 저장·삭제 버튼은 튜토리얼 대상에서 제외합니다. 건너뛰기는 이 계정에 1회 저장되며, 상단 도움말에서 언제든 다시 체험할 수 있습니다.</small>
+        <small>실제 저장·삭제 버튼은 튜토리얼 대상에서 제외합니다. 건너뛰기는 이 계정에 1회 저장되며, 계정·업무 도구의 도움말에서 언제든 다시 체험할 수 있습니다.</small>
         </div>}
       </aside>
     </div>, document.body)}

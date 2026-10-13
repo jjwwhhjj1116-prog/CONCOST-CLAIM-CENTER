@@ -11,10 +11,14 @@ export const SoftLaunchNotice: React.FC<{ hideBanner?: boolean; openRequest?: nu
 
   useEffect(() => {
     if (!detailOpen) return undefined;
+    const opener = document.activeElement;
     closeButtonRef.current?.focus();
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setDetailOpen(false); };
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
+    return () => {
+      window.removeEventListener('keydown', closeOnEscape);
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
   }, [detailOpen]);
 
   const dismiss = () => {

@@ -14,16 +14,22 @@ export interface DialogProps {
 export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose, hideDefaultAction = false, size = 'default' }) => {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
     if (!isOpen) return;
+    const opener = document.activeElement;
     panelRef.current?.focus();
     const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') closeRef.current();
     };
     document.addEventListener('keydown', escape);
-    return () => document.removeEventListener('keydown', escape);
-  }, [isOpen, onClose]);
+    return () => {
+      document.removeEventListener('keydown', escape);
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
   return createPortal(

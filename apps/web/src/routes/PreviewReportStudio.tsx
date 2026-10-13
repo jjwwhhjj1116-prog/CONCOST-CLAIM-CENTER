@@ -734,8 +734,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     return () => window.removeEventListener('keydown', saveShortcut, { capture: true });
   }, [saveNow, chapterDrafts, chapterCollaboration, editable]);
 
+  const wizardNavigationBusy = loading || saving || savingOutline || generating || generatingOutline || improving || linkingHwp || Boolean(chapterBusy) || navigationBusy || evidenceInsertOpen || restoringLocal;
   const changeWizardStep = async (step: ReportWizardStep) => {
-    if (evidenceInsertOpen || restoringLocal) return;
+    if (wizardNavigationBusy) return;
     if (generatingOutline) { setOutlineProposalError('AI 목차 제안이 끝난 뒤 현재 목차를 저장하고 이동해 주세요. 입력 내용은 유지됩니다.'); return; }
     if (outlineSaveInFlight.current || generationInFlight.current || chapterSaveInFlight.current || improving || saving || loading) return;
     if (step === activeStep) return;
@@ -1691,13 +1692,13 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           <Button variant="secondary" onClick={() => setShowGuide((current) => !current)}>{showGuide ? '간단히 보기' : '단계 도움말 보기'}</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={() => setShowTemplatePreview(true)}>완제품 템플릿 열람</Button>{roles.includes('admin') && <Button onClick={() => onNavigate('/ai-config')}>챕터 프롬프트 설정</Button>}
       </section>
 
-      <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계">
+      <nav className="report-wizard-navigation" aria-label="보고서 작성 5단계" aria-busy={wizardNavigationBusy}>
         <ol>{REPORT_WIZARD_STEPS.map((step) => {
           const current = step.id === activeStep;
           const complete = stepComplete[step.id];
           const unlocked = stepUnlocked[step.id];
           return <li key={step.id}>
-            <button type="button" className={current ? 'is-current' : complete ? 'is-complete' : ''} disabled={!unlocked} aria-current={current ? 'step' : undefined} onClick={() => changeWizardStep(step.id)}>
+            <button type="button" className={current ? 'is-current' : complete ? 'is-complete' : ''} disabled={!unlocked || wizardNavigationBusy} aria-current={current ? 'step' : undefined} onClick={() => changeWizardStep(step.id)}>
               <b>{complete ? '✓' : step.id}</b>
               <span><strong>{step.title}</strong><small>{current ? '지금 진행 중' : complete ? '완료' : unlocked ? '열림' : '앞 단계 완료 후 열림'}</small></span>
             </button>
@@ -1906,14 +1907,14 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         </Card>
       </>}
       <footer className="report-wizard-footer" aria-label="보고서 단계 이동">
-        <Button variant="secondary" disabled={!previousStep} onClick={() => previousStep && changeWizardStep(previousStep)}>← 이전 단계</Button>
+        <Button variant="secondary" disabled={!previousStep || wizardNavigationBusy} onClick={() => previousStep && changeWizardStep(previousStep)}>← 이전 단계</Button>
         <div>
           <strong>{activeStep} / 5 · {activeStepGuide.title}</strong>
           <small>{stepComplete[activeStep] ? `✓ ${activeStepGuide.doneText}` : nextBlockedReason || activeStepGuide.doneText}</small>
         </div>
         {nextStep
-          ? <Button className="workflow-next-action" disabled={!stepComplete[activeStep]} onClick={() => changeWizardStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
-          : <Button onClick={() => onNavigate('/approval')}>검토·승인함 열기 →</Button>}
+          ? <Button className="workflow-next-action" disabled={!stepComplete[activeStep] || wizardNavigationBusy} onClick={() => changeWizardStep(nextStep)}>이 단계 완료 · 다음 단계 →</Button>
+          : <Button disabled={wizardNavigationBusy} onClick={() => onNavigate('/approval')}>검토·승인함 열기 →</Button>}
       </footer>
       <Dialog isOpen={Boolean(pendingNavigation)} title="보고서 작업을 저장하고 이동할까요?" onClose={() => !navigationBusy && setPendingNavigation(null)}>
         <div className="report-navigation-save-dialog">

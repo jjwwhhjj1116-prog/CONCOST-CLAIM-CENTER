@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -7,6 +8,7 @@ import { chromium } from 'playwright-core';
 test('CF216 actual shell and report traverse all five stages and every review panel without changing the draft', { timeout: 180_000 }, async t => {
   const base = resolve('tmp/cf216-qa'); mkdirSync(base, { recursive: true });
   const proof = mkdtempSync(join(base, 'authoring-'));
+  const beforeNavigation = process.env.CF216_BEFORE_NAVIGATION === '1' ? execFileSync('git', ['-c', `safe.directory=${process.cwd().replaceAll('\\', '/')}`, 'show', 'ba1185f:apps/web/src/routes/PreviewReportStudio.tsx'], { encoding: 'utf8' }) : null;
   const html = readFileSync('apps/web/index.html', 'utf8')
     .replace('<script src="/runtime-config.js"></script>', '')
     .replace('<div id="root"></div>', '<div hidden><button id="qa-fail"></button><button id="qa-navigate"></button><pre id="qa-audit"></pre></div><div id="root"></div>')
@@ -19,6 +21,7 @@ test('CF216 actual shell and report traverse all five stages and every review pa
       res.setHeader('Content-Type', 'text/html'); res.end(await vite.transformIndexHtml(req.url, html));
     }); },
     transform(code, id) {
+      if (beforeNavigation && id.replaceAll('\\', '/').endsWith('/src/routes/PreviewReportStudio.tsx')) return beforeNavigation;
       if (!id.replaceAll('\\', '/').endsWith('/qa/cf114-studio.tsx')) return;
       code = code.replaceAll('\r\n', '\n');
       const replace = (from: string, to: string) => { assert.ok(code.includes(from), 'The existing CF114 fixture anchor must match'); code = code.replace(from, to); };
@@ -27,7 +30,7 @@ test('CF216 actual shell and report traverse all five stages and every review pa
         import {markReleaseSeen} from '/src/layout/ReleaseNotice.tsx';
         import '/src/layout/WorkspaceHelpCenter.css'; import '/src/layout/SoftLaunchNotice.css';
         window.__CLAIM_API_ORIGIN__=location.origin;
-        window.cf216={requests:[],navigation:[],expires:0};
+        window.cf216={requests:[],navigation:[],expires:0,holdNext:false,pending:false,release:null};
         markReleaseSeen('cf216-synthetic-user');`);
       replace("document.head.prepend(...Array.from(new DOMParser().parseFromString(appHtml, 'text/html').head.querySelectorAll('style,link[rel=\"stylesheet\"]')).map(node => node.cloneNode(true)));", '');
       // CF114 predates persisted default front-matter attributes. Supply those
@@ -38,6 +41,8 @@ test('CF216 actual shell and report traverse all five stages and every review pa
         window.cf216.requests.push({path:url.pathname,method,body:init?.body?JSON.parse(String(init.body)):null});`);
       replace("if (method === 'POST' && url.pathname === '/api/report-chapter-collaboration') {", `if(method==='GET'&&url.pathname==='/api/member-alerts')return response({awards:[],todos:[],today:'2026-10-13',available:true});
         if (method === 'POST' && url.pathname === '/api/report-chapter-collaboration') {`);
+      replace("if (method === 'PUT' && url.pathname === '/api/report-drafts') {", `if (method === 'PUT' && url.pathname === '/api/report-drafts') {
+        if(window.cf216.holdNext){window.cf216.holdNext=false;window.cf216.pending=true;await new Promise(resolve=>{window.cf216.release=()=>{window.cf216.pending=false;resolve()}});}`);
       const rootLine = code.split('\n').find(line => line.startsWith("createRoot(document.getElementById('root')!).render(")); assert.ok(rootLine);
       replace(rootLine, `createRoot(document.getElementById('root')!).render(<AppShell currentPath="/reports/studio" currentSearch="" roles={['pm']} userId="cf216-synthetic-user" userName="합성 검수자" previewMode={false} onNavigate={path=>window.cf216.navigation.push(path)} onExpireSession={()=>window.cf216.expires++}><PreviewReportStudio roles={['pm']} onNavigate={path=>window.cf216.navigation.push(path)}/></AppShell>);`);
       return code;
@@ -77,6 +82,29 @@ test('CF216 actual shell and report traverse all five stages and every review pa
           await page.screenshot({ path: join(proof, `stage-${width}-${step}${step === 4 && measurements.some((value: any) => value.width === width && value.step === 4) ? '-return' : ''}.png`) });
           measurements.push({ width, step, geometry });
         }
+        // Reproduce the live step-4 -> step-1 save delay before the next click.
+        const stepButtons = page.locator('.report-wizard-navigation li button');
+        const beforeHold = (await state()).draft;
+        await page.evaluate(() => { (window as any).cf216.holdNext = true; });
+        await stepButtons.nth(0).click();
+        await page.waitForFunction(() => (window as any).cf216.pending);
+        assert.equal(await page.locator('.report-authoring-studio').getAttribute('data-wizard-step'), '1');
+        assert.equal((await state()).draft.version, beforeHold.version, 'An unacknowledged navigation save cannot advance the saved version');
+        assert.equal(await stepButtons.count(), 5);
+        assert.equal(await stepButtons.evaluateAll(nodes => nodes.filter(node => (node as HTMLButtonElement).disabled).length), 5, 'Every stage button must expose its disabled state while a navigation save awaits ACK');
+        const footerButtons = page.locator('.report-wizard-footer button');
+        assert.equal(await footerButtons.count(), 2);
+        assert.equal(await footerButtons.evaluateAll(nodes => nodes.filter(node => (node as HTMLButtonElement).disabled).length), 2, 'Both footer navigation buttons must expose the same pending save boundary');
+        await page.screenshot({ path: join(proof, `navigation-saving-${width}.png`) });
+        await page.evaluate(() => (window as any).cf216.release()); await ready(1); await unchanged();
+        assert.equal((await state()).draft.version, beforeHold.version + 1);
+        assert.equal(await stepButtons.evaluateAll(nodes => nodes.filter(node => !(node as HTMLButtonElement).disabled).length), 5, 'All completed-stage links become available after the exact save ACK');
+        assert.equal(await footerButtons.nth(0).isDisabled(), true, 'Step 1 still has no previous step after saving');
+        assert.equal(await footerButtons.nth(1).isEnabled(), true, 'Step 1 next action becomes available after the exact ACK');
+        await footerButtons.nth(1).click(); await ready(2); await unchanged();
+        assert.equal(await footerButtons.evaluateAll(nodes => nodes.filter(node => !(node as HTMLButtonElement).disabled).length), 2, 'Completed step 2 allows both previous and next actions');
+        await stepButtons.nth(3).click(); await ready(4); await unchanged();
+        measurements.push({ width, heldNavigation: 'all-five-disabled-until-exact-ACK', beforeVersion: beforeHold.version, acknowledgedVersion: beforeHold.version + 1 });
         const tools = page.locator('.report-review-tools-row');
         for (const [index, name] of ['목차 제목 수정', '챕터별 분담', '판례 인용 검수'].entries()) {
           const button = tools.getByRole('button', { name: new RegExp('^' + name) }); await button.click();
@@ -106,6 +134,11 @@ test('CF216 actual shell and report traverse all five stages and every review pa
           assert.equal(await page.getByRole('dialog', { name: '전체 내비게이션 메뉴' }).count(), 0, 'A utility dialog must not stay underneath the mobile navigation drawer');
           assert.equal(await page.getByRole('dialog').count(), 1);
           await page.keyboard.press('Escape'); await page.getByRole('dialog', { name: dialog }).waitFor({ state: 'hidden' }); await unchanged();
+          if (width === 390) {
+            const focus = await page.evaluate(() => ({ returned: document.activeElement === document.querySelector('.mobile-workspace-menu button'), tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') }));
+            assert.equal(focus.returned, true, `${action} must return focus to the persistent mobile menu: ${JSON.stringify(focus)}`);
+            measurements.push({ width, utility: String(action), focus });
+          }
         }
         await openTools();
         assert.match(await page.locator('.session-identity').textContent() || '', /합성 검수자/u);
@@ -119,5 +152,5 @@ test('CF216 actual shell and report traverse all five stages and every review pa
         t.diagnostic(JSON.stringify({ width, localNavigationSaves: writes.length, proof }));
       } finally { await page.close(); }
     });
-  } finally { writeFileSync(join(proof, 'receipt.json'), JSON.stringify({ scope: 'Actual AppShell and PreviewReportStudio with existing in-memory CF114 API; no real account, customer data or remote writes', measurements }, null, 2)); await browser.close(); await server.close(); }
+  } finally { writeFileSync(join(proof, 'receipt.json'), JSON.stringify({ scope: 'Actual AppShell and PreviewReportStudio with existing in-memory CF114 API; no real account, customer data or remote writes', beforeNavigation: Boolean(beforeNavigation), measurements }, null, 2)); await browser.close(); await server.close(); }
 });

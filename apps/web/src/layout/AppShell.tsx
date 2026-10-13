@@ -113,6 +113,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [theme, setTheme] = useState<ThemeMode>(readInitialTheme);
   const [sidebarWidth, setSidebarWidth] = useState(readInitialSidebarWidth);
   const sidebarElement = useRef<HTMLElement>(null);
+  const mobileMenuElement = useRef<HTMLDivElement>(null);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => ({ [activeGroup?.icon ?? 'home']: true }));
   const [expandedSubgroups, setExpandedSubgroups] = useState<Record<string, boolean>>(() => activeSubgroup ? { [activeSubgroup.label]: true } : {});
   const [memberAlerts,setMemberAlerts]=useState<MemberAlertsPayload>({awards:[],todos:[],today:'',available:true});
@@ -124,6 +125,14 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [releaseOpen, setReleaseOpen] = useState(() => !hasSeenRelease(userId));
   const closeRelease = () => { markReleaseSeen(userId); setReleaseOpen(false); };
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
+  const openUtility = (open: () => void) => {
+    closeDrawer();
+    if (isTablet) window.requestAnimationFrame(() => {
+      mobileMenuElement.current?.querySelector('button')?.focus();
+      open();
+    });
+    else open();
+  };
   const locationParams = new URLSearchParams(currentSearch);
   const contextProjectId = locationParams.get('projectId');
   const contextCaseId = locationParams.get('caseId');
@@ -293,10 +302,10 @@ export const AppShell: React.FC<AppShellProps> = ({
       </button>
       {utilitiesOpen && <div id="workspace-utility-panel" className="sidebar-utility-panel" role="group" aria-label="계정·업무 도구">
         <button type="button" className="theme-toggle" aria-label={theme === 'dark' ? '라이트 모드로 전환' : '다크 모드로 전환'} aria-pressed={theme === 'dark'} onClick={() => setTheme(value => value === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '라이트 모드' : '다크 모드'}</button>
-        <button type="button" className="theme-toggle" aria-label={`${RELEASE_DATE_LABEL} 업데이트 내역 보기`} onClick={() => { closeDrawer(); setReleaseOpen(true); }}>업데이트</button>
-        <button type="button" className="theme-toggle" aria-label="현재 화면 도움말 열기" onClick={() => { closeDrawer(); setHelpRequest(value => value + 1); }}>도움말</button>
-        <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${memberAlerts.awards.length + memberAlerts.todos.length}건`} onClick={() => { closeDrawer(); setAlertsOpen(true); }}>알림 {memberAlerts.awards.length + memberAlerts.todos.length}</button>
-        <button type="button" className="theme-toggle" aria-label="가오픈 이용 안내 열기" onClick={() => { closeDrawer(); setNoticeRequest(value => value + 1); }}>이용 안내</button>
+        <button type="button" className="theme-toggle" aria-label={`${RELEASE_DATE_LABEL} 업데이트 내역 보기`} onClick={() => openUtility(() => setReleaseOpen(true))}>업데이트</button>
+        <button type="button" className="theme-toggle" aria-label="현재 화면 도움말 열기" onClick={() => openUtility(() => setHelpRequest(value => value + 1))}>도움말</button>
+        <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${memberAlerts.awards.length + memberAlerts.todos.length}건`} onClick={() => openUtility(() => setAlertsOpen(true))}>알림 {memberAlerts.awards.length + memberAlerts.todos.length}</button>
+        <button type="button" className="theme-toggle" aria-label="가오픈 이용 안내 열기" onClick={() => openUtility(() => setNoticeRequest(value => value + 1))}>이용 안내</button>
         <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
       </div>}
     </footer></>
@@ -354,7 +363,7 @@ export const AppShell: React.FC<AppShellProps> = ({
           ><span aria-hidden="true" /></div>
         </aside>}
         <Drawer isOpen={isDrawerOpen} onClose={closeDrawer} title="전체 내비게이션 메뉴">{navigation}</Drawer>
-        <main id="main-content" className="main-content" tabIndex={-1}>{isTablet && <div className="mobile-workspace-menu"><Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button></div>}{children}</main>
+        <main id="main-content" className="main-content" tabIndex={-1}>{isTablet && <div className="mobile-workspace-menu" ref={mobileMenuElement}><Button size="sm" variant="secondary" onClick={() => setIsDrawerOpen(true)} aria-label="메인 메뉴 드로어 열기">☰ 메뉴</Button></div>}{children}</main>
       </div>
     </div>
   );
