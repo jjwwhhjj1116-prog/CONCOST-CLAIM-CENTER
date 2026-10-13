@@ -57,8 +57,13 @@ export async function documentImageData(image: HTMLImageElement): Promise<{bytes
     const density = fitted ? Math.max(2,1/fitScale) : 1;
     const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round((fitted?width:image.naturalWidth)*density));canvas.height=Math.max(1,Math.round((fitted?height:image.naturalHeight)*density));
     if(canvas.width*canvas.height>36_000_000)throw new Error('DOCX 첨부 이미지가 너무 큽니다. 6000px 이하 이미지로 조정하세요.');
+    let bitmap:ImageBitmap|undefined;
     try{
       const context=canvas.getContext('2d');if(!context)throw new Error('Canvas unavailable');
+      // A displayed JPEG can use a different browser decoder than source bytes.
+      // Pin only re-rasterized JPEGs to the fetched evidence, across all formats.
+      if(type==='jpg')bitmap=await createImageBitmap(new Blob([new Uint8Array(bytes)],{type:'image/jpeg'}));
+      const drawable=bitmap??image;
       if(fitted){
         const drawWidth=image.naturalWidth*fitScale,drawHeight=image.naturalHeight*fitScale;
         const position=css.objectPosition.split(/\s+/u);
@@ -67,12 +72,12 @@ export async function documentImageData(image: HTMLImageElement): Promise<{bytes
           if(/^-?[\d.]+px$/u.test(value))return parseFloat(value);
           throw new Error('지원하지 않는 사진 정렬입니다. 가운데 정렬 후 다시 출력해 주세요.');
         };
-        context.drawImage(image,offset(position[0],width-drawWidth)*density,offset(position[1]??'50%',height-drawHeight)*density,drawWidth*density,drawHeight*density);
-      }else context.drawImage(image,0,0,canvas.width,canvas.height);
+        context.drawImage(drawable,offset(position[0],width-drawWidth)*density,offset(position[1]??'50%',height-drawHeight)*density,drawWidth*density,drawHeight*density);
+      }else context.drawImage(drawable,0,0,canvas.width,canvas.height);
       const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('Image conversion failed')),'image/png'));
       bytes=new Uint8Array(await blob.arrayBuffer());type='png';
     }catch{throw new Error(`DOCX 첨부 이미지 변환에 실패했습니다: ${image.alt || '첨부 이미지'}`);}
-    finally{canvas.width=1;canvas.height=1;}
+    finally{bitmap?.close();canvas.width=1;canvas.height=1;}
   }
   return {bytes,type,width,height};
 }
