@@ -1,8 +1,11 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## 현재 판정 — CF213 분담·복구·간결한 UI 로컬 검수 통과, 개발 반영 대기, 전체 A–Z는 미합격, 2026-10-13
+## 현재 판정 — CF213 분담·복구·간결한 UI development 반영, 전체 HWP/A–Z는 미합격, 2026-10-13
 
 ### CF213 단일 담당자 분담·서식 보존·작업 복구·상단 UI 정리
+
+- 최종 제품 `978158b` GitHub push 후 development Worker `68c7fd76-c907-4b48-8db5-be5ea00f62dc`에 keep-vars 반영했다. E213/deploy-build/assets/index-CqElpDQX.js 포함 공개43개/37,738,536B 바이트·SHA exact, canonical `59269f99b27347b212016dcab587a506a42a018ffc3e6a440a177771ee978980`, health/readiness200다. 사용자 기존 삭제22개는 미스테이징 상태 그대로이고 가오픈·키·DB 구조는 변경0이다. 실제 CC7 탭의 새 모듈 대조는 아직 별도 진행한다.
+- 마지막 시각검수에서 일반 미지정 폭의 표도 editor65.86/34.14 vs preview50/50인 FAIL을 확인했다. 편집 DOM에서만 문자 길이로 열 비율을 계산하던 경로를 제거해 미지정 폭은 공통 equal fallback, 저장/수동 조절 폭은 보존한다. 일반표·사진2열은 editor/preview196.140625px씩, 사진1열392.28125px·100%, 저장·재열기 JSON exact를 실측했다. 최종 Worker/API5+실제 UI5=10/10·skipped0, root 독립 표시/표/첨부/원형 회귀42/42·skipped0, web/root 타입0오류다. chapter SAVE late-bold 및 stage4 whole SAVE 중 새본문이 oldACK 후에도 남고 로컬 JSON이 유지됨을 실제 handler로 확인했다. 권한/status 상시 표시, 원형 HWP 장보기 미지원 안내를 포함한다. 기존 전단계95/95와 최종 영향42/42는 같은 검사 총합으로 중복 계산하지 않는다.
 
 - 사용자 확정: 챕터마다 담당자 1명. 전체 보기/선택 챕터 보기를 분리하고 담당자·작성 권한·상태를 표시한다. 분담 원고에 실제 표·사진·서식 편집기를 사용하며 3초 자동 저장, 작성 완료 후 PM·관리자만 전체에 반영한다. 업무 최종승인·자기승인 차단·역할·직원 배정은 변경하지 않았다.
 - 확인한 결함: 기존 SAVE/MARK_READY가 `draft_editor_json=NULL`로 저장했고 UI는 textarea/텍스트만 보냈다. 현재 existing column에 canonical JSON을 보존하고 APPLY는 저장된 READY 원고를 사용한다. 동일 텍스트·다른 JSON 제출은409, 잘못된/중첩 경계는400, 모호한 WHOLE·native에 임의 append는409/DB 불변이다. 일반 전체 문서의 유일한 H2 범위만 연결하며 기존 제목 서식과 다른 챕터 노드는 보존한다. schema/migration0.
