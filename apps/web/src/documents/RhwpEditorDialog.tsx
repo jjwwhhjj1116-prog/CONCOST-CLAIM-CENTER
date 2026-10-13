@@ -221,9 +221,9 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       requireCurrent(operation);
       assertReportNativePagesMatch(before, snapshot.pages);
       downloadBlob(bytesToBlob(bytes, mime), fileName);
-      try { await editor.notifySaved(fileName); } catch { /* Older hosted Studio can omit this capability. */ }
+      // A browser download request provides no persistence ACK; keep Studio dirty/drafts intact.
       requireCurrent(operation);
-      setStatus(`${fileName} 다운로드를 완료했습니다. 웹 엔진에서 저장 전·후 페이지 일치는 확인했지만, PC 한컴의 글꼴·여백·배치와 동일한지는 아직 검증되지 않았습니다. 제출 전 한컴에서 다시 열어 대조해 주세요.`);
+      setStatus(`${fileName} 다운로드를 요청했습니다. 브라우저에서 파일 저장 완료를 확인해 주세요. 웹 엔진에서 내보내기 전·후 페이지 일치는 확인했지만, PC 한컴의 글꼴·여백·배치와 동일한지는 아직 검증되지 않았습니다. 제출 전 한컴에서 다시 열어 대조해 주세요.`);
       setConfirmClose(false);
     } catch (reason) {
       if(current(operation)){setError(reason instanceof Error ? reason.message : `${format.toUpperCase()} 파일 생성에 실패했습니다.`);setStatus('');}
@@ -361,7 +361,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         {tocInspection&&tocInspection.excluded.length>0&&<details className="rhwp-dialog__toc-excluded"><summary>자동 갱신 제외 사유 {tocInspection.excluded.length}개</summary><ul>{tocInspection.excluded.map(row=><li key={`${row.section}:${row.paragraph}`}><strong>{row.title}</strong><span>원본 물리 {row.physicalPage}쪽 · {tocExcludedLabels[row.reason]}</span></li>)}</ul></details>}
       </section>}
       <div className="rhwp-dialog__editor" ref={editorHostRef} aria-label="rhwp 한글 문서 편집 영역" />
-      {confirmClose && <div className="rhwp-dialog__confirm" role="alertdialog" aria-modal="true" aria-label="편집기 닫기 확인"><div><h3>편집기를 닫을까요?</h3><p>{tocHandedOff?'목차 작업본 적용은 이미 시작됐습니다. 닫은 뒤 보고서 저장 상태를 확인하고 저장 실패 시 기존 저장 재시도를 사용하세요. 같은 숫자 갱신이나 파일 업로드를 반복하지 마세요.':preserveAppliedSource && onApplyPages ? '전체 페이지를 적용하지 않은 수정 내용은 보고서에 반영되지 않습니다. 먼저 전체 페이지 적용과 보고서 저장 완료를 확인하세요. 파일 다운로드만으로는 보고서가 갱신되지 않습니다.' : '내보내지 않은 수정 내용은 사라질 수 있습니다. 먼저 HWP 또는 HWPX로 내려받는 것을 권장합니다.'}</p><div><button type="button" disabled={busy} onClick={() => setConfirmClose(false)}>{tocHandedOff?'안내로 돌아가기':'계속 편집'}</button><button type="button" disabled={busy} className="is-danger" onClick={closeEditor}>{tocHandedOff?'닫고 저장 상태 확인':'저장하지 않고 닫기'}</button></div></div></div>}
+      {confirmClose && <div className="rhwp-dialog__confirm" role="alertdialog" aria-modal="true" aria-label="편집기 닫기 확인"><div><h3>편집기를 닫을까요?</h3><p>{tocHandedOff?'목차 작업본 적용은 이미 시작됐습니다. 닫은 뒤 보고서 저장 상태를 확인하고 저장 실패 시 기존 저장 재시도를 사용하세요. 같은 숫자 갱신이나 파일 업로드를 반복하지 마세요.':preserveAppliedSource && onApplyPages ? '전체 페이지를 적용하지 않은 수정 내용은 보고서에 반영되지 않습니다. 먼저 전체 페이지 적용과 보고서 저장 완료를 확인하세요. 파일 다운로드만으로는 보고서가 갱신되지 않습니다.' : '파일로 보관하지 않은 수정 내용은 사라질 수 있습니다. HWP 또는 HWPX로 내려받은 뒤 브라우저에서 파일 저장 완료를 확인하고 닫아 주세요.'}</p><div><button type="button" disabled={busy} onClick={() => setConfirmClose(false)}>{tocHandedOff?'안내로 돌아가기':'계속 편집'}</button><button type="button" disabled={busy} className="is-danger" onClick={closeEditor}>{tocHandedOff?'닫고 저장 상태 확인':'저장하지 않고 닫기'}</button></div></div></div>}
     </section>
   </div>;
 }

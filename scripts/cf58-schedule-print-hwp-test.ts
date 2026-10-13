@@ -31,9 +31,11 @@ test('CF58 shared rhwp editor imports, edits, verifies and exports HWP/HWPX', ()
   const report = read('apps/web/src/reports/ReportStudio.tsx');
   const dialogCss = read('apps/web/src/documents/RhwpEditorDialog.css');
   const webPackage = read('apps/web/package.json');
-  for (const marker of ['createEditor', 'loadFile', 'exportHwp()', 'exportHwpx()', 'captureReportNativeSource(bytes, fileName', 'assertReportNativePagesMatch(before, snapshot.pages)', 'notifySaved']) {
+  for (const marker of ['createEditor', 'loadFile', 'exportHwp()', 'exportHwpx()', 'captureReportNativeSource(bytes, fileName', 'assertReportNativePagesMatch(before, snapshot.pages)']) {
     assert.ok(component.includes(marker), `missing rhwp integration marker: ${marker}`);
   }
+  assert.doesNotMatch(component, /\.notifySaved\s*\(/u, 'Download and page application are not persistent-save acknowledgements');
+  assert.match(component, /다운로드를 요청했습니다/u);
   assert.match(component, /__CLAIM_CENTER_RHWP_STUDIO_URL__/u);
   assert.match(component, /\.hwp,\.hwpx,\.hml/u);
   assert.match(component, /원본 HWP 서식 유지/u);
