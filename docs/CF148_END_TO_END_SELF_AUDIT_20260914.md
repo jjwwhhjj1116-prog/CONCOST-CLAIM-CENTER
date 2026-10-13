@@ -2,11 +2,12 @@
 
 ## CF214 새 대화 후속 — HWP 다운로드 저장 ACK 분리, 2026-10-13
 
+- 최종 제품 `4c7c829` 정상 push 후 development Worker `640b99e4-8c7f-4158-a5e1-d296a6629060`에 `--keep-vars` 반영. 공개43파일/37,738,627B byte·SHA exact/canonical `e285bf8eeecf71963c67f3af189a9f5a06e6bef0e8fb7522413785adf6c8eb88`, health/readiness200. 검증 영수증 `tmp/cf214-qa/public-verification.json`; 실제 배포 폴더는 아래 web-build다. DB/schema/키ENV/가오픈 변경0.
 - `RhwpEditorDialog`의 다운로드 직후 `notifySaved()` 호출을 제거했다. SDK 0.8.4와 승인 Studio 모두 이 호출을 dirty 해제·복구 draft 삭제로 처리하지만 anchor.click에는 파일 영속화 ACK가 없다. 안내를 다운로드 요청/브라우저 파일 저장 확인으로 바꾸고 닫기 확인과 전체 적용 경계는 유지했다. 이것은 계정·사건별 native binary 복구 구현이 아니다.
 - 실제 SDK·승인 WASM·합성 HWP를 사용하는 `scripts/cf214-native-download-browser-test.ts`: 수정 전 취소모델/정상 다운로드에서 잘못된 notifySaved 호출 1회로 각각 FAIL, 클릭 예외는 PASS. 수정 후 HWP/HWPX 다운로드 no-op·클릭 예외·정상 파일 재열기, 다운로드 이후 실제 입력/재export·텍스트 적용에서 notifySaved 0회 PASS. CF190 목차 회귀·CF58 포함 총7/7/skipped0. 취소는 anchor no-op 모델이며 실제 Windows 저장창 취소가 아니다. 진행 중 늦은 입력 경합·실제 IndexedDB draft 잔존·종료복구는 미검증이다.
 - `tmp/cf214-qa/before-download.tap`은 기본 sandbox localhost 차단으로 제품검사 미실행, `before-download-authorized.tap`은 공식 권한 실행의 실제 수정 전 실패다. `after-download-regression.tap`은 수정 후 통과. 기본 sandbox 타입 오류와 구분하여 공식 권한 root/web 타입 모두 exit0, fresh web build·승인runtime28 stage·Worker dry-run PASS, chunk500kB 경고 유지. 새 산출물은 `tmp/cf214-qa/web-build`, main `index-Z5iggfNI.js`; 기존 E213 산출물·승인 WASM·새 engine 후보 불변.
-- 이 절 작성 시 제품 커밋·푸시·development 배포는 아직 하지 않았다. 단신 Chrome extension d9cb0cc6-3a2f-4c07-862e-d6441bda9044/provider3의 기존 tab839126195에서 유종욱 PM/ADMIN·CC7 v8/09:20:52·합성 본문/사진/XLSX/관리자검수 카드 읽기 확인. 클릭·reload·저장·재첨부0. 아래 CF213의 CC7 재열기 대기 문구는 CF214 인수 기록에서 이미 완료로 정정됐다.
-- 다음: 검증 소스의 development 반영/동일 자산 확인, native 미적용 binary 계정·사건별 영속복구, 격리 새 Studio 복원·승격검수와 기존 CF214 잔여 순서. 전체 HWP/A–Z·가오픈·독립 한컴/Word는 미완료이며 고객/직원/DB/ENV 변경 금지를 유지한다.
+- 단신 Chrome extension d9cb0cc6-3a2f-4c07-862e-d6441bda9044/provider3 기존 tab839126195: 배포 전 유종욱 PM/ADMIN·CC7 v8 관리자카드 확인, 배포 후 reload1회로 index-Z5iggfNI.js 확인. 본문 text exact/H2 11/사진3/표2·마지막 저장09:20:52 불변/alert0. 12:02:44 이전 작업·위치 복구 후보 안내가 나타났으나 복구/폐기/저장/재첨부/출력은 하지 않았다. 이 후보를 서버 저장 실패라고 단정하지 않는다. 실제 배포의 native 다운로드 버튼·OS 취소는 미검증이며 localhost 실제 SDK 검사와 구분한다. 아래 CF213의 CC7 재열기 대기 문구는 CF214 인수 기록에서 이미 완료로 정정됐다.
+- 다음: native 미적용 binary 계정·사건별 영속복구, 격리 새 Studio 복원·승격검수와 기존 CF214 잔여 순서. 전체 HWP/A–Z·가오픈·독립 한컴/Word는 미완료이며 고객/직원/DB/ENV 변경 금지를 유지한다.
 
 ## 현재 판정 — CF213 분담·복구·간결한 UI development 반영, 전체 HWP/A–Z는 미합격, 2026-10-13
 
