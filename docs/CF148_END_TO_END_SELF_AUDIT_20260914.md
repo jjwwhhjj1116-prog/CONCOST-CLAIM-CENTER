@@ -2,10 +2,12 @@
 
 ## CF215 공통 최상단 고정 해제 — 2026-10-13
 
-- 로컬 제품 commit `6699cff`. 자동 승인 검토가 GitHub push를 "사적 코드·감사 문서 외부 전송의 명시적 사용자 승인 없음"으로 거절했다. remote URL 읽기로 기존 `https://github.com/jjwwhhjj1116-prog/CONCOST-CLAIM-CENTER.git`임을 확인했으나 우회하지 않았다. push/development 배포 미실행, 실제 development는 CF214 유지. 다음은 이 커밋의 기존 브랜치 push 및 검증 산출물 development keep-vars 반영 승인 후 실제 화면 스크롤 확인이다.
+- 사용자 "푸시하고 배포해 승인한다" 명시 승인 후 제품 `6699cff`·문서 `4fa462a`를 기존 origin/feat/CF123-es-v2에 정상 push했다. development Worker `416ddc23-e75b-4fba-9849-1514781fa031`에 검증된 `tmp/cf215-qa/web-build`를 --assets/--keep-vars로 반영. 공개43파일/37,738,163B byte·SHA exact, canonical `6f3152419dc0aaab74a0bf7585e0bf69d01a4aa15623a4c09f3eb2b8970099d0`, health/readiness200. 이전 자동승인거절은 사용자 승인 후 해소됐으며 우회0. DB/schema/키ENV/가오픈 변경0.
+- 실제 단신 Chrome extension d9cb0cc6-3a2f-4c07-862e-d6441bda9044/provider3 기존 tab839126195에서 새 module index-D0rKedIx.js 재열기1회: topbar relative/sidebar0px, CC7 본문text·사진src·마지막저장09:20:52 exact/H2 11/사진3/표2/alert0. 실제1440×1000 DOM 스크롤1944에서 header bottom-1876.01/sidebar top0/bottom999.98/넘침0. 실제390×844 DOM3열 동일y/넘침0, 기본1867×1270 복원 후 목차패널1개/폭1405.5 동일과 접기 확인. 원고저장·복구후보처리·출력·직원변경0. 기존 브라우저복구후보 안내는 보존됐다.
+- Cua 화면캡처는 DOM의 현재 스크롤 위치와 일치하지 않아 시각 PASS 자료로 쓰지 않았다. 모바일 클릭 결과도 viewport 제어 중 명확히 확인하지 못해 단일패널 클릭 검증은 기본크기 및 아래 실제AppShell/분담 로컬검사 범위로 제한한다. 신규 의뢰 tab839126437 실제새module/topbar relative/sidebar0/hero0/빈폼·계정정상/넘침0, 입력·저장0. 임시viewport reset완료. 다음 주요 과제는 이전 인수의 native binary 복구·새 Studio 검증이며 전체A–Z 완료는 아니다.
 - 사용자 "남은 수정사항 적용해"에 따라 공통 topbar를 sticky→relative로 변경. 로고·계정·설정·로그아웃·모바일 메뉴 기능은 유지하며 스크롤과 함께 화면 밖으로 이동한다. 사이드바 top68→0/기본height100vh, 기존 실제위치 기반 높이 보정 유지. 제안서 출력 액션의 고정 헤더 높이측정 effect 제거, top16px/높이제한 동기화로 빈68px 제거. BETA는 기존 relative 유지.
 - 실제 AppShell+production CSS 합성검사 `cf215-shell-header-browser-test.ts` 전문가 및 총괄 독립3/3 skip0: 1440/390에서800px 스크롤 후 header y-800, 계정/설정/로그아웃·모바일메뉴/Escape포커스 정상, 가로넘침0, sidebar top0 및900→760 높이 보존. 실제 ProposalView CF1186/6: 출력레일16px·확정취소/성공/실패·접수흐름 보존. root/web 타입0·빌드·승인runtime28 stage·Worker dry-run0. 이전 1행3열/단일패널은 변경0.
-- 산출물 repo/tmp/cf215-qa/web-build/main index-D0rKedIx.js. 기존 CF214/E213 출력·WASM 승인pin·후보엔진 불변. Impeccable detector는 parser 누락으로 regex 축소검사 및 기존스타일 경고; 완전 디자인 합격으로 보지 않는다. chunk500KB 경고 유지. 실제 development 반영 결과는 후속 기록한다.
+- 산출물 repo/tmp/cf215-qa/web-build/main index-D0rKedIx.js. 기존 CF214/E213 출력·WASM 승인pin·후보엔진 불변. Impeccable detector는 parser 누락으로 regex 축소검사 및 기존스타일 경고; 완전 디자인 합격으로 보지 않는다. chunk500KB 경고 유지. 배포 영수증 development-deploy.log/public-verification.json을 같은 QA폴더에 보존했다.
 
 ## CF214 새 대화 후속 — HWP 다운로드 저장 ACK 분리, 2026-10-13
 
