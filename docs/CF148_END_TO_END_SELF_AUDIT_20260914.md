@@ -2,6 +2,7 @@
 
 ## CF215 공통 최상단 고정 해제 — 2026-10-13
 
+- 로컬 제품 commit `6699cff`. 자동 승인 검토가 GitHub push를 "사적 코드·감사 문서 외부 전송의 명시적 사용자 승인 없음"으로 거절했다. remote URL 읽기로 기존 `https://github.com/jjwwhhjj1116-prog/CONCOST-CLAIM-CENTER.git`임을 확인했으나 우회하지 않았다. push/development 배포 미실행, 실제 development는 CF214 유지. 다음은 이 커밋의 기존 브랜치 push 및 검증 산출물 development keep-vars 반영 승인 후 실제 화면 스크롤 확인이다.
 - 사용자 "남은 수정사항 적용해"에 따라 공통 topbar를 sticky→relative로 변경. 로고·계정·설정·로그아웃·모바일 메뉴 기능은 유지하며 스크롤과 함께 화면 밖으로 이동한다. 사이드바 top68→0/기본height100vh, 기존 실제위치 기반 높이 보정 유지. 제안서 출력 액션의 고정 헤더 높이측정 effect 제거, top16px/높이제한 동기화로 빈68px 제거. BETA는 기존 relative 유지.
 - 실제 AppShell+production CSS 합성검사 `cf215-shell-header-browser-test.ts` 전문가 및 총괄 독립3/3 skip0: 1440/390에서800px 스크롤 후 header y-800, 계정/설정/로그아웃·모바일메뉴/Escape포커스 정상, 가로넘침0, sidebar top0 및900→760 높이 보존. 실제 ProposalView CF1186/6: 출력레일16px·확정취소/성공/실패·접수흐름 보존. root/web 타입0·빌드·승인runtime28 stage·Worker dry-run0. 이전 1행3열/단일패널은 변경0.
 - 산출물 repo/tmp/cf215-qa/web-build/main index-D0rKedIx.js. 기존 CF214/E213 출력·WASM 승인pin·후보엔진 불변. Impeccable detector는 parser 누락으로 regex 축소검사 및 기존스타일 경고; 완전 디자인 합격으로 보지 않는다. chunk500KB 경고 유지. 실제 development 반영 결과는 후속 기록한다.
