@@ -134,6 +134,7 @@ const prepareExportPages = async (root: HTMLElement): Promise<HTMLElement[]> => 
 
 const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrientation, onProgress?: (message: string) => void): Promise<CapturedPage[]> => {
   const layout = pageLayout(orientation);
+  const report = root.matches('[data-export-document-kind="REPORT"]') || Boolean(root.querySelector('[data-export-document-kind="REPORT"]'));
   const elements = await prepareExportPages(root);
   const result: CapturedPage[] = [];
   for (let index = 0; index < elements.length; index += 1) {
@@ -218,6 +219,13 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
         clonedPage.style.minHeight = `${layout.heightPx}px`;
         if (isFittedSheet) clonedPage.style.overflow = 'hidden';
         clonedPage.style.margin = '0';
+        // Absolute UI offsets cause floating-point differences in dotted Canvas
+        // paths, then JPEG amplifies them. Keep the report clone at one origin.
+        if (report) {
+          clonedPage.style.position = 'fixed';
+          clonedPage.style.left = '0';
+          clonedPage.style.top = '0';
+        }
         clonedPage.style.boxSizing = 'border-box';
         clonedPage.querySelectorAll<HTMLElement>('.proposal-cover-heading > div').forEach((band,bandIndex) => {
           const gradient=gradientBands[bandIndex];if(!gradient)return;

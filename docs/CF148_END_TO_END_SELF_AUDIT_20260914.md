@@ -1,5 +1,16 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF220 PDF 원점·Word 실제 쪽나눔 수정 — 배포 준비, 2026-10-14
+
+- 시작 feat/CF123-es-v2 HEAD/origin1c91c74; 기존 사용자삭제22/package통계M(실diff0)/apps-web-tmp 보존. 승인 범위는 development push/배포이며 운영·D1변경·환경키·엔진승격0이다.
+- **CF219 검사 정정:** actual-pdf-continuity embeddedImages5쪽 exact는 각page의 Do 대신 공유resources 첫I0을반복읽은오류다. CF217실제→CF219실제 목차I1 JPEG92054→92048B, 직접decode1621픽셀/max6; 다른4이미지/contentstream/MediaBox exact. 기존Poppler1757px/max4 FAIL·글자/쪽숫자exact는유효. 기존JSON/역사는보존하고본정정이우선한다.
+- **PDF 실제원인/최소수정:** 보호된합성CC7 v8/원본fixture사진/실제React/exporter/고정runtime에서 surroundingleft/top변경만으로 JPEG직전목차23px/max1 재현, 다른4쪽0. dottedCanvas 절대좌표차이를JPEG가증폭. REPORT복제페이지만fixed/left0/top0; 원DOM상속/크기/JPEG.91/제안서/HWP불변. product-final 실제5쪽 두native2/3zoom에서 fullRGBA/preJPEG/Do이미지/배치 전부0, 허용치·크롭·resize0.
+- **Word 실제결함:** 인증없이Word2010 14.0.7268.5000로열람가능. 원본7쪽→빈문단1twip후보초기5표시는미계산값이며전체재계산6쪽; word-fixed-repaginated-6pages.jpg에보존. 빈HTML P는height0이지만Word P는앞뒤margin collapse를끊어본문여백누적, 사진제목+cantSplit행이넘어감. 진단사본의비표시bodyP제외로첫사진행4쪽·전체5쪽복원.
+- **DOCX 최종최소수정:** 표밖의 P에서 height0+emittedruns0+명시nonzero인라인여백없을때만생략. BR/이미지/목록/실제빈줄/물리·논리작성자간격/requiredcell·terminalP유지. 문자·표·사진크기·keepNext/cantSplit축소0. 제품source출력docx-product-final239976B SHA bed14c751e5ca383199b309d38c7765c5f2455ceb987102f67764fc79e4f01bf; Word제한된보기 전체5쪽/308단어/첫사진표4쪽/마지막사진·수치표5쪽, repair0. word-product-final-five-pages.jpg 재관찰안정5. OOXML74→63P(비표시11생략), textorder/mediaexact, 표3/셀13/이미지3/sect5 보존.
+- **검수기보완:** cf220-pdf-page-integrity는각Do가참조하는직접RGBJPEG1개를선택, MediaBox/CropBox/Rotate/contentstream/encodedimage/fullRGBA비교; 예상외Decode/DecodeParms/Mask/SMask/Interpolate·색공간/크기거부. 실제PDF두파일5쪽PASS; 누락·순서·배치·2번째실제이미지변조·Decode반전5음성모두거부.
+- **최종회귀:** complete-product-regression-env8/8 PASS skip0, 공유제안서7/7 PASS, 실제출력메뉴1/1 PASS(3형식/GET-only/권한/원고저장guard). DOCX전처리두분기제거음성FAIL, PDF원점패치제거음성FAIL. env누락으로처음complete-product-regression실패는보존, 번들경로명시재실행과구분. root/web최종타입0, fresh web-build-release/index-2kjF2yQu.js, runtime28 SHA bcc40a79…/bindingad01e939…동일, dryrun/keep-vars PASS. 앞선web-build-complete는폐기삭제없이보존하고배포에쓰지않는다.
+- **실제배포후잔여:** 현재실제Chrome tab839127188는로그인유지하나extensionbrowser3→5변경후Debugger unattached로제어연결만실패. 사용자재연결요청, 원고D1readonly보호스냅샷 cc7-before-deploy.json보존. 정상commit/push→정확한release폴더배포→공개전체SHA/health/readiness→실제Chrome새3파일/PDF다른UI좌표전쪽exact/실제다운로드DOCXWord5쪽/원고7필드·4카운터exact로검수해야최종완료다. 독립한컴desktop/Word편집저장왕복/PC간/전체HWP32/A–Z·가오픈은미검증이다.
+
 ## CF219 임시 복구 팝업·7일 보관·작성본 내보내기 — 2026-10-14
 
 - **구현:** development 보고서의 이전 작업 목록을 기존 도구 행의 버튼으로 접고 명시 클릭 시 공통 팝업을 연다. 제안서·HWP 작업본 복구도 같은 팝업을 사용한다. 보관/만료 시각·추정 크기·선택 복구/파일 보관/삭제 확인, 1440/390px 내부 스크롤·Tab 순환/Escape/호출 버튼 복귀를 검증했다. 크기는 payload/File의 추정값이며 IndexedDB 실제 디스크 점유량은 아니다.

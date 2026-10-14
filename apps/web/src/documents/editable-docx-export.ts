@@ -110,10 +110,23 @@ async function runs(nodes: readonly Node[], inherited: Element): Promise<Run[]> 
   return result;
 }
 
+function collapsedParagraph(element: Element): boolean {
+  const css = style(element);
+  const authoredSpacing = element instanceof HTMLElement &&
+    Boolean(element.style.marginTop || element.style.marginBottom || element.style.marginBlockStart || element.style.marginBlockEnd) &&
+    (px(css.marginTop) !== 0 || px(css.marginBottom) !== 0);
+  return !authoredSpacing && element.getBoundingClientRect().height === 0;
+}
+
 async function paragraph(nodes: readonly Node[], element: Element, marker = '', spacing?: {before:number;after:number}): Promise<Paragraph> {
   const css = style(element);
   const children = await runs(nodes, element);
   const containsImage = children.some(child => child instanceof ImageRun) || nodes.some(node => node instanceof Element && !ignored(node) && [...node.querySelectorAll('img')].some(image => !ignored(image)));
+  // Empty HTML paragraphs can collapse to zero height. Word otherwise gives
+  // them a full line and can push the reviewed body or photo row onto a new page.
+  if (!spacing && !marker && !children.length && collapsedParagraph(element)) {
+    return new Paragraph({ children: [], spacing: { before: 0, after: 0, line: 1, lineRule: LineRuleType.EXACT } });
+  }
   if (marker) children.unshift(new TextRun(marker));
   const heading = /^H[1-6]$/u.test(element.tagName);
   // Direct cell text already gets this padding from tcMar. A nested authored
@@ -209,6 +222,10 @@ async function blocks(parent: Element): Promise<Block[]> {
     if (node instanceof HTMLImageElement && css.display === 'block') { await flush(); result.push(await paragraph([node], node)); continue; }
     if (['inline', 'inline-block', 'inline-flex'].includes(css.display) || node.tagName === 'BR' || node instanceof HTMLImageElement) { inline.push(node); continue; }
     await flush();
+    // A zero-height HTML paragraph does not separate collapsed block margins.
+    // Even a 1-twip Word paragraph does; omit only invisible body paragraphs.
+    // Cells still need a paragraph, and authored blank lines/spacing stay intact.
+    if (node.tagName === 'P' && !node.closest('td,th') && collapsedParagraph(node) && !(await runs([...node.childNodes], node)).length) continue;
     if (/^(P|H[1-6]|PRE|FIGCAPTION)$/u.test(node.tagName)) result.push(await paragraph([...node.childNodes], node));
     else if (node.tagName === 'LI') {
       const own = [...node.childNodes].filter(child => !(child instanceof Element && ['OL','UL'].includes(child.tagName)));
