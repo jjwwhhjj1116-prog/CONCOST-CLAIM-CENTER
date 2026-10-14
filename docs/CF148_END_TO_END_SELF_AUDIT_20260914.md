@@ -1,5 +1,16 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF218 미적용 HWP 작업본 복구 구현·검수 — 2026-10-14
+
+- **구현 범위:** development Preview 보고서의 원형 HWP 팝업에 기존 IndexedDB v1을 사용하는 작업본 보관을 연결했다. 계정·사건·원본 SHA256·편집 세션 UUID를 구분하고 원본 File과 편집본 File·각 해시·서버 버전·보관시각을 함께 저장한다. 10초 주기와 명시적 보관을 제공하며, 보고서 화면의 후보 원본명/버전/시각을 확인해 명시적으로 다시 연다. 다운로드·복구·팝업 전체 적용을 서버 저장 ACK로 처리하거나 복구본을 삭제하지 않는다. 적용 시 보관한 원본 파일을 그대로 넘긴다. 마지막 주기 이후 아직 완료되지 않은 입력은 복구되지 않을 수 있다.
+- **보호 경계:** HWP5 FileHeader의 보호 속성이 없는 flags 0/1만 허용한다. 기존 XLSX.CFB와 승인 SDK 공개 exportHwp를 사용하며 새 의존성·DB migration·엔진 변경은 없다. HWPX/HWP3·암호/배포/DRM·알 수 없는 속성은 보관 불가 안내와 기존 수동 다운로드 경로를 유지한다. 전체 비보호 HWP 변형이나 실제 암호 문서의 안전성을 이번 헤더 검사만으로 주장하지 않는다. 원본/편집본의 서명과 SHA, 후보의 계정·사건·원본 해시를 검증한다.
+- **확인한 결함과 수정:** 같은 탭에서 원본을 다시 열면 미적용 편집본이 덮이는 세션 문제를 before-session-guard-corrected 음성 검사로 재현하고 UUID로 분리했다. 계정·사건이 바뀌면 이전 파일을 새 범위로 보관하기 전에 닫으며 늦은 결과를 무효화한다. 보관 중 SDK 가져오기/다운로드/전체 적용/목차 검사와 동시 실행을 막았다. 모바일 편집 영역 93px을 220px 이상으로 확보하고 도구를 2열로 정리했다. 팝업 진입은 실제 SDK iframe을 포함한 내부 포커스, 닫기는 원본/복구 버튼 복귀를 검사한다. 키보드 전체 순환·Escape는 별도 잔여다.
+- **실제 SDK 검수:** 최종 `tmp/cf218-qa/native-recovery-complete.tap` 10/10·skip0. 실제 캔버스 입력→IndexedDB commit→격리 Chrome renderer crash→브라우저 종료/동일 profile 재시작→명시적 복구→실제 HWP/PDF 다운로드를 실행했다. 계정/사건 분리·같은 원본 재열기·다운로드 취소·quota 실패시 이전 복구본 보존/재시도·느린 export 중 늦은 입력·scope 변경 닫기·390px 실제 입력/포커스도 포함한다. 최종 증거는 `native-recovery-HUKKI1`이며 원격 쓰기/페이지 오류 0이다. 실제 사용자 Chrome을 강제 종료하거나 고객 문서를 변경하지 않았다.
+- **실제 파일:** 합성 원본 HWP 12800B/SHA ca4a6d5929b5c3fe6503c880a09866af5a8be23e9baeadf516de42bcd066c11b. 복구 HWP 12800B/SHA 8c68dba526e37afdb4de007f6592ab5bfae19b6cc47436ac2d4146a2f962eeb3는 checkpoint 전체 바이트와 exact다. 독립 SDK 재열기/XML 검사에서 첫 문단 CF218-RECOVERED 추가만 확인했다. 표 9셀·빈 행·0/123.45/246.9·표 XML·PNG 80B/4×2/RGBA·A4 용지·1쪽 보존. PDF 실제 재열기와 120dpi 993×1404 전체 RGBA 비교 변경 픽셀 0. 모바일 MOBILE 추가 입력은 별도의 SDK export 재파싱이며 납품한 복구 파일에는 포함하지 않았다. 독립 `native-output-independent-1rUTMG.json` 대상과 최종 파일의 SHA 동등성도 대조한다.
+- **회귀/음성/빌드:** 기존 CF213/214/190/58 15/15, CF182 저장본·미저장/race 차단 5/5, CF217 PDF 위치/패키지 변조 차단 2/2 통과. 헤더 보호 플래그 5종·HWPX 2종·위조 서명·원본/편집 SHA·다른 계정/사건 총 12 음성 모두 reject, 정상 헤더 재포장 대조 PASS. 이는 실제 보호 고객 문서가 아닌 검수 파일의 헤더 fault fixture다. root/web 타입·diff check·fresh Vite·승인 rhwp28 stage·Worker dry-run PASS. 첫 빌드 CLI 경로 오류/기본 sandbox localhost 차단/테스트의 SDK iframe focus를 section focus로 오인한 실패 로그와 중간 모바일 PNG를 보존했다. 제품 동작 검사 기준 완화는 없다.
+- **정확한 배포 후보:** `tmp/cf218-qa/web-build-complete`를 사용한다. 중간 web-build-verified/web-build-final은 최종 배포 대상이 아니다. 승인 WASM bcc40a79…/binding ad01e939…/runtime28/caret pin 불변, 사용자 삭제22개·apps/web/tmp·package/lock·고객 원고·키/ENV·DB schema·가오픈 변경 0. 기존 승인 범위로 정상 push/development 배포 및 공개 SHA/인증 화면 검수를 이어간다.
+- **잔여:** Proposal/production ReportStudio의 native 복구 연결, HWPX/HWP3 자동복구, 실제 휴대폰 터치/가상키보드, 독립 PC 한컴/Word, 모든 원형32/A–Z는 이번 검수 범위 밖이다. 실제 개발 CC7는 원고를 보존하는 조회/모듈/기존 UI 검수만 수행하며 파일 가져오기에 따른 Drive 업로드나 업무 적용을 실행하지 않는다. CF217의 local↔live 목차 점선 strict FAIL은 유지한다. 추가 GPU/소수 원점/JPEG 증폭 실험은 원인을 일부 좁혔으나 실제 Chrome 차이의 정확한 기전은 PARTIAL/UNKNOWN이며 허용치를 확대하거나 원고·글꼴을 임의 변경하지 않았다.
+
 ## CF217 PDF 글자 위치 원인 수정·실제 저장 원고 출력 — 2026-10-13
 
 - **배포 전 확인:** 실제 development CC7 v8에서 DOCX/PDF/HWP를 각 한 번 내려받은 보호본 `tmp/cf217-qa/actual-output`을 CF212와 대조했다. DOCX 본문 50문단·표 3개·9셀·스타일·사진 3장 및 HWP 전체 바이트는 보존되지만 PDF 5쪽의 글자 위치가 1~2px 달라 strict FAIL이었다. 최초 파일·비교 결과·실패 PNG를 보존했다.

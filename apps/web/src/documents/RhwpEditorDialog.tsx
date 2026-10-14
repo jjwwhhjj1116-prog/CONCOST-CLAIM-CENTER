@@ -3,6 +3,8 @@ import type { EditorOptions, RhwpEditor } from '@rhwp/editor';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
 import { captureReportNativeSource, assertReportNativePagesMatch,assertReportNativeImportContainer } from './report-native-source';
 import { inspectNativeTocNumbers, parseNativeTocPages, refreshConfirmedNativeTocNumbers, type NativeTocExcludedReason } from './report-native-toc';
+import { createLocalDocumentRecovery, listLocalDocumentRecoveryByPrefix, type RecoveryMetadata } from './local-document-recovery';
+import { assertNativeRecoverySource, nativeRecoveryPayload, readNativeRecovery, type NativeRecoveryPayload, type NativeRecoveryScope } from './native-document-recovery';
 
 export interface RhwpEditorDialogProps {
   isOpen: boolean;
@@ -16,6 +18,8 @@ export interface RhwpEditorDialogProps {
   applyDisabled?: boolean;
   applyLabel?: string;
   applyProgress?: string;
+  recoveryScope?: NativeRecoveryScope;
+  onOpenRecovery?: (file: File) => void;
 }
 
 type ExportFormat = 'hwp' | 'hwpx';
@@ -59,8 +63,11 @@ function NativeTocProofImage({svg,label,onState}:{svg:string;label:string;onStat
   return <figure><figcaption>{label}</figcaption>{current?.failed?<p role="alert">쪽 이미지를 표시하지 못했습니다. 취소하고 원형에서 직접 확인한 뒤 다시 검사하세요.</p>:current?<img key={current.url} src={current.url} alt={`${label} · 숫자 갱신 전 원형`} onLoad={event=>{if(activeUrl.current===current.url&&event.currentTarget.complete&&event.currentTarget.naturalWidth>0&&event.currentTarget.naturalHeight>0)onState('ready');}} onError={()=>{if(activeUrl.current!==current.url)return;setImage(previous=>previous?.url===current.url?{...previous,failed:true}:previous);onState('failed');}}/>:<p role="status">확인할 쪽을 준비하고 있습니다…</p>}</figure>;
 }
 
-export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, preserveAppliedSource = false, applyDisabled = false, applyLabel = '현재 HWP 내용을 선택 챕터에 적용', applyProgress }: RhwpEditorDialogProps): React.ReactElement | null {
+export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLabel, onClose, onApplyContent, onApplyPages, preserveAppliedSource = false, applyDisabled = false, applyLabel = '현재 HWP 내용을 선택 챕터에 적용', applyProgress, recoveryScope, onOpenRecovery }: RhwpEditorDialogProps): React.ReactElement | null {
   const editorHostRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const recoveryOpenerRef = useRef('');
   const editorRef = useRef<RhwpEditor | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const originalFileRef = useRef<File | null>(null);
@@ -77,6 +84,19 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const [editorReady,setEditorReady]=useState(false);
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  const scopeKey = recoveryScope ? JSON.stringify([recoveryScope.accountId, recoveryScope.workspaceId]) : '';
+  const recoveryScopeRef = useRef(recoveryScope); recoveryScopeRef.current = recoveryScope;
+  const recoveryScopeKeyRef = useRef(scopeKey); recoveryScopeKeyRef.current = scopeKey;
+  const [nativeCandidates, setNativeCandidates] = useState<RecoveryMetadata[]>([]);
+  const [nativeRecoveryStatus, setNativeRecoveryStatus] = useState('');
+  const [nativeRecoveryError, setNativeRecoveryError] = useState('');
+  const [nativeRecoveryBusy, setNativeRecoveryBusy] = useState(false);
+  const checkpointBusyRef = useRef(false);
+  const nativeSessionRef = useRef('');
+  const openedScopeRef = useRef<string | null>(null);
+  const checkpointRef = useRef<() => Promise<void>>(async () => {});
+  const lastCheckpointRef = useRef<{ hash: string; metadata: RecoveryMetadata } | null>(null);
+  const restoredNativeRef = useRef<{ scopeKey: string; payload: NativeRecoveryPayload } | null>(null);
   const [tocRange,setTocRange]=useState('');
   const [tocInspection,setTocInspection]=useState<Awaited<ReturnType<typeof inspectNativeTocNumbers>>|null>(null);
   const [tocPreview,setTocPreview]=useState<(Awaited<ReturnType<typeof inspectNativeTocNumbers>> & {bytes:Uint8Array;format:ExportFormat;name:string;editor:RhwpEditor;generation:number;original:File|null;source:File|null|undefined;proofPages:Record<number,string>})|null>(null);
@@ -90,12 +110,19 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const studioUrl = (globalThis as typeof globalThis & { __CLAIM_CENTER_RHWP_STUDIO_URL__?: string }).__CLAIM_CENTER_RHWP_STUDIO_URL__?.trim();
 
   useEffect(() => {
-    if (!isOpen || !editorHostRef.current) return undefined;
+    if (!isOpen || !editorHostRef.current) { openedScopeRef.current = null; setEditorReady(false); setHasImportedTemplate(false); setBusy(false); setNativeRecoveryStatus(''); return undefined; }
+    if (openedScopeRef.current !== null && openedScopeRef.current !== scopeKey) {
+      setNativeRecoveryError('계정 또는 사건이 바뀌어 HWP 편집기를 닫았습니다. 해당 사건에서 다시 열어 주세요. 기존 복구본은 유지됩니다.');
+      onClose(); return undefined;
+    }
+    openedScopeRef.current = scopeKey;
+    nativeSessionRef.current = crypto.randomUUID();
     let active = true;
     generationRef.current++;
     operationRef.current=true;
     let instance: RhwpEditor | null = null;
     setError('');
+    setNativeRecoveryStatus(''); setNativeRecoveryError('');
     setStatus('rhwp 오픈소스 편집기를 연결하고 있습니다…');
     setPageCount(null);
     setHasImportedTemplate(false);
@@ -127,7 +154,8 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
           const result = await editor.loadFile(bytes, sourceFile.name, { suppressDialogs: true });
           if (!active) return;
           setPageCount(result.pageCount);
-          originalFileRef.current = sourceFile;
+          const restored = restoredNativeRef.current;
+          originalFileRef.current = restored?.scopeKey === scopeKey && restored.payload.edited === sourceFile ? restored.payload.original : sourceFile;
           setActiveFileName(sourceFile.name);
           setHasImportedTemplate(true);
           setStatus(preserveAppliedSource && onApplyPages ? `${result.pageCount}페이지를 열었습니다. 수정 후 전체 페이지를 적용하고 보고서 저장 상태를 확인하세요. 다운로드만으로 보고서가 갱신되지는 않습니다.` : `${result.pageCount}페이지를 열었습니다. 편집 후 HWP 또는 HWPX로 내보내세요.`);
@@ -147,16 +175,85 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       if (editorRef.current === instance) editorRef.current = null;
       instance?.destroy();
     };
-  }, [isOpen, sourceFile, studioUrl, suggestedName]);
+  }, [isOpen, sourceFile, studioUrl, suggestedName, scopeKey]);
 
   useEffect(() => {
     if (!isOpen) setConfirmClose(false);
+    if (isOpen) {
+      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) openerRef.current = document.activeElement;
+      const focus = window.requestAnimationFrame(() => dialogRef.current?.focus());
+      return () => window.cancelAnimationFrame(focus);
+    }
+    const focus = window.requestAnimationFrame(() => {
+      const candidate = recoveryOpenerRef.current ? document.querySelector<HTMLElement>(`[data-native-recovery-id="${CSS.escape(recoveryOpenerRef.current)}"]`) : null;
+      if (candidate) candidate.focus(); else if (openerRef.current?.isConnected) openerRef.current.focus();
+    });
+    return () => window.cancelAnimationFrame(focus);
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    let active = true;
+    lastCheckpointRef.current = null; setNativeCandidates([]); setNativeRecoveryStatus(''); setNativeRecoveryError(openedScopeRef.current !== null && openedScopeRef.current !== scopeKey ? '계정 또는 사건이 바뀌어 HWP 편집기를 닫았습니다. 해당 사건에서 다시 열어 주세요. 기존 복구본은 유지됩니다.' : ''); setNativeRecoveryBusy(false);
+    if (recoveryScope) void listLocalDocumentRecoveryByPrefix(recoveryScope.accountId, recoveryScope.workspaceId + ':')
+      .then(items => { if (active) setNativeCandidates(items); })
+      .catch(reason => { if (active) setNativeRecoveryError(reason instanceof Error ? reason.message : 'HWP 복구본을 읽지 못했습니다.'); });
+    return () => { active = false; };
+  }, [scopeKey]);
+
+  useEffect(() => {
+    if (!isOpen || !editorReady || !hasImportedTemplate || !recoveryScope) return;
+    void checkpointRef.current();
+    // Public SDK has no change subscription. Keep one export in flight; unchanged bytes do not write.
+    const timer = window.setInterval(() => void checkpointRef.current(), 10_000);
+    return () => window.clearInterval(timer);
+  }, [isOpen, editorReady, hasImportedTemplate, scopeKey, studioUrl]);
+
+  checkpointRef.current = async () => {
+    const editor = editorRef.current, original = originalFileRef.current, scope = recoveryScopeRef.current;
+    if (!isOpen || !editor || !original || !scope || operationRef.current || checkpointBusyRef.current || tocPreviewRef.current) return;
+    const generation = generationRef.current, key = scopeKey, session = nativeSessionRef.current;
+    const active = () => latestRef.current.isOpen && generationRef.current === generation && editorRef.current === editor && originalFileRef.current === original && recoveryScopeKeyRef.current === key && nativeSessionRef.current === session && !operationRef.current;
+    checkpointBusyRef.current = true; setNativeRecoveryBusy(true);
+    try {
+      const runtime = new URL(editor.element.src);
+      if (runtime.origin !== location.origin || runtime.pathname !== '/rhwp/' || runtime.searchParams.get('chrome') !== 'embed') throw new Error('승인된 사내 HWP 편집기에서만 작업본을 자동 보관합니다. 파일로 직접 보관해 주세요.');
+      await assertNativeRecoverySource(await original.arrayBuffer(), original.name); if (!active()) return;
+      await loadNativeHwpEngine(); if (!active()) return;
+      const bytes = await editor.exportHwp(); if (!active()) return;
+      const payload = await nativeRecoveryPayload(original, bytes, safeBaseName(activeFileName) + '.hwp', scope.version); if (!active()) return;
+      const client = createLocalDocumentRecovery<NativeRecoveryPayload>({ accountId: scope.accountId, workspaceId: scope.workspaceId + ':' + payload.originalSha256, tabId: session });
+      if (lastCheckpointRef.current?.hash === payload.editedSha256 && lastCheckpointRef.current.metadata.workspaceId === scope.workspaceId + ':' + payload.originalSha256 && lastCheckpointRef.current.metadata.tabId === session) return;
+      const written = await client.write(payload, { documentName: original.name, documentVersion: scope.version }); if (!active()) return;
+      const { payload: _payload, ...metadata } = written;
+      lastCheckpointRef.current = { hash: payload.editedSha256, metadata };
+      setNativeCandidates(items => [metadata, ...items.filter(item => item.workspaceId !== metadata.workspaceId || item.tabId !== metadata.tabId)]);
+      setNativeRecoveryError('');
+      setNativeRecoveryStatus(`HWP 작업본 보관 ${new Date(metadata.writtenAt).toLocaleTimeString('ko-KR')} · 보고서 저장 완료와는 별도입니다.`);
+    } catch (reason) {
+      if (active()) setNativeRecoveryError(reason instanceof Error ? reason.message : 'HWP 작업본을 보관하지 못했습니다. 이전 복구본은 유지됩니다.');
+    } finally {
+      checkpointBusyRef.current = false;
+      if (recoveryScopeKeyRef.current === key) setNativeRecoveryBusy(false);
+    }
+  };
+
+  const openNativeRecovery = async (candidate: RecoveryMetadata) => {
+    const scope = recoveryScopeRef.current, key = scopeKey;
+    if (!scope || !onOpenRecovery || busy || nativeRecoveryBusy || (isOpen && hasImportedTemplate)) return;
+    setNativeRecoveryBusy(true); setNativeRecoveryError('');
+    try {
+      const payload = await readNativeRecovery(scope, candidate);
+      if (recoveryScopeKeyRef.current !== key || latestRef.current.isOpen !== isOpen) return;
+      restoredNativeRef.current = { scopeKey: key, payload };
+      recoveryOpenerRef.current = candidate.snapshotId;
+      onOpenRecovery(payload.edited);
+      setNativeRecoveryStatus(`HWP 작업본 v${payload.serverVersion}을 열었습니다. 현재 원고 v${recoveryScopeRef.current?.version}에 자동으로 적용하지 않습니다.`);
+    } catch (reason) { if (recoveryScopeKeyRef.current === key) setNativeRecoveryError(reason instanceof Error ? reason.message : 'HWP 복구본을 열지 못했습니다.'); }
+    finally { if (recoveryScopeKeyRef.current === key) setNativeRecoveryBusy(false); }
+  };
 
   const beginOperation=()=>{
-    const editor=editorRef.current;if(!editor||operationRef.current||!latestRef.current.isOpen)return null;
+    const editor=editorRef.current;if(!editor||operationRef.current||checkpointBusyRef.current||!latestRef.current.isOpen)return null;
     operationRef.current=true;setBusy(true);setError('');
     return {editor,generation:generationRef.current,source:sourceFile,original:originalFileRef.current};
   };
@@ -187,6 +284,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       const result = await operation.editor.loadFile(bytes, file.name, { suppressDialogs: true });requireCurrent(operation);
       setPageCount(result.pageCount);
       originalFileRef.current = file;
+      nativeSessionRef.current = crypto.randomUUID();
       setActiveFileName(file.name);
       setHasImportedTemplate(true);
       setStatus(`${result.pageCount}페이지를 열었습니다. 원본과 표·이미지 위치를 확인해 주세요.`);
@@ -313,20 +411,31 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   };
   const selectedProofReady=Boolean(tocPreview&&tocSelected.length&&tocSelected.every(index=>[tocPreview.candidates[index].tocPhysicalPage,tocPreview.candidates[index].anchor.physicalPage].every(page=>tocProofLoaded[page])));
 
+  const candidates = isOpen && hasImportedTemplate ? [] : nativeCandidates.filter(item => !isOpen || item.snapshotId !== lastCheckpointRef.current?.metadata.snapshotId);
+  const recoveryPanel = recoveryScope && (isOpen || candidates.length > 0 || nativeRecoveryError) ? <section className="rhwp-native-recovery" aria-label="HWP 작업본 복구">
+    {isOpen && <p role="status">{nativeRecoveryBusy ? 'HWP 작업본을 확인·보관 중입니다…' : nativeRecoveryStatus || 'HWP 작업본은 10초 간격으로 이 브라우저에 보관합니다. 마지막 보관 이후의 입력은 복구되지 않을 수 있습니다.'}</p>}
+    {nativeRecoveryError && <p role="alert">{nativeRecoveryError}</p>}
+    {candidates.length > 0 && <><strong>이 계정·보고서에 보관한 HWP 작업본이 있습니다.</strong><p>복구본을 열어도 현재 보고서 원고에는 자동으로 적용하지 않습니다. {isOpen && hasImportedTemplate ? '복구본을 열려면 현재 HWP 편집기를 먼저 닫아 주세요.' : '원본을 함께 보존하며, 보고서 저장 완료와는 별도입니다.'}</p>
+      {candidates.map(candidate => <div key={candidate.snapshotId}><span>{candidate.documentName ?? `원본 ${candidate.workspaceId.slice(-64, -56)}`} · v{candidate.documentVersion ?? '?'} · {new Date(candidate.writtenAt).toLocaleString('ko-KR')}</span><button type="button" data-native-recovery-id={candidate.snapshotId} disabled={busy || nativeRecoveryBusy || !onOpenRecovery || (isOpen && hasImportedTemplate)} onClick={() => void openNativeRecovery(candidate)}>HWP 복구본 열기</button></div>)}
+    </>}
+  </section> : null;
+  if (!isOpen) return recoveryPanel;
   return <div className="rhwp-dialog-backdrop" role="presentation">
-    <section className="rhwp-dialog" role="dialog" aria-modal="true" aria-labelledby="rhwp-dialog-title">
+    <section ref={dialogRef} tabIndex={-1} className="rhwp-dialog" role="dialog" aria-modal="true" aria-labelledby="rhwp-dialog-title">
       <header className="rhwp-dialog__header">
         <div><span>HWP / HWPX OPEN-SOURCE EDITOR</span><h2 id="rhwp-dialog-title">{documentLabel} · 한글 문서 편집</h2><p>{activeFileName}{pageCount !== null ? ` · ${pageCount}페이지` : ''}</p></div>
         <button type="button" disabled={busy} aria-label="HWP 편집기 닫기" onClick={() => {if(!operationRef.current)setConfirmClose(true);}}>×</button>
       </header>
       <nav className="rhwp-dialog__toolbar" aria-label="HWP 문서 도구">
         <input ref={importInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event) => void loadFile(event.target.files?.[0])} />
-        <button type="button" className="rhwp-action-import" disabled={busy || !editorReady || Boolean(tocPreview)} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
-        <button type="button" className="rhwp-action-hwp" disabled={busy || Boolean(tocPreview) || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 다운로드만</button>
-        <button type="button" className="rhwp-action-hwpx" disabled={busy || Boolean(tocPreview) || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 다운로드만</button>
-        {(onApplyContent||onApplyPages) && <button type="button" className="rhwp-action-apply" disabled={busy || Boolean(tocPreview) || applyDisabled || !hasImportedTemplate} title={applyDisabled ? '원본 연결 또는 다른 저장이 끝난 뒤 적용할 수 있습니다.' : !hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
+        <button type="button" className="rhwp-action-import" disabled={busy || nativeRecoveryBusy || !editorReady || Boolean(tocPreview)} onClick={() => importInputRef.current?.click()}>HWP/HWPX 가져오기</button>
+        <button type="button" className="rhwp-action-hwp" disabled={busy || nativeRecoveryBusy || Boolean(tocPreview) || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwp')}>HWP 다운로드만</button>
+        <button type="button" className="rhwp-action-hwpx" disabled={busy || nativeRecoveryBusy || Boolean(tocPreview) || !hasImportedTemplate} title={!hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void exportDocument('hwpx')}>HWPX 다운로드만</button>
+        {recoveryScope && <button type="button" className="rhwp-action-checkpoint" aria-label="HWP 작업본 지금 보관" disabled={busy || nativeRecoveryBusy || Boolean(tocPreview) || !hasImportedTemplate} onClick={() => void checkpointRef.current()}>작업본 보관</button>}
+        {(onApplyContent||onApplyPages) && <button type="button" className="rhwp-action-apply" disabled={busy || nativeRecoveryBusy || Boolean(tocPreview) || applyDisabled || !hasImportedTemplate} title={applyDisabled ? '원본 연결 또는 다른 저장이 끝난 뒤 적용할 수 있습니다.' : !hasImportedTemplate ? 'HWP/HWPX 원본을 먼저 가져오세요.' : undefined} onClick={() => void applyCurrentDocument()}>{applyLabel}</button>}
         <div className="rhwp-dialog__status" role="status">{busy && <i aria-hidden="true" />}{busy && applyProgress ? applyProgress : status}</div>
       </nav>
+      {recoveryPanel}
       <aside className={`rhwp-dialog__format-note${hasImportedTemplate ? ' is-preserved' : ''}`}>
         <strong>{hasImportedTemplate ? '원본 HWP 서식 유지 여부 확인' : '회사 기본서식 적용 방법'}</strong>
         <span>{hasImportedTemplate ? `원본의 글꼴·여백·표·사진·쪽번호를 대조해 주세요. 웹 렌더러가 지원하지 않는 서식은 차이가 날 수 있습니다.${onApplyPages?' 작업본 적용은 페이지 이미지 방식입니다. 문장·표는 이 HWP 편집기에서 수정하고 전체 페이지 적용을 눌러 보고서에 반영하세요. 다운로드 버튼은 파일만 내려받으며 보고서는 바꾸지 않습니다.':''}` : '이 편집기는 기존 HWP/HWPX의 서식을 유지하며 고치는 용도입니다. “HWP/HWPX 가져오기”로 승인 템플릿을 먼저 열어야 편집·내보내기가 정상 작동합니다.'}</span>
@@ -343,7 +452,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
         <h3 id="native-toc-title">원형 목차 쪽번호 갱신</h3>
         {!tocPreview ? <form onSubmit={event=>{event.preventDefault();void inspectToc();}}>
           <label htmlFor="native-toc-pages">목차가 있는 물리 쪽 <input id="native-toc-pages" value={tocRange} onChange={event=>setTocRange(event.target.value)} maxLength={200} placeholder="예: 2-4,6" disabled={busy||applyDisabled} aria-describedby="native-toc-help" /></label>
-          <button type="submit" disabled={busy||applyDisabled||!hasImportedTemplate||!tocRange.trim()}>목차 번호 확인</button>
+          <button type="submit" disabled={busy||nativeRecoveryBusy||applyDisabled||!hasImportedTemplate||!tocRange.trim()}>목차 번호 확인</button>
           <p id="native-toc-help">표지를 포함해 세는 쪽입니다. 점선·탭 뒤 아라비아 쪽번호와 본문 제목이 정확히 일치하는 항목만 확인합니다. 본문의 1행 2열 로마 번호·제목 표는 읽어서 위치만 확인하며 표는 바꾸지 않습니다. 목차가 표 안이거나 필드·로마 쪽번호이면 직접 편집하세요.</p>
         </form> : <>
           <p>숫자만 갱신합니다. 일치 {tocPreview.unchanged}건 · 자동 확인 제외 {tocPreview.unsupported}건. 제외 항목은 직접 대조하세요.</p>

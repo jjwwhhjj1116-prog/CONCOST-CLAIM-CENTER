@@ -4,6 +4,8 @@ export interface RecoveryMetadata {
   tabId: string;
   snapshotId: string;
   writtenAt: string;
+  documentName?: string;
+  documentVersion?: number;
 }
 export interface RecoverySnapshot<T extends Record<string, unknown> = Record<string, unknown>> extends RecoveryMetadata { payload: T }
 export type RecoveryErrorCode = 'UNAVAILABLE' | 'QUOTA_EXCEEDED' | 'READ_FAILED' | 'WRITE_FAILED' | 'INVALID_SCOPE' | 'INVALID_SNAPSHOT';
@@ -76,8 +78,22 @@ function queue<T>(key: string, action: () => Promise<T>): Promise<T> {
 function checked<T extends Record<string, unknown>>(record: RecoverySnapshot<T>, accountId: string, workspaceId: string): RecoverySnapshot<T> {
   if (record.accountId !== accountId || record.workspaceId !== workspaceId || typeof record.tabId !== 'string' || !record.tabId
     || typeof record.snapshotId !== 'string' || !record.snapshotId || typeof record.writtenAt !== 'string' || !Number.isFinite(Date.parse(record.writtenAt))
+    || (record.documentName !== undefined && (typeof record.documentName !== 'string' || !record.documentName.trim() || record.documentName.length > 500))
+    || (record.documentVersion !== undefined && (!Number.isSafeInteger(record.documentVersion) || record.documentVersion < 0))
     || !record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload)) throw new LocalDocumentRecoveryError('INVALID_SNAPSHOT', '로컬 복구본의 문서·계정 또는 데이터 형식을 확인하지 못했습니다.');
   return record;
+}
+
+/** Enumerate a document family without sharing records across accounts. */
+export function listLocalDocumentRecoveryByPrefix(accountId: string, prefix: string): Promise<RecoveryMetadata[]> {
+  if (!accountId.trim() || accountId.length > 500 || !prefix.endsWith(':') || prefix.length > 430) return Promise.reject(new LocalDocumentRecoveryError('INVALID_SCOPE', '복구할 계정과 문서를 명확히 지정해 주세요.'));
+  return queue(JSON.stringify([accountId, prefix]), () => transaction('readonly', async store => {
+    const records = await value<RecoverySnapshot[]>(store.index('workspace').getAll(IDBKeyRange.bound([accountId, prefix], [accountId, prefix + '\uffff'])));
+    return records.map(record => {
+      if (!record.workspaceId.startsWith(prefix)) throw new LocalDocumentRecoveryError('INVALID_SCOPE', '다른 문서의 복구본은 열지 않습니다.');
+      const { payload: _payload, ...metadata } = checked(record, accountId, record.workspaceId); return metadata;
+    }).sort((a, b) => b.writtenAt.localeCompare(a.writtenAt));
+  }));
 }
 
 /** Local-only journal. The caller decides whether an exact server acknowledgement exists. */
@@ -88,11 +104,11 @@ export function createLocalDocumentRecovery<T extends Record<string, unknown> = 
   const queueKey = JSON.stringify([accountId, workspaceId]);
   return {
     tabId,
-    write(payload: T): Promise<RecoverySnapshot<T>> {
+    write(payload: T, description?: { documentName: string; documentVersion: number }): Promise<RecoverySnapshot<T>> {
       let snapshot: RecoverySnapshot<T>;
       try {
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new LocalDocumentRecoveryError('INVALID_SNAPSHOT', '복구본은 구조형 문서 스냅샷이어야 합니다.');
-        snapshot = { accountId, workspaceId, tabId, snapshotId: identity(), writtenAt: new Date().toISOString(), payload: structuredClone(payload) };
+        snapshot = checked({ accountId, workspaceId, tabId, snapshotId: identity(), writtenAt: new Date().toISOString(), payload: structuredClone(payload), ...(description ? { documentName: description.documentName, documentVersion: description.documentVersion } : {}) }, accountId, workspaceId);
       } catch (error) { return Promise.reject(failure(error, 'readwrite')); }
       return queue(queueKey, () => transaction('readwrite', async store => { await value(store.put(snapshot)); return snapshot; }));
     },
