@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
@@ -9,6 +9,8 @@ import { getDocumentProxy } from 'unpdf';
 
 test('CF182 real report UI exports unapproved saved DOCX PDF HWP with GET-only access and hides QA from non-admin', async () => {
   const { createServer } = await import('../apps/web/qa/vite-server.js');
+  const proofRoot=resolve(process.env.CF219_OUTPUT_ROOT||'tmp/cf219-qa');mkdirSync(proofRoot,{recursive:true});const proof=mkdtempSync(join(proofRoot,'actual-menu-export-'));
+  const appHead=readFileSync('apps/web/index.html','utf8').match(/<style>[\s\S]*?<\/style>/u)?.[0];assert.ok(appHead);
   const runtimeRoot = resolve(process.env.CF182_QA_RUNTIME_ROOT || 'apps/web/dist/rhwp');
   const server = await createServer({ root: resolve('apps/web'), server: {host:'127.0.0.1',port:0,hmr:false}, logLevel:'error', plugins:[{
     name: 'admin-qa-report-fixture',
@@ -21,7 +23,7 @@ test('CF182 real report UI exports unapproved saved DOCX PDF HWP with GET-only a
       }
       if (pathname !== '/admin-qa.html') return next();
       res.setHeader('Content-Type','text/html');
-      res.end(await s.transformIndexHtml(req.url!, '<html><body><script>window.__CLAIM_API_ORIGIN__=window.location.origin;</script><div id="root"></div><script type="module" src="/admin-qa-entry.js"></script></body></html>'));
+      res.end(await s.transformIndexHtml(req.url!, '<html><head>'+appHead+'</head><body><script>window.__CLAIM_API_ORIGIN__=window.location.origin;</script><div id="root"></div><script type="module" src="/admin-qa-entry.js"></script></body></html>'));
     }); },
     resolveId: id => id === '/admin-qa-entry.js' ? '\0admin-qa-entry' : undefined,
     load: id => id === '\0admin-qa-entry' ? `import React from'react';import{createRoot}from'react-dom/client';import{PreviewReportStudio}from'/src/routes/PreviewReportStudio.tsx';import{createEditableDocx}from'/src/documents/editable-docx-export.ts';import'/src/theme-system.css';import'/src/routes/PreviewReportStudio.css';import'/src/documents/StructuredDocumentEditor.css';import'/src/documents/DocumentReviewWorkspace.css';window.qaDocxProgress=async()=>{const progress=[];await createEditableDocx(document.querySelector('.report-draft-qa-preview'),'portrait',message=>progress.push(message));return progress;};createRoot(document.getElementById('root')).render(React.createElement(PreviewReportStudio,{roles:[new URLSearchParams(location.search).get('role')||'admin'],onNavigate:()=>{}}));` : undefined
@@ -87,5 +89,19 @@ test('CF182 real report UI exports unapproved saved DOCX PDF HWP with GET-only a
     await page.locator('.report-current-project--persistent').waitFor();
     assert.equal(await page.getByRole('button',{name:'저장본 검수 미리보기 불러오기',exact:true}).count(),0);
     assert.equal(await page.getByRole('button',{name:/미승인 관리자 검수용 .* 내려받기/}).count(),0);
+    for(const format of ['docx','hwp','pdf']){
+      await page.locator(`.report-step-card--4 summary[aria-label="${format.toUpperCase()} 문서 도구 열기"]`).click();
+      await page.locator('.report-step-card--4').getByRole('button',{name:`작성본 ${format.toUpperCase()} 내보내기`,exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:'보고서 작성본 출력 · 미승인',exact:true});await dialog.waitFor();
+      const downloading=page.waitForEvent('download');await dialog.getByRole('button',{name:`작성본 ${format.toUpperCase()} 파일 다운로드`,exact:true}).click();
+      const download=await downloading,file=join(proof,`working-copy.${format}`);await download.saveAs(file);const bytes=readFileSync(file);assert.match(download.suggestedFilename(),new RegExp(`^QA-6_미승인_작성본_v5_.*\\.${format}$`));
+      if(format==='docx'){const text=strFromU8(unzipSync(bytes)['word/document.xml']);assert.match(text,/검수용 합성 저장 본문/);assert.match(text,/<w:tbl>/);assert.match(text,/123원/);}
+      if(format==='hwp'){const document=new engine.HwpDocument(new Uint8Array(bytes));try{assert.equal(document.pageCount(),1);const text=strFromU8(unzipSync(document.exportHwpx())['Contents/section0.xml']);assert.match(text,/검수용 합성 저장 본문/);assert.match(text,/123원/);assert.match(text,/<hp:tbl/);}finally{document.free();}}
+      if(format==='pdf'){const document=await getDocumentProxy(new Uint8Array(bytes));assert.equal(document.numPages,1);const size=(await document.getPage(1)).getViewport({scale:1});assert.ok(Math.abs(size.width-595.28)<1&&Math.abs(size.height-841.89)<1);}
+      await dialog.getByRole('button',{name:'닫기',exact:true}).click();await dialog.waitFor({state:'detached'});assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),`${format.toUpperCase()} 문서 도구 열기`);
+    }
+    await page.screenshot({path:join(proof,'report-menu-1440.png')});await page.setViewportSize({width:390,height:844});await page.locator('.report-step-card--4 summary[aria-label="DOCX 문서 도구 열기"]').click();await page.screenshot({path:join(proof,'report-menu-390.png')});
+    await page.locator('.report-step-card--4').getByRole('button',{name:'작성본 DOCX 내보내기',exact:true}).click();await page.getByRole('dialog',{name:'보고서 작성본 출력 · 미승인',exact:true}).waitFor();const mobilePreview=page.locator('.working-copy-output .report-draft-qa-preview');assert.equal(await mobilePreview.evaluate(el=>el.scrollWidth>el.clientWidth),true);await mobilePreview.evaluate(el=>el.scrollLeft=el.scrollWidth);assert.ok(await mobilePreview.evaluate(el=>el.scrollLeft)>0,'Mobile A4 preview must support horizontal scrolling');await mobilePreview.evaluate(el=>el.scrollLeft=0);await page.screenshot({path:join(proof,'working-output-390.png')});await page.keyboard.press('Escape');await page.getByRole('dialog',{name:'보고서 작성본 출력 · 미승인',exact:true}).waitFor({state:'detached'});
+    assert.equal(JSON.stringify(draft),before);assert.equal(methods.every(method=>method==='GET'),true);assert.deepEqual(errors,[]);writeFileSync(join(proof,'result.json'),JSON.stringify({methods,errors,savedDraftExact:JSON.stringify(draft)===before,workingCopyFormats:['docx','hwp','pdf'],adminQaHiddenFromPm:true},null,2));console.log(JSON.stringify({proof}));
   } finally { await browser.close(); await server.close(); }
 });

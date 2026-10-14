@@ -6,6 +6,8 @@ export interface RecoveryMetadata {
   writtenAt: string;
   documentName?: string;
   documentVersion?: number;
+  expiresAt?: string;
+  byteSize?: number;
 }
 export interface RecoverySnapshot<T extends Record<string, unknown> = Record<string, unknown>> extends RecoveryMetadata { payload: T }
 export type RecoveryErrorCode = 'UNAVAILABLE' | 'QUOTA_EXCEEDED' | 'READ_FAILED' | 'WRITE_FAILED' | 'INVALID_SCOPE' | 'INVALID_SNAPSHOT';
@@ -15,6 +17,8 @@ export class LocalDocumentRecoveryError extends Error {
 
 const DATABASE = 'claim-center-local-document-recovery';
 const STORE = 'snapshots';
+export const RECOVERY_RETENTION_DAYS = 7;
+const retentionMs = RECOVERY_RETENTION_DAYS * 86400000;
 let connection: Promise<IDBDatabase> | undefined;
 let pageTabId: string | undefined;
 const queues = new Map<string, Promise<void>>();
@@ -80,20 +84,50 @@ function checked<T extends Record<string, unknown>>(record: RecoverySnapshot<T>,
     || typeof record.snapshotId !== 'string' || !record.snapshotId || typeof record.writtenAt !== 'string' || !Number.isFinite(Date.parse(record.writtenAt))
     || (record.documentName !== undefined && (typeof record.documentName !== 'string' || !record.documentName.trim() || record.documentName.length > 500))
     || (record.documentVersion !== undefined && (!Number.isSafeInteger(record.documentVersion) || record.documentVersion < 0))
+    || (record.expiresAt !== undefined && (typeof record.expiresAt !== 'string' || !Number.isFinite(Date.parse(record.expiresAt))))
+    || (record.byteSize !== undefined && (!Number.isSafeInteger(record.byteSize) || record.byteSize < 0))
     || !record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload)) throw new LocalDocumentRecoveryError('INVALID_SNAPSHOT', '로컬 복구본의 문서·계정 또는 데이터 형식을 확인하지 못했습니다.');
   return record;
+}
+
+function payloadBytes(payload: Record<string, unknown>): number | undefined {
+  try {
+    let files = 0;
+    const json = JSON.stringify(payload, (_key, item) => { if (item instanceof Blob) { files += item.size; return null; } return item; });
+    return new Blob([json]).size + files;
+  } catch { return undefined; }
+}
+
+/** Current-account maintenance. Legacy copies get one persisted grace period, never renewed by reading. */
+export function pruneExpiredLocalDocumentRecovery(accountId: string): Promise<number> {
+  if (typeof accountId !== 'string' || !accountId.trim() || accountId.length > 500) return Promise.reject(new LocalDocumentRecoveryError('INVALID_SCOPE', '복구할 계정을 확인해 주세요.'));
+  return queue(JSON.stringify([accountId]), () => transaction('readwrite', store => new Promise((resolve, reject) => {
+    const now = Date.now(), request = store.index('workspace').openCursor(IDBKeyRange.bound([accountId], [accountId, []]));
+    let removed = 0;
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) { resolve(removed); return; }
+      try {
+        const record = checked(cursor.value as RecoverySnapshot, accountId, cursor.value.workspaceId);
+        if (!record.expiresAt) cursor.update({ ...record, expiresAt: new Date(now + retentionMs).toISOString(), byteSize: payloadBytes(record.payload) });
+        else if (Date.parse(record.expiresAt) <= now) { cursor.delete(); removed++; }
+        cursor.continue();
+      } catch (error) { reject(error); }
+    };
+  })));
 }
 
 /** Enumerate a document family without sharing records across accounts. */
 export function listLocalDocumentRecoveryByPrefix(accountId: string, prefix: string): Promise<RecoveryMetadata[]> {
   if (!accountId.trim() || accountId.length > 500 || !prefix.endsWith(':') || prefix.length > 430) return Promise.reject(new LocalDocumentRecoveryError('INVALID_SCOPE', '복구할 계정과 문서를 명확히 지정해 주세요.'));
-  return queue(JSON.stringify([accountId, prefix]), () => transaction('readonly', async store => {
+  return queue(JSON.stringify([accountId, prefix]), async () => { await pruneExpiredLocalDocumentRecovery(accountId); return transaction('readonly', async store => {
     const records = await value<RecoverySnapshot[]>(store.index('workspace').getAll(IDBKeyRange.bound([accountId, prefix], [accountId, prefix + '\uffff'])));
     return records.map(record => {
       if (!record.workspaceId.startsWith(prefix)) throw new LocalDocumentRecoveryError('INVALID_SCOPE', '다른 문서의 복구본은 열지 않습니다.');
       const { payload: _payload, ...metadata } = checked(record, accountId, record.workspaceId); return metadata;
     }).sort((a, b) => b.writtenAt.localeCompare(a.writtenAt));
-  }));
+  }); });
 }
 
 /** Local-only journal. The caller decides whether an exact server acknowledgement exists. */
@@ -108,20 +142,25 @@ export function createLocalDocumentRecovery<T extends Record<string, unknown> = 
       let snapshot: RecoverySnapshot<T>;
       try {
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new LocalDocumentRecoveryError('INVALID_SNAPSHOT', '복구본은 구조형 문서 스냅샷이어야 합니다.');
-        snapshot = checked({ accountId, workspaceId, tabId, snapshotId: identity(), writtenAt: new Date().toISOString(), payload: structuredClone(payload), ...(description ? { documentName: description.documentName, documentVersion: description.documentVersion } : {}) }, accountId, workspaceId);
+        const copied = structuredClone(payload), now = Date.now();
+        snapshot = checked({ accountId, workspaceId, tabId, snapshotId: identity(), writtenAt: new Date(now).toISOString(), expiresAt: new Date(now + retentionMs).toISOString(), byteSize: payloadBytes(copied), payload: copied, ...(description ? { documentName: description.documentName, documentVersion: description.documentVersion } : {}) }, accountId, workspaceId);
       } catch (error) { return Promise.reject(failure(error, 'readwrite')); }
       return queue(queueKey, () => transaction('readwrite', async store => { await value(store.put(snapshot)); return snapshot; }));
     },
     list(): Promise<RecoveryMetadata[]> {
-      return queue(queueKey, () => transaction('readonly', async store => {
+      return queue(queueKey, async () => { await pruneExpiredLocalDocumentRecovery(accountId); return transaction('readonly', async store => {
         const records = await value<RecoverySnapshot<T>[]>(store.index('workspace').getAll(IDBKeyRange.only([accountId, workspaceId])));
         return records.map(record => { const { payload: _payload, ...metadata } = checked(record, accountId, workspaceId); return metadata; }).sort((a, b) => b.writtenAt.localeCompare(a.writtenAt));
-      }));
+      }); });
     },
     read(snapshotId: string): Promise<RecoverySnapshot<T> | null> {
-      return queue(queueKey, () => transaction('readonly', async store => {
+      return queue(queueKey, () => transaction('readwrite', async store => {
         const record = await value<RecoverySnapshot<T> | undefined>(store.index('snapshot').get([accountId, workspaceId, snapshotId]));
-        return record ? checked(record, accountId, workspaceId) : null;
+        if (!record) return null;
+        checked(record, accountId, workspaceId);
+        if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) { await value(store.delete([accountId, workspaceId, record.tabId])); return null; }
+        if (!record.expiresAt) { record.expiresAt = new Date(Date.now() + retentionMs).toISOString(); record.byteSize = payloadBytes(record.payload); await value(store.put(record)); }
+        return record;
       }));
     },
     acknowledge(snapshotId: string): Promise<boolean> {

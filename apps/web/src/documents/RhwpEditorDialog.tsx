@@ -4,6 +4,7 @@ import { loadNativeHwpEngine } from './native-hwp-runtime';
 import { captureReportNativeSource, assertReportNativePagesMatch,assertReportNativeImportContainer } from './report-native-source';
 import { inspectNativeTocNumbers, parseNativeTocPages, refreshConfirmedNativeTocNumbers, type NativeTocExcludedReason } from './report-native-toc';
 import { createLocalDocumentRecovery, listLocalDocumentRecoveryByPrefix, type RecoveryMetadata } from './local-document-recovery';
+import { LocalRecoveryMenu } from './LocalRecoveryMenu';
 import { assertNativeRecoverySource, nativeRecoveryPayload, readNativeRecovery, type NativeRecoveryPayload, type NativeRecoveryScope } from './native-document-recovery';
 
 export interface RhwpEditorDialogProps {
@@ -95,7 +96,7 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const nativeSessionRef = useRef('');
   const openedScopeRef = useRef<string | null>(null);
   const checkpointRef = useRef<() => Promise<void>>(async () => {});
-  const lastCheckpointRef = useRef<{ hash: string; metadata: RecoveryMetadata } | null>(null);
+  const lastCheckpointRef = useRef<{ hash: string; metadata: RecoveryMetadata; session: string } | null>(null);
   const restoredNativeRef = useRef<{ scopeKey: string; payload: NativeRecoveryPayload } | null>(null);
   const [tocRange,setTocRange]=useState('');
   const [tocInspection,setTocInspection]=useState<Awaited<ReturnType<typeof inspectNativeTocNumbers>>|null>(null);
@@ -186,7 +187,8 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
     }
     const focus = window.requestAnimationFrame(() => {
       const candidate = recoveryOpenerRef.current ? document.querySelector<HTMLElement>(`[data-native-recovery-id="${CSS.escape(recoveryOpenerRef.current)}"]`) : null;
-      if (candidate) candidate.focus(); else if (openerRef.current?.isConnected) openerRef.current.focus();
+      const trigger = document.querySelector<HTMLElement>('[data-native-recovery-trigger]');
+      if (candidate) candidate.focus(); else if (recoveryOpenerRef.current && trigger) trigger.focus(); else if (openerRef.current?.isConnected) openerRef.current.focus();
     });
     return () => window.cancelAnimationFrame(focus);
   }, [isOpen]);
@@ -221,11 +223,16 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
       await loadNativeHwpEngine(); if (!active()) return;
       const bytes = await editor.exportHwp(); if (!active()) return;
       const payload = await nativeRecoveryPayload(original, bytes, safeBaseName(activeFileName) + '.hwp', scope.version); if (!active()) return;
+      if (payload.originalSha256 === payload.editedSha256) { setNativeRecoveryError(''); setNativeRecoveryStatus('원본과 같은 작업본 보관은 생략했습니다. 수정하면 자동 보관합니다.'); return; }
       const client = createLocalDocumentRecovery<NativeRecoveryPayload>({ accountId: scope.accountId, workspaceId: scope.workspaceId + ':' + payload.originalSha256, tabId: session });
-      if (lastCheckpointRef.current?.hash === payload.editedSha256 && lastCheckpointRef.current.metadata.workspaceId === scope.workspaceId + ':' + payload.originalSha256 && lastCheckpointRef.current.metadata.tabId === session) return;
+      const cached = lastCheckpointRef.current;
+      if (cached?.hash === payload.editedSha256 && cached.session === session && cached.metadata.tabId === session && cached.metadata.workspaceId === scope.workspaceId + ':' + payload.originalSha256 && cached.metadata.documentName === original.name && cached.metadata.documentVersion === scope.version && Date.parse(cached.metadata.expiresAt ?? '') > Date.now()) {
+        try { const saved = await readNativeRecovery(scope, cached.metadata); if (!active()) return; if (saved.editedSha256 === payload.editedSha256) { setNativeRecoveryError(''); setNativeRecoveryStatus('같은 HWP 작업본 보관은 생략했습니다. 기존 복구본과 보관 기한을 유지합니다.'); return; } }
+        catch { if (!active()) return; /* Invalid or expired prior copy never prevents a fresh verified checkpoint. */ }
+      }
       const written = await client.write(payload, { documentName: original.name, documentVersion: scope.version }); if (!active()) return;
       const { payload: _payload, ...metadata } = written;
-      lastCheckpointRef.current = { hash: payload.editedSha256, metadata };
+      lastCheckpointRef.current = { hash: payload.editedSha256, metadata, session };
       setNativeCandidates(items => [metadata, ...items.filter(item => item.workspaceId !== metadata.workspaceId || item.tabId !== metadata.tabId)]);
       setNativeRecoveryError('');
       setNativeRecoveryStatus(`HWP 작업본 보관 ${new Date(metadata.writtenAt).toLocaleTimeString('ko-KR')} · 보고서 저장 완료와는 별도입니다.`);
@@ -412,13 +419,11 @@ export function RhwpEditorDialog({ isOpen, sourceFile, suggestedName, documentLa
   const selectedProofReady=Boolean(tocPreview&&tocSelected.length&&tocSelected.every(index=>[tocPreview.candidates[index].tocPhysicalPage,tocPreview.candidates[index].anchor.physicalPage].every(page=>tocProofLoaded[page])));
 
   const candidates = isOpen && hasImportedTemplate ? [] : nativeCandidates.filter(item => !isOpen || item.snapshotId !== lastCheckpointRef.current?.metadata.snapshotId);
-  const recoveryPanel = recoveryScope && (isOpen || candidates.length > 0 || nativeRecoveryError) ? <section className="rhwp-native-recovery" aria-label="HWP 작업본 복구">
-    {isOpen && <p role="status">{nativeRecoveryBusy ? 'HWP 작업본을 확인·보관 중입니다…' : nativeRecoveryStatus || 'HWP 작업본은 10초 간격으로 이 브라우저에 보관합니다. 마지막 보관 이후의 입력은 복구되지 않을 수 있습니다.'}</p>}
+  const recoveryPanel = recoveryScope ? <>
+    {isOpen && <section className="rhwp-native-recovery" aria-label="HWP 작업본 복구"><p role="status">{nativeRecoveryBusy ? 'HWP 작업본을 확인·보관 중입니다…' : nativeRecoveryStatus || 'HWP 작업본은 10초 간격으로 이 브라우저에 보관합니다. 마지막 보관 이후의 입력은 복구되지 않을 수 있습니다.'}</p></section>}
     {nativeRecoveryError && <p role="alert">{nativeRecoveryError}</p>}
-    {candidates.length > 0 && <><strong>이 계정·보고서에 보관한 HWP 작업본이 있습니다.</strong><p>복구본을 열어도 현재 보고서 원고에는 자동으로 적용하지 않습니다. {isOpen && hasImportedTemplate ? '복구본을 열려면 현재 HWP 편집기를 먼저 닫아 주세요.' : '원본을 함께 보존하며, 보고서 저장 완료와는 별도입니다.'}</p>
-      {candidates.map(candidate => <div key={candidate.snapshotId}><span>{candidate.documentName ?? `원본 ${candidate.workspaceId.slice(-64, -56)}`} · v{candidate.documentVersion ?? '?'} · {new Date(candidate.writtenAt).toLocaleString('ko-KR')}</span><button type="button" data-native-recovery-id={candidate.snapshotId} disabled={busy || nativeRecoveryBusy || !onOpenRecovery || (isOpen && hasImportedTemplate)} onClick={() => void openNativeRecovery(candidate)}>HWP 복구본 열기</button></div>)}
-    </>}
-  </section> : null;
+    <LocalRecoveryMenu scopeKey={scopeKey} candidates={candidates} error={nativeRecoveryError} disabled={busy || nativeRecoveryBusy || !onOpenRecovery || (isOpen && hasImportedTemplate)} restoreLabel="HWP 복구본 열기" onRestore={async id=>{const candidate=nativeCandidates.find(item=>item.snapshotId===id);if(candidate)await openNativeRecovery(candidate);}} onRefresh={async()=>{const key=scopeKey,scope=recoveryScopeRef.current;if(!scope)return;try{const items=await listLocalDocumentRecoveryByPrefix(scope.accountId,scope.workspaceId+':');if(recoveryScopeKeyRef.current===key)setNativeCandidates(items);}catch(reason){if(recoveryScopeKeyRef.current===key)setNativeRecoveryError(reason instanceof Error?reason.message:String(reason));}}} onDownload={async id=>{const scope=recoveryScopeRef.current,candidate=nativeCandidates.find(item=>item.snapshotId===id),key=scopeKey;if(!scope||!candidate)return;try{const payload=await readNativeRecovery(scope,candidate);if(recoveryScopeKeyRef.current===key)downloadBlob(payload.edited,payload.edited.name);}catch(reason){if(recoveryScopeKeyRef.current===key)setNativeRecoveryError(reason instanceof Error?reason.message:String(reason));}}} onDiscard={async id=>{const scope=recoveryScopeRef.current,candidate=nativeCandidates.find(item=>item.snapshotId===id),key=scopeKey;if(!scope||!candidate)return;try{await createLocalDocumentRecovery({accountId:scope.accountId,workspaceId:candidate.workspaceId}).acknowledge(id);if(recoveryScopeKeyRef.current===key){setNativeCandidates(items=>items.filter(item=>item.snapshotId!==id));setNativeRecoveryError('');}}catch(reason){if(recoveryScopeKeyRef.current===key)setNativeRecoveryError(reason instanceof Error?reason.message:String(reason));}}}/>
+  </> : null;
   if (!isOpen) return recoveryPanel;
   return <div className="rhwp-dialog-backdrop" role="presentation">
     <section ref={dialogRef} tabIndex={-1} className="rhwp-dialog" role="dialog" aria-modal="true" aria-labelledby="rhwp-dialog-title">

@@ -31,7 +31,7 @@ function fixture() {
     chapterDocumentsRef: ref({}), chapterSavedDocumentsRef: ref({}),
     selectedCaseRef: ref('qa-case'), versionRef: ref(5), titleRef: ref('검수 제목'), contentRef: ref(draft.content),
     editorJsonRef: ref(json), reportHeaderRef: ref(header), reportFrontMatterRef: ref(frontMatter), loadSequence: ref(1), activeStepRef: ref(4), selectedChapterRef: ref(''),
-    qaReadyRef: ref(true), qaSnapshotRef: ref(null), qaPreviewRef: ref({ isConnected: true, querySelector: () => null }), qaExportInFlight: ref(false),
+    qaReadyRef: ref(true), draftReadyRef: ref(true), qaSnapshotRef: ref(null), qaPreviewRef: ref({ isConnected: true, querySelector: () => null }), qaExportInFlight: ref(false),
     dirtyRef: ref(false), workspaceDirtyRef: ref(false), outlineDirtyRef: ref(false), saveErrorRef: ref(''),
     draftSaveInFlight: ref(false), outlineSaveInFlight: ref(false), outlineSyncPendingRef: ref(false), pageImportInFlight: ref(false), generationInFlight: ref(false), chapterSaveInFlight: ref(false), linkingHwpRef: ref(false),
     setQaSnapshot: (value: unknown) => { context.snapshot = value; }, setQaExportBusy: (value: boolean) => { context.busy = value; },
@@ -112,4 +112,17 @@ test('CF182 production QA rejects races during GET and before all-format downloa
     const exporting = f.context.qa.downloadQaReport(format); f.context[key].current = value; release(); await exporting;
     assert.equal(f.downloads.length, 0, format + ' / ' + key); assert.ok(f.context.error); assert.equal(f.context.qaExportInFlight.current, false);
   }
+});
+
+test('CF219 managed working copies preserve saved-state guards without widening administrator QA', async () => {
+  const {context,exports,requests}=fixture();context.qaReadyRef.current=false;
+  await context.qa.loadQaSnapshot();assert.equal(requests.length,0);
+  await context.qa.loadQaSnapshot(true);assert.equal(requests.length,1);
+  for(const format of ['docx','hwp','pdf'])await context.qa.downloadQaReport(format,true);
+  assert.equal(exports.length,3);for(const item of exports){assert.equal(item.purpose,'DRAFT');assert.match(item.fileName,/_미승인_작성본_v5_/);assert.equal(item.reportNativeSnapshot.isCurrent(),true);}
+  context.draftReadyRef.current=false;await context.qa.downloadQaReport('hwp',true);assert.equal(exports.length,3);
+  for(const key of ['dirtyRef','workspaceDirtyRef','outlineDirtyRef','saveErrorRef','draftSaveInFlight','outlineSaveInFlight','outlineSyncPendingRef','pageImportInFlight','generationInFlight','chapterSaveInFlight','linkingHwpRef']){
+    const failed=fixture();failed.context[key].current=true;await failed.context.qa.loadQaSnapshot(true);assert.equal(failed.requests.length,0,key);
+  }
+  const race=fixture();let release=()=>{};race.holdRead(new Promise<void>(resolve=>{release=resolve;}));const read=race.context.qa.loadQaSnapshot(true);race.context.draftReadyRef.current=false;release();await read;assert.equal(race.context.qaSnapshotRef.current,null);
 });

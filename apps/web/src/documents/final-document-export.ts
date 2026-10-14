@@ -397,14 +397,14 @@ export async function downloadFinalDocument(options: {
   format: FinalDocumentFormat;
   fileName: string;
   orientation?: FinalDocumentOrientation;
-  purpose?: 'FINAL' | 'ADMIN_QA';
+  purpose?: 'FINAL' | 'ADMIN_QA' | 'DRAFT';
   onProgress?: (message: string) => void;
   reportNativeSnapshot?: { document: JSONContent | null; caseId: string; isCurrent: () => boolean };
 }): Promise<FinalDocumentExportResult> {
   const report = options.root.matches('[data-export-document-kind="REPORT"]') || options.root.querySelector('[data-export-document-kind="REPORT"]');
   const orientation = report ? 'portrait' : options.orientation ?? 'landscape';
   const baseName = fileSafe(options.fileName.replace(/\.(?:docx|pdf|hwp)$/iu, ''));
-  const changedSelectionMessage = options.purpose === 'ADMIN_QA' ? '검수 저장본이나 현재 원고가 변경되어 출력을 중단했습니다.' : '확정본 선택이 변경되어 출력을 중단했습니다.';
+  const changedSelectionMessage = (options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검수 저장본이나 현재 원고가 변경되어 출력을 중단했습니다.' : '확정본 선택이 변경되어 출력을 중단했습니다.';
   let bytes: Uint8Array;
   let pageCount: number;
   let nativeExtension: 'hwp' | 'hwpx' | undefined;
@@ -422,27 +422,27 @@ export async function downloadFinalDocument(options: {
       assertCurrent();
       const source = await readBoundReportNativeSource(snapshot.document, snapshot.caseId);
       assertCurrent();
-      options.onProgress?.(options.purpose === 'ADMIN_QA' ? '검수 저장본의 원형 한글 파일 본문 연결·크기·해시를 검증하고 있습니다.' : '확정 당시 원형 한글 파일의 본문 연결·크기·해시를 검증하고 있습니다.');
+      options.onProgress?.((options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검수 저장본의 원형 한글 파일 본문 연결·크기·해시를 검증하고 있습니다.' : '확정 당시 원형 한글 파일의 본문 연결·크기·해시를 검증하고 있습니다.');
       const evidence = await apiRequest<{ files: Array<{ id: string; sha256: string; byteSize: number }> }>(`/api/cases/${encodeURIComponent(snapshot.caseId)}/evidence?category=REPORT_REFERENCE&evidenceId=${encodeURIComponent(source.evidenceId)}`);
-      if (!Array.isArray(evidence.files) || !evidence.files.some(file => file.id === source.evidenceId && file.sha256 === source.sha256 && file.byteSize === source.byteSize)) throw new Error(options.purpose === 'ADMIN_QA' ? '검수용 원형 파일이 해당 사건 자료와 일치하지 않아 출력을 중단했습니다.' : '확정 원형 파일이 해당 사건 자료와 일치하지 않아 출력을 중단했습니다.');
+      if (!Array.isArray(evidence.files) || !evidence.files.some(file => file.id === source.evidenceId && file.sha256 === source.sha256 && file.byteSize === source.byteSize)) throw new Error((options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검수용 원형 파일이 해당 사건 자료와 일치하지 않아 출력을 중단했습니다.' : '확정 원형 파일이 해당 사건 자료와 일치하지 않아 출력을 중단했습니다.');
       assertCurrent();
       const result = await apiDownload(source.downloadUrl);
       const payload = await result.blob.arrayBuffer();
-      if (payload.byteLength !== source.byteSize || await reportSourceSha256(payload) !== source.sha256) throw new Error(options.purpose === 'ADMIN_QA' ? '검수용 원형 한글 파일의 크기·해시가 일치하지 않아 출력을 중단했습니다.' : '확정 원형 한글 파일의 크기·해시가 일치하지 않아 출력을 중단했습니다.');
+      if (payload.byteLength !== source.byteSize || await reportSourceSha256(payload) !== source.sha256) throw new Error((options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검수용 원형 한글 파일의 크기·해시가 일치하지 않아 출력을 중단했습니다.' : '확정 원형 한글 파일의 크기·해시가 일치하지 않아 출력을 중단했습니다.');
       assertCurrent();
       bytes = new Uint8Array(payload);
       nativeExtension = /\.hwpx$/iu.test(source.name) ? 'hwpx' : 'hwp';
       const Engine = await loadNativeHwpEngine(), native = new Engine(bytes);
       try {
         pageCount = native.pageCount();
-        if (pageCount !== elements.length) throw new Error(options.purpose === 'ADMIN_QA' ? '검수용 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.' : '확정 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.');
+        if (pageCount !== elements.length) throw new Error((options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검수용 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.' : '확정 원형 한글 파일과 미리보기의 쪽수가 일치하지 않습니다.');
         assertReportNativeA4Portrait(native);
         for (let page = 0; page < pageCount; page++) {
           if (!svgOrientationMatches(native.renderPageSvg(page), 'portrait')) throw new Error(`원형 한글 ${page + 1}쪽이 A4 세로가 아니어서 출력을 중단했습니다.`);
         }
       } finally { native.free(); }
       assertCurrent();
-      options.onProgress?.(options.purpose === 'ADMIN_QA' ? '검증된 미승인 검수용 원형을 재변환 없이 내려받습니다. 원래 문장·표·사진 구조를 유지합니다.' : '검증된 확정 원형을 재변환 없이 내려받습니다. 원래 문장·표·사진 구조를 유지합니다.');
+      options.onProgress?.((options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검증된 미승인 검수용 원형을 재변환 없이 내려받습니다. 원래 문장·표·사진 구조를 유지합니다.' : '검증된 확정 원형을 재변환 없이 내려받습니다. 원래 문장·표·사진 구조를 유지합니다.');
     } else {
       const pages = await collectNativeHwpPages(options.root, orientation);
       pageCount = pages.length;
@@ -468,7 +468,7 @@ export async function downloadFinalDocument(options: {
       ? [0x25, 0x50, 0x44, 0x46, 0x2d]
       : [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
   if (bytes.byteLength <= 512 || expectedSignature.some((value, index) => bytes[index] !== value)) {
-    throw new Error(`${options.format.toUpperCase()} ${options.purpose === 'ADMIN_QA' ? '검수용 파일' : '확정본'}의 파일 형식 검증에 실패했습니다. 다운로드를 중단했습니다.`);
+    throw new Error(`${options.format.toUpperCase()} ${(options.purpose === 'ADMIN_QA' || options.purpose === 'DRAFT') ? '검수용 파일' : '확정본'}의 파일 형식 검증에 실패했습니다. 다운로드를 중단했습니다.`);
   }
   const extension = nativeExtension ?? options.format;
   const fileName = `${baseName}.${extension}`;

@@ -55,6 +55,7 @@ test('CF213 actual ProposalView preserves drafts on renderer crash, explicit rec
     await page.getByRole('textbox',{name:'클라이언트명',exact:true}).waitFor({timeout:15000}).catch(async error=>{throw new Error(`${error.message}; fixture errors=${JSON.stringify(errors)}; denied=${JSON.stringify(denied)}; DOM=${(await page.locator('body').innerText()).slice(0,500)}`);});await page.waitForFunction(()=>document.querySelector<HTMLInputElement>('.proposal-input-grid input')?.value==='합성 제출처');
     await page.evaluate('globalThis.__name = value => value');
   };
+  const openRecovery=async(page:Page)=>{if(!(await page.getByRole('dialog',{name:'이전 작업 복구',exact:true}).count()))await page.getByRole('button',{name:/^이전 작업 복구 /}).click();};
   const records=async(page:Page,account='synthetic-author@example.invalid')=>page.evaluate(async({caseId,account})=>{
     const {createLocalDocumentRecovery}=await import('/src/documents/local-document-recovery.ts' as string),client=createLocalDocumentRecovery({accountId:account,workspaceId:`proposal:${caseId}`});
     const rows=await client.list();return Promise.all(rows.map((row:{snapshotId:string})=>client.read(row.snapshotId)));
@@ -79,7 +80,7 @@ test('CF213 actual ProposalView preserves drafts on renderer crash, explicit rec
     await t.test('actual renderer crash and browser reopen present a candidate, never autooverwrite, then restore every saved field',async()=>{
       const crash=page.waitForEvent('crash'),cdp=await context.newCDPSession(page);void cdp.send('Page.crash').catch(()=>undefined);await crash;await page.close();await context.close();
       context=await chromium.launchPersistentContext(join(proof,'profile'),{executablePath,headless:true,viewport:{width:1440,height:1000}});page=await context.newPage();await initialize(page);
-      await page.getByRole('button',{name:'이 편집본 복구',exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'프로젝트 제목',exact:true}).inputValue(),'합성 프로젝트');assert.equal(writes.length,0);
+      await openRecovery(page);await page.getByRole('button',{name:'이 편집본 복구',exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'프로젝트 제목',exact:true}).inputValue(),'합성 프로젝트');assert.equal(writes.length,0);
       await page.getByRole('button',{name:'이 편집본 복구',exact:true}).click();await backedUp(page);
       assert.equal(await page.locator('.proposal-toc button.active span').textContent(),'합성 수정 목차');assert.match(await page.locator('.proposal-chapter-editor .tiptap').innerText(),/합성 미저장 덧붙임/u);
       const rows=await records(page),restored=rows.find(row=>row?.snapshotId!==snapshot.snapshotId);assert.ok(restored);assert.deepEqual(restored.payload,snapshot.payload);assert.equal(writes.length,0);
@@ -109,7 +110,7 @@ test('CF213 actual ProposalView preserves drafts on renderer crash, explicit rec
       await page.getByRole('button',{name:/← 수정 · 3단계로/}).first().click();await page.getByRole('complementary',{name:'갑지·목차·12개 챕터 편집 목록'}).getByRole('button',{name:/갑지/}).click();await page.getByRole('textbox',{name:'제출처',exact:true}).fill('합성 첫 탭');await backedUp(page);
       const other=await context.newPage();await initialize(other);await other.getByRole('textbox',{name:'프로젝트 제목',exact:true}).fill('합성 두 번째 탭');await backedUp(other);const before=await records(other);assert.equal(before.length,2);assert.notEqual(before[0].tabId,before[1].tabId);
       const foreign=await context.newPage();await initialize(foreign,'synthetic-other@example.invalid');assert.equal(await foreign.getByRole('button',{name:'이 편집본 복구',exact:true}).count(),0);assert.deepEqual(await records(foreign,'synthetic-other@example.invalid'),[]);await foreign.close();
-      const clean=await context.newPage();await initialize(clean);await clean.getByRole('button',{name:'서버본 유지 · 이 복구본만 폐기',exact:true}).first().click();await clean.waitForTimeout(30);assert.equal((await records(clean)).length,1);assert.equal(await clean.getByRole('textbox',{name:'프로젝트 제목',exact:true}).inputValue(),'합성 미저장 제목 🧱');await other.close();await clean.close();
+      const clean=await context.newPage();await initialize(clean);await openRecovery(clean);await clean.getByRole('button',{name:'이 복구본 삭제',exact:true}).first().click();await clean.getByRole('button',{name:'이 복구본 삭제 확인',exact:true}).click();await clean.waitForTimeout(30);assert.equal((await records(clean)).length,1);assert.equal(await clean.getByRole('textbox',{name:'프로젝트 제목',exact:true}).inputValue(),'합성 미저장 제목 🧱');await other.close();await clean.close();
     });
     await t.test('quota failure is visible and retains the last successful record instead of fake success',async()=>{
       const before=await records(page);await page.evaluate(()=>{(window as any).cf213Put=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(){throw new DOMException('CF213 synthetic quota','QuotaExceededError');};});
@@ -117,7 +118,7 @@ test('CF213 actual ProposalView preserves drafts on renderer crash, explicit rec
       await page.evaluate(()=>{IDBObjectStore.prototype.put=(window as any).cf213Put;});
     });
     await t.test('an asynchronous restore cannot overwrite edits made while its IndexedDB read is pending',async()=>{
-      const clean=await context.newPage();await initialize(clean);await clean.getByRole('button',{name:'이 편집본 복구',exact:true}).waitFor();
+      const clean=await context.newPage();await initialize(clean);await openRecovery(clean);await clean.getByRole('button',{name:'이 편집본 복구',exact:true}).waitFor();
       await page.evaluate(async()=>{
         const db=await new Promise<IDBDatabase>((resolve,reject)=>{const req=indexedDB.open('claim-center-local-document-recovery',1);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
         (window as any).cf213HoldDb=db;(window as any).cf213Release=false;const lock=db.transaction('snapshots','readwrite');

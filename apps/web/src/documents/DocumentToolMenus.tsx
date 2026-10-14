@@ -8,13 +8,13 @@ export interface DocumentToolAction {
 }
 
 export interface DocumentToolGroup {
-  id: 'excel' | 'docx' | 'hwp';
+  id: 'excel' | 'docx' | 'hwp' | 'pdf';
   label: string;
   actions: readonly DocumentToolAction[];
 }
 
 function DocumentIcon({ kind }: { kind: DocumentToolGroup['id'] }): ReactElement {
-  const label = kind === 'excel' ? 'X' : kind === 'docx' ? 'W' : '한';
+  const label = kind === 'excel' ? 'X' : kind === 'docx' ? 'W' : kind === 'pdf' ? 'P' : '한';
   return <span className={`document-tool-icon is-${kind}`} aria-hidden="true"><i />{label}</span>;
 }
 
@@ -57,7 +57,7 @@ export function DocumentToolMenus({ groups }: { groups: readonly DocumentToolGro
       <div className="document-tool-menu__panel">
         {group.actions.map((action) => <button key={action.id} type="button" disabled={action.disabled} onClick={(event) => {
           const menu = event.currentTarget.closest('details');
-          if (menu) menu.open = false;
+          if (menu) { menu.open = false; menu.querySelector('summary')?.focus(); }
           action.onClick();
         }}>{action.label}</button>)}
       </div>

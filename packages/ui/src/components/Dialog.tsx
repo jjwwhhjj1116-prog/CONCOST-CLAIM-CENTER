@@ -9,9 +9,10 @@ export interface DialogProps {
   onClose: () => void;
   hideDefaultAction?: boolean;
   size?: 'default' | 'wide';
+  trapFocus?: boolean;
 }
 
-export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose, hideDefaultAction = false, size = 'default' }) => {
+export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose, hideDefaultAction = false, size = 'default', trapFocus = false }) => {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -22,6 +23,13 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose
     const opener = document.activeElement;
     panelRef.current?.focus();
     const escape = (event: KeyboardEvent) => {
+      if (trapFocus && event.key === 'Tab' && panelRef.current) {
+        const panel = panelRef.current;
+        const controls = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]')].filter(item => item.getClientRects().length > 0);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (!first) { event.preventDefault(); panel.focus(); }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === panel) || !event.shiftKey && (document.activeElement === last || document.activeElement === panel)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+      }
       if (event.key === 'Escape') closeRef.current();
     };
     document.addEventListener('keydown', escape);
@@ -29,7 +37,7 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, title, children, onClose
       document.removeEventListener('keydown', escape);
       if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
     };
-  }, [isOpen]);
+  }, [isOpen, trapFocus]);
 
   if (!isOpen) return null;
   return createPortal(

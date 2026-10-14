@@ -287,12 +287,15 @@ test('CF213 actual chapter workspace edits rich content, reopens and applies wit
         const local=await waitForLocal(page,'body') as any;
         assert.equal(local.payload.step,4);assert.equal(local.payload.chapterId,'ch2');assert.equal(local.payload.view,'whole');assert.equal(local.payload.selection.text,'검수');
         const rich=JSON.stringify(local.payload.editorJson);assert.match(rich,/"type":"image"/u);assert.match(rich,/"type":"table"/u);
+        await page.evaluate(()=>{(window as any).cf219Puts=0;const put=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(value,key){if(value?.workspaceId?.startsWith('report:'))(window as any).cf219Puts++;return put.call(this,value,key!);};});
+        await page.keyboard.press('ArrowLeft');await page.keyboard.press('ArrowRight');await page.waitForTimeout(1100);assert.equal(await page.evaluate(()=>(window as any).cf219Puts),0,'Cursor-only motion must not rewrite the complete recovery copy');
+
         // Same server content version, but a different saved navigation location.
         // Workspace-only metadata is allowed to move without advancing content.
         await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('step','2');url.searchParams.set('chapter','ch1');history.replaceState(null,'',url)});
         await page.reload();await page.waitForFunction(()=>document.querySelector('.report-wizard-navigation li:nth-child(2) button')?.getAttribute('aria-current')==='step');
         assert.doesNotMatch(JSON.stringify((await state(page)).draft.editorJson),/CF213 종료 전 복구 검수/u,'Reload first reads the unchanged server, not an implicit local overwrite');
-        await page.getByRole('region',{name:'보고서 로컬 작업 복구'}).getByRole('button',{name:'이 로컬 작업 복구',exact:true}).click();
+        await page.getByRole('button',{name:/^이전 작업 복구 /}).click();await page.getByRole('dialog',{name:'이전 작업 복구',exact:true}).getByRole('button',{name:'이 로컬 작업 복구',exact:true}).click();
         await page.waitForFunction(()=>window.getSelection()?.toString()==='검수');
         assert.match(await page.locator('.document-review-split .tiptap').innerText(),/CF213 종료 전 복구 검수/u);
         assert.equal(await page.locator('.report-view-switch').getByRole('button',{name:'전체 보고서 보기',exact:true}).getAttribute('aria-pressed'),'true');
