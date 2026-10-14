@@ -1,6 +1,6 @@
 # 의뢰부터 검토 납품까지 자가검수
 
-## CF220 PDF 원점·Word 실제 쪽나눔 수정 — 배포 준비, 2026-10-14
+## CF220 PDF 원점·Word 실제 쪽나눔 수정 — development 배포·실제 파일 검수 완료, 2026-10-14
 
 - 시작 feat/CF123-es-v2 HEAD/origin1c91c74; 기존 사용자삭제22/package통계M(실diff0)/apps-web-tmp 보존. 승인 범위는 development push/배포이며 운영·D1변경·환경키·엔진승격0이다.
 - **CF219 검사 정정:** actual-pdf-continuity embeddedImages5쪽 exact는 각page의 Do 대신 공유resources 첫I0을반복읽은오류다. CF217실제→CF219실제 목차I1 JPEG92054→92048B, 직접decode1621픽셀/max6; 다른4이미지/contentstream/MediaBox exact. 기존Poppler1757px/max4 FAIL·글자/쪽숫자exact는유효. 기존JSON/역사는보존하고본정정이우선한다.
@@ -9,7 +9,11 @@
 - **DOCX 최종최소수정:** 표밖의 P에서 height0+emittedruns0+명시nonzero인라인여백없을때만생략. BR/이미지/목록/실제빈줄/물리·논리작성자간격/requiredcell·terminalP유지. 문자·표·사진크기·keepNext/cantSplit축소0. 제품source출력docx-product-final239976B SHA bed14c751e5ca383199b309d38c7765c5f2455ceb987102f67764fc79e4f01bf; Word제한된보기 전체5쪽/308단어/첫사진표4쪽/마지막사진·수치표5쪽, repair0. word-product-final-five-pages.jpg 재관찰안정5. OOXML74→63P(비표시11생략), textorder/mediaexact, 표3/셀13/이미지3/sect5 보존.
 - **검수기보완:** cf220-pdf-page-integrity는각Do가참조하는직접RGBJPEG1개를선택, MediaBox/CropBox/Rotate/contentstream/encodedimage/fullRGBA비교; 예상외Decode/DecodeParms/Mask/SMask/Interpolate·색공간/크기거부. 실제PDF두파일5쪽PASS; 누락·순서·배치·2번째실제이미지변조·Decode반전5음성모두거부.
 - **최종회귀:** complete-product-regression-env8/8 PASS skip0, 공유제안서7/7 PASS, 실제출력메뉴1/1 PASS(3형식/GET-only/권한/원고저장guard). DOCX전처리두분기제거음성FAIL, PDF원점패치제거음성FAIL. env누락으로처음complete-product-regression실패는보존, 번들경로명시재실행과구분. root/web최종타입0, fresh web-build-release/index-2kjF2yQu.js, runtime28 SHA bcc40a79…/bindingad01e939…동일, dryrun/keep-vars PASS. 앞선web-build-complete는폐기삭제없이보존하고배포에쓰지않는다.
-- **실제배포후잔여:** 현재실제Chrome tab839127188는로그인유지하나extensionbrowser3→5변경후Debugger unattached로제어연결만실패. 사용자재연결요청, 원고D1readonly보호스냅샷 cc7-before-deploy.json보존. 정상commit/push→정확한release폴더배포→공개전체SHA/health/readiness→실제Chrome새3파일/PDF다른UI좌표전쪽exact/실제다운로드DOCXWord5쪽/원고7필드·4카운터exact로검수해야최종완료다. 독립한컴desktop/Word편집저장왕복/PC간/전체HWP32/A–Z·가오픈은미검증이다.
+- **배포:** 제품 d27c4aea64dc06b6a5318c3a7b1b8ac7a08e451e 정상push. 동일검사 web-build-release를keep-vars로development배포, Worker b2da9ffd-8589-4b14-bbf8-122a2e033a45. 공개44파일37,892,852B 모두localSHA/sizeexact, canonical b36edd83642e76ffe1c54cf02b88ed00ca13ca9704c08fdf18b03bf022d5309a, health/readiness200. 런타임·D1schema·keys·gaopen변경0.
+- **인증화면 실검수:** Chrome3→5 제어연결끊김은사용자재허용후browser6으로복구; 로그인재요청없음. 기존tab839127188 reload→index-2kjF2yQu.js/DPR2/3확인. 관리자QA PDF와4단계작성본팝업DOCX/HWP/PDF 실제다운로드4개; 원래wizard5로복귀. 실제3도구한행 y538.7578125/width478.171875동일, editorHTML8178자전후exact/alert0. 출력팝업은 미승인작성본·v8·5쪽완료 표시.
+- **실제출력 최종:** live-cc7/admin.pdf449638B SHA bdef41686b1c19d173ab20f6fcf5d544eae1c25a302120b92fe9f36c54e506aa; working.pdf449638B SHA e2b0e28e12513b1d5a7aa9029f25f7b8b778baed3db89fb99a4afba10d8deffd. 두파일 각Do이미지/encodedJPEG/배치5쪽exact·120dpiPoppler993×1404 fullRGBA5쪽차이0(허용치/크롭/resize0), 실제admin→local제품5쪽도exact. working.docx240006B SHA48cc41f638e931d5395e05e1c81d23a74131f95e461192b9f02334f04e967412, Word2010제한된보기 재계산후5쪽/308단어/4쪽2사진·5쪽마지막사진및표/repair0; word-deployed-five-pages.jpg 안정재관찰. 문자순서·50내용문단·3이미지bytes·표3/13셀내용·5sect전부원본exact, invisiblebodyP11만생략74→63. working.hwp244224B SHA f905c32816c625564cde7feb36800977d9a1d3ab052d5caea89c9a5ee793cd9b CF219검수본과fullbytesexact.
+- **보존·독립검수:** cc7-before-deploy/after-output readonlySELECT title/content/editor_json/version8/wizard5/selectedchapter/updated_at2026-10-13T00:20:52.466Z 7필드exact 및 revisions8/reviews0/finalizations0/notifications0exact. 총괄검수와3전문결과모두도착, 독립QA가PDF직접재검사/PNG5쪽0·DOCX구조/imageSHA·HWPbytes재확인. tmp/cf220-qa에중간실패·원본·진단XML직렬화실패·초기쪽수오판근거를보존하고최종결과와분리. 사용자현재chat outputs에실제3파일/PDF5PNG/Word·팝업화면을원본SHA검증후전달한다.
+- **판정·다음범위:** 검증한CC7 v8의새작성본출력/PDF원점/Word쪽나눔 수정은완료. Word제품인증·보안설정변경0, 허용된열람만수행. Word/독립한컴desktop의편집·저장왕복, 임의부모transform/zoom, 다른PC/모든Word버전/전체고객문서·HWP32/A–Z·가오픈은미검증으로별도유지. 기존원본·사용자22삭제/package통계M/apps-web-tmp변경은미스테이징보존. 다음시작은이절과live-cc7실제파일을읽고독립한컴/편집저장범위를검수하는것이다.
 
 ## CF219 임시 복구 팝업·7일 보관·작성본 내보내기 — 2026-10-14
 
