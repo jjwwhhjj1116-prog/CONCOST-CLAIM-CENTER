@@ -213,7 +213,12 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const [finalSnapshot, setFinalSnapshot] = useState<{ id: string; document: FinalReportSnapshot } | null>(null);
   const [finalSnapshotError, setFinalSnapshotError] = useState('');
   const [finalSnapshotRetry, setFinalSnapshotRetry] = useState(0);
+  const [pendingFinalExport, setPendingFinalExport] = useState<{caseId:string;reviewId:string;format:FinalDocumentFormat}|null>(null);
   const [reviewNote, setReviewNote] = useState('');
+  const [approvers, setApprovers] = useState<{id:string;name:string;role:string}[]>([]);
+  const [assignedReviewerId, setAssignedReviewerId] = useState('');
+  const [approversError, setApproversError] = useState('');
+  const [approvalRefresh, setApprovalRefresh] = useState(0);
   const [submittingReview, setSubmittingReview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -471,6 +476,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     outlineProposalSequence.current++;
     setOutlineProposal(null); setOutlineProposalError(''); setGeneratingOutline(false); setEditingOutlineChapterId(null);
     setLoading(true); setError(''); setLoadedCaseId('');
+    setPendingFinalExport(null);
     qaSnapshotRef.current = null; setQaSnapshot(null); setQaExportError(''); setQaExportMessage(''); setWorkingOutputOpen(false);
     try {
       const [result, reviewResult, finalizationResult, authoringResult, collaborationResult] = await Promise.all([
@@ -524,7 +530,8 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       const loadedChapterId = result.draft?.selectedChapterId && authoringResult.chapters.some((chapter) => chapter.id === result.draft?.selectedChapterId)
         ? result.draft.selectedChapterId
         : authoringResult.chapters[0]?.id ?? '';
-      const loadedStep = Math.min(5, Math.max(1, Number(result.draft?.wizardStep ?? 1))) as ReportWizardStep;
+      const linkedStep = new URLSearchParams(window.location.search).get('step') === '5' ? 5 : null;
+      const loadedStep = Math.min(5, Math.max(1, Number(linkedStep ?? result.draft?.wizardStep ?? 1))) as ReportWizardStep;
       selectedChapterRef.current = loadedChapterId;
       activeStepRef.current = loadedStep;
       setSelectedChapterId(loadedChapterId);
@@ -1425,15 +1432,34 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     return () => { active = false; };
   }, [finalSnapshotId, finalSnapshotVersion, finalSnapshotRetry]);
   const pendingReview = reviews.find((review) => review.status === 'PENDING') ?? null;
+  useEffect(() => {
+    if (activeStep !== 5 || !selectedCaseId || loadedCaseId !== selectedCaseId) return;
+    let active = true;
+    setApprovers([]); setAssignedReviewerId(''); setApproversError('');
+    void apiRequest<{approvers:{id:string;name:string;role:string}[]}>(`/api/report-reviews/approvers?caseId=${encodeURIComponent(selectedCaseId)}`)
+      .then(result => { if (active) setApprovers(result.approvers); })
+      .catch(reason => { if (active) setApproversError(reason instanceof Error?reason.message:'결재자를 불러오지 못했습니다.'); });
+    return () => { active = false; };
+  }, [activeStep, selectedCaseId, loadedCaseId, version, approvalRefresh]);
+  useEffect(() => {
+    if (activeStep !== 5 || !selectedCaseId || loadedCaseId !== selectedCaseId) return;
+    let active = true;
+    const refresh = () => { void Promise.all([
+      apiRequest<{reviews:PreviewReportReview[]}>(`/api/report-reviews?caseId=${encodeURIComponent(selectedCaseId)}`),
+      apiRequest<{finalizations:Finalization[]}>(`/api/report-finalizations?caseId=${encodeURIComponent(selectedCaseId)}`)
+    ]).then(([reviewResult,finalizationResult])=>{if(active){setReviews(reviewResult.reviews);setFinalizations(finalizationResult.finalizations);}}).catch(reason=>{if(active)setError(reason instanceof Error?reason.message:'결재 상태를 불러오지 못했습니다.');}); };
+    refresh(); const timer = window.setInterval(refresh,30_000); window.addEventListener('focus',refresh);
+    return () => { active=false; window.clearInterval(timer);window.removeEventListener('focus',refresh); };
+  }, [activeStep,selectedCaseId,loadedCaseId,approvalRefresh]);
   const requestReview = async () => {
-    if (!editable || !selectedCaseId || !version || dirty || saving || currentReview || pendingReview) return;
+    if (!editable || !selectedCaseId || !version || dirty || saving || currentReview || pendingReview || submittingReview || !assignedReviewerId || !qaCanReadSavedDraft(true)) return;
     const requestCaseId = selectedCaseId;
     setSubmittingReview(true); setError('');
     try {
       const result = await apiRequest<{ reviews: PreviewReportReview[] }>('/api/report-reviews', {
         method: 'POST',
         headers: { 'Idempotency-Key': `report-review:${requestCaseId}:v${version}` },
-        body: JSON.stringify({ caseId: requestCaseId, expectedVersion: version, note: reviewNote.trim() })
+        body: JSON.stringify({ caseId: requestCaseId, expectedVersion: version, note: reviewNote.trim(), assignedReviewerId })
       });
       if (selectedCaseRef.current === requestCaseId) { setReviews(result.reviews); setReviewNote(''); }
     } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
@@ -1441,7 +1467,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const finalizeApproved = async () => {
-    if (!currentReview || currentReview.status !== 'APPROVED' || !selectedCaseId || currentFinalization || dirty || saving || submittingReview) return;
+    if (!currentReview || currentReview.status !== 'APPROVED' || !selectedCaseId || currentFinalization || dirty || saving || submittingReview) return false;
     const requestCaseId = selectedCaseId;
     setSubmittingReview(true); setError('');
     try {
@@ -1449,8 +1475,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         method: 'POST', headers: { 'Idempotency-Key': `report-finalize:${selectedCaseId}:v${version}` },
         body: JSON.stringify({ caseId: selectedCaseId, reviewId: currentReview.id })
       });
-      if (selectedCaseRef.current === requestCaseId) setFinalizations(result.finalizations);
-    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); }
+      if (selectedCaseRef.current !== requestCaseId) return false;
+      setFinalizations(result.finalizations); return true;
+    } catch (reason) { if (selectedCaseRef.current === requestCaseId) setError(reason instanceof Error ? reason.message : String(reason)); return false; }
     finally { if (selectedCaseRef.current === requestCaseId) setSubmittingReview(false); }
   };
 
@@ -1470,6 +1497,20 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSubmittingReview(false); }
   };
+
+  const requestFinalOutput = async (format: FinalDocumentFormat) => {
+    if (submittingReview || pendingFinalExport || currentReview?.status!=='APPROVED') return;
+    if (currentFinalization) { await downloadFinalReport(format); return; }
+    const request = {caseId:selectedCaseId,reviewId:currentReview.id,format};
+    setPendingFinalExport(request);
+    if (!await finalizeApproved()) setPendingFinalExport(null);
+  };
+  useEffect(() => {
+    if (!pendingFinalExport) return;
+    if (pendingFinalExport.caseId!==selectedCaseId || pendingFinalExport.reviewId!==currentReview?.id || finalSnapshotError) { setPendingFinalExport(null); return; }
+    if (submittingReview || !currentFinalization || !approvedDocument || !finalReportPreviewRef.current) return;
+    const format=pendingFinalExport.format;setPendingFinalExport(null);void downloadFinalReport(format);
+  }, [pendingFinalExport,selectedCaseId,currentReview?.id,currentFinalization?.id,approvedDocument,submittingReview,finalSnapshotError]);
 
   const qaCanReadSavedDraft = (forDraft = false): boolean => (forDraft ? draftReadyRef.current : qaReadyRef.current) && !dirtyRef.current && !workspaceDirtyRef.current && !outlineDirtyRef.current && !saveErrorRef.current
     && !draftSaveInFlight.current && !outlineSaveInFlight.current && !outlineSyncPendingRef.current
@@ -1873,7 +1914,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           </fieldset>
           <details id="report-backups" className="report-revision-history"><summary>시간별 백업 불러오기 · 최근 {backups.length}건</summary>{backups.length ? <ul className="dashboard-work-list">{backups.map((backup) => <li key={backup.id}><span><strong>{backup.backupHour.replace('T',' ')}시 백업 · {backup.title}</strong><small>보고서 v{backup.version} · {new Date(backup.savedAt).toLocaleString('ko-KR')} · {backup.savedBy.name} · 무결성 확인 {backup.contentSha256.slice(0, 12)}…</small></span><Button variant="secondary" onClick={() => restoreRevision(backup)}>이 백업 불러오기</Button></li>)}</ul> : <p className="empty-box">첫 자동 저장 때 백업이 생성되고, 이후 변경된 작업은 1시간 단위로 안전하게 보관됩니다.</p>}</details>
         </Card>
-        {roles.includes('admin') && (activeStep === 4 || activeStep === 5) && <Card title="관리자 출력 검수 · 미승인">
+        {roles.includes('admin') && (activeStep === 4 || activeStep === 5) && <details className="report-advanced-panel"><summary>관리자용 미승인 파일 검수</summary><Card title="관리자 출력 검수 · 미승인">
           <p>최종 승인 없이 저장본의 화면·파일을 검수합니다. 업무 승인·납품 기록이나 직원 알림은 생성하지 않습니다. 파일명에 검수용을 표시하며 원형 HWP 내부는 변경하지 않습니다.</p>
           <div className="action-row"><Button variant="secondary" onClick={() => void loadQaSnapshot()} disabled={!qaReady || qaExportBusy}>{qaExportBusy ? '검수 처리 중…' : '저장본 검수 미리보기 불러오기'}</Button>{!qaReady && <span className="muted">변경사항과 저장 오류를 먼저 해결해 주세요.</span>}</div>
           {qaSnapshot && <>
@@ -1885,34 +1926,40 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           </>}
           {qaExportMessage && <p className="notice-box" role="status">{qaExportMessage}</p>}
           {qaExportError && <p role="alert">{qaExportError}</p>}
-        </Card>}
+        </Card></details>}
         <Card title="" className="report-step-card report-step-card--5 report-stage-card">
           {renderStageHeader(5)}
           <div className="form-stack">
-            <div className="action-row"><span className="preview-pill">{currentReview ? currentReview.status === 'PENDING' ? `v${version} 검토 대기` : currentReview.status === 'APPROVED' ? `v${version} 승인 완료` : `v${version} 수정 요청` : pendingReview ? `v${pendingReview.reportVersion} 검토 중 · 현재 v${version}` : version ? `v${version} 제출 가능` : '저장 후 제출 가능'}</span><Button variant="secondary" onClick={() => onNavigate('/approval')}>검토·승인함 보기</Button></div>
+            <h3>최종 결재상신</h3>
+            <p><strong>{title}</strong> · 저장본 v{version}{savedAt ? ` · ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
+            <div className="action-row"><span className="preview-pill">{currentReview ? currentReview.status === 'PENDING' ? `v${version} 결재 대기` : currentReview.status === 'APPROVED' ? `v${version} 승인 완료` : `v${version} 수정 요청` : pendingReview ? `v${pendingReview.reportVersion} 결재 중 · 현재 v${version}` : version ? `v${version} 상신 가능` : '저장 후 상신 가능'}</span><Button variant="secondary" onClick={() => setApprovalRefresh(value=>value+1)}>결재 상태 새로고침</Button>{currentReview && <Button variant="secondary" onClick={() => onNavigate(`/approval?reviewId=${encodeURIComponent(currentReview.id)}`)}>이 상신본·결재 내용 보기</Button>}</div>
+            {currentReview && <p className="notice-box">상신자 {currentReview.requestedBy.name} · 결재자 {currentReview.assignedReviewer?.name ?? '기존 검토 요청'} · {new Date(currentReview.requestedAt).toLocaleString('ko-KR')}{currentReview.status==='PENDING'?' · 지정 결재자의 업무 알림에서 상신본을 확인할 수 있습니다.':''}</p>}
             {currentReview?.decisionNote && <p className="notice-box"><strong>검토 의견</strong><br />{currentReview.decisionNote}</p>}
+            <details className="report-advanced-panel"><summary>최종 보고서 미리보기 · v{version}</summary>{dirty || saving || loadedCaseId!==selectedCaseId ? <p className="notice-box">변경사항을 저장한 뒤 상신할 보고서를 확인하세요.</p> : <ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber ?? ''} caseTitle={selectedCase?.title ?? ''} title={title} content={content} editorJson={joinReportPresentation(editorJson,reportHeader,reportFrontMatter)} label="결재상신 전 저장본 미리보기"/>}</details>
             {!currentReview && editable && <>
-              <label htmlFor="preview-review-note">검토 요청 메모</label>
+              <Select label="최종 결재자" value={assignedReviewerId} onChange={event=>setAssignedReviewerId(event.target.value)} disabled={submittingReview || !!pendingReview} options={[{value:'',label:'결재자를 선택하세요'},...approvers.map(person=>({value:person.id,label:`${person.name} · ${person.role==='ceo'?'대표':'임원'}`}))]}/>
+              {approversError && <p className="error-box" role="alert">{approversError}<Button variant="secondary" onClick={()=>setApprovalRefresh(value=>value+1)}>결재자 다시 조회</Button></p>}
+              {!approversError && !approvers.length && <p className="muted">본인과 이 버전을 저장한 사람을 제외한 활성 CEO·DIRECTOR 계정이 필요합니다.</p>}
+              <label htmlFor="preview-review-note">결재 요청 내용</label>
               <textarea id="preview-review-note" className="report-editor report-editor--decision" value={reviewNote} maxLength={2000} onChange={(event) => setReviewNote(event.target.value)} placeholder="검토자가 확인할 쟁점이나 근거를 남기세요." />
-              <div className="action-row"><Button onClick={() => void requestReview()} disabled={!version || dirty || saving || submittingReview || !!pendingReview || loadedCaseId !== selectedCaseId}>{submittingReview ? '제출 중…' : '저장된 최신본 검토 요청'}</Button>{dirty && <span className="muted">변경사항을 먼저 저장해야 합니다.</span>}{pendingReview && <span className="muted">기존 검토가 끝난 뒤 새 버전을 제출할 수 있습니다.</span>}</div>
+              <div className="action-row"><Button onClick={() => void requestReview()} disabled={!version || !assignedReviewerId || !qaCanReadSavedDraft(true) || dirty || saving || submittingReview || !!pendingReview || loadedCaseId !== selectedCaseId}>{submittingReview ? '결재상신 중…' : '선택한 결재자에게 상신'}</Button><span className="muted">저장된 v{version}을 보내며 결재자에게 업무 알림과 상신본 링크가 표시됩니다.</span>{dirty && <span className="muted">변경사항을 먼저 저장해야 합니다.</span>}{pendingReview && <span className="muted">기존 결재가 끝난 뒤 새 버전을 상신할 수 있습니다.</span>}</div>
             </>}
+            {currentReview?.status==='CHANGES_REQUESTED' && <p className="notice-box">결재 의견에 따라 앞 단계에서 수정하고 새 버전을 저장한 뒤 다시 상신하세요.</p>}
           </div>
-          <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">승인본 확정·3종 다운로드</h3>
-          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="empty-box">독립 검토자가 현재 버전을 승인하면 미리보기와 동일한 DOCX·PDF·HWP 출력이 열립니다.</p> : !currentFinalization ? <div className="form-stack">
+          <section className="report-stage-section report-final-output" aria-labelledby="report-final-output-title"><h3 id="report-final-output-title">최종 보고서 출력</h3>
+          {!currentReview || currentReview.status !== 'APPROVED' ? <p className="notice-box">최종 결재 승인 후 이 단계에서 승인본을 확정하고 DOCX·PDF·HWP를 출력할 수 있습니다. 앞 단계의 작성본 출력은 검수용입니다.</p> : !currentFinalization ? <div className="form-stack">
             <p className="notice-box"><strong>승인 완료 · v{currentReview.reportVersion}</strong><br />승인자 {currentReview.reviewedBy?.name} · 이 정확한 버전만 최종 확정됩니다.</p>
-            <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 최종 확정</Button><span className="muted">확정 기록은 이후 변경·삭제할 수 없습니다.</span></div>
+            <div className="action-row"><Button onClick={() => void finalizeApproved()} disabled={submittingReview || dirty || saving}>승인본 확정·출력 준비</Button><span className="muted">승인된 v{currentReview.reportVersion}을 출력본으로 고정합니다.</span></div>
           </div> : <div className="form-stack">
             <p className="notice-box"><strong>최종 확정 완료 · v{currentFinalization.reportVersion}</strong><br />{currentFinalization.finalizedBy.name} · {new Date(currentFinalization.finalizedAt).toLocaleString('ko-KR')} · 승인자 {currentFinalization.approvedBy}</p>
             {finalSnapshotError ? <p role="alert">{finalSnapshotError}<Button variant="secondary" onClick={() => setFinalSnapshotRetry(value => value + 1)}>확정본 다시 조회</Button></p> : !approvedDocument ? <p role="status">확정 당시 본문과 서식을 불러오는 중입니다.</p> : <p>현재 편집본이 아닌 승인·확정 당시의 본문과 서식으로 출력합니다.</p>}
             <div ref={finalReportPreviewRef} className="report-final-export-source">{approvedDocument && <ReportFinalDocumentPreview {...approvedDocument}/>}</div>
-            <div className="action-row final-export-actions" aria-label="확정 보고서 파일 내려받기">
-              <Button className="final-export-button is-docx" aria-label="확정 보고서 Word DOCX 내려받기" onClick={() => void downloadFinalReport('docx')} disabled={submittingReview || !approvedDocument}><FileFormatIcon format="docx"/><span>Word DOCX</span></Button>
-              <Button className="final-export-button is-pdf" aria-label="확정 보고서 PDF 내려받기" onClick={() => void downloadFinalReport('pdf')} disabled={submittingReview || !approvedDocument}><FileFormatIcon format="pdf"/><span>PDF</span></Button>
-              <Button className="final-export-button is-hwp" aria-label="확정 보고서 HWP 내려받기" onClick={() => void downloadFinalReport('hwp')} disabled={submittingReview || !approvedDocument}><FileFormatIcon format="hwp"/><span>HWP</span></Button>
-            </div>
             {finalExportMessage && <p className="notice-box" role="status">{finalExportMessage}</p>}
             {currentFinalization.outputs.map((output) => <p className="muted" key={output.id}>{output.format} · {(output.byteSize / 1024).toFixed(1)} KB · SHA {output.contentSha256.slice(0, 16)}…</p>)}
-          </div>}</section>
+          </div>}
+          <div className="action-row final-export-actions" aria-label="확정 보고서 파일 내려받기">{(['docx','pdf','hwp'] as const).map(format=><Button key={format} className={`final-export-button is-${format}`} aria-label={`확정 보고서 ${format==='docx'?'Word DOCX':format.toUpperCase()} 내려받기`} onClick={()=>void requestFinalOutput(format)} disabled={submittingReview || !!pendingFinalExport || currentReview?.status!=='APPROVED' || (!currentFinalization&&(dirty||saving)) || (!!currentFinalization&&!approvedDocument)}><FileFormatIcon format={format}/><span>{format==='docx'?'Word DOCX':format.toUpperCase()}</span></Button>)}</div>
+          {pendingFinalExport && <p role="status">승인본을 확정하고 {pendingFinalExport.format.toUpperCase()} 출력본을 준비하고 있습니다.</p>}
+          </section>
         </Card>
       </>}
       <footer className="report-wizard-footer" aria-label="보고서 단계 이동">

@@ -5,16 +5,18 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
+const assignedReview = args.at(-1) === '--cf221';
+if (assignedReview) args.pop();
 const manualRetryPreview = args.at(-1) === '--cf151-preview';
 const manualRetry = manualRetryPreview || args.at(-1) === '--cf151';
 if (manualRetry) args.pop();
 const preview = args[1] === '78094a1c-abe0-451d-bc12-68d0d37166d8';
 const databaseId = preview ? '78094a1c-abe0-451d-bc12-68d0d37166d8' : '16d1f25b-60c8-4489-95ed-4fa7de161c9f';
-const migrations = manualRetry ? ['0066_cf151_manual_evidence_retry.sql'] : preview ? ['0063_cf123_es_documents.sql','0064_cf132_ecos_api_settings.sql','0065_cf148_finalization_metadata.sql'] : ['0065_cf148_finalization_metadata.sql'];
+const migrations = assignedReview ? ['0067_cf221_assigned_report_approval.sql'] : manualRetry ? ['0066_cf151_manual_evidence_retry.sql'] : preview ? ['0063_cf123_es_documents.sql','0064_cf132_ecos_api_settings.sql','0065_cf148_finalization_metadata.sql'] : ['0065_cf148_finalization_metadata.sql'];
 const migration = migrations.join(',');
-const kind = manualRetry ? (preview ? 'CF151_PREVIEW_D1_BACKUP' : 'CF151_DEVELOPMENT_D1_BACKUP') : preview ? 'CF148_PREVIEW_D1_BACKUP' : 'CF148_DEVELOPMENT_D1_BACKUP';
-const addedTables = manualRetry ? ['preview_google_case_retry_approvals'] : [...(preview ? ['es_documents','es_revisions','es_runs','es_outputs','es_audit_events','preview_ecos_api_settings'] : []),'preview_report_finalization_metadata'];
-const addedObjects = manualRetry ? [...addedTables,'preview_google_case_retry_approval_insert_guard','preview_google_case_retry_approval_update_guard','preview_google_case_retry_approval_delete_guard','idx_preview_google_case_operation_pending_fingerprint','preview_google_case_operation_retry_guard','preview_google_case_retry_evidence_guard'].sort() : [...addedTables, 'preview_finalization_metadata_no_update', 'preview_finalization_metadata_no_delete', ...(preview ? ['es_documents_owner','es_revision_no_update','es_revision_no_delete','es_run_no_update','es_run_no_delete','es_audit_no_update','es_audit_no_delete','es_owner_immutable','es_run_revision_scope','preview_ecos_api_settings_insert_guard','preview_ecos_api_settings_update_guard','preview_ecos_api_settings_delete_guard'] : [])].sort();
+const kind = assignedReview ? 'CF221_DEVELOPMENT_D1_BACKUP' : manualRetry ? (preview ? 'CF151_PREVIEW_D1_BACKUP' : 'CF151_DEVELOPMENT_D1_BACKUP') : preview ? 'CF148_PREVIEW_D1_BACKUP' : 'CF148_DEVELOPMENT_D1_BACKUP';
+const addedTables = assignedReview ? [] : manualRetry ? ['preview_google_case_retry_approvals'] : [...(preview ? ['es_documents','es_revisions','es_runs','es_outputs','es_audit_events','preview_ecos_api_settings'] : []),'preview_report_finalization_metadata'];
+const addedObjects = assignedReview ? ['idx_preview_report_reviews_recipient','preview_report_review_recipient_insert_guard','preview_report_review_recipient_identity_guard'].sort() : manualRetry ? [...addedTables,'preview_google_case_retry_approval_insert_guard','preview_google_case_retry_approval_update_guard','preview_google_case_retry_approval_delete_guard','idx_preview_google_case_operation_pending_fingerprint','preview_google_case_operation_retry_guard','preview_google_case_retry_evidence_guard'].sort() : [...addedTables, 'preview_finalization_metadata_no_update', 'preview_finalization_metadata_no_delete', ...(preview ? ['es_documents_owner','es_revision_no_update','es_revision_no_delete','es_run_no_update','es_run_no_delete','es_audit_no_update','es_audit_no_delete','es_owner_immutable','es_run_revision_scope','preview_ecos_api_settings_insert_guard','preview_ecos_api_settings_update_guard','preview_ecos_api_settings_delete_guard'] : [])].sort();
 const removedObjects = manualRetry ? ['idx_preview_google_case_operation_active_fingerprint'] : [];
 class CheckFailure extends Error {}
 const check = (condition, code) => { if (!condition) throw new CheckFailure(code); };
@@ -45,11 +47,18 @@ const preserve = (before, after) => {
   for (const name of tables(before)) {
     const previous = sortedRows(before, name), current = sortedRows(after, name);
     if (name === 'd1_migrations') check(previous.every(row => current.includes(row)), 'ORIGINAL_LEDGER_CHANGED');
+    else if (assignedReview && name === 'preview_report_reviews') {
+      const columns=all(before,'PRAGMA table_info(preview_report_reviews)').map(row=>row.name);
+      equal(all(after,'PRAGMA table_info(preview_report_reviews)').map(row=>row.name),[...columns,'assigned_reviewer_id'],'EXACT_NEW_REVIEW_COLUMN');
+      equal(all(after,'SELECT '+columns.map(quote).join(',')+' FROM preview_report_reviews').map(json).sort(),previous,'EXISTING_REVIEW_VALUES_CHANGED');
+      check(rows(after,name).every(row=>row.assigned_reviewer_id===null),'EXISTING_REVIEW_RECIPIENT_CHANGED');
+    }
     else equal(current, previous, 'EXISTING_VALUES_CHANGED');
   }
   const originalSchema = schema(before), nextSchema = schema(after);
   check(removedObjects.every(name => originalSchema.some(item => item.name === name) && !nextSchema.some(item => item.name === name)), 'EXACT_REVIEWED_INDEX_REPLACEMENT');
-  equal(nextSchema.filter(item => originalSchema.some(previous => previous.name === item.name)), originalSchema.filter(item => !removedObjects.includes(item.name)), 'EXISTING_SCHEMA_CHANGED');
+  const changedObjects=assignedReview?['preview_report_reviews','preview_report_review_decision_guard']:[];
+  equal(nextSchema.filter(item => !changedObjects.includes(item.name) && originalSchema.some(previous => previous.name === item.name)), originalSchema.filter(item => !changedObjects.includes(item.name) && !removedObjects.includes(item.name)), 'EXISTING_SCHEMA_CHANGED');
   equal(nextSchema.filter(item => !originalSchema.some(previous => previous.name === item.name)).map(item => item.name).sort(), addedObjects, 'UNREVIEWED_SCHEMA_OBJECT');
 };
 const runPending = (db, sql) => {
@@ -72,6 +81,7 @@ try {
   check(['sign', 'verify', 'preflight', 'restore', 'compare'].includes(mode) && !extra.length, 'USAGE_sign_verify_preflight_restore_compare');
   check(database === databaseId, 'EXPLICIT_DATABASE_SCOPE_REQUIRED');
   check(!manualRetry || preview === manualRetryPreview, 'CF151_EXPLICIT_ENVIRONMENT_REQUIRED');
+  check(!assignedReview || !preview, 'CF221_DEVELOPMENT_ONLY');
   check(typeof beforePath === 'string' && /\.sql$/i.test(beforePath) && typeof manifestPath === 'string', 'SQL_BACKUP_AND_MANIFEST_REQUIRED');
   check(['restore', 'compare'].includes(mode) ? !!afterPath : !afterPath, 'UNEXPECTED_OR_MISSING_AFTER_PATH');
   check(mode !== 'sign' || !pin, 'SIGN_TAKES_NO_PIN');
@@ -106,11 +116,11 @@ try {
     check(before.prepare('SELECT COUNT(*) AS n FROM preview_evidence_upload_locks WHERE organization_id=? AND case_id=? AND category=?').get(op.organization_id,op.case_id,op.workflow_category).n===0, 'EXISTING_UPLOAD_LOCK_MUST_NOT_BE_RELEASED');
     recoveryScope={caseId:op.case_id,caseNumber:item.case_number,operationId:op.id,operationSnapshot:op};
   }
-  const appliedMigrationChecksums = manualRetry ? Object.fromEntries(rows(before,'d1_migrations').map(row => row.name).sort().map(name => {
+  const appliedMigrationChecksums = manualRetry || assignedReview ? Object.fromEntries(rows(before,'d1_migrations').map(row => row.name).sort().map(name => {
     check(typeof name === 'string' && /^\d{4}_[a-z0-9_]+\.sql$/.test(name), 'INVALID_APPLIED_MIGRATION_NAME');
     return [name,hash(readFileSync('apps/cloudflare/migrations/'+name))];
   })) : undefined;
-  const state = { sqlSha256: hash(readFileSync(beforePath)), tables: inventory(before), schemaSha256: hash(json(schema(before))), migration, migrationSha256: hash(sql), ...(manualRetry ? {appliedMigrationChecksums,...(recoveryScope ? {recoveryScope} : {})} : {}) };
+  const state = { sqlSha256: hash(readFileSync(beforePath)), tables: inventory(before), schemaSha256: hash(json(schema(before))), migration, migrationSha256: hash(sql), ...(manualRetry || assignedReview ? {appliedMigrationChecksums,...(recoveryScope ? {recoveryScope} : {})} : {}) };
   if (mode === 'sign') {
     const manifest = { kind, database, createdAt: new Date().toISOString(), ...state };
     const { publicKey, privateKey } = generateKeyPairSync('ed25519');

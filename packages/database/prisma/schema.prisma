@@ -1310,6 +1310,7 @@ model ReportReviewRequest {
   @@index([organizationId, caseId])
   @@index([requestedById])
   @@index([assignedReviewerId])
+  @@index([assignedReviewerId, createdAt])
 }
 
 model ReportFinalization {

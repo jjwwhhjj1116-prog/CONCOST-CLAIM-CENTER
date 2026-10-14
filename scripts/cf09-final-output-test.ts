@@ -152,11 +152,10 @@ test('CF09 Worker document engine is byte deterministic and embeds immutable pro
 
 test('CF09 production studio exposes finalize, generate and download actions', () => {
   const studio=readFileSync(join(process.cwd(),'apps/web/src/routes/PreviewReportStudio.tsx'),'utf8');
-  assert.match(studio,/승인본 최종 확정/u);
+  assert.match(studio,/승인본 확정·출력 준비/u);
   assert.match(studio,/downloadFinalDocument/u);
-  assert.match(studio,/downloadFinalReport\('docx'\)/u);
-  assert.match(studio,/downloadFinalReport\('pdf'\)/u);
-  assert.match(studio,/downloadFinalReport\('hwp'\)/u);
+  assert.match(studio,/\['docx','pdf','hwp'\]/u);
+  assert.match(studio,/requestFinalOutput\(format\)/u);
   assert.match(studio,/FileFormatIcon/u);
   assert.match(studio,/DOCX.*PDF.*HWP/su);
 });

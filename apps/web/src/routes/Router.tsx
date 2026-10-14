@@ -240,7 +240,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
   if (previewMode && currentRoute.id === 'REPO-02') return <PreviewReportStudio key={currentSearch} roles={roles} onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-03') return <ReportLibraryView mode="projects" onNavigate={onNavigate} />;
   if (previewMode && currentRoute.id === 'REPO-04') return <ReportLibraryView mode="database" onNavigate={onNavigate} />;
-  if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox roles={roles} onNavigate={onNavigate} />;
+  if (previewMode && currentRoute.id === 'APPR-01') return <PreviewApprovalInbox key={currentSearch} roles={roles} onNavigate={onNavigate} search={currentSearch} />;
   if (previewMode && ['PROP-01', 'PROP-02'].includes(currentRoute.id)) {
     return (
       <section className="route-view" aria-labelledby="route-title">

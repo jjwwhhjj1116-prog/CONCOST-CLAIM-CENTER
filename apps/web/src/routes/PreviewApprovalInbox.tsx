@@ -16,6 +16,7 @@ export interface PreviewReportReview {
   reportTitle: string;
   status: 'PENDING' | 'APPROVED' | 'CHANGES_REQUESTED';
   requestedBy: { id: string; name: string };
+  assignedReviewer?: { id: string; name: string | null } | null;
   canDecide?: boolean;
   requestNote: string | null;
   requestedAt: string;
@@ -35,7 +36,7 @@ function statusLabel(status: PreviewReportReview['status']): string {
   return '검토 대기';
 }
 
-export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[]; onNavigate: (path: string) => void }): React.ReactElement {
+export function PreviewApprovalInbox({ roles, onNavigate, search = '' }: { roles: UserRole[]; onNavigate: (path: string) => void; search?: string }): React.ReactElement {
   const [reviews, setReviews] = useState<PreviewReportReview[]>([]);
   const [filter, setFilter] = useState<'ALL' | PreviewReportReview['status']>('PENDING');
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -72,7 +73,7 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
     }, 15_000);
     return () => { active = false; observer.disconnect(); window.clearTimeout(timeout); root.removeEventListener('load', check, true); root.removeEventListener('error', check, true); };
   }, [document]);
-  const openDocument = async (review: PreviewReportReview) => {
+  const openDocument = useCallback(async (review: PreviewReportReview) => {
     const sequence = ++previewSequence.current;
     setPreviewId(review.id); setDocument(null); setDocumentError(''); setConfirmedRevision(''); setPreviewReady(false); setDocumentLoading(true);
     try {
@@ -82,7 +83,7 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
       setDocument(result.document);
     } catch (reason) { if (sequence === previewSequence.current) setDocumentError(reason instanceof Error ? reason.message : '제출 본문을 불러오지 못했습니다.'); }
     finally { if (sequence === previewSequence.current) setDocumentLoading(false); }
-  };
+  }, []);
   const canReview = roles.some((role) => REVIEW_ROLES.includes(role));
   const canFinalApprove = roles.some((role) => FINAL_APPROVAL_ROLES.includes(role));
   const resetPreview = useCallback(() => {
@@ -101,6 +102,13 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
   }, [resetPreview]);
 
   useEffect(() => { void load(); }, [load]);
+  const linkedReviewId = new URLSearchParams(search).get('reviewId') ?? '';
+  useEffect(() => {
+    if (loading || !linkedReviewId) return;
+    const review = reviews.find(entry => entry.id === linkedReviewId);
+    if (!review) { setError('이 상신을 찾을 수 없거나 열람 권한이 없습니다.'); return; }
+    setFilter('ALL'); void openDocument(review);
+  }, [loading, linkedReviewId, openDocument]);
   const visible = useMemo(() => filter === 'ALL' ? reviews : reviews.filter((review) => review.status === filter), [filter, reviews]);
 
   const decide = async (review: PreviewReportReview, decision: 'APPROVED' | 'CHANGES_REQUESTED') => {
@@ -132,7 +140,7 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
           ]} />
           <div className="action-row"><span className="preview-pill">대기 {reviews.filter((review) => review.status === 'PENDING').length}건</span><Button variant="secondary" onClick={() => void load()}>새로고침</Button></div>
         </div>
-        <p className="muted">승인은 제출된 정확한 보고서 버전에 고정됩니다. 수정 요청은 검토자도 할 수 있지만 최종 승인은 CEO·DIRECTOR 역할(현동명 대표 또는 이원희 부사장)만 할 수 있으며 자기 승인은 시스템에서 차단됩니다.</p>
+        <p className="muted">지정 결재자가 제출된 보고서의 본문·표·사진을 확인하고 승인 또는 수정을 요청합니다. 승인은 제출 버전에 고정되며 본인이 작성·저장한 버전은 승인할 수 없습니다.</p>
         {error && <p className="error-box" role="alert">{error}</p>}
       </Card>
 
@@ -140,6 +148,7 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
         <Card key={review.id} title={`${review.caseNumber} · ${review.caseTitle}`}>
           <div className="form-stack" style={{ gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0 }}>
             <div className="action-row"><span className="preview-pill">{statusLabel(review.status)}</span><strong>{review.reportTitle} · v{review.reportVersion}</strong></div>
+            <p>상신자 {review.requestedBy.name} · 결재자 {review.assignedReviewer?.name ?? '기존 검토 요청'}</p>
             <p>{review.requestNote || '별도 검토 메모 없음'}</p>
             <Button variant="secondary" disabled={Boolean(busyId)} onClick={() => void openDocument(review)}>제출 본문·표·사진 보기 · v{review.reportVersion}</Button>
             {previewId === review.id && <section aria-label={`제출 보고서 v${review.reportVersion} 검토`}>
@@ -163,8 +172,8 @@ export function PreviewApprovalInbox({ roles, onNavigate }: { roles: UserRole[];
                 {canFinalApprove && confirmedRevision !== review.reportRevisionId && <span className="muted">제출 본문을 열고 확인한 뒤 승인할 수 있습니다.</span>}
                 <Button variant="danger" onClick={() => void decide(review, 'CHANGES_REQUESTED')} disabled={Boolean(busyId) || review.canDecide === false || !(notes[review.id]?.trim())}>수정 요청</Button>
               </div>
-              {review.canDecide === false && <p className="muted">본인이 작성·저장하거나 검토 요청한 버전입니다. 다른 검토자에게 결정을 요청하세요.</p>}
-              {!canFinalApprove && <p className="muted">최종 승인은 현동명 대표 또는 이원희 부사장 계정에서 진행합니다.</p>}
+              {review.canDecide === false && <p className="muted">지정 결재자만 결정할 수 있으며 본인이 작성·저장·상신한 버전은 직접 승인할 수 없습니다.</p>}
+              {!canFinalApprove && <p className="muted">최종 승인은 CEO·DIRECTOR 권한의 지정 결재자가 진행합니다.</p>}
             </>}
           </div>
         </Card>

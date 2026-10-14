@@ -7381,6 +7381,8 @@ interface PreviewReportReviewRow {
   requestedById: string;
   requestedByName: string;
   savedById: string;
+  assignedReviewerId?: string | null;
+  assignedReviewerName?: string | null;
   requestNote: string | null;
   requestedAt: string;
   reviewedById: string | null;
@@ -7402,7 +7404,8 @@ function previewReviewProjection(row: PreviewReportReviewRow, userId: string): R
     reportTitle: row.reportTitle,
     status: row.status,
     requestedBy: { id: row.requestedById, name: row.requestedByName },
-    canDecide: row.requestedById !== userId && row.savedById !== userId,
+    assignedReviewer: row.assignedReviewerId ? { id: row.assignedReviewerId, name: row.assignedReviewerName } : null,
+    canDecide: row.requestedById !== userId && row.savedById !== userId && (!row.assignedReviewerId || row.assignedReviewerId === userId),
     requestNote: row.requestNote,
     requestedAt: row.requestedAt,
     reviewedBy: row.reviewedById ? { id: row.reviewedById, name: row.reviewedByName } : null,
@@ -7464,7 +7467,23 @@ async function handlePreviewMemberAlerts(request:Request,env:CloudflareEnv):Prom
       ORDER BY s.start_date,c.case_number,s.stage_code LIMIT 30`).bind(today,user.id,PREVIEW_ORGANIZATION_ID,today,today,user.id,today).all<Record<string,unknown>>()
   ]);
   const stageLabels:Record<string,string>={KICKOFF:'착수회의',SITE_SURVEY:'현장조사',TAKEOFF_COST:'물량산출·내역',REPORT_WRITING:'보고서 작성'};
-  return json({awards:awardRows.results.map((row)=>({eventKey:row.eventKey,caseId:row.caseId,caseNumber:row.caseNumber,projectTitle:row.title,awardedAt:row.awardedAt,projectStartOn:row.projectStartOn,projectEndOn:row.projectEndOn,message:`${row.caseNumber} · ${row.title} 프로젝트가 수주 확정되었습니다.`})),todos:todoRows.results.map((row)=>({...row,stageLabel:stageLabels[String(row.stageCode)]??String(row.stageCode),message:`${row.caseNumber} · ${stageLabels[String(row.stageCode)]??row.stageCode} 투입 일정 (${row.startDate} ~ ${row.endDate})`})),today,available:true,phase:'CF79_MEMBER_ALERTS'});
+  let reports: Record<string,unknown>[] = [];
+  if (await previewAssignedReviewSchema(env)) {
+    const incoming = user.roles.some(role=>PREVIEW_FINAL_APPROVAL_ROLES.has(role)) ? "(v.status='PENDING' AND v.assigned_reviewer_id=?) OR " : '';
+    const reportRows = await env.DB.prepare(`SELECT (CASE v.status WHEN 'PENDING' THEN 'REPORT:' WHEN 'APPROVED' THEN 'APPROVED:' ELSE 'CHANGES:' END || v.id) AS eventKey,
+      v.id AS reviewId,v.case_id AS caseId,c.case_number AS caseNumber,r.title,v.report_version AS version,v.status,
+      requester.display_name AS requestedByName,assignee.display_name AS assignedReviewerName,
+      COALESCE(v.reviewed_at,v.requested_at) AS createdAt
+      FROM preview_report_reviews v JOIN preview_cases c ON c.id=v.case_id AND c.organization_id=v.organization_id
+      JOIN preview_report_revisions r ON r.id=v.report_revision_id JOIN preview_users requester ON requester.id=v.requested_by
+      LEFT JOIN preview_users assignee ON assignee.id=v.assigned_reviewer_id
+      WHERE v.organization_id=? AND c.deleted_at IS NULL AND (${incoming}(v.status<>'PENDING' AND v.requested_by=?))
+      AND ${previewReportActiveSql('v.case_id')}
+      AND NOT EXISTS (SELECT 1 FROM preview_member_alert_reads a WHERE a.user_id=? AND a.event_key=(CASE v.status WHEN 'PENDING' THEN 'REPORT:' WHEN 'APPROVED' THEN 'APPROVED:' ELSE 'CHANGES:' END || v.id))
+      ORDER BY COALESCE(v.reviewed_at,v.requested_at) DESC LIMIT 30`).bind(PREVIEW_ORGANIZATION_ID,...(incoming?[user.id]:[]),user.id,user.id).all<Record<string,unknown>>();
+    reports=reportRows.results.map(row=>({...row,path:row.status==='PENDING'?`/approval?reviewId=${row.reviewId}`:`/reports/studio?caseId=${row.caseId}&step=5`,message:row.status==='PENDING'?`${row.requestedByName}님이 최종 결재를 요청했습니다.`:row.status==='APPROVED'?'최종 결재가 승인되었습니다. 5단계에서 승인본을 확정하고 출력하세요.':'수정 요청을 확인하고 새 버전을 저장해 다시 상신하세요.'}));
+  }
+  return json({awards:awardRows.results.map((row)=>({eventKey:row.eventKey,caseId:row.caseId,caseNumber:row.caseNumber,projectTitle:row.title,awardedAt:row.awardedAt,projectStartOn:row.projectStartOn,projectEndOn:row.projectEndOn,message:`${row.caseNumber} · ${row.title} 프로젝트가 수주 확정되었습니다.`})),todos:todoRows.results.map((row)=>({...row,stageLabel:stageLabels[String(row.stageCode)]??String(row.stageCode),message:`${row.caseNumber} · ${stageLabels[String(row.stageCode)]??row.stageCode} 투입 일정 (${row.startDate} ~ ${row.endDate})`})),reports,today,available:true,phase:'CF221_REPORT_APPROVAL_ALERTS'});
 }
 
 async function previewApprovalNotificationSchema(env: CloudflareEnv): Promise<boolean> {
@@ -7478,9 +7497,34 @@ async function previewApprovalNotificationSchema(env: CloudflareEnv): Promise<bo
   }
 }
 
+async function previewAssignedReviewSchema(env: CloudflareEnv): Promise<boolean> {
+  if (!env.DB) return false;
+  try { await env.DB.prepare('SELECT assigned_reviewer_id FROM preview_report_reviews LIMIT 0').all(); return true; }
+  catch { return false; }
+}
+
+// A named executive may read the submitted document's photos, without getting
+// access to its project library, editable draft or other attachments.
+async function canReadSubmittedReviewImage(env: CloudflareEnv, user: SessionUser, evidence: {id:string;caseId:string;mimeType:string}): Promise<boolean> {
+  if (!env.DB || !user.roles.some(role=>PREVIEW_FINAL_APPROVAL_ROLES.has(role)) || !/^image\/(png|jpeg|webp|gif)$/u.test(evidence.mimeType) || !await previewAssignedReviewSchema(env) || await previewReportDeleted(env,evidence.caseId)) return false;
+  const rows = await env.DB.prepare(`SELECT r.editor_json AS editorJson FROM preview_report_reviews v JOIN preview_report_revisions r ON r.id=v.report_revision_id AND r.case_id=v.case_id AND r.version=v.report_version
+    WHERE v.organization_id=? AND v.case_id=? AND v.assigned_reviewer_id=?`).bind(PREVIEW_ORGANIZATION_ID,evidence.caseId,user.id).all<{editorJson:string|null}>();
+  const source = `/api/cases/evidence/${evidence.id}/download`;
+  const containsImage = (node: unknown): boolean => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return false;
+    const value = node as {type?:string;attrs?:{src?:string};content?:unknown[]};
+    return (value.type==='image' && value.attrs?.src===source) || (Array.isArray(value.content) && value.content.some(containsImage));
+  };
+  return rows.results.some(row=>containsImage(parsePreviewEditorJson(row.editorJson)));
+}
+
 async function previewReportReviewList(env: CloudflareEnv, user: SessionUser, caseId = ''): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const notificationSchema = await previewApprovalNotificationSchema(env);
+  const assignedSchema = await previewAssignedReviewSchema(env);
+  const recipientColumns = assignedSchema ? 'v.assigned_reviewer_id AS assignedReviewerId, assignee.display_name AS assignedReviewerName, ' : '';
+  const recipientJoin = assignedSchema ? 'LEFT JOIN preview_users assignee ON assignee.id=v.assigned_reviewer_id ' : '';
+  const recipientScope = assignedSchema && user.roles.some(role => PREVIEW_FINAL_APPROVAL_ROLES.has(role)) ? ' OR v.assigned_reviewer_id=?' : '';
   const deliveryColumns = notificationSchema
     ? "(SELECT n.id FROM preview_notifications n WHERE n.review_id=v.id AND n.notification_type='REPORT_APPROVED_DELIVERY_REQUIRED' LIMIT 1) AS deliveryNotificationId, (SELECT o.status FROM preview_email_outbox o JOIN preview_notifications n ON n.id=o.notification_id WHERE n.review_id=v.id LIMIT 1) AS deliveryEmailStatus "
     : 'NULL AS deliveryNotificationId, NULL AS deliveryEmailStatus ';
@@ -7488,13 +7532,13 @@ async function previewReportReviewList(env: CloudflareEnv, user: SessionUser, ca
     'SELECT v.id, v.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, v.report_revision_id AS reportRevisionId, ' +
     'v.report_version AS reportVersion, r.title AS reportTitle, r.saved_by AS savedById, v.status, v.requested_by AS requestedById, requester.display_name AS requestedByName, ' +
     'v.request_note AS requestNote, v.requested_at AS requestedAt, v.reviewed_by AS reviewedById, reviewer.display_name AS reviewedByName, ' +
-    'v.decision_note AS decisionNote, v.reviewed_at AS reviewedAt, ' + deliveryColumns + 'FROM preview_report_reviews v ' +
+    'v.decision_note AS decisionNote, v.reviewed_at AS reviewedAt, ' + recipientColumns + deliveryColumns + 'FROM preview_report_reviews v ' +
     'JOIN preview_cases c ON c.id = v.case_id JOIN preview_report_revisions r ON r.id = v.report_revision_id ' +
-    'JOIN preview_users requester ON requester.id = v.requested_by LEFT JOIN preview_users reviewer ON reviewer.id = v.reviewed_by ' +
+    'JOIN preview_users requester ON requester.id = v.requested_by LEFT JOIN preview_users reviewer ON reviewer.id = v.reviewed_by ' + recipientJoin +
     'WHERE v.organization_id = ? AND (? = \'\' OR v.case_id = ?) ' +
-    'AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = v.case_id AND a.user_id = ?)) ' +
+    'AND c.deleted_at IS NULL AND (? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = v.case_id AND a.user_id = ?)' + recipientScope + ') ' +
     'ORDER BY CASE v.status WHEN \'PENDING\' THEN 0 ELSE 1 END, v.requested_at DESC LIMIT 100'
-  ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewReportReviewRow>();
+  ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id, ...(recipientScope ? [user.id] : [])).all<PreviewReportReviewRow>();
   return json({ reviews: rows.results.map(row => previewReviewProjection(row, user.id)), phase: 'CF08_D1_REPORT_APPROVAL' });
 }
 
@@ -7502,6 +7546,18 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
+
+  const assignedSchema = await previewAssignedReviewSchema(env);
+  if (url.pathname === '/api/report-reviews/approvers' && request.method === 'GET') {
+    const caseId = url.searchParams.get('caseId') ?? '';
+    if (!PREVIEW_DRAFT_KEY.test(caseId) || !await accessiblePreviewCase(env,user,caseId)) return json({error:'상신할 프로젝트에 접근할 수 없습니다.',code:'CASE_NOT_FOUND'},404);
+    if (!assignedSchema) return json({error:'결재자 지정 기능을 준비하고 있습니다.',code:'APPROVER_SCHEMA_REQUIRED'},503);
+    const rows = await env.DB.prepare(`SELECT u.id,u.display_name AS name,u.roles_json AS rolesJson FROM preview_users u
+      WHERE u.is_active=1 AND u.id<>? AND (instr(u.roles_json,'"ceo"')>0 OR instr(u.roles_json,'"director"')>0)
+      AND NOT EXISTS (SELECT 1 FROM preview_report_revisions r JOIN preview_report_drafts d ON d.case_id=r.case_id AND d.version=r.version WHERE d.case_id=? AND r.saved_by=u.id)
+      ORDER BY u.display_name,u.id`).bind(user.id,caseId).all<{id:string;name:string;rolesJson:string}>();
+    return json({approvers:rows.results.map(row=>({id:row.id,name:row.name,role:JSON.parse(row.rolesJson).includes('ceo')?'ceo':'director'}))});
+  }
 
   if (url.pathname === '/api/report-reviews' && request.method === 'GET') {
     const caseId = url.searchParams.get('caseId') ?? '';
@@ -7511,9 +7567,10 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
 
   const reviewDocumentMatch = url.pathname.match(/^\/api\/report-reviews\/([0-9a-f-]{36})\/document$/iu);
   if (reviewDocumentMatch && request.method === 'GET') {
-    const review = await env.DB.prepare('SELECT case_id AS caseId, report_revision_id AS revisionId, report_version AS version FROM preview_report_reviews WHERE id=? AND organization_id=?')
-      .bind(reviewDocumentMatch[1], PREVIEW_ORGANIZATION_ID).first<{ caseId: string; revisionId: string; version: number }>();
-    const project = review ? await accessiblePreviewCase(env, user, review.caseId) : null;
+    const review = await env.DB.prepare(`SELECT case_id AS caseId, report_revision_id AS revisionId, report_version AS version, ${assignedSchema?'assigned_reviewer_id':'NULL'} AS assignedReviewerId FROM preview_report_reviews WHERE id=? AND organization_id=?`)
+      .bind(reviewDocumentMatch[1], PREVIEW_ORGANIZATION_ID).first<{ caseId: string; revisionId: string; version: number; assignedReviewerId:string|null }>();
+    const assignedRecipient = review?.assignedReviewerId === user.id && user.roles.some(role=>PREVIEW_FINAL_APPROVAL_ROLES.has(role));
+    const project = review ? assignedRecipient ? await organizationPreviewCase(env,review.caseId) : await accessiblePreviewCase(env, user, review.caseId) : null;
     if (!review || !project) return json({ error: '검토 대상 보고서를 찾을 수 없거나 접근 권한이 없습니다.', code: 'REVIEW_NOT_FOUND' }, 404);
     if (await previewReportDeleted(env, review.caseId)) return json({ error: '삭제 처리된 보고서입니다.', code: 'REPORT_DELETED' }, 410);
     const editorColumn = await previewReportEditorSchemaAvailable(env) ? 'editor_json' : 'NULL';
@@ -7528,7 +7585,7 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     const idempotencyKey = request.headers.get('Idempotency-Key') ?? '';
     if (!PREVIEW_REVIEW_KEY.test(idempotencyKey)) return json({ error: 'A valid Idempotency-Key is required', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-    if (!body || !exactObjectKeys(body, ['caseId', 'expectedVersion', 'note']) || typeof body.caseId !== 'string' || !Number.isInteger(body.expectedVersion) || typeof body.note !== 'string') {
+    if (!body || !exactObjectKeys(body, assignedSchema ? ['caseId', 'expectedVersion', 'note','assignedReviewerId'] : ['caseId', 'expectedVersion', 'note']) || typeof body.caseId !== 'string' || !Number.isInteger(body.expectedVersion) || typeof body.note !== 'string' || (assignedSchema && typeof body.assignedReviewerId !== 'string')) {
       return json({ error: 'Review request payload is invalid', code: 'INVALID_REVIEW_PAYLOAD' }, 400);
     }
     const caseId = body.caseId;
@@ -7536,31 +7593,36 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     const note = body.note.trim();
     if (!PREVIEW_DRAFT_KEY.test(caseId) || expectedVersion < 1 || note.length > 2000) return json({ error: 'Review request exceeds field limits', code: 'INVALID_REVIEW_PAYLOAD' }, 400);
     if (!await accessiblePreviewCase(env, user, caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    const assignedReviewerId = assignedSchema ? String(body.assignedReviewerId) : null;
+    if (assignedSchema && (!PREVIEW_DRAFT_KEY.test(assignedReviewerId!) || assignedReviewerId === user.id || !await env.DB.prepare(`SELECT id FROM preview_users WHERE id=? AND is_active=1 AND (instr(roles_json,'"ceo"')>0 OR instr(roles_json,'"director"')>0)`).bind(assignedReviewerId).first())) return json({error:'본인 이외의 활성 최종 결재자를 선택해 주세요.',code:'INVALID_FINAL_APPROVER'},400);
 
-    const fingerprint = await sha256Hex(JSON.stringify({ caseId, expectedVersion, note }));
+    const fingerprint = await sha256Hex(JSON.stringify({ caseId, expectedVersion, note, ...(assignedSchema?{assignedReviewerId}:{}) }));
     const replay = await env.DB.prepare('SELECT id, request_fingerprint AS requestFingerprint FROM preview_report_reviews WHERE organization_id = ? AND request_key = ?').bind(PREVIEW_ORGANIZATION_ID, idempotencyKey).first<{ id: string; requestFingerprint: string }>();
     if (replay) return replay.requestFingerprint === fingerprint ? previewReportReviewList(env, user, caseId) : json({ error: 'Idempotency key was used for a different review request', code: 'IDEMPOTENCY_MISMATCH' }, 409);
 
     const source = await env.DB.prepare(
-      'SELECT d.version, d.content, r.id AS revisionId FROM preview_report_drafts d JOIN preview_report_revisions r ON r.case_id = d.case_id AND r.version = d.version ' +
+      'SELECT d.version, d.content, r.id AS revisionId,r.saved_by AS savedBy FROM preview_report_drafts d JOIN preview_report_revisions r ON r.case_id = d.case_id AND r.version = d.version ' +
       'WHERE d.case_id = ? AND d.organization_id = ?'
-    ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; content: string; revisionId: string }>();
+    ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ version: number; content: string; revisionId: string; savedBy:string }>();
     if (!source) return json({ error: 'Save the report before requesting review', code: 'REPORT_NOT_SAVED' }, 409);
     if (Number(source.version) !== expectedVersion) return json({ error: 'The report version changed before review submission', code: 'VERSION_CONFLICT', currentVersion: Number(source.version) }, 409);
     if (!source.content.trim()) return json({ error: 'An empty report cannot be submitted for review', code: 'EMPTY_REPORT' }, 409);
+    if (assignedSchema && assignedReviewerId === source.savedBy) return json({error:'이 버전을 저장한 사람은 결재자로 지정할 수 없습니다.',code:'SELF_APPROVAL_FORBIDDEN'},403);
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
 
     const reviewId = crypto.randomUUID();
     const now = new Date().toISOString();
     try {
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO preview_report_reviews (id, organization_id, case_id, report_revision_id, report_version, status, requested_by, request_note, request_key, request_fingerprint, requested_at, reviewed_by, decision_note, reviewed_at) SELECT ?, ?, ?, ?, ?, \'PENDING\', ?, ?, ?, ?, ?, NULL, NULL, NULL WHERE ' + previewReportActiveSql('?')).bind(reviewId, PREVIEW_ORGANIZATION_ID, caseId, source.revisionId, expectedVersion, user.id, note || null, idempotencyKey, fingerprint, now, caseId),
+        env.DB.prepare('INSERT INTO preview_report_reviews (id, organization_id, case_id, report_revision_id, report_version, status, requested_by, request_note, request_key, request_fingerprint, requested_at, reviewed_by, decision_note, reviewed_at' + (assignedSchema?',assigned_reviewer_id':'') + ') SELECT ?, ?, ?, ?, ?, \'PENDING\', ?, ?, ?, ?, ?, NULL, NULL, NULL' + (assignedSchema?',?':'') + ' WHERE ' + previewReportActiveSql('?')).bind(reviewId, PREVIEW_ORGANIZATION_ID, caseId, source.revisionId, expectedVersion, user.id, note || null, idempotencyKey, fingerprint, now, ...(assignedSchema?[assignedReviewerId]:[]),caseId),
         env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) VALUES (?, ?, \'REVIEW_REQUESTED\', ?, ?, ?)').bind(crypto.randomUUID(), reviewId, user.id, note || null, now),
         env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) VALUES (?, ?, ?, \'REPORT_REVIEW_REQUESTED\', ?, ?, ?)').bind(crypto.randomUUID(), caseId, user.id, `보고서 검토 요청 · v${expectedVersion}`, note || null, now)
       ]);
     } catch {
       const canonical = await env.DB.prepare('SELECT request_fingerprint AS requestFingerprint FROM preview_report_reviews WHERE organization_id = ? AND request_key = ?').bind(PREVIEW_ORGANIZATION_ID, idempotencyKey).first<{ requestFingerprint: string }>();
       if (canonical?.requestFingerprint === fingerprint) return previewReportReviewList(env, user, caseId);
+      const latest = await env.DB.prepare('SELECT version FROM preview_report_drafts WHERE case_id=? AND organization_id=?').bind(caseId,PREVIEW_ORGANIZATION_ID).first<{version:number}>();
+      if (Number(latest?.version)!==expectedVersion) return json({error:'상신 중 보고서 버전이 변경되었습니다. 최신본을 다시 확인하세요.',code:'VERSION_CONFLICT',currentVersion:Number(latest?.version??0)},409);
       return json({ error: 'This report version already has a review request', code: 'REVIEW_ALREADY_EXISTS' }, 409);
     }
     const payload = await previewReportReviewList(env, user, caseId);
@@ -7579,9 +7641,11 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     if(status==='APPROVED'&&notificationSchema&&!user.roles.some((role)=>PREVIEW_FINAL_APPROVAL_ROLES.has(role)))return json({error:'최종 승인은 대표 또는 부사장 권한(CEO/DIRECTOR)만 할 수 있습니다.',code:'FINAL_APPROVER_REQUIRED'},403);
     const note = body.note.trim();
     if (note.length > 4000 || (status === 'CHANGES_REQUESTED' && !note)) return json({ error: 'A changes-requested decision requires a note', code: 'DECISION_NOTE_REQUIRED' }, 400);
-    const review = await env.DB.prepare('SELECT v.id, v.case_id AS caseId, v.report_version AS reportVersion, v.status, v.requested_by AS requestedBy, r.saved_by AS savedBy FROM preview_report_reviews v JOIN preview_report_revisions r ON r.id=v.report_revision_id AND r.case_id=v.case_id AND r.version=v.report_version WHERE v.id = ? AND v.organization_id = ?').bind(decisionMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; reportVersion: number; status: string; requestedBy: string; savedBy: string }>();
+    const review = await env.DB.prepare(`SELECT v.id, v.case_id AS caseId, v.report_version AS reportVersion, v.status, v.requested_by AS requestedBy, r.saved_by AS savedBy, ${assignedSchema?'v.assigned_reviewer_id':'NULL'} AS assignedReviewerId FROM preview_report_reviews v JOIN preview_report_revisions r ON r.id=v.report_revision_id AND r.case_id=v.case_id AND r.version=v.report_version WHERE v.id = ? AND v.organization_id = ?`).bind(decisionMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; reportVersion: number; status: string; requestedBy: string; savedBy: string;assignedReviewerId:string|null }>();
     if (!review) return json({ error: 'Review request was not found', code: 'REVIEW_NOT_FOUND' }, 404);
-    if (!await accessiblePreviewCase(env, user, review.caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (review.assignedReviewerId && (review.assignedReviewerId !== user.id || !user.roles.some(role=>PREVIEW_FINAL_APPROVAL_ROLES.has(role)))) return json({error:'이 상신의 지정 결재자만 승인·수정 요청할 수 있습니다.',code:'ASSIGNED_APPROVER_REQUIRED'},403);
+    if (!review.assignedReviewerId && !await accessiblePreviewCase(env, user, review.caseId)) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
+    if (!await organizationPreviewCase(env,review.caseId)) return json({error:'프로젝트가 삭제되었습니다.',code:'CASE_NOT_FOUND'},404);
     if (await previewReportDeleted(env, review.caseId)) return json({ error: '목록에서 삭제 처리된 보고서는 새로 승인할 수 없습니다.', code: 'REPORT_DELETED' }, 410);
     if (review.requestedBy === user.id || review.savedBy === user.id) return json({ error: '본인이 작성·저장하거나 검토 요청한 버전은 직접 승인·수정 요청할 수 없습니다. 다른 검토자에게 요청하세요.', code: 'SELF_APPROVAL_FORBIDDEN' }, 403);
     if (review.status !== 'PENDING') return previewReportReviewList(env, user, review.caseId);
@@ -8346,7 +8410,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       googleEvidence = null;
     }
     if (googleEvidence) {
-      if (!await canAccessProject(googleEvidence.caseId)) return forbidden();
+      if (!await canAccessProject(googleEvidence.caseId) && !await canReadSubmittedReviewImage(env,user,googleEvidence)) return forbidden();
       if (!await organizationPreviewCase(env, googleEvidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
       if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, googleEvidence.caseId)) {
         return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
@@ -8361,7 +8425,7 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
       'FROM preview_case_evidence e WHERE e.id=? AND e.organization_id=?'
     ).bind(downloadMatch[1], PREVIEW_ORGANIZATION_ID).first<{ id: string; caseId: string; originalName: string; mimeType: string; byteSize: number; sha256: string; chunkCount: number }>();
     if (!evidence || !await organizationPreviewCase(env, evidence.caseId)) return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
-    if (!await canAccessProject(evidence.caseId)) return forbidden();
+    if (!await canAccessProject(evidence.caseId) && !await canReadSubmittedReviewImage(env,user,evidence)) return forbidden();
     if (await projectWorkGateSchemaAvailable(env) && !await isActiveProjectWorkCase(env, evidence.caseId)) {
       return json({ error: 'Evidence file was not found', code: 'EVIDENCE_NOT_FOUND' }, 404);
     }

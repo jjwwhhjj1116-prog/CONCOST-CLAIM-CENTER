@@ -296,10 +296,10 @@ test('CF08 production UI exposes submission, independent decisions, and real pre
   const studio = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewReportStudio.tsx'), 'utf8');
   const inbox = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'PreviewApprovalInbox.tsx'), 'utf8');
   const router = readFileSync(join(process.cwd(), 'apps', 'web', 'src', 'routes', 'Router.tsx'), 'utf8');
-  assert.match(studio, /저장된 최신본 검토 요청/u);
+  assert.match(studio, /선택한 결재자에게 상신/u);
   assert.match(studio, /report-review:\$\{requestCaseId\}:v\$\{version\}/u);
   assert.match(inbox, /이 버전 승인/u);
   assert.match(inbox, /수정 요청/u);
-  assert.match(inbox, /자기 승인은 시스템에서 차단/u);
+  assert.match(inbox, /본인이 작성·저장한 버전은 승인할 수 없습니다/u);
   assert.match(router, /currentRoute\.id === 'APPR-01'.*PreviewApprovalInbox/u);
 });
