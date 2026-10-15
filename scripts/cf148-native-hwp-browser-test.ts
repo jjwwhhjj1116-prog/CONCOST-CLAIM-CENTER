@@ -34,13 +34,13 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
     });
     await page.goto(origin+'/native-qa.html');await page.waitForFunction(()=>document.styleSheets.length>0);
     await page.evaluate('globalThis.__name = value => value');
-    for(const name of ['fontFamilyFallback','letterSpacing','normalLine','inlineBreaks','photoWhitespace','photoCellSingleLine','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows'])await t.test(name,async()=>{
+    for(const name of ['fontFamilyFallback','letterSpacing','normalLine','inlineBreaks','photoWhitespace','photoCellSingleLine','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows','reportTocFractionalRows'])await t.test(name,async()=>{
       await page.evaluate(()=>document.querySelectorAll('#native-source').forEach(node=>node.remove()));
       const download=page.waitForEvent('download');
       const result=await page.evaluate(async name=>{
         const {downloadFinalDocument}=await import('/src/documents/final-document-export.ts' as string);
         const canvas=document.createElement('canvas');canvas.width=120;canvas.height=72;canvas.getContext('2d')!.fillRect(0,0,120,72);
-        const src=canvas.toDataURL(),root=document.createElement('div');root.className=name==='reportToc10Rows'?'report-final-document':'proposal-final-document';
+        const src=canvas.toDataURL(),root=document.createElement('div');root.className=name.startsWith('reportToc')?'report-final-document':'proposal-final-document';
         const photo=`<p style="text-align:center">
 <img src="${src}" width="120" height="72">
 </p>`;
@@ -60,7 +60,9 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           collapsedBlankParagraphs:'<style>#native-source .cf205-collapse h2{font:20px/32px Arial;margin:28px 0 16px}#native-source .cf205-collapse p{font:16px/29.6px Arial;margin:16px 0}#native-source .cf205-collapse p:empty{height:0;min-height:0}</style><section data-export-page data-export-page-policy="fit" style="width:794px;height:1123px;padding:96px 80px 76px;font:16px/29.6px Arial"><article class="cf205-collapse" style="display:flow-root">'+Array.from({length:6},(_,i)=>`<h2><strong>CF205 짧은 제목 ${i+1}</strong></h2><p>CF205 본문 ${i+1} 첫째 줄 123,456원.<br>둘째 줄 <em>246.90 보존</em>.</p><p></p>`).join('')+'<p></p><p></p></article></section>',
           reportToc10Rows:'<section class="report-final-body report-final-toc report-paginated-sheet" data-export-page data-export-page-policy="fit" data-page-number="2"><h2>목 차</h2><article class="report-toc-content">'+Array.from({length:10},(_,i)=>`<div class="report-toc-entry report-toc-level-2"><span>${i===0?'CF206 담당자 수정한 첫 목차':i===4?'5. 실무 검수':i===9?'10. 원문':`CF206 원본 목차 ${i+1}: 프로젝트 및 계약상 권리 검수`}</span><span class="report-toc-leader"></span><span class="report-toc-page">${i<6?1:2}</span></div>`).join('')+'</article><footer class="report-page-number">- 목차 1 -</footer></section>'
         };
-        root.innerHTML=contents[name];root.style.cssText='background:#fff;color:#17263a';root.querySelectorAll<HTMLElement>('[data-export-page]').forEach(p=>p.style.boxSizing='border-box');document.body.append(root);
+        root.innerHTML=contents[name==='reportTocFractionalRows'?'reportToc10Rows':name];
+        if(name==='reportTocFractionalRows')root.insertAdjacentHTML('afterbegin','<style>#native-source .report-toc-entry{line-height:28.78125px}</style>');
+        root.style.cssText='background:#fff;color:#17263a';root.querySelectorAll<HTMLElement>('[data-export-page]').forEach(p=>p.style.boxSizing='border-box');document.body.append(root);
         await Promise.all([...root.querySelectorAll('img')].map(i=>i.decode()));
         root.id='native-source';
         const before=root.innerHTML;
@@ -82,7 +84,7 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           if(!collected.html.includes('font-family:Arial;font-size:20px;font-weight:bold;font-style:italic;letter-spacing:2px')||collected.html.includes('CF224 Missing Font')||!collected.footer?.html.includes('font-family:Arial'))throw Error('CF224 named fallback or authored style/footer lost');
           metrics={sourceUnchanged:root.innerHTML===before};
         }
-        if(name==='reportToc10Rows'){
+        if(name.startsWith('reportToc')){
           await document.fonts.ready;
           const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
           const [collected]=await collectNativeHwpPages(root,'portrait');
@@ -176,10 +178,15 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
         assert.equal(imported.pages,1);assert.equal((imported.xml.match(/lineWrap="SQUEEZE"/gu)||[]).length,1);
         assert.ok(imported.xml.includes('<hp:lineBreak/>'),'Explicit multiline photo cell must retain its break');
       }
-      if(name==='reportToc10Rows'){
+      if(name.startsWith('reportToc')){
         assert.equal(result.sourceUnchanged,true);assert.equal(result.metrics.sourceUnchanged,true);assert.equal(result.metrics.tables,10);
         assert.deepEqual(result.metrics.cells,Array(10).fill(3));assert.deepEqual(result.metrics.numbers,[...Array(6).fill('1'),...Array(4).fill('2')]);
         assert.equal(result.metrics.titles[0],'CF206 담당자 수정한 첫 목차');
+        if(name==='reportTocFractionalRows'){
+          const row=result.metrics.geometry[0],gap=row.advance-Math.max(...row.cells.map((cell:{height:number})=>cell.height));
+          assert.equal(gap,13.78125,'Reproduce the actual Chrome fractional row gap');
+          assert.notEqual(Math.round(gap*150),Math.round(gap*75)*2,'The fixture must exercise incompatible independent rounding');
+        }
         const reopened=await page.evaluate(async bytes=>{
           const {loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string);const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);const {verifyNativeHwpContent}=await import('/src/documents/editable-hwp-export.ts' as string);
           const {unzipSync,zipSync,strFromU8,strToU8}=await import('/cf206-zip.js' as string);
