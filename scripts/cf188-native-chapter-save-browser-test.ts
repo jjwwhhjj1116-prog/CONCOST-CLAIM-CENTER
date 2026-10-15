@@ -114,6 +114,7 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
       }
     }
     await nav.selectOption('1');
+    await page.getByRole('button', {name: '목차 제목 수정', exact: true}).click();
     await page.getByRole('combobox', {name: '수정할 챕터', exact: true}).selectOption(ids[1]);
     await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('[aria-label="원형 보고서 쪽 이동"]')?.value === '2');
     assert.equal(saves, 1, 'Mapped jump itself creates no body save');
@@ -145,6 +146,7 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
     assert.equal(draft.version, 3); assert.equal(draft.editorJson.attrs.reportNativeSource.confirmedChapterPages, undefined);
     assert.deepEqual(draft.editorJson.content, original.editorJson.content); assert.equal(draft.content, original.content);
     const beforePlan = structuredClone(draft), savesBeforePlan = saves;
+    await page.getByRole('button', {name: '목차 제목 수정', exact: true}).click();
     await page.getByRole('textbox', {name: '챕터 제목', exact: true}).fill('내부 작업용 자료 목록');
     await page.getByRole('button', {name: '작업 목차 제목 저장', exact: true}).click();
     await page.locator('.report-review-outline').getByRole('status').filter({hasText:/작업 목차 제목을 저장했습니다.*원형 HWP의 표지·인쇄 목차·본문 제목·쪽수는 변경하지 않았습니다/u}).waitFor();
@@ -159,6 +161,7 @@ test('CF188 actual report route confirms, versions, reopens and retries navigati
     await page.goto(origin+'/native-nav.html?mixed=1&caseId='+caseId);
     await page.locator('.tiptap h1').getByText('감정자료 목록',{exact:false}).waitFor();
     const mixedBefore=structuredClone(draft), savesBeforeMixed=saves;
+    await page.getByRole('button', {name: '목차 제목 수정', exact: true}).click();
     await page.getByRole('textbox',{name:'챕터 제목',exact:true}).fill('혼합 원고에서 별도 작업 제목');
     await page.getByRole('button',{name:'작업 목차 제목 저장',exact:true}).click();
     await page.locator('.report-review-outline').getByRole('status').waitFor();

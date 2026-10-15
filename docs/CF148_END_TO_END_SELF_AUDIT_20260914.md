@@ -1,5 +1,16 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF225 HWP 불러오기 → 웹 보고서 적용 검수 — 2026-10-15
+
+- **요청·판정:** 사용자는 출력은 우선 가능하다고 판단하고, 작성된 HWP를 불러왔을 때 웹 보고서에 그대로 적용되는지 검수하도록 범위를 지정했다. 실제 제품 PreviewReportStudio/RhwpEditorDialog의 파일 선택→전체 적용→저장 응답→reload→연결 원형 재열기를 검수했다. **검수한 A4 세로 5쪽의 페이지 이미지 적용은 PASS**다. 문장·표를 Tiptap 문단/표로 변환하는 기능은 현재 없다. 일반 웹 편집기에는 text0/table0/image5로 들어가며, 문장·표·사진 수정은 웹의 연결 HWP 편집기에서 한 뒤 “수정 원본 보존·전체 페이지 적용”으로 반영한다. 파일 열기나 다운로드만으로 웹 보고서가 갱신되지 않는다.
+- **입력·검수 격리:** 이전 실제 development 다운로드 outputs/CF224-development-v16-downloaded.hwp 244224B/SHA216f8bdf2dccbd42b0a587b8c6daceada09bb2a28afbf625d2b49521dc9609b5를 그대로 사용했다. 실제 제품 UI/승인 SDK와 격리 메모리 HTTP API를 사용했으며, 실제 development D1/Drive 업로드·저장이나 새 프로젝트/결재/직원 알림을 실행한 증거는 아니다. 사용자 원고·원본·운영 데이터 변경0. 실제 Chrome 기존 저장본v8/09:20:52 표시 유지, 새 의뢰 조회 탭은 입력·저장 없이 닫았다.
+- **적용·재진입 독립 PASS:** tmp/cf225-qa/hwp-ui/run-3hMYNm. 파일 선택만 했을 때 기존 저장 원고 유지, 적용 확인 취소 시 PUT0/기존 원고 exact. 실제 5쪽 전체 적용 후 image노드5/자동 갑지 false/원형 bindingVersion1/bodySHA/originalSource를 함께 저장하고 v2응답 확인 뒤 팝업 닫힘. reload 후 편집기 이미지5 및 미리보기5쪽의 순서와 evidence GET5개/1588×2246 decode 확인. 원형 5쪽 재열기와 working HWP 다운로드도 통과했다. working HWP246784B/SHAe7c5ca7167eb38683df83135052491e67bdf761e1f9928118c740fa2976aa692는 SDK 재직렬화로 원본과 전체바이트가 다르지만, 전5 printSVG와 원문이 동일하고 originalSource는 입력SHA를 보존한다.
+- **보존·화면 대조 PASS 범위:** 원본 SDK SVG→제품 hwpSvgPageForUpload로 생성한 JPEG5개와 실제 저장 evidence JPEG5개의 SHA가 각각 exact(jpeg-comparison.json). 이는 HWP 자체 픽셀이나 native 한컴/다뷰와의 동일성을 뜻하지 않는다. 1440/390에서 원형 쪽선택1~5와 이동 버튼을 실제 조작하여 양쪽 패널의 해당쪽 노출·순서/이미지 간 겹침0을 확인했다(10회). 자동 갑지·목차 추가0. 목차11행/본문/사진3/표 빈칸·0·123.45·246.9를 root가 페이지2/4/5 이미지 및 웹 스크린샷에서 확인했다. web-page-{2,4,5}-{1440,390}.png와 page-navigation.json 보존. 하단 고정 단계바가 viewport 일부를 덮고 A4 페이지 전체는 스크롤해야 하므로 “화면 가림0”으로 확대하지 않는다.
+- **업로드 실패 보호 PASS:** regression/negative-run-If84XL: 두 번째 page JPEG POST503에서 중단, imageAttempts2/후속3~5없음/원고PUT0/서버 및 화면 기존 원고 exact/팝업 유지/입력HWP 해시 불변. 이미 보관된 원본·작업본·첫 페이지는 임의 삭제하지 않는다.
+- **최종 저장 실패·재시도 PASS:** regression/negative-run-Ng27HQ: 첫 최종PUT503 후 서버 기존 원고 exact, 가져온 새5쪽은 dirty 화면과 HWP 팝업에 보존. HWP 편집기를 닫고 실제 “저장 다시 시도” 버튼으로 두 번째PUT 성공/v2, reload후5쪽 유지. page POST5건에서 증가하지 않아 중복 재업로드0. 초기 negative-run-Q1lyzf는 제품의 일반 저장실패 안내 대신 raw 오류 문구를 기다린 검수 selector 오류로 timeout한 자료이며 보존한다.
+- **기존 회귀와 최소 보완:** CF192 파일형식 보호 검사는 통과했다. CF188 목차 탐색·저장 회귀는 접힌 “목차 제목 수정” 패널을 열지 않은 오래된 검사 동작으로 선택자를 찾지 못했다(baseline-361312dd/2개 중1PASS·1FAIL). root가 현재 UI 순서에 맞게 패널 열기 click3줄만 추가했으며 권한·버전충돌·잘못된 ACK·원형 본문 보존 assert는 완화하지 않았다. 최종 재실행 baseline-retry-09266b3d/tests.log는 2/2PASS/fail0/skip0/exit0다. 제품 앱/API 소스 변경0이며 개발 Worker277482eb-dd32-4cf2-980a-055b01536375를 재배포하지 않는다.
+- **현재 경계·다음 시작점:** 현재 확인된 것은 한 개 검수용 HWP의 원형 페이지 적용과 격리 저장 흐름이다. 임의의 모든 HWP/실제 한컴 원본 기하/실제 서버 Drive·D1 영속화의 전수 합격은 아니다. 일반 웹 문장·표로 직접 편집하는 가져오기가 필요하면 별도 구현 범위이며 현재 지원으로 보고하지 않는다. CF224 출력/다뷰 수동 작업은 사용자 요청에 따라 재개하지 않는다. 기존 CF224 이하 이력은 byte-exact 보존한다.
+
 ## CF224 최신 상태 — 개발 배포·실제 3종 다운로드 검수 완료, 최신 다뷰 실출력은 미검증 (2026-10-15)
 
 - **현재 결론:** Word v10 실제 편집·저장·닫기·재열기·출력 검수, DOCX 사진 가져오기·저장·재진입·출력 검수와 HWP 한 줄 보존을 구현했다. 제품 1f97585 및 실제 Chrome에서 발견한 분수 목차 간격 수정 07f8ca4를 푸시하고 development Worker 277482eb-dd32-4cf2-980a-055b01536375에 배포했다. 새 모듈에서 실제 HWP·DOCX·PDF 파일을 다운로드하여 독립 검수했다. 사용자의 추가 수동 작업 중단 지시에 따라 최신 DaVu 실제 출력/독립 한컴 편집은 NOT_VERIFIED로 유지한다. 전 환경 호환·전체 A–Z 합격으로 확대하지 않는다.
