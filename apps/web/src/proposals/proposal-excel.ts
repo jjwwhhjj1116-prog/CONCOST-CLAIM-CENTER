@@ -1,3 +1,5 @@
+import { strFromU8, unzipSync } from 'fflate';
+
 export interface ProposalExcelValues {
   background: string;
   objective: string;
@@ -37,6 +39,7 @@ export interface ReportStudioExcelValues {
 export interface ReportDocxValues {
   reportTitle: string;
   reportContent: string;
+  images?: Array<{ source: string; file: File }>;
 }
 
 export interface MeetingMinutesExcelValues {
@@ -702,14 +705,15 @@ export async function readProposalDocx(file: File): Promise<ProposalDocxChapter[
 
 export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   if(!file.name.toLowerCase().endsWith('.docx')||file.size>20_000_000)throw new Error('20MB 이하의 Word DOCX 보고서만 가져올 수 있습니다.');
-  const documentXml=await zipEntry(new Uint8Array(await file.arrayBuffer()),'word/document.xml');
+  const bytes=new Uint8Array(await file.arrayBuffer());
+  const documentXml=await zipEntry(bytes,'word/document.xml');
   const document = new DOMParser().parseFromString(documentXml, 'application/xml');
   const elements = [...document.getElementsByTagName('*')];
   if (elements.some(element=>element.localName==='parsererror')) throw new Error('Word 문서 구조를 읽지 못했습니다. DOCX 원본을 확인하세요.');
   // These objects need their own importer. Never replace a reviewed report with
   // a text-only subset while silently dropping its pictures, equations or notes.
-  if (elements.some(element=>['drawing','pict','object','altChunk','oMath','oMathPara','footnoteReference','endnoteReference'].includes(element.localName))) {
-    throw new Error('이 Word 문서에는 그림·개체·수식 또는 각주가 포함되어 있습니다. 해당 내용을 누락하지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. Word 원본에서 내용을 확인하고, 텍스트·표만 있는 DOCX를 가져오거나 필요한 내용을 편집기에 직접 추가하세요.');
+  if (elements.some(element=>['pict','object','altChunk','oMath','oMathPara','footnoteReference','endnoteReference'].includes(element.localName))) {
+    throw new Error('이 Word 문서에는 지원하지 않는 그림·개체·수식 또는 각주가 포함되어 있습니다. 해당 내용을 누락하지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. 텍스트·표와 본문에 삽입한 PNG·JPEG 사진을 지원합니다. 나머지는 Word 원본에서 확인해 주세요.');
   }
   if (elements.some(element => element.localName === 'numPr')) {
     throw new Error('이 Word 문서에는 자동 번호·글머리표가 있습니다. 번호가 누락되지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. Word에서 번호를 일반 텍스트로 바꾼 사본을 가져오거나 목록을 편집기에 직접 추가하세요.');
@@ -719,9 +723,67 @@ export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   const enabled = (element: Element | undefined) => Boolean(element && !['0','false','off','none'].includes(attr(element)));
   const escape = (value: string) => value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
   const plainText = (element: Element) => [...element.getElementsByTagName('*')].filter(item=>item.localName==='t').map(item=>item.textContent??'').join('');
+  const sections=elements.filter(element=>element.localName==='sectPr'&&(element.parentElement?.localName==='body'||element.parentElement?.localName==='pPr'&&element.parentElement.parentElement?.localName==='p'));
+  const sectionPageBreaks=new Set<Element>();
+  sections.slice(0,-1).forEach((section,index)=>{
+    // A section's properties live at its end; the following section defines
+    // how it starts. An omitted type means nextPage (WordprocessingML).
+    const nextType=attr(child(sections[index+1],'type'))||'nextPage';
+    if(!['nextPage','continuous'].includes(nextType))throw new Error('Word의 홀수·짝수 쪽 또는 다단 구역 나누기는 보존할 수 없어 가져오기를 중단했습니다. 기존 보고서는 유지됩니다.');
+    if(nextType==='nextPage')sectionPageBreaks.add(section);
+  });
+  // Preflight every picture before the caller uploads anything or changes the
+  // report. Floating, cropped and transformed drawings need a richer importer.
+  const drawings=elements.filter(element=>element.localName==='drawing');
+  const pictures=new Map<Element,string>();
+  const images: NonNullable<ReportDocxValues['images']>=[];
+  if(drawings.length){
+    const parts=unzipSync(bytes,{filter:entry=>{
+      const wanted=['word/_rels/document.xml.rels','[Content_Types].xml'].includes(entry.name)||entry.name.startsWith('word/media/');
+      if(wanted&&entry.originalSize>20_000_000)throw new Error('Word 사진 자료가 너무 커서 가져오기를 중단했습니다. 기존 보고서는 유지됩니다.');
+      return wanted;
+    }});
+    const xml=(name:string)=>new DOMParser().parseFromString(strFromU8(parts[name]??new Uint8Array()),'application/xml');
+    const relationships=[...xml('word/_rels/document.xml.rels').getElementsByTagName('*')].filter(e=>e.localName==='Relationship');
+    const types=[...xml('[Content_Types].xml').getElementsByTagName('*')];
+    const byPath=new Map<string,string>();
+    const unsupported=()=>{throw new Error('이 Word 그림의 배치 또는 형식을 보존할 수 없어 가져오기를 중단했습니다. 본문에 삽입한 PNG·JPEG 사진만 지원하며, 떠 있는 그림·잘라내기·회전·외부 연결은 지원하지 않습니다. 기존 보고서는 유지됩니다.');};
+    let total=0;
+    for(const drawing of drawings){
+      const descendants=[...drawing.getElementsByTagName('*')];
+      const named=(name:string)=>descendants.filter(e=>e.localName===name);
+      const extent=named('extent').filter(e=>e.namespaceURI==='http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing');
+      const blips=named('blip');
+      if(named('inline').length!==1||named('anchor').length||named('pic').length!==1||blips.length!==1||extent.length!==1||named('graphicData').length!==1||named('graphicData').some(e=>e.getAttribute('uri')!=='http://schemas.openxmlformats.org/drawingml/2006/picture'))unsupported();
+      if(named('srcRect').some(e=>[...e.attributes].some(a=>Number(a.value)!==0))||named('xfrm').some(e=>['rot','flipH','flipV'].some(a=>!['','0','false'].includes(e.getAttribute(a)??'')))||named('effectLst').some(e=>e.children.length)||named('blip').some(e=>e.children.length))unsupported();
+      if(['custGeom','tile','ln','grpSp','wsp','wgp'].some(name=>named(name).length)||named('prstGeom').some(e=>e.getAttribute('prst')!=='rect')||named('fillRect').some(e=>[...e.attributes].some(a=>Number(a.value)!==0))||named('inline').some(e=>['distT','distB','distL','distR'].some(a=>Number(e.getAttribute(a)??0)!==0))||named('effectExtent').some(e=>[...e.attributes].some(a=>Number(a.value)!==0)))unsupported();
+      const embed=blips[0].getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','embed');
+      const rel=relationships.filter(e=>e.getAttribute('Id')===embed);
+      if(!embed||rel.length!==1||rel[0].getAttribute('TargetMode')==='External'||!rel[0].getAttribute('Type')?.endsWith('/image')||blips[0].hasAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','link'))unsupported();
+      const target=rel[0].getAttribute('Target')??'';
+      if(!/^media\/[^\\/?#]+$/u.test(target))unsupported();
+      const path='word/'+target, data=parts[path];
+      const contentType=types.find(e=>e.localName==='Override'&&e.getAttribute('PartName')==='/'+path)?.getAttribute('ContentType')??types.find(e=>e.localName==='Default'&&e.getAttribute('Extension')?.toLowerCase()===path.split('.').at(-1)?.toLowerCase())?.getAttribute('ContentType');
+      const png=data?.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>data[i]===v);
+      const jpeg=data?.length>=3&&data[0]===255&&data[1]===216&&data[2]===255;
+      if(!data?.length||!(png&&contentType==='image/png'||jpeg&&contentType==='image/jpeg'))unsupported();
+      const width=Number(extent[0].getAttribute('cx'))/9525, height=Number(extent[0].getAttribute('cy'))/9525;
+      if(![width,height].every(value=>Number.isFinite(value)&&value>0&&value<=5000))unsupported();
+      let source=byPath.get(path);
+      if(!source){
+        total+=data.length;if(total>40_000_000)unsupported();
+        const picture=new File([new Uint8Array(data)],target.slice(6),{type:contentType!});
+        const decoded=await createImageBitmap(picture);decoded.close();
+        source=`docx-image:${images.length}`;byPath.set(path,source);images.push({source,file:picture});
+      }
+      const description=named('docPr')[0]?.getAttribute('descr')??'';
+      pictures.set(drawing,`<img src="${source}" alt="${escape(description)}" width="${width}" height="${height}">`);
+    }
+  }
   const pageBreak = '<div data-document-page-break="true"></div>';
   const inline = (element: Element): string => {
     const name=element.localName;
+    if(name==='drawing')return pictures.get(element)!;
     if (name==='t') return escape(element.textContent??'');
     if (name==='tab') return '&#160;'.repeat(4);
     if (name==='br') return attr(element,'type')==='page' ? pageBreak : '<br>';
@@ -755,7 +817,8 @@ export async function readReportDocx(file: File): Promise<ReportDocxValues> {
       const heading=/^Heading([1-6])$/iu.exec(attr(properties&&child(properties,'pStyle')));
       const tag=heading?`h${heading[1]}`:'p';
       const html=[...element.children].map(inline).join('');
-      return `${enabled(properties&&child(properties,'pageBreakBefore'))?pageBreak:''}${html.split(pageBreak).map(part=>`<${tag}${style}>${part||'<br>'}</${tag}>`).join(pageBreak)}`;
+      const section=properties&&child(properties,'sectPr');
+      return `${enabled(properties&&child(properties,'pageBreakBefore'))?pageBreak:''}${html.split(pageBreak).map(part=>`<${tag}${style}>${part||'<br>'}</${tag}>`).join(pageBreak)}${section&&sectionPageBreaks.has(section)?pageBreak:''}`;
     }
     if (element.localName==='tbl') {
       type ImportedCell = { html:string; colspan:number; rowspan:number; heading:boolean };
@@ -793,8 +856,8 @@ export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   const firstParagraph=blocks[0]?.localName==='p'?blocks[0]:undefined;
   const firstText=firstParagraph?plainText(firstParagraph).replace(/\s+/gu,' ').trim():'';
   const titleStyle=firstParagraph&&attr(child(firstParagraph,'pPr')&&child(child(firstParagraph,'pPr')!,'pStyle'));
-  const hasDocumentTitle=titleStyle==='Title'&&firstText.length>0&&firstText.length<=300&&blocks.length>1;
+  const hasDocumentTitle=titleStyle==='Title'&&firstText.length>0&&firstText.length<=300&&blocks.length>1&&!firstParagraph?.getElementsByTagNameNS('*','drawing').length&&!firstParagraph?.getElementsByTagNameNS('*','sectPr').length;
   const title=hasDocumentTitle?firstText:file.name.replace(/\.docx$/iu,'').slice(0,300);
   const content=hasDocumentTitle?blocks.slice(1):blocks;
-  return{reportTitle:title||file.name.replace(/\.docx$/iu,''),reportContent:content.map(render).join('\n')};
+  return{reportTitle:title||file.name.replace(/\.docx$/iu,''),reportContent:content.map(render).join('\n'),...(images.length?{images}:{})};
 }

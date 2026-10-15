@@ -34,7 +34,7 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
     });
     await page.goto(origin+'/native-qa.html');await page.waitForFunction(()=>document.styleSheets.length>0);
     await page.evaluate('globalThis.__name = value => value');
-    for(const name of ['letterSpacing','normalLine','inlineBreaks','photoWhitespace','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows'])await t.test(name,async()=>{
+    for(const name of ['fontFamilyFallback','letterSpacing','normalLine','inlineBreaks','photoWhitespace','photoCellSingleLine','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows'])await t.test(name,async()=>{
       await page.evaluate(()=>document.querySelectorAll('#native-source').forEach(node=>node.remove()));
       const download=page.waitForEvent('download');
       const result=await page.evaluate(async name=>{
@@ -45,10 +45,12 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
 <img src="${src}" width="120" height="72">
 </p>`;
         const contents:Record<string,string>={
+          fontFamilyFallback:`<style>#native-source .cf224-fallback::after{content:"- 1 -";font-family:"CF224 Missing Font",Arial,serif;font-size:16px;line-height:20px;height:20px;bottom:20px}</style><section lang="ko" class="proposal-final-chapter cf224-fallback" data-export-page style="width:794px;height:1123px;padding:40px"><p style="font-family:'CF224 Missing Font',Arial,serif;font-size:20px;font-weight:700;font-style:italic;letter-spacing:2px">CF224 fallback 123.45</p><p lang="en-US" style="font-family:Arial,'CF224 Missing Font',serif">Existing family retained</p></section>`,
           letterSpacing:'<section data-export-page style="width:794px;height:1123px;padding:40px"><p><span style="font-size:20px;letter-spacing:2px">양수 자간</span><span style="font-size:20px;letter-spacing:-2px">음수 자간</span></p></section>',
           normalLine:'<section data-export-page style="width:794px;height:1123px;padding:40px"><p style="font-size:20px;line-height:normal;min-height:0">단일 줄 검수</p></section>',
           inlineBreaks:'<section data-export-page style="width:794px;height:1123px;padding:40px"><p style="line-height:40px"><span>첫째 줄<br><br>넷째 아닌 셋째 줄<br></span></p></section>',
           photoWhitespace:`<section data-export-page style="width:794px;height:1123px;padding:40px">${photo}</section>`,
+          photoCellSingleLine:`<section data-export-page style="width:794px;height:1123px;padding:40px;font:16px/24px Arial"><table style="width:620px;table-layout:fixed"><tr><td style="width:310px;padding:12px"><p>첨부자료 1</p><img src="${src}" width="120" height="72"><p style="font:12px/18px Arial;white-space:nowrap">CF224 사진 설명 끝글자 123.45</p></td><td style="width:310px;padding:12px"><p>명시적<br>줄바꿈 보존</p>${photo}</td></tr></table></section>`,
           sourcePage:`<section data-export-page style="width:794px;height:1123px;padding:40px"><p><img data-report-source-page="true" src="${src}" width="120" height="72"></p></section>`,
           collapsedPhotoMargins:`<section data-export-page style="width:794px;height:1123px;padding:40px"><p style="margin:0 0 16px;min-height:28.8px;text-align:center"><img style="display:block;margin:18px auto 24px" src="${src}" width="120" height="72"></p></section>`,
           mergedFooter:`<section data-export-page style="position:relative;width:794px;height:1123px;padding:40px"><p>원문 123,456원</p><table style="width:600px"><tr><td rowspan="2">병합</td><td>120</td></tr><tr><td>${photo}</td></tr></table><footer class="report-page-number" style="position:absolute;bottom:20px">- 1 -</footer></section>`,
@@ -63,6 +65,23 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
         root.id='native-source';
         const before=root.innerHTML;
         let metrics:any;
+        if(name==='photoCellSingleLine'){
+          const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
+          const [collected]=await collectNativeHwpPages(root,'portrait');
+          metrics={singleLine:collected.tableGeometry![0].cells.map(cell=>Boolean(cell.singleLine))};
+        }
+        if(name==='fontFamilyFallback'){
+          // fonts.check() can succeed through generic fallback. A missing local
+          // face must not become the font name saved into the actual HWP.
+          let missingRejected=false;
+          try{await new FontFace('cf224-missing-probe','local("CF224 Missing Font")').load();}catch{missingRejected=true;}
+          if(!missingRejected)throw Error('CF224 missing-font fixture unexpectedly installed');
+          await new FontFace('cf224-existing-probe','local("Arial")').load();
+          const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
+          const [collected]=await collectNativeHwpPages(root,'portrait');
+          if(!collected.html.includes('font-family:Arial;font-size:20px;font-weight:bold;font-style:italic;letter-spacing:2px')||collected.html.includes('CF224 Missing Font')||!collected.footer?.html.includes('font-family:Arial'))throw Error('CF224 named fallback or authored style/footer lost');
+          metrics={sourceUnchanged:root.innerHTML===before};
+        }
         if(name==='reportToc10Rows'){
           await document.fonts.ready;
           const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string);
@@ -124,6 +143,39 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
       const artifact=await download;
       assert.equal(result.pageCount,1);assert.ok(result.byteSize>512);assert.equal(artifact.suggestedFilename(),'native-'+name+'.hwp');
       const path=await artifact.path();assert.ok(path);assert.equal(sha(readFileSync(path)),result.sha256);
+      if(name==='fontFamilyFallback'){
+        assert.equal(result.sourceUnchanged,true);
+        const reopened=await page.evaluate(async bytes=>{
+          const {loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string),{unzipSync,strFromU8}=await import('/cf206-zip.js' as string);
+          const Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
+          try{const zip=unzipSync(doc.exportHwpx());return{pages:doc.pageCount(),header:strFromU8(zip['Contents/header.xml']),text:strFromU8(zip['Contents/section0.xml'])};}finally{doc.free();}
+        },[...readFileSync(path)]);
+        assert.equal(reopened.pages,1);assert.match(reopened.header,/face="Arial"/u);assert.ok(!reopened.header.includes('CF224 Missing Font'));
+        assert.ok(reopened.text.includes('CF224 fallback 123.45')&&reopened.text.includes('Existing family retained'));
+        const word=await page.evaluate(async()=>{
+          const {createEditableDocx}=await import('/src/documents/editable-docx-export.ts' as string),{unzipSync,strFromU8}=await import('/cf206-zip.js' as string);
+          const source=document.querySelector<HTMLElement>('#native-source')!;source.querySelector<HTMLElement>('[data-export-page]')!.style.border='2px solid black';
+          const before=source.innerHTML,zip=unzipSync(await createEditableDocx(source,'portrait'));
+          return{unchanged:source.innerHTML===before,body:strFromU8(zip['word/document.xml']),footer:strFromU8(zip['word/footer1.xml'])};
+        });
+        assert.equal(word.unchanged,true);assert.match(word.body,/<w:rFonts[^>]*w:ascii="Arial"/u);assert.match(word.footer,/<w:rFonts[^>]*w:ascii="Arial"/u);
+        assert.ok(!word.body.includes('CF224 Missing Font')&&!word.footer.includes('CF224 Missing Font'));assert.ok(word.body.includes('<w:b/>')&&word.body.includes('<w:i/>'));
+        assert.match(word.body,/<w:lang w:val="ko-KR" w:eastAsia="ko-KR"\/>/u);assert.match(word.footer,/<w:lang w:val="ko-KR" w:eastAsia="ko-KR"\/>/u);
+        assert.match(word.body,/<w:lang w:val="en-US" w:eastAsia="en-US"\/>/u);
+        const margin=word.body.match(/<w:pgMar\b[^>]*>/u)![0];
+        for(const side of ['left','right','top','bottom'])assert.ok(margin.includes(`w:${side}="630"`),'DOCX must include the authored page border in the content inset');
+        assert.ok(margin.includes('w:footer="330"'),'DOCX footer distance must include the bottom border');
+      }
+      if(name==='photoCellSingleLine'){
+        assert.deepEqual(result.metrics.singleLine,[true,false]);
+        const imported=await page.evaluate(async bytes=>{
+          const {loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string),{unzipSync,strFromU8}=await import('/cf206-zip.js' as string);
+          const Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
+          try{return{pages:doc.pageCount(),xml:strFromU8(unzipSync(doc.exportHwpx())['Contents/section0.xml'])};}finally{doc.free();}
+        },[...readFileSync(path)]);
+        assert.equal(imported.pages,1);assert.equal((imported.xml.match(/lineWrap="SQUEEZE"/gu)||[]).length,1);
+        assert.ok(imported.xml.includes('<hp:lineBreak/>'),'Explicit multiline photo cell must retain its break');
+      }
       if(name==='reportToc10Rows'){
         assert.equal(result.sourceUnchanged,true);assert.equal(result.metrics.sourceUnchanged,true);assert.equal(result.metrics.tables,10);
         assert.deepEqual(result.metrics.cells,Array(10).fill(3));assert.deepEqual(result.metrics.numbers,[...Array(6).fill('1'),...Array(4).fill('2')]);
@@ -133,11 +185,20 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           const {unzipSync,zipSync,strFromU8,strToU8}=await import('/cf206-zip.js' as string);
           const source=document.querySelector<HTMLElement>('#native-source')!,before=source.innerHTML,pages=await collectNativeHwpPages(source,'portrait'),Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
           try{
+            if(!pages[0].tableGeometry!.every(table=>table.reflowCellLines))throw Error('TOC cell geometry must discard the importer line cache');
             const archive=doc.exportHwpx();verifyNativeHwpContent(archive,pages);
             const zip=unzipSync(archive),xml=strFromU8(zip['Contents/section0.xml']);
+            let singleLineModeBlocked=false;
+            try{verifyNativeHwpContent(zipSync({...zip,'Contents/section0.xml':strToU8(xml.replace('lineWrap="SQUEEZE"','lineWrap="BREAK"'))}),pages);}catch(error){if(!String(error).includes('한 줄 셀 속성'))throw error;singleLineModeBlocked=true;}
             if(!xml.includes('style="DOT"'))throw Error('CF206 native DOT definition missing');
             let overwrittenDotBlocked=false;
             try{verifyNativeHwpContent(zipSync({...zip,'Contents/section0.xml':strToU8(xml.replace('style="DOT"','style="SOLID"'))}),pages);}catch(error){if(!String(error).includes('목차 점선의 모양'))throw error;overwrittenDotBlocked=true;}
+            const cell=xml.match(/<hp:tc\b[^>]*>[\s\S]*?<\/hp:tc>/u)![0],cellDoc=new DOMParser().parseFromString(cell,'text/html');
+            const size=cellDoc.getElementsByTagName('hp:cellsz')[0],padding=cellDoc.getElementsByTagName('hp:cellmargin')[0];
+            const inner=Number(size.getAttribute('width'))-Number(padding.getAttribute('left'))-Number(padding.getAttribute('right'));
+            const stale=xml.replace(cell,cell.replace('</hp:subList>',`<hp:p id="90000" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1200" textheight="1200" baseline="1000" spacing="0" horzpos="0" horzsize="${inner+1}" flags="0"/></hp:linesegarray></hp:p></hp:subList>`));
+            let staleCacheBlocked=false;
+            try{verifyNativeHwpContent(zipSync({...zip,'Contents/section0.xml':strToU8(stale)}),pages);}catch(error){if(!String(error).includes('목차 셀의 줄 너비'))throw error;staleCacheBlocked=true;}
             const altered=structuredClone(pages),firstGeometry=altered[0].tableGeometry![0];
             if(!Number.isFinite(firstGeometry.advance))throw Error('CF206 measured TOC row advance missing');
             firstGeometry.advance!+=1;
@@ -152,11 +213,13 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
             let missingCaseNextBlocked=false;
             try{verifyNativeHwpContent(zipSync({...zip,'Contents/header.xml':strToU8(missingNextHeader)}),pages);}catch(error){if(!String(error).includes('목차 행 간격'))throw error;missingCaseNextBlocked=true;}
             verifyNativeHwpContent(archive,pages);
-            return{pages:doc.pageCount(),sourceUnchanged:source.innerHTML===before,svg:doc.renderPageSvg(0),overwrittenDotBlocked,alteredAdvanceBlocked,missingCaseNextBlocked};
+            return{pages:doc.pageCount(),sourceUnchanged:source.innerHTML===before,svg:doc.renderPageSvg(0),singleLineModeBlocked,overwrittenDotBlocked,staleCacheBlocked,alteredAdvanceBlocked,missingCaseNextBlocked};
           }finally{doc.free();}
         },[...readFileSync(path)]);
         assert.equal(reopened.pages,1);assert.equal(reopened.sourceUnchanged,true);
         assert.equal(reopened.overwrittenDotBlocked,true);
+        assert.equal(reopened.singleLineModeBlocked,true);
+        assert.equal(reopened.staleCacheBlocked,true);
         assert.equal(reopened.alteredAdvanceBlocked,true);
         assert.equal(reopened.missingCaseNextBlocked,true);
         const rendered=await page.evaluate(async svg=>{
@@ -235,6 +298,32 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
         await page.locator('#native-source').screenshot({path:`output/cf148/native-browser/${name}-hwp.png`});
       }
       await page.evaluate(()=>document.querySelector('#native-source')?.remove());
+    });
+    await t.test('CF224 DOCX retains text and rendered space widths across collapse, pre and zoom',async()=>{
+      const result=await page.evaluate(async()=>{
+        const {createEditableDocx}=await import('/src/documents/editable-docx-export.ts' as string);
+        const {unzipSync,strFromU8}=await import('/cf206-zip.js' as string);
+        const root=document.createElement('section');root.setAttribute('data-export-page','');root.lang='ko';
+        root.style.cssText='width:794px;height:1123px;padding:40px;zoom:.75;font:16px/29px Arial';
+        root.innerHTML='<p>  Alpha   beta  </p><p lang="en">Alpha 가 나 Gamma</p><pre>  A   B  </pre><p style="word-spacing:2px;letter-spacing:1px">A B</p><p style="width:1px">A B</p>';
+        document.body.append(root);await document.fonts.ready;
+        const before=root.outerHTML;
+        try{
+          const archive=unzipSync(await createEditableDocx(root,'portrait'));
+          const xml=new DOMParser().parseFromString(strFromU8(archive['word/document.xml']),'application/xml');
+          const ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+          const paragraphs=[...xml.getElementsByTagNameNS(ns,'p')].filter(p=>p.getElementsByTagNameNS(ns,'t').length);
+          return {unchanged:before===root.outerHTML,paragraphs:paragraphs.map(p=>({text:[...p.getElementsByTagNameNS(ns,'t')].map(t=>t.textContent).join(''),fits:[...p.getElementsByTagNameNS(ns,'fitText')].map(f=>({width:Number(f.getAttributeNS(ns,'val')),id:f.getAttributeNS(ns,'id'),parent:f.parentElement?.localName,runText:[...f.parentElement!.parentElement!.getElementsByTagNameNS(ns,'t')].map(t=>t.textContent).join('')}))}))};
+        }finally{root.remove();}
+      });
+      assert.equal(result.unchanged,true);
+      assert.deepEqual(result.paragraphs.map(p=>p.text),[' Alpha beta ','Alpha 가 나 Gamma','  A   B  ','A B','A B']);
+      assert.deepEqual(result.paragraphs.map(p=>p.fits.length),[1,3,7,1,0]);
+      const fits=result.paragraphs.flatMap(p=>p.fits);
+      assert.equal(new Set(fits.map(f=>f.id)).size,fits.length,'Independent spaces must not form a shared fit group');
+      assert.ok(fits.every(f=>Number.isInteger(f.width)&&f.width>0));
+      assert.ok(fits.every(f=>f.parent==='rPr'&&f.runText===' '),'Width properties must apply directly to only the space run');
+      assert.ok(result.paragraphs[3].fits[0].width>result.paragraphs[0].fits[0].width,'Authored spacing must be retained');
     });
     await t.test('CF205 visible or explicitly authored blank paragraphs remain represented in native collection',async()=>{
       const results=await page.evaluate(async()=>{

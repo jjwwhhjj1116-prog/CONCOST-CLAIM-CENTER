@@ -1145,22 +1145,53 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
 
   const importReportDocx = async (file: File | undefined) => {
     if(!file)return;
-    if (!editable || saving || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) { if (reportDocxInputRef.current) reportDocxInputRef.current.value=''; setError('진행 중인 저장·챕터 반영이 끝난 뒤 파일을 다시 선택해 주세요. 기존 내용은 유지됩니다.'); return; }
+    if (!editable || saving || pageImportInFlight.current || linkingHwpRef.current || chapterSaveInFlight.current || outlineSaveInFlight.current || generationInFlight.current) { if (reportDocxInputRef.current) reportDocxInputRef.current.value=''; setError('진행 중인 저장·챕터 반영이 끝난 뒤 파일을 다시 선택해 주세요. 기존 내용은 유지됩니다.'); return; }
+    pageImportInFlight.current=true;
+    const controller=new AbortController();pageImportAbort.current=controller;
+    const requestCaseId=selectedCaseId, requestTitle=titleRef.current, requestContent=contentRef.current;
+    const requestJson=JSON.stringify(editorJsonRef.current), requestFront=JSON.stringify(reportFrontMatterRef.current), requestHeader=JSON.stringify(reportHeaderRef.current);
+    const requestStep=activeStepRef.current, requestChapter=selectedChapterRef.current;
+    const isCurrent=()=>!controller.signal.aborted&&selectedCaseRef.current===requestCaseId&&titleRef.current===requestTitle&&contentRef.current===requestContent&&JSON.stringify(editorJsonRef.current)===requestJson&&JSON.stringify(reportFrontMatterRef.current)===requestFront&&JSON.stringify(reportHeaderRef.current)===requestHeader&&activeStepRef.current===requestStep&&selectedChapterRef.current===requestChapter;
+    const assertCurrent=()=>{if(!isCurrent())throw new Error('프로젝트 또는 원고가 변경되어 DOCX를 적용하지 않았습니다. 기존 원고는 유지됩니다.');};
+    let storedImages=0;
     setSaving(true);setError('');
     try{
       const values=await readReportDocx(file);
+      assertCurrent();
+      let importedContent=values.reportContent;
+      if(values.images?.length){
+        const imported=new DOMParser().parseFromString(importedContent,'text/html');
+        for(const image of values.images){
+          assertCurrent();
+          setMemoryNotice(`Word 사진 보존 중 · ${storedImages+1}/${values.images.length}`);
+          const stored=await reportUploads.upload(requestCaseId,image.file,isCurrent,'REPORT_REFERENCE',controller.signal);
+          storedImages++;
+          assertCurrent();
+          const placements=[...imported.querySelectorAll('img')].filter(element=>element.getAttribute('src')===image.source);
+          if(!placements.length)throw new Error('Word 사진의 본문 위치를 확인하지 못했습니다. 기존 원고는 유지됩니다.');
+          placements.forEach(element=>element.setAttribute('src',stored.downloadUrl));
+        }
+        importedContent=imported.body.innerHTML;
+        const expected=[...imported.querySelectorAll('img')].map(image=>[image.getAttribute('src'),Number(image.getAttribute('width')),Number(image.getAttribute('height'))]);
+        const normalized=parseStructuredDocumentMarkdown(importedContent), actual: unknown[][]=[];
+        const visit=(node:JSONContent)=>{if(node.type==='image')actual.push([node.attrs?.src,Number(node.attrs?.width),Number(node.attrs?.height)]);node.content?.forEach(visit);};
+        visit(normalized);
+        if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('Word 사진의 순서·크기를 보존하지 못해 적용하지 않았습니다. 기존 원고는 유지됩니다.');
+      }
+      assertCurrent();
       if (activeStep === 4 && selectedChapter) {
         const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
-        applyChapterText(selectedChapter.chapterCode, chapterTitle, values.reportContent);
-        setMemoryNotice(`Word DOCX 본문을 ${selectedChapter.chapterCode} 챕터에만 반영했습니다.`);
+        applyChapterText(selectedChapter.chapterCode, chapterTitle, importedContent);
+        setMemoryNotice(`Word DOCX 본문·표·사진을 ${selectedChapter.chapterCode} 챕터에 반영했습니다. 페이지 배치·머리말·꼬리말은 미리보기에서 확인하세요.`);
       } else {
-        const nextContent = activeStep === 3 ? wholeReportDocument(values.reportContent) : values.reportContent;
+        const nextContent = activeStep === 3 ? wholeReportDocument(importedContent) : importedContent;
         titleRef.current=values.reportTitle;contentRef.current=nextContent;
-        setTitle(values.reportTitle);setContent(nextContent);setEditorJson(null);setDraftMethod('MANUAL');setDirty(true);
-        setMemoryNotice(activeStep === 3 ? 'Word DOCX 전체를 챕터 구분 없는 단일 수동 초안으로 반영했습니다. 저장 후 담당자 검수로 이동할 수 있습니다.' : 'Word DOCX 가져오기 완료. 제목과 본문을 수동 초안으로 반영했으며 자동 저장을 시작합니다.');
+        setTitle(values.reportTitle);setContent(nextContent);setEditorJson(parseStructuredDocumentMarkdown(nextContent));setDraftMethod('MANUAL');setDirty(true);
+        if(activeStep===3)setReportFrontMatter({...reportFrontMatterRef.current,enabled:false});
+        setMemoryNotice('Word DOCX 본문·표·사진을 반영하고 자동 저장을 시작합니다. 페이지 배치·머리말·꼬리말은 미리보기에서 확인하세요.');
       }
-    }catch(reason){setError(reason instanceof Error?reason.message:'Word 보고서를 읽지 못했습니다.');}
-    finally{setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}
+    }catch(reason){if(!controller.signal.aborted&&selectedCaseRef.current===requestCaseId)setError(`${reason instanceof Error?reason.message:'Word 보고서를 읽지 못했습니다.'}${storedImages?` 저장된 사진 ${storedImages}개는 프로젝트 자료실에 보존됩니다.`:''}`);}
+    finally{pageImportInFlight.current=false;if(pageImportAbort.current===controller)pageImportAbort.current=null;setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}
   };
 
   const openAndLinkReportHwp = async (file: File | undefined) => {

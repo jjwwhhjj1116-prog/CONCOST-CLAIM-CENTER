@@ -1,5 +1,6 @@
 import {documentBlockImageAlignment,documentImageData,listMarker} from './editable-docx-export';
 import type {NativeHwpContent,NativeHwpPage} from './editable-hwp-export';
+import {prepareDocumentExportFonts,resolveDocumentExportFontFamily} from './document-export-fonts';
 
 const px=(v:string)=>Number.parseFloat(v)||0;
 const style=(e:Element)=>e.ownerDocument.defaultView!.getComputedStyle(e);
@@ -10,11 +11,20 @@ const color=(v:string)=>{
 };
 const ignored=(e:Element)=>e.matches('script,style,button,input,select,textarea,[hidden],[aria-hidden="true"],[data-export-ignore],[data-html2canvas-ignore],.document-tool-menus,.structured-editor__toolbar')||['none'].includes(style(e).display)||['hidden','collapse'].includes(style(e).visibility);
 const empty=():NativeHwpContent=>({html:'',text:'',tables:0,images:0,tableCells:[],pictures:[],tableGeometry:[]});
+function singleTextLine(element:Element):boolean{
+  if(!element.textContent?.trim()||element.querySelector('br,img,table'))return false;
+  const range=element.ownerDocument.createRange();range.selectNodeContents(element);
+  const boxes=[...range.getClientRects()].filter(box=>box.width>0&&box.height>0);
+  return boxes.length>0&&boxes.every(box=>Math.abs(box.top-boxes[0].top)<.5);
+}
 function append(target:NativeHwpContent,source:NativeHwpContent){
   target.html+=source.html;target.text+=source.text;target.tables+=source.tables;target.images+=source.images;
   target.tableCells!.push(...source.tableCells!);target.pictures!.push(...source.pictures!);target.tableGeometry!.push(...source.tableGeometry!);
 }
-const fontStyle=(css:CSSStyleDeclaration)=>`font-family:${css.fontFamily.split(',')[0].replaceAll('"','').replaceAll("'",'')};font-size:${css.fontSize};font-weight:${px(css.fontWeight)>=600?'bold':css.fontWeight};font-style:${css.fontStyle};letter-spacing:${css.letterSpacing};color:${color(css.color)};text-decoration:${css.textDecorationLine}`;
+async function fontStyle(css:CSSStyleDeclaration,document:Document):Promise<string>{
+  const family=css.fontFamily,properties=`font-size:${css.fontSize};font-weight:${px(css.fontWeight)>=600?'bold':css.fontWeight};font-style:${css.fontStyle};letter-spacing:${css.letterSpacing};color:${color(css.color)};text-decoration:${css.textDecorationLine}`;
+  return `font-family:${await resolveDocumentExportFontFamily(family,document)};${properties}`;
+}
 const paragraphStyle=(css:CSSStyleDeclaration,before?:number,after?:number)=>{
   const align=css.textAlign==='start'?(css.direction==='rtl'?'right':'left'):css.textAlign==='end'?(css.direction==='rtl'?'left':'right'):css.textAlign;
   return `text-align:${align};line-height:${css.lineHeight};margin-top:${before??px(css.marginTop)}px;margin-bottom:${after??px(css.marginBottom)}px;margin-left:${px(css.paddingLeft)}px;margin-right:${px(css.paddingRight)}px`;
@@ -37,7 +47,7 @@ async function inline(nodes:readonly Node[],parent:Element):Promise<NativeHwpCon
   for(const node of nodes){
     if(node.nodeType===Node.TEXT_NODE){
       const css=style(parent),text=css.whiteSpace.startsWith('pre')?node.textContent||'':(node.textContent||'').replace(/\s+/gu,' ');
-      result.html+=`<span style="${escape(fontStyle(css))}">${escape(text)}</span>`;result.text+=text;
+      result.html+=`<span style="${escape(await fontStyle(css,parent.ownerDocument))}">${escape(text)}</span>`;result.text+=text;
     }else if(node instanceof Element&&!ignored(node)){
       if(node instanceof HTMLImageElement)append(result,await image(node));
       else if(node.tagName==='BR'){result.html+='<br>';result.text+='\n';}
@@ -109,7 +119,11 @@ async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
       const own=cell.cloneNode(true) as HTMLElement;own.querySelectorAll('table').forEach(node=>node.remove());
       const ownText=body.tables?[...own.childNodes].map(node=>node.textContent||'').join('').replace(/\s+/gu,' '):body.text;
       cells.push({row:r,col:column,rowSpan,colSpan,text:ownText});
-      geometry.cells.push({width:cell.offsetWidth,height:cell.offsetHeight,padding:{top:px(css.paddingTop),right:px(css.paddingRight),bottom:px(css.paddingBottom),left:px(css.paddingLeft)}});
+      const children=[...cell.children],captions=children.filter(child=>child.textContent?.trim());
+      const singleLine=Boolean(cell.querySelector('img'))&&!cell.querySelector('table,br')&&captions.length>0
+        &&[...cell.childNodes].every(node=>node.nodeType===Node.TEXT_NODE?!node.textContent?.trim():node instanceof HTMLImageElement||node instanceof Element&&/^(P|H[1-6])$/u.test(node.tagName))
+        &&captions.every(singleTextLine);
+      geometry.cells.push({width:cell.offsetWidth,height:cell.offsetHeight,singleLine,padding:{top:px(css.paddingTop),right:px(css.paddingRight),bottom:px(css.paddingBottom),left:px(css.paddingLeft)}});
       const borders=['top','right','bottom','left'].map(side=>`border-${side}:${css.getPropertyValue(`border-${side}-width`)} ${css.getPropertyValue(`border-${side}-style`)} ${color(css.getPropertyValue(`border-${side}-color`))}`).join(';');
       rowHtml+=`<td rowspan="${rowSpan}" colspan="${colSpan}" style="width:${cell.offsetWidth}px;height:${cell.offsetHeight}px;padding:0;vertical-align:${css.verticalAlign};background-color:${color(css.backgroundColor)};${borders}">${body.html}</td>`;
       result.text+=body.text;result.images+=body.images;result.tables+=body.tables;result.pictures!.push(...body.pictures!);result.tableCells!.push(...body.tableCells!);result.tableGeometry!.push(...body.tableGeometry!);
@@ -151,7 +165,10 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
       const page=node.closest<HTMLElement>('[data-export-page]'),pageScale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):scale;
       const next=node.nextElementSibling?.matches(reportToc?'.report-toc-entry':'.proposal-final-toc li')?node.nextElementSibling:null;
       const advance=next?(next.getBoundingClientRect().top-rect.top)/pageScale:rect.height/pageScale+px(style(node).marginBottom);
-      append(result,layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding,advance));continue;
+      const row=layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding,advance);
+      row.tableGeometry![0].reflowCellLines=true;
+      if(reportToc&&singleTextLine(children[0]!))row.tableGeometry![0].cells[0].singleLine=true;
+      append(result,row);continue;
     }
     if(node instanceof HTMLTableElement){await flush();previous=null;append(result,await table(node));continue;}
     if(node instanceof HTMLImageElement){await flush();previous=null;append(result,await image(node));continue;}
@@ -207,6 +224,7 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
 
 /** Read the reviewed DOM only. No template reinjection, save or API mutation. */
 export async function collectNativeHwpPages(root:HTMLElement,orientation:'portrait'|'landscape'):Promise<NativeHwpPage[]>{
+  await prepareDocumentExportFonts(root.ownerDocument);
   const candidates=root.matches('[data-export-page]')?[root]:[...root.querySelectorAll<HTMLElement>('[data-export-page]')];
   const pages=candidates.filter(page=>!ignored(page)&&!page.parentElement?.closest('[data-export-page]'));
   const results:NativeHwpPage[]=[];
@@ -261,7 +279,7 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
       if(pseudo.content&&!['none','normal'].includes(pseudo.content)&&pseudo.display!=='none'){
         const text=[...pseudo.content.matchAll(/"([^"]*)"|'([^']*)'/gu)].map(m=>m[1]??m[2]).join('');
         if(!text)throw Error('HWP 하단 쪽번호를 확인하지 못했습니다.');
-        footer={...empty(),html:`<p style="${escape(paragraphStyle(pseudo,0,0))}"><span style="${escape(fontStyle(pseudo))}">${escape(text)}</span></p>`,text,distance:px(css.borderBottomWidth)+px(pseudo.bottom)};
+        footer={...empty(),html:`<p style="${escape(paragraphStyle(pseudo,0,0))}"><span style="${escape(await fontStyle(pseudo,page.ownerDocument))}">${escape(text)}</span></p>`,text,distance:px(css.borderBottomWidth)+px(pseudo.bottom)};
         const thickness=px(pseudo.borderTopWidth);
         if(thickness&&pseudo.borderTopStyle==='solid')rules.push({left:px(css.borderLeftWidth)+px(pseudo.left),top:page.offsetHeight-px(css.borderBottomWidth)-px(pseudo.bottom)-px(pseudo.height)-px(pseudo.paddingTop)-px(pseudo.paddingBottom)-thickness,width:px(pseudo.width),height:thickness,colors:[color(pseudo.borderTopColor)]});
       }

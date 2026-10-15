@@ -1,11 +1,17 @@
-import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, ImageRun, LeaderType, LineRuleType, Packer, PageOrientation, Paragraph, ShadingType, Tab, Table, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, VerticalAlign, WidthType } from 'docx';
+import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, ImageRun, ImportedXmlComponent, LeaderType, LineRuleType, Packer, PageOrientation, Paragraph, ShadingType, Tab, Table, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, VerticalAlign, WidthType, type IRunOptions } from 'docx';
 import {strFromU8,strToU8,unzipSync,zipSync} from 'fflate';
+import {prepareDocumentExportFonts,resolveDocumentExportFontFamily} from './document-export-fonts';
 
 type Block = Paragraph | Table;
 type Run = TextRun | ImageRun | ExternalHyperlink;
 const px = (value: string): number => Number.parseFloat(value) || 0;
 const twips = (value: number): number => Math.max(0, Math.round(value * 15));
 const style = (node: Element): CSSStyleDeclaration => node.ownerDocument.defaultView!.getComputedStyle(node);
+const language = (node: Element) => {
+  const tag=node.closest('[lang]')?.getAttribute('lang');
+  const value=tag==='ko'?'ko-KR':tag||undefined;
+  return value?{value,eastAsia:value}:undefined;
+};
 const color = (value: string): string | undefined => {
   const match = value.match(/^rgba?\((\d+)[, ]+(\d+)[, ]+(\d+)(?:[, /]+([\d.]+))?\)/u);
   if (match) return match[4] === '0' ? undefined : match.slice(1, 4).map(part => Number(part).toString(16).padStart(2, '0')).join('');
@@ -87,6 +93,35 @@ async function imageRun(image: HTMLImageElement): Promise<ImageRun> {
   return new ImageRun({ type, data: bytes, transformation: { width, height }, altText: { title: image.title || image.alt, description: image.alt, name: image.alt || '첨부 이미지' } });
 }
 
+class FittedSpace extends TextRun {
+  constructor(options: IRunOptions, width: number) {
+    super({...options,text:' '});
+    this.properties.push(new ImportedXmlComponent('w:fitText',{'w:val':twips(width),'w:id':0}));
+  }
+}
+
+function textRuns(node: Node, inherited: Element, options: IRunOptions): TextRun[] {
+  const original=node.textContent||'',pre=style(inherited).whiteSpace.startsWith('pre');
+  const page=inherited.closest<HTMLElement>('[data-export-page]');
+  const scale=page?.offsetWidth?page.getBoundingClientRect().width/page.offsetWidth:1;
+  const result:TextRun[]=[],range=node.ownerDocument!.createRange();
+  let start=0,pending='';
+  const flush=()=>{if(pending)result.push(new TextRun({...options,text:pending}));pending='';};
+  for(const match of original.matchAll(pre?/ /gu:/\s+/gu)){
+    pending+=original.slice(start,match.index);
+    range.setStart(node,match.index!);range.setEnd(node,match.index!+match[0].length);
+    const rectangles=range.getClientRects();
+    const width=rectangles.length===1&&scale>0?rectangles[0].width/scale:0;
+    // Preserve Chromium's rendered space advance, including Korean font locl
+    // shaping. Collapsed and wrapping spaces retain text without a forced width.
+    if(Number.isFinite(width)&&twips(width)>0){flush();result.push(new FittedSpace(options,width));}
+    else pending+=' ';
+    start=match.index!+match[0].length;
+  }
+  pending+=original.slice(start);flush();
+  return result;
+}
+
 async function runs(nodes: readonly Node[], inherited: Element): Promise<Run[]> {
   const result: Run[] = [];
   for (const node of nodes) {
@@ -94,8 +129,8 @@ async function runs(nodes: readonly Node[], inherited: Element): Promise<Run[]> 
       const css = style(inherited);
       const text = css.whiteSpace.startsWith('pre') ? node.textContent || '' : (node.textContent || '').replace(/\s+/gu, ' ');
       if (!text) continue;
-      const font = css.fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/gu, '');
-      result.push(new TextRun({ text, font, size: Math.max(1, Math.round((px(css.fontSize) || 16) * 1.5)), bold: Number(css.fontWeight) >= 600 || css.fontWeight === 'bold', italics: css.fontStyle === 'italic', color: color(css.color), underline: css.textDecorationLine.includes('underline') ? {} : undefined, strike: css.textDecorationLine.includes('line-through'), subScript: css.verticalAlign === 'sub', superScript: css.verticalAlign === 'super' }));
+      const font = await resolveDocumentExportFontFamily(css.fontFamily,inherited.ownerDocument);
+      result.push(...textRuns(node,inherited,{font,language:language(inherited),size:Math.max(1,Math.round((px(css.fontSize)||16)*1.5)),bold:Number(css.fontWeight)>=600||css.fontWeight==='bold',italics:css.fontStyle==='italic',color:color(css.color),underline:css.textDecorationLine.includes('underline')?{}:undefined,strike:css.textDecorationLine.includes('line-through'),subScript:css.verticalAlign==='sub',superScript:css.verticalAlign==='super'}));
     } else if (node instanceof Element && !ignored(node)) {
       if (node instanceof HTMLImageElement) result.push(await imageRun(node));
       else if (node.tagName === 'BR') result.push(new TextRun({ break: 1 }));
@@ -239,7 +274,7 @@ async function blocks(parent: Element): Promise<Block[]> {
 
 /** Native paragraphs, tables and individual images; never a rasterized page. */
 export async function createEditableDocx(root: HTMLElement, orientation: 'portrait' | 'landscape', onProgress?: (message: string) => void): Promise<Uint8Array> {
-  await root.ownerDocument.fonts?.ready;
+  await prepareDocumentExportFonts(root.ownerDocument);
   const candidates = root.matches('[data-export-page]') ? [root] : [...root.querySelectorAll<HTMLElement>('[data-export-page]')];
   const pages = candidates.filter(page => !ignored(page) && !page.parentElement?.closest('[data-export-page]'));
   if (!pages.length) throw new Error('편집 가능한 DOCX로 내보낼 페이지가 없습니다.');
@@ -291,15 +326,15 @@ export async function createEditableDocx(root: HTMLElement, orientation: 'portra
     }
     const pageNumber=page.querySelector<HTMLElement>(':scope > .report-page-number');
     let footer=pageNumber&&!ignored(pageNumber)?await paragraph([...pageNumber.childNodes],pageNumber):new Paragraph('');
-    let footerDistance=pageNumber?twips(px(style(pageNumber).bottom)):0;
+    let footerDistance=pageNumber?twips(px(css.borderBottomWidth)+px(style(pageNumber).bottom)):0;
     // Proposal footers are generated by CSS and have no DOM text to traverse.
     if(page.matches('.proposal-final-toc,.proposal-final-chapter')){
       const pseudo=page.ownerDocument.defaultView!.getComputedStyle(page,'::after');
       if(pseudo.content && !['none','normal'].includes(pseudo.content) && pseudo.display!=='none' && pseudo.visibility!=='hidden'){
         const text=[...pseudo.content.matchAll(/"([^"]*)"|'([^']*)'/gu)].map(match=>match[1]??match[2]).join('');
         if(!text)throw new Error('DOCX 제안서 하단 쪽번호를 읽지 못했습니다.');
-        footer=new Paragraph({children:[new TextRun({text,font:pseudo.fontFamily.split(',')[0].trim().replace(/^['"]|['"]$/gu,''),size:Math.max(1,Math.round(px(pseudo.fontSize)*1.5)),bold:Number(pseudo.fontWeight)>=600,color:color(pseudo.color)})],alignment:alignment(pseudo.textAlign),border:{top:border(pseudo,'Top')},spacing:{before:twips(px(pseudo.paddingTop))}});
-        footerDistance=twips(px(pseudo.bottom));
+        footer=new Paragraph({children:[new TextRun({text,font:await resolveDocumentExportFontFamily(pseudo.fontFamily,page.ownerDocument),language:language(page),size:Math.max(1,Math.round(px(pseudo.fontSize)*1.5)),bold:Number(pseudo.fontWeight)>=600,color:color(pseudo.color)})],alignment:alignment(pseudo.textAlign),border:{top:border(pseudo,'Top')},spacing:{before:twips(px(pseudo.paddingTop))}});
+        footerDistance=twips(px(css.borderBottomWidth)+px(pseudo.bottom));
       }
     }
     const frame=page.matches('.proposal-final-cover')?page.querySelector(':scope > .proposal-cover-frame'):null;
@@ -309,7 +344,7 @@ export async function createEditableDocx(root: HTMLElement, orientation: 'portra
     // footer, not a full-height body spacer that can push the table to page 2.
     const footerChildren=coverSignature?[coverSignature,new Paragraph({children:[],spacing:{before:0,after:0,line:1,lineRule:LineRuleType.EXACT}})]:[footer];
     if(coverSignature)footerDistance=twips(px(css.paddingBottom)+px(css.borderBottomWidth));
-    sections.push({ properties: { page: { size: { width: 11906, height: 16838, orientation: orientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT }, margin: { top: twips(px(css.paddingTop)), right: twips(px(css.paddingRight)), bottom: twips(px(css.paddingBottom)), left: twips(px(css.paddingLeft)), footer: footerDistance } } }, footers:{default:new Footer({children:footerChildren})}, children });
+    sections.push({ properties: { page: { size: { width: 11906, height: 16838, orientation: orientation === 'landscape' ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT }, margin: { top: twips(px(css.paddingTop)+px(css.borderTopWidth)), right: twips(px(css.paddingRight)+px(css.borderRightWidth)), bottom: twips(px(css.paddingBottom)+px(css.borderBottomWidth)), left: twips(px(css.paddingLeft)+px(css.borderLeftWidth)), footer: footerDistance } } }, footers:{default:new Footer({children:footerChildren})}, children });
   }
   onProgress?.(`DOCX ${pages.length}쪽을 파일로 묶고 있습니다.`);
   const archive=unzipSync(new Uint8Array(await Packer.toArrayBuffer(new Document({ sections }))));
@@ -348,12 +383,14 @@ export async function createEditableDocx(root: HTMLElement, orientation: 'portra
   archive['word/document.xml']=strToU8(new XMLSerializer().serializeToString(xml));
   // The image library defaults every drawing to id=1. Word requires unique
   // drawing identifiers, including images in separate header/footer parts.
-  let drawingId=0;
+  let drawingId=0,spaceId=0;
   for(const path of Object.keys(archive).filter(path=>/^word\/(document|header\d+|footer\d+)\.xml$/u.test(path))){
     const part=new DOMParser().parseFromString(strFromU8(archive[path]),'application/xml');
     const drawings=[...part.getElementsByTagNameNS('http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing','docPr')];
-    if(!drawings.length)continue;
+    const spaces=[...part.getElementsByTagNameNS(ns,'fitText')];
+    if(!drawings.length&&!spaces.length)continue;
     for(const drawing of drawings)drawing.setAttribute('id',String(++drawingId));
+    for(const space of spaces)space.setAttributeNS(ns,'w:id',String(++spaceId));
     archive[path]=strToU8(new XMLSerializer().serializeToString(part));
   }
   return zipSync(archive);

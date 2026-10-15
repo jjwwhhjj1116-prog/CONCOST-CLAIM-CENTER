@@ -17,9 +17,10 @@ test('CF69 proposals and reports export the reviewed preview directly as DOCX PD
   assert.match(proposal, /download\('pdf'\)/u);
   assert.match(proposal, /download\('hwp'\)/u);
   assert.match(report, /ref=\{finalReportPreviewRef\}/u);
-  assert.match(report, /downloadFinalReport\('docx'\)/u);
-  assert.match(report, /downloadFinalReport\('pdf'\)/u);
-  assert.match(report, /downloadFinalReport\('hwp'\)/u);
+  assert.match(report, /\(\['docx','pdf','hwp'\] as const\)\.map\(format/u);
+  assert.match(report, /requestFinalOutput\(format\)/u);
+  assert.match(report, /currentFinalization\) \{ await downloadFinalReport\(format\)/u);
+  assert.match(report, /currentReview\?\.status!=='APPROVED'/u);
   assert.match(proposal, /activeProposal\?\.status!==['"]DRAFT['"]/u);
   assert.match(icon, /FileFormatIcon/u);
   assert.match(icon, /docx: 'W'/u);

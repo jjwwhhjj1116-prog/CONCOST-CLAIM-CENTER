@@ -24,7 +24,7 @@ export interface NativeHwpContent {
   images: number;
   tableCells?: Array<Array<{ row: number; col: number; rowSpan: number; colSpan: number; text: string }>>;
   pictures?: Array<{ bytes: Uint8Array; width: number; height: number }>;
-  tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;padding:{top:number;right:number;bottom:number;left:number}}>}>;
+  tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number}}>}>;
 }
 export interface NativeHwpPage extends NativeHwpContent {
   width: number;
@@ -96,8 +96,12 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
       for(const frame of pageShapes(source)){
       const rect=(frame.dotted?lines:rectangles).find(rect=>{const position=rect.match(/<hp:pos\b[^>]*\/>/u)?.[0]||'';return Number(attribute(position,'horzOffset'))===Math.round(frame.left*75)&&Number(attribute(position,'vertOffset'))===Math.round(frame.top*75);})||'';
       const size=rect.match(/<hp:sz\b[^>]*\/>/u)?.[0]||'',position=rect.match(/<hp:pos\b[^>]*\/>/u)?.[0]||'',line=rect.match(/<hp:lineShape\b[^>]*\/>/u)?.[0]||'';
-      if(Number(attribute(size,'width'))!==Math.round(frame.width*75)||Number(attribute(size,'height'))!==Math.round(frame.height*75)||Number(attribute(position,'horzOffset'))!==Math.round(frame.left*75)||Number(attribute(position,'vertOffset'))!==Math.round(frame.top*75)||attribute(position,'horzRelTo')!=='PAPER'||attribute(position,'vertRelTo')!=='PAPER'||attribute(line,'color')?.toLowerCase()!==frame.color.toLowerCase()||Number(attribute(line,'width'))!==Math.round(frame.stroke*75))throw new Error('HWP 갑지 테두리의 위치·크기·색상이 원문과 다릅니다.');
-      if(frame.dotted){if(attribute(line,'style')!=='DOT'||/<hc:fillBrush\b/u.test(rect))throw new Error('HWP 목차 점선의 모양이 원문과 다릅니다.');continue;}
+      const height=frame.dotted?Math.max(1,Math.round(frame.stroke*75)):Math.round(frame.height*75);
+      if(Number(attribute(size,'width'))!==Math.round(frame.width*75)||Number(attribute(size,'height'))!==height||Number(attribute(position,'horzOffset'))!==Math.round(frame.left*75)||Number(attribute(position,'vertOffset'))!==Math.round(frame.top*75)||attribute(position,'horzRelTo')!=='PAPER'||attribute(position,'vertRelTo')!=='PAPER'||attribute(line,'color')?.toLowerCase()!==frame.color.toLowerCase()||Number(attribute(line,'width'))!==Math.round(frame.stroke*75))throw new Error('HWP 갑지 테두리의 위치·크기·색상이 원문과 다릅니다.');
+      if(frame.dotted){
+        const start=rect.match(/<hc:startPt\b[^>]*\/>/u)?.[0]||'',end=rect.match(/<hc:endPt\b[^>]*\/>/u)?.[0]||'';
+        if(attribute(line,'style')!=='DOT'||/<hc:fillBrush\b/u.test(rect)||Number(attribute(start,'x'))!==0||Number(attribute(start,'y'))!==0||Number(attribute(end,'x'))!==Math.round(frame.width*75)||Number(attribute(end,'y'))!==0)throw new Error('HWP 목차 점선의 모양이 원문과 다릅니다.');continue;
+      }
       if(frame.colors?.length===2){
         const gradient=rect.match(/<hc:gradation\b[\s\S]*?<\/hc:gradation>/u)?.[0]||'';
         const colors=[...gradient.matchAll(/<hc:color\b[^>]*value="([^"]+)"/gu)].map(m=>m[1].toLowerCase());
@@ -138,6 +142,20 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
         elements(own,'tc',true).forEach((cell,cellIndex)=>{
           const expected=geometry.cells[cellIndex],size=cell.match(/<hp:cellSz\b[^>]*\/>/u)?.[0]||'',padding=cell.match(/<hp:cellMargin\b[^>]*\/>/u)?.[0]||'';
           if(!expected||Number(attribute(size,'width'))!==Math.round(expected.width*75)||Number(attribute(size,'height'))!==Math.round(expected.height*75)||Object.entries(expected.padding).some(([side,value])=>Number(attribute(padding,side))!==Math.round(value*75)))throw new Error('HWP 표 셀 크기·여백이 원문과 다릅니다.');
+          if(expected.singleLine){
+            if(attribute(cell.match(/<hp:subList\b[^>]*>/u)?.[0]||'','lineWrap')!=='SQUEEZE')throw Error('HWP 한 줄 셀 속성이 원문과 다릅니다.');
+            for(const paragraph of elements(cell,'p',true).filter(p=>normalize(textOf(p)))){
+              const lines=[...paragraph.matchAll(/<hp:lineseg\b[^>]*\/>/gu)];
+              if(lines.length!==1||Number(attribute(lines[0][0],'textpos'))!==0||/<hp:lineBreak\b/u.test(paragraph))throw Error('HWP 한 줄 셀의 원본 줄 배치가 누락되었습니다.');
+            }
+          }
+          if((geometry.advance!==undefined&&geometry.reflowCellLines)||expected.singleLine){
+            const inner=Number(attribute(size,'width'))-Number(attribute(padding,'left'))-Number(attribute(padding,'right'));
+            for(const line of cell.matchAll(/<hp:lineseg\b[^>]*\/>/gu)){
+              const left=Number(attribute(line[0],'horzpos')),width=Number(attribute(line[0],'horzsize'));
+              if(!Number.isFinite(left)||!Number.isFinite(width)||left<0||width<0||left+width>inner||(expected.singleLine&&(inner<=0||left!==0||width!==inner)))throw Error('HWP 목차 셀의 줄 너비가 안쪽 폭을 벗어났습니다.');
+            }
+          }
         });
       }
     });
@@ -182,10 +200,22 @@ function restoreTableGeometry(xml:string,geometries:NativeHwpContent['tableGeome
       changed=changed.slice(0,sizeOffset)+`<hp:cellSz width="${Math.round(expected.width*75)}" height="${Math.round(expected.height*75)}"/>`+changed.slice(sizeOffset+ownSize.length);
       const marginOffset=changed.lastIndexOf(ownMargin);
       changed=changed.slice(0,marginOffset)+`<hp:cellMargin ${Object.entries(expected.padding).map(([side,value])=>`${side}="${Math.round(value*75)}"`).join(' ')}/>`+changed.slice(marginOffset+ownMargin.length);
-      // The fresh HTML importer's line cache still uses its old cell padding.
-      // Recompute only cell lines after restoring the reviewed geometry; never
-      // discard layout caches from a loaded original HWP document.
-      if(geometry.reflowCellLines)changed=changed.replace(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu,'');
+      if(expected.singleLine)changed=changed.replace(/<hp:subList\b[^>]*>/u,tag=>tag.replace(/lineWrap="[^"]*"/u,'lineWrap="SQUEEZE"'));
+      // Only fresh HTML-generated cells enter this path. Preserve the same
+      // paragraph's first line metrics for an authored single line, adjusting
+      // its width after restoring padding. Native SQUEEZE keeps it on one line.
+      // Match the own paragraph's trailing cache, leaving nested tables intact.
+      if(geometry.reflowCellLines)for(const paragraph of elements(changed,'p',true)){
+        const cache=paragraph.match(/<hp:linesegarray\b[^>]*>(?:\s*<hp:lineseg\b[^>]*\/>)*\s*<\/hp:linesegarray>(?=\s*<\/hp:p>$)/u)?.[0];
+        let replacement='';
+        if(expected.singleLine&&normalize(textOf(paragraph))){
+          const first=cache?.match(/<hp:lineseg\b[^>]*\/>/u)?.[0],inner=Math.round(expected.width*75)-Math.round(expected.padding.left*75)-Math.round(expected.padding.right*75);
+          if(!first||Number(attribute(first,'textpos'))!==0||inner<=0||/<hp:lineBreak\b/u.test(paragraph))throw Error('HWP 한 줄 셀의 원본 줄 배치를 확인하지 못했습니다.');
+          const line=first.replace(/horzpos="[^"]*"/u,'horzpos="0"').replace(/horzsize="[^"]*"/u,`horzsize="${inner}"`);
+          replacement=`<hp:linesegarray>${line}</hp:linesegarray>`;
+        }
+        if(cache)changed=changed.replace(paragraph,paragraph.replace(cache,replacement));
+      }
       next=next.replace(cell,changed);
     });
     xml=xml.replace(original,next);
@@ -384,7 +414,9 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
         const result=JSON.parse(prepared.createShapeControl(JSON.stringify({sectionIdx:index,paraIdx:0,charOffset:0,width:hu(f.width),height:hu(f.height),horzOffset:hu(f.left),vertOffset:hu(f.top),treatAsChar:false,textWrap:'BehindText',shapeType:f.dotted?'line':'rectangle'}))) as {ok:boolean;paraIdx:number;controlIdx:number};
         if(!result.ok)throw Error('HWP 갑지 테두리를 만들지 못했습니다.');
         const color=Number.parseInt(f.color.replace('#','').match(/../gu)!.reverse().join(''),16);
-        if(!JSON.parse(prepared.setShapeProperties(index,result.paraIdx,result.controlIdx,JSON.stringify({fillType:!f.dotted&&f.colors?'solid':'none',...(!f.dotted&&f.colors?{fillBgColor:color}:{}),borderColor:color,borderWidth:hu(f.stroke),lineType:f.dotted?3:f.colors?0:1,horzRelTo:'Paper',vertRelTo:'Paper'}))).ok)throw Error('HWP 갑지 테두리 배치를 보존하지 못했습니다.');
+        // DaVu skips a zero-height line box. Keep horizontal endpoints and give
+        // its box the actual stroke height, without changing the drawn line.
+        if(!JSON.parse(prepared.setShapeProperties(index,result.paraIdx,result.controlIdx,JSON.stringify({fillType:!f.dotted&&f.colors?'solid':'none',...(!f.dotted&&f.colors?{fillBgColor:color}:{}),...(f.dotted?{height:Math.max(1,hu(f.stroke))}:{}),borderColor:color,borderWidth:hu(f.stroke),lineType:f.dotted?3:f.colors?0:1,horzRelTo:'Paper',vertRelTo:'Paper'}))).ok)throw Error('HWP 갑지 테두리 배치를 보존하지 못했습니다.');
       }));
       if (prepared.pageCount() !== pages.length) throw new Error(`HWP 줄바꿈으로 페이지 수가 달라졌습니다. (${prepared.pageCount()}/${pages.length})`);
       // The SDK exposes gradient geometry, but not its color stops. Preserve
