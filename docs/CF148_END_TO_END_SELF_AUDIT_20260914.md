@@ -1,5 +1,14 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF226 HWP 문장·표·개별 사진 구조 가져오기 — 2026-10-16
+
+- **요청·구현:** 이미지로 붙이는 가져오기를 일반 편집으로 확대했다고 주장하지 않는다. 별도 “HWP/HWPX 문장·표·사진 가져오기”를 추가해 승인 SDK의 HWPX 구조와 동일 문서 공개 page/text/control layout을 읽어 Tiptap 문단·표·사진으로 적용한다. 원본 파일과 사진 원본은 별도 자료로 보존한다. 저장 JSON의 reportNativeSource는 null이며 편집한 웹 원고가 원형 파일 통과 출력에 가려지지 않는다. 자동 갑지·머리글 중복을 해제하고 정상 버전 저장·충돌/내용 ACK 검증을 그대로 사용한다.
+- **구조·배치 보존:** 원본 text run charX advance와 loaded browser DOM 폭 차이를 trackingCorrection으로 분리 저장하고 명시 원본 자간은 유지한다. 같은 pinned WOFF2를 별칭으로 사용하여 UI 전역 폰트를 바꾸지 않는다. 한 줄 원본은 줄바꿈을 유지한다. 문단 좌표는 hwpImportedTextBox가 소유해 중간/끝 Enter가 정상 흐름 문단을 만든다. 소수 열폭 parseInt 절삭과 stock 25px 최소폭 확대를 가져온 표에 한해 제거했다. 가져온 쪽 밖 문단·텍스트/표/사진 넘침·겹침은 원고를 보존하고 출력 전 차단한다.
+- **격리 실제 제품 UI PASS:** tmp/cf226-qa/browser/run-UIMtZP. 원본 CF224-development-v16-downloaded.hwp SHA216f8bdf2dccbd42b0a587b8c6daceada09bb2a28afbf625d2b49521dc9609b5(244224B)→확인→원본+사진3 저장→5쪽·14표·개별 사진3·업무표 빈셀4 유지. CF200→CF226, 123.45→123.46, 첫 사진260→240px를 실제 UI로 수정하고 PUT→reload JSON/DOM 보존. 사진3 SHA exact. Enter 중간2문단/끝3문단/원문 유지, 문단 겹침0. 가시 미리보기5쪽의 페이지·셀 넘침0/목차11행 중첩0, 원본 advance 대비 비교 가능한 같은 text span 폭 오차 최대0.0875px. 이는 격리 메모리 HTTP API 검수이며 실제 서버 증거와 구분한다.
+- **회귀·실패 보존 PASS:** parser preflight-fIEC5l 정상 및 malformed/회전/crop/세로쓰기/다중 쪽 layout 오류주입5건 거부, 원본 불변/POST0. 다중 쪽은 실제 분할 파일 대신 관측값 오류주입이다. overflow-ET9MoD는 정상5쪽 overflowfalse, 글자/표/사진 넘침3건과 외부 문단은 true·출력 차단, 외부 문단6번째 미리보기에 보존. 중간 목차 겹침 실패, schema 소수폭 손실 실패, 하네스 blob URL 깨짐/selector timeout 자료는 삭제하지 않는다. 마지막 단위12/12·CF117/CF60 관련7/7 PASS, web tsc exit0. UI detector의 가져온 문서용 pinned font 별칭2 warning은 ES용 DESIGN typography를 원본 문서에 적용하지 않는 의도된 범위이며 디자인 문서를 임의 수정하지 않았다.
+- **검증 경계:** tracking은 run 총폭을 맞추며 개별 glyph·공백 위치의 완전 일치를 증명하지 않는다. glyph 논리 상자 Y 약±2.5px·일부 표 경계 약1.24px 차이를 남겨 픽셀 exact라 하지 않는다. A4 세로만 지원하며 회전/crop/효과/세로쓰기/다단/중첩 표/여러 쪽에 걸친 문단·표 등 확인하지 못하는 구조는 가져오기 전 오류로 기존 원고를 유지한다. 한 개 합성5쪽의 검수를 임의의 모든 HWP·native 한컴 재편집 검수로 확대하지 않는다.
+- **개발 배포 준비:** 새 tmp/cf226-qa/web-build-v1 build/stage/dry-run exit0, runtime28·WASM/binding pin 불변/engineRebuiltfalse. entry index-CczYYJLE.js. 실제 서버 검수는 별도 합성 CC-2026-00008(case44baf9d6-3912-4823-9b5b-3add94cf3ee1)를 정상 UI 의뢰→수동 제안서→작성자 확정으로 준비 중이다. 기존 CC7 원고는 덮어쓰지 않는다. 이 항목 작성 시 실제 신규 기능 서버 가져오기·저장·배포 검수는 아직 미실행이며 아래 후속 결과로 갱신한다.
+
 ## CF225 HWP 불러오기 → 웹 보고서 적용 검수 — 2026-10-15
 
 - **요청·판정:** 사용자는 출력은 우선 가능하다고 판단하고, 작성된 HWP를 불러왔을 때 웹 보고서에 그대로 적용되는지 검수하도록 범위를 지정했다. 실제 제품 PreviewReportStudio/RhwpEditorDialog의 파일 선택→전체 적용→저장 응답→reload→연결 원형 재열기를 검수했다. **검수한 A4 세로 5쪽의 페이지 이미지 적용은 PASS**다. 문장·표를 Tiptap 문단/표로 변환하는 기능은 현재 없다. 일반 웹 편집기에는 text0/table0/image5로 들어가며, 문장·표·사진 수정은 웹의 연결 HWP 편집기에서 한 뒤 “수정 원본 보존·전체 페이지 적용”으로 반영한다. 파일 열기나 다운로드만으로 웹 보고서가 갱신되지 않는다.

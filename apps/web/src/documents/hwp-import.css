@@ -1,0 +1,23 @@
+/* Use the same pinned font bytes as the HWP runtime, scoped to imported text. */
+@font-face{font-family:'HwpImport Noto Serif KR';src:url('/rhwp/fonts/NotoSerifKR-Regular.woff2') format('woff2');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'HwpImport Noto Serif KR';src:url('/rhwp/fonts/NotoSerifKR-Bold.woff2') format('woff2');font-weight:700;font-style:normal;font-display:block}
+@font-face{font-family:'HwpImport Noto Sans KR';src:url('/rhwp/fonts/NotoSansKR-Regular.woff2') format('woff2');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'HwpImport Noto Sans KR';src:url('/rhwp/fonts/NotoSansKR-Bold.woff2') format('woff2');font-weight:700;font-style:normal;font-display:block}
+/* Imported measurements belong to the document, and are shared by edit/preview. */
+.hwp-import-page{flex:none;overflow:visible;color:#111;max-width:none!important;line-height:1}
+.hwp-import-page [data-hwp-layout]{box-sizing:border-box;flex:none}
+.hwp-import-page p,.hwp-import-page h1,.hwp-import-page h2,.hwp-import-page h3{margin:0;padding:0;border:0;white-space:pre-wrap;word-break:normal;overflow-wrap:normal}
+.hwp-import-page table{border:0;border-collapse:collapse;margin:0;max-width:none;table-layout:fixed}
+.hwp-import-page td,.hwp-import-page th{position:relative;box-sizing:border-box;overflow:visible}
+.hwp-import-page td>p,.hwp-import-page th>p{max-width:none}
+.hwp-import-page img{max-width:none;max-height:none;object-fit:contain}
+.tiptap:has(>[data-hwp-import-page]){padding:0!important;width:794px;max-width:none;min-height:1123px}
+.report-final-document .report-hwp-structured-sheet[data-export-page]{padding:0!important;border:0;border-radius:0;box-shadow:none;overflow:visible}
+.report-final-document .report-hwp-structured-sheet>.structured-editor__preview{padding:0;margin:0;width:794px;height:1123px;flex:none}
+.report-final-document .report-hwp-structured-sheet [data-hwp-import-page]{margin:0!important}
+.hwp-import-page [data-hwp-import-rule]{user-select:none}
+
+.structured-editor :is(.tiptap,.structured-editor__preview) .hwp-import-page p{min-height:0}
+.structured-editor :is(.tiptap,.structured-editor__preview) .hwp-import-page [data-hwp-text-box]>p{margin:0}
+.structured-editor :is(.tiptap,.structured-editor__preview) .hwp-import-page table{min-width:0;max-width:none;box-sizing:border-box}
+.hwp-import-page [data-hwp-text-box]{overflow:visible}

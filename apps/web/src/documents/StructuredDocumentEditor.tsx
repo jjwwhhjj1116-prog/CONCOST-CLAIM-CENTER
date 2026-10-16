@@ -33,6 +33,8 @@ import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, pre
 import { DocumentReviewPages, type DocumentReviewPagesHandle } from './DocumentPreviewPane';
 import { ReportSourceChapterLinks, type SourceChapterLinkSettings } from './ReportSourceChapterLinks';
 import { ScaledImage, ScaledTableResize, selectTableCells, syncImageDimensions } from './document-resize-scale';
+import { HWP_IMPORT_EXTENSIONS, HWP_IMPORT_DATA_ATTRIBUTES, DocumentTableCell, DocumentTableHeader, DocumentMeasuredTable, normalizeHwpLayout, hwpLayoutStyle } from './hwp-import-nodes';
+import './hwp-import.css';
 
 export interface StructuredSelection {
   from: number;
@@ -265,7 +267,7 @@ export const DocumentPresentationAttributes = Extension.create({
   name: 'documentPresentationAttributes',
   addGlobalAttributes() {
     return [
-      { types: ['doc'], attributes: { reportNativeSource: { default: null, rendered: false } } },
+      { types: ['doc'], attributes: { reportNativeSource: { default: null, rendered: false }, reportHwpImport: {default:null,rendered:false} } },
       {
         types: ['image'],
         attributes: {
@@ -342,18 +344,27 @@ export const DocumentPresentationAttributes = Extension.create({
 });
 
 export class DocumentTableView extends TableView {
+  private standardCellMinWidth: number;
   constructor(node: ProseMirrorNode, cellMinWidth: number, view: EditorView, HTMLAttributes?: Record<string, unknown>) {
-    super(node, cellMinWidth, view, HTMLAttributes);
+    super(node, node.attrs.hwpLayout ? 0 : cellMinWidth, view, HTMLAttributes);
+    this.standardCellMinWidth=cellMinWidth;
     this.applyPresentation(node);
   }
 
   update(node: ProseMirrorNode): boolean {
+    this.cellMinWidth=node.attrs.hwpLayout?0:this.standardCellMinWidth;
     const updated = super.update(node);
     if (updated) this.applyPresentation(node);
     return updated;
   }
 
   private applyPresentation(node: ProseMirrorNode): void {
+    const imported=normalizeHwpLayout(node.attrs.hwpLayout);
+    if(imported){
+      this.dom.style.cssText=hwpLayoutStyle(imported)+';overflow:visible;margin:0;box-sizing:border-box';
+      this.table.style.cssText='position:relative;left:0;top:0;width:100%;height:100%;margin:0;table-layout:fixed;border-collapse:collapse;min-width:0;max-width:none';
+      return;
+    }
     const width = Math.min(100, Math.max(35, Number(node.attrs.tableWidth) || 100));
     const alignment = IMAGE_ALIGNMENTS.has(node.attrs.tableAlignment) ? node.attrs.tableAlignment : 'center';
     const density = TABLE_DENSITIES.has(node.attrs.tableDensity) ? node.attrs.tableDensity : 'normal';
@@ -394,7 +405,7 @@ const jsonText = (node: JSONContent): string => `${typeof node.text === 'string'
 export const normalizeA4TableJson = (source: JSONContent): JSONContent => {
   const visit = (node: JSONContent): JSONContent => {
     const next: JSONContent = { ...node, ...(node.attrs ? { attrs: { ...node.attrs } } : {}), ...(node.content ? { content: node.content.map(visit) } : {}) };
-    if (next.type !== 'table' || !next.content?.length) return next;
+    if (next.type !== 'table' || !next.content?.length || next.attrs?.hwpLayout) return next;
     const rows = next.content.filter((row) => row.type === 'tableRow');
     const columnIndexes = tableCellColumnIndexes(rows.map(row => (row.content ?? []).map(cell => cell.attrs ?? {})));
     const firstCells = rows[0]?.content ?? [];
@@ -464,6 +475,7 @@ export const normalizeStructuredDocumentHtml = (html: string): string => {
     reportPhoto: image.getAttribute('data-report-photo') === 'true'
   }, false));
   parsed.querySelectorAll<HTMLTableElement>('table').forEach((table) => {
+    if(table.closest('[data-hwp-import-page]'))return;
     table.dataset.documentDefaultsVersion ||= '2';
     table.dataset.tableDensity ||= 'normal';
     const requestedWidth = Math.min(100, Math.max(35, Number(table.dataset.tableWidth) || Number.parseFloat(table.style.width) || 100));
@@ -542,6 +554,10 @@ const createTurndown = () => {
     headingStyle: 'atx',
     strongDelimiter: '**'
   });
+  service.addRule('hwp-imported-page',{
+    filter:node=>node instanceof HTMLElement&&node.hasAttribute('data-hwp-import-page'),
+    replacement:(_content,node)=>`\n\n${DOMPurify.sanitize((node as HTMLElement).outerHTML,{ADD_ATTR:[...HWP_IMPORT_DATA_ATTRIBUTES,'style','colwidth','colspan','rowspan','width','height']})}\n\n`
+  });
   service.use(gfm);
   service.addRule('emptyParagraph', {
     filter: node => node instanceof HTMLElement && node.tagName === 'P' && !(node.textContent ?? '').trim() && !node.querySelector('img,table,iframe,video,audio'),
@@ -612,8 +628,8 @@ export const editorHtmlToMarkdown = (html: string): string => createTurndown().t
 
 export const parseStructuredDocumentMarkdown = (markdown: string): JSONContent => generateJSON(markdownToEditorHtml(markdown), [
   StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }), Highlight.configure({ multicolor: false }),
-  TextAlign.configure({ types: ['heading', 'paragraph'] }), TableKit.configure({ table: { resizable: false } }), Image.configure({ allowBase64: false, inline: false }),
-  AiChapterMarker, DocumentPageBreak, DocumentSpacer, DocumentTextStyle, DocumentPresentationAttributes
+  TextAlign.configure({ types: ['heading', 'paragraph'] }), TableKit.configure({ table: false, tableCell: false, tableHeader: false }), DocumentMeasuredTable.configure({resizable:false}), DocumentTableCell, DocumentTableHeader, Image.configure({ allowBase64: false, inline: false }),
+  AiChapterMarker, DocumentPageBreak, DocumentSpacer, DocumentTextStyle, DocumentPresentationAttributes, ...HWP_IMPORT_EXTENSIONS
 ]);
 
 /** Render the same structured document used by the editor for final previews. */
@@ -623,13 +639,14 @@ export const renderStructuredDocumentHtml = (editorJson: JSONContent, options?: 
       StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: false } }),
+      TableKit.configure({ table: false, tableCell: false, tableHeader: false }), DocumentMeasuredTable.configure({resizable:false}), DocumentTableCell, DocumentTableHeader,
       Image.configure({ allowBase64: false, inline: false }),
       AiChapterMarker,
       DocumentPageBreak,
       DocumentSpacer,
       DocumentTextStyle,
-      DocumentPresentationAttributes
+      DocumentPresentationAttributes,
+      ...HWP_IMPORT_EXTENSIONS
     ]);
     return DOMPurify.sanitize(normalizeStructuredDocumentHtml(html), {
       ADD_ATTR: ['data-report-photo', 'data-report-source-page', 'data-document-spacer', 'data-ai-chapter-marker', 'data-document-page-break', 'data-image-align', 'data-document-defaults-version', 'data-table-width', 'data-table-align', 'data-table-density', 'data-cell-vertical-align', 'data-cell-horizontal-align', 'data-row-height-mm', 'colwidth', 'colspan', 'rowspan', 'style', 'target', 'rel', 'width', 'height']
@@ -816,7 +833,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       }),
       Highlight.configure({ multicolor: false }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
-      TableKit.configure({ table: { resizable: true, lastColumnResizable: false, allowTableNodeSelection: false, View: DocumentTableView } }),
+      TableKit.configure({ table: false, tableCell: false, tableHeader: false }), DocumentMeasuredTable.configure({resizable:true,lastColumnResizable:false,allowTableNodeSelection:false,View:DocumentTableView}), DocumentTableCell, DocumentTableHeader,
       ScaledTableResize,
       ScaledImage.configure({
         allowBase64: false,
@@ -837,6 +854,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       DocumentSpacingSelection,
       DocumentTextStyle,
       DocumentPresentationAttributes,
+      ...HWP_IMPORT_EXTENSIONS,
       ...(collaborationSession ? [
         Collaboration.configure({ document: collaborationSession.document }),
         CollaborationCaret.configure({ provider: collaborationSession.provider, user: collaborationSession.user })

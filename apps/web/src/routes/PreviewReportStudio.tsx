@@ -8,7 +8,9 @@ import { ApiError, apiDownload, apiRequest } from '../api';
 import { loadCaseOptions } from '../case-options';
 import { AiGenerationProgressModal, type AiGenerationStatus } from '../components/AiGenerationProgressModal';
 import { RhwpEditorDialog } from '../documents/RhwpEditorDialog';
-import { confirmReportPages } from '../documents/confirm-report-pages';
+import { confirmReportPages, confirmAppAction } from '../documents/confirm-report-pages';
+import { readReportHwp } from '../documents/hwp-structured-import';
+import { hwpStructuredSignature } from '../documents/hwp-import-nodes';
 import { assertReportNativeA4Portrait, readBoundReportNativeSource, readReportNativeSource, readReportOriginalSource, reportNativeChapterPage, reportSourcePageCount, reportSourceSha256, reportNativeBodySha256, updateReportNativeChapterPage, type ReportNativeSource } from '../documents/report-native-source';
 import { loadNativeHwpEngine } from '../documents/native-hwp-runtime';
 import { DocumentToolMenus } from '../documents/DocumentToolMenus';
@@ -335,6 +337,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   const reportExcelInputRef = useRef<HTMLInputElement | null>(null);
   const reportDocxInputRef = useRef<HTMLInputElement | null>(null);
   const hwpInputRef = useRef<HTMLInputElement | null>(null);
+  const structuredHwpInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadSequence = useRef(0);
   const selectedCaseRef = useRef('');
@@ -1194,6 +1197,47 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     finally{pageImportInFlight.current=false;if(pageImportAbort.current===controller)pageImportAbort.current=null;setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}
   };
 
+  const importStructuredReportHwp = async (file:File|undefined) => {
+    if(!file)return;
+    if(!editable||saving||pageImportInFlight.current||linkingHwpRef.current||chapterSaveInFlight.current||outlineSaveInFlight.current||generationInFlight.current){setError('진행 중인 저장이 끝난 뒤 HWP를 다시 선택해 주세요.');if(structuredHwpInputRef.current)structuredHwpInputRef.current.value='';return;}
+    pageImportInFlight.current=true;
+    const controller=new AbortController();pageImportAbort.current=controller;
+    const requestCaseId=selectedCaseId,originalContent=contentRef.current,originalJson=JSON.stringify(editorJsonRef.current),originalTitle=titleRef.current;
+    const originalFront=JSON.stringify(reportFrontMatterRef.current),originalHeader=JSON.stringify(reportHeaderRef.current),requestStep=activeStepRef.current,requestChapter=selectedChapterRef.current;
+    const isCurrent=()=>!controller.signal.aborted&&selectedCaseRef.current===requestCaseId&&contentRef.current===originalContent&&JSON.stringify(editorJsonRef.current)===originalJson&&titleRef.current===originalTitle&&JSON.stringify(reportFrontMatterRef.current)===originalFront&&JSON.stringify(reportHeaderRef.current)===originalHeader&&activeStepRef.current===requestStep&&selectedChapterRef.current===requestChapter;
+    const assertCurrent=()=>{if(!isCurrent())throw Error('프로젝트 또는 원고가 변경되어 HWP를 적용하지 않았습니다.');};
+    let applied=false,storedFiles=0;
+    setSaving(true);setError('');setMemoryNotice('HWP 문단·표·사진과 페이지 배치를 확인하고 있습니다…');
+    try{
+      if(!/\.hwpx?$/iu.test(file.name)||file.size<1||file.size>10000000)throw Error('10MB 이하의 정상 저장된 HWP 또는 HWPX를 선택해 주세요.');
+      const values=await readReportHwp(file);assertCurrent();
+      const preflightHtml=renderStructuredDocumentHtml(values.document,{pageMode:'a4-portrait'});
+      const normalized=parseStructuredDocumentMarkdown(preflightHtml);
+      if(!preflightHtml||hwpStructuredSignature(normalized)!==hwpStructuredSignature(values.document))throw Error('HWP 문장·표·사진의 서식이나 배치를 웹 편집기에 그대로 보존하지 못했습니다. 기존 원고를 유지합니다.');
+      if(!await confirmAppAction('편집 가능한 HWP 보고서 가져오기',`현재 보고서 전체를 ${values.pageCount}쪽 HWP의 문장·표·사진으로 교체합니다. 원본 파일은 별도로 보관하며 적용 후 웹에서 직접 수정할 수 있습니다. 기존 원고는 저장 기록에 유지됩니다.`,`${values.pageCount}쪽 편집 가능하게 적용`,controller.signal,'취소 · 기존 원고 유지'))return;
+      assertCurrent();
+      if(dirty&&!await saveNow('MANUAL',false,true))throw Error('현재 원고를 저장하지 못해 HWP 가져오기를 중단했습니다.');
+      assertCurrent();setSaving(true);
+      const original=await reportUploads.upload(requestCaseId,file,isCurrent,'REPORT_REFERENCE',controller.signal);storedFiles++;assertCurrent();
+      const replacements=new Map<string,string>();
+      for(const [index,image]of values.images.entries()){
+        setMemoryNotice(`HWP 사진 보존 중 · ${index+1}/${values.images.length}`);
+        const stored=await reportUploads.upload(requestCaseId,image.file,isCurrent,'REPORT_REFERENCE',controller.signal);storedFiles++;assertCurrent();
+        replacements.set('/__hwp_import_image__/'+image.key,stored.downloadUrl);
+      }
+      const replaceImages=(node:JSONContent)=>{if(node.type==='image'){const src=replacements.get(String(node.attrs?.src));if(!src)throw Error('HWP 사진의 본문 위치와 저장 결과가 일치하지 않습니다.');node.attrs={...node.attrs,src};}node.content?.forEach(replaceImages);};
+      replaceImages(normalized);assertCurrent();
+      const imported:JSONContent={...normalized,attrs:{...normalized.attrs,reportNativeSource:null,reportHwpImport:{version:1,caseId:requestCaseId,pages:values.pageCount,source:{evidenceId:original.id,downloadUrl:original.downloadUrl,name:file.name,sha256:original.sha256,byteSize:file.size}}},content:[{type:'aiChapterMarker',attrs:{marker:WHOLE_DOCUMENT_START.replace(/<!--\s*|\s*-->/gu,'')}},...(normalized.content??[]),{type:'aiChapterMarker',attrs:{marker:WHOLE_DOCUMENT_END.replace(/<!--\s*|\s*-->/gu,'')}}]};
+      const content=editorHtmlToMarkdown(renderStructuredDocumentHtml(imported,{pageMode:'a4-portrait'}));
+      if(!content||content.length>500000||JSON.stringify(imported).length>2000000)throw Error('편집 가능한 보고서가 서버 저장 한도를 넘었습니다. 기존 원고를 유지합니다.');
+      contentRef.current=content;setContent(content);setEditorJson(imported);setReportFrontMatter({...reportFrontMatterRef.current,enabled:false});setReportHeader({enabled:false,text:null});setDraftMethod('MANUAL');setDirty(true);applied=true;
+      activeStepRef.current=4;setActiveStep(4);setWorkspaceDirty(true);
+      if(!await saveNow('MANUAL',false,true))throw Error('가져온 보고서의 저장 완료를 확인하지 못했습니다. 현재 화면은 유지됩니다. “저장 다시 시도”를 눌러 주세요. 사진을 다시 가져올 필요는 없습니다.');
+      setMemoryNotice(`HWP ${values.pageCount}쪽의 문장·표·사진을 편집 가능한 보고서로 저장했습니다. 본문과 표를 직접 수정할 수 있습니다.`);
+    }catch(reason){if(!controller.signal.aborted&&selectedCaseRef.current===requestCaseId)setError(`${reason instanceof Error?reason.message:'HWP 보고서를 읽지 못했습니다.'}${!applied&&storedFiles?' 이미 보관된 원본·사진은 프로젝트 자료실에 남습니다.':''}`);}
+    finally{pageImportInFlight.current=false;if(pageImportAbort.current===controller)pageImportAbort.current=null;setSaving(false);if(structuredHwpInputRef.current)structuredHwpInputRef.current.value='';}
+  };
+
   const openAndLinkReportHwp = async (file: File | undefined) => {
     if (!file) return;
     if (linkingHwpRef.current || selectedCaseRef.current !== selectedCaseId || loadedCaseId !== selectedCaseId) return;
@@ -1682,6 +1726,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     ]},
     {id:'hwp',label:'HWP',actions:[
       {id:'export',label:'작성본 HWP 내보내기',onClick:()=>{setWorkingOutputOpen(true);void loadQaSnapshot(true);},disabled:!draftReadyRef.current || qaExportBusy},
+      {id:'structured-import',label:'HWP/HWPX 문장·표·사진 가져오기',onClick:()=>structuredHwpInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy) || linkingHwp},
       {id:'import',label:'HWP/HWPX 전체 페이지 가져오기',onClick:()=>hwpInputRef.current?.click(),disabled:!editable || saving || savingOutline || generating || Boolean(chapterBusy) || linkingHwp},
     ]},
     {id:'pdf',label:'PDF',actions:[{id:'export',label:'작성본 PDF 내보내기',onClick:()=>{setWorkingOutputOpen(true);void loadQaSnapshot(true);},disabled:!draftReadyRef.current || qaExportBusy}]},
@@ -1756,6 +1801,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
       <RhwpEditorDialog recoveryScope={chapterCollaboration?.currentUserId && loadedCaseId === selectedCaseId ? { accountId: chapterCollaboration.currentUserId, workspaceId: 'report-native:' + selectedCaseId, version } : undefined} onOpenRecovery={file=>{setHwpSourceFile(file);setHwpEditorOpen(true);}} preserveAppliedSource applyProgress={pageImportInFlight.current && linkingHwp ? memoryNotice : undefined} applyDisabled={linkingHwp || saving || generating} isOpen={hwpEditorOpen} sourceFile={hwpSourceFile} suggestedName={`${selectedCase?.caseNumber??'클레임센터'}_${title||'보고서'}.hwp`} documentLabel="프로젝트 보고서" applyLabel="수정 원본 보존·전체 페이지 적용" onApplyPages={editable ? applyHwpPagesToReport : undefined} onClose={()=>{setHwpEditorOpen(false);setHwpSourceFile(null);}} />
       <input ref={reportExcelInputRef} hidden type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event)=>void importReportExcel(event.target.files?.[0])}/>
       <input ref={reportDocxInputRef} hidden type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event)=>void importReportDocx(event.target.files?.[0])}/>
+      <input ref={structuredHwpInputRef} hidden type="file" accept=".hwp,.hwpx,application/x-hwp,application/vnd.hancom.hwpx" onChange={event=>void importStructuredReportHwp(event.target.files?.[0])}/>
       <input ref={hwpInputRef} hidden type="file" accept=".hwp,.hwpx,.hml,application/x-hwp,application/vnd.hancom.hwpx" onChange={(event)=>void openAndLinkReportHwp(event.target.files?.[0])}/>
 
       <AiGenerationProgressModal isOpen={Boolean(aiGeneration)} status={aiGeneration?.status??'running'} providerLabel={aiGeneration?.kind==='outline'?authoring?.outlineProviderLabel:aiGeneration?.kind==='improve'?'Gemini':authoring?.providerLabel} title={aiGeneration?.title??'AI가 보고서를 작성하고 있습니다'} description={aiGeneration?.kind==='outline'?'선택한 원본 템플릿을 기준으로 목차를 불러오고 현재 프로젝트에 맞게 정리합니다.':aiGeneration?.kind==='improve'?'사실과 수치는 유지하고 문장을 더 명확하고 전문적으로 다듬습니다.':'승인된 챕터 프롬프트와 선택 프로젝트 근거만 사용해 초안을 작성합니다.'} stages={aiGeneration?.kind==='outline'?['AI 공급자 응답 대기','원본 템플릿 목차 불러오기','챕터 제목 정리','편집 화면 반영']:aiGeneration?.kind==='improve'?['AI 공급자 응답 대기','문장 구조·표현 개선','사실·수치 보존 검증','개선본 반영 대기']:['AI 공급자 응답 대기','근거 자료·메모 분석','챕터 초안 작성','메모리 규칙·결과 검증']} completeMessage={aiGeneration?.kind==='outline'?'템플릿 기반 목차가 준비되었습니다. 이상한 제목만 고친 뒤 목차를 확정하세요.':aiGeneration?.kind==='improve'?'문장 개선이 완료되었습니다. 수정 내용을 확인하고 저장하세요.':'요청한 챕터 초안이 작성·저장되었습니다. 담당자가 내용과 근거를 검수해 주세요.'} errorMessage={aiGeneration?.error} confirmLabel={aiGeneration?.kind==='outline'?'목차 편집 화면 보기':aiGeneration?.kind==='improve'?'개선 본문 확인하기':'완료 확인 · 다음 챕터'} onConfirm={()=>{if(aiGeneration?.kind==='chapter'){const next=authoring?.chapters.find((candidate)=>!authoredChapterCodes.has(candidate.chapterCode));if(next)changeSelectedChapter(next.id);else changeWizardStep(4);}setAiGeneration(null);}} onClose={()=>setAiGeneration(null)}/>

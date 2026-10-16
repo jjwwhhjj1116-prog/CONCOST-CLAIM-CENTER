@@ -6,6 +6,7 @@ import { closeHistory } from '@tiptap/pm/history';
 import type { Node as DocumentNode } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
 import { fitImageDimensions } from './structured-document-layout';
+import { hwpLayoutStyle, normalizeHwpLayout } from './hwp-import-nodes';
 
 const displayScale = (element: HTMLElement) => element.offsetWidth > 0 ? element.getBoundingClientRect().width / element.offsetWidth : 1;
 
@@ -165,11 +166,24 @@ export const ScaledImage = Image.extend({
       type ResizeStart = { width: number; height: number; scale: number; maximumWidth: number; direction: string; shift: boolean; cancelled: boolean; doc: DocumentNode; current?: {width:number;height:number} };
       let start: ResizeStart | null = null;
       const doc = view.dom.ownerDocument;
-      const sync = () => syncImageDimensions(view.element, view.node.attrs);
+      const sync = (attrs = view.node.attrs) => {
+        syncImageDimensions(view.element, attrs);
+        const layout=normalizeHwpLayout(attrs.hwpLayout);
+        if(!layout)return;
+        // Place the resize handles and image together at the imported anchor.
+        const probe=doc.createElement('div');probe.style.cssText=hwpLayoutStyle(layout);
+        for(const property of Array.from(probe.style))view.dom.style.setProperty(property,probe.style.getPropertyValue(property));
+        view.dom.style.padding='0';view.dom.style.maxWidth='none';
+        if(layout.position==='absolute'){
+          view.dom.style.width=Number(attrs.width)>0?`${attrs.width}px`:probe.style.width;
+          view.dom.style.height=Number(attrs.height)>0?`${attrs.height}px`:probe.style.height;
+        }else{view.dom.style.width='100%';view.dom.style.height='auto';}
+        for(const property of ['position','left','top','margin-top','margin-right','margin-bottom','margin-left'])view.element.style.removeProperty(property);
+      };
       const update = view.onUpdate;
       view.onUpdate = (node, decorations, inner) => {
         const accepted = update?.(node, decorations, inner) ?? true;
-        if (accepted) syncImageDimensions(view.element, node.attrs);
+        if (accepted) sync(node.attrs);
         return accepted;
       };
       sync();
