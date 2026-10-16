@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {createRequire} from 'node:module';import {resolve} from 'node:path';import test from 'node:test';
+import {HwpTextAdvance} from '../apps/web/src/documents/hwp-import-nodes';
+const req=createRequire(resolve('apps/web/package.json'));const{Schema,Slice,Fragment}=req('@tiptap/pm/model');const{EditorState}=req('@tiptap/pm/state');const{history,undo,redo}=req('@tiptap/pm/history');
+const schema=new Schema({nodes:{doc:{content:'paragraph+'},paragraph:{content:'text*'},text:{}},marks:{hwpTextAdvance:{attrs:{unitAdvance:{default:null},letterSpacing:{default:0}}}}});
+const mark=schema.marks.hwpTextAdvance.create({unitAdvance:10});const doc=schema.node('doc',null,[schema.node('paragraph',null,[schema.text('ABCDE',[mark])])]);
+const fresh=()=>EditorState.create({schema,doc,plugins:[history(),...HwpTextAdvance.config.addProseMirrorPlugins!.call({} as never)]});
+const units=(s:any)=>{const result:any[]=[];s.doc.descendants((n:any)=>{if(n.isText)for(const c of n.text)result.push([c,n.marks.find((m:any)=>m.type.name==='hwpTextAdvance')?.attrs.unitAdvance??null]);});return result;};
+const apply=(s:any,tr:any)=>s.applyTransaction(tr).state;
+test('insert keeps untouched source widths and removes inherited width only on input',()=>{let s=fresh();s=apply(s,s.tr.insertText('X',3));assert.deepEqual(units(s),[['A',10],['B',10],['X',null],['C',10],['D',10],['E',10]]);});
+test('replace and multiReplace map inserted segments to final positions',()=>{let s=fresh();s=apply(s,s.tr.insertText('xy',2,4).insertText('Z',5,6));assert.deepEqual(units(s),[['A',10],['x',null],['y',null],['D',10],['Z',null]]);});
+test('paste removes foreign fixed widths',()=>{let s=fresh();s=apply(s,s.tr.replaceRange(2,3,new Slice(Fragment.from(schema.text('PASTE',[mark])),0,0)));assert.deepEqual(units(s),[['A',10],...Array.from('PASTE',c=>[c,null]),['C',10],['D',10],['E',10]]);});
+test('IME sequential replace leaves original sides intact',()=>{let s=fresh();s=apply(s,s.tr.insertText('ㄱ',3));s=apply(s,s.tr.insertText('가',3,4));s=apply(s,s.tr.insertText('각',3,4));assert.deepEqual(units(s),[['A',10],['B',10],['각',null],['C',10],['D',10],['E',10]]);});
+test('Enter split keeps existing widths',()=>{let s=fresh();s=apply(s,s.tr.split(3));assert.equal(s.doc.childCount,2);assert.deepEqual(units(s),units(fresh()));});
+test('undo and redo restore document and input width state',()=>{let s=fresh();s=apply(s,s.tr.insertText('X',3));const edited=s.doc.toJSON();assert.ok(undo(s,(tr:any)=>{s=apply(s,tr);}));assert.deepEqual(s.doc.toJSON(),doc.toJSON());assert.ok(redo(s,(tr:any)=>{s=apply(s,tr);}));assert.deepEqual(s.doc.toJSON(),edited);});
+test('explicit import meta retains exact source advance',()=>{let s=fresh();s=apply(s,s.tr.replaceRange(1,6,new Slice(Fragment.from(schema.text('IMPORT',[mark])),0,0)).setMeta('preserveHwpAdvances',true));assert.deepEqual(units(s),Array.from('IMPORT',c=>[c,10]));});

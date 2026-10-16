@@ -21,6 +21,19 @@ const engine = import(pathToFileURL(resolve(pkg, 'rhwp.js')).href).then(async mo
 const { unzipSync, strFromU8, strToU8, zipSync } = createRequire(new URL('../apps/web/package.json', import.meta.url))('fflate');
 const page = (html: string, text: string, tables = 0, images = 0): NativeHwpPage => ({ html, text, tables, images, width: 794, height: 1123, margins: { top: 40, right: 40, bottom: 40, left: 40 } });
 
+test('CF229 fractional photo dimensions round once in native units and a changed dimension is rejected',async()=>{
+  const Engine=await engine,bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5V8AAAAASUVORK5CYII=','base64');
+  const source={...page(`<p>치수 검수</p><img src="data:image/png;base64,${bytes.toString('base64')}" width="10.01" height="12.01">`,'치수 검수',0,1),pictures:[{bytes,width:10.01,height:12.01}]};
+  const doc=new Engine(createNativeHwp([source],Engine));
+  try{
+    const hwpx=doc.exportHwpx();verifyNativeHwpContent(hwpx,[source]);
+    const files=unzipSync(hwpx),xml=strFromU8(files['Contents/section0.xml']),picture=xml.match(/<hp:pic\b[\s\S]*?<\/hp:pic>/u)![0],size=picture.match(/<hp:sz\b[^>]*\/>/u)![0];
+    assert.match(size,/width="751"/u);assert.match(size,/height="901"/u);
+    files['Contents/section0.xml']=strToU8(xml.replace(picture,picture.replace(size,size.replace('width="751"','width="752"'))));
+    assert.throws(()=>verifyNativeHwpContent(zipSync(files),[source]),/사진 크기/u);
+  }finally{doc.free();}
+});
+
 test('applied snapshot keeps edited bytes and its own rendered pages, not the initial file', async () => {
   const Engine = await engine;
   const source = page('<p>기존 본문 123원</p>', '기존 본문 123원');

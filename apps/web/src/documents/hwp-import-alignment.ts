@@ -12,6 +12,22 @@ export function alignImportedHwpPages(source:HTMLElement):void {
   for(const page of source.querySelectorAll<HTMLElement>('[data-hwp-import-page]')){
     const paper=page.getBoundingClientRect(),scale=paper.width/Number(page.getAttribute('data-hwp-width'));
     if(!(scale>0))continue;
+    // Browser/OS font metrics are not portable document geometry. Keep the
+    // native advance in the document and derive the local spacing after fonts
+    // load, including when a saved report opens on another PC or at a new zoom.
+    for(const span of page.querySelectorAll<HTMLElement>('[data-hwp-advance]')){
+      let value:unknown;try{value=JSON.parse(span.getAttribute('data-hwp-advance')||'null');}catch{continue;}
+      if(!Array.isArray(value)||(value.length!==1&&value.length!==2))continue;
+      const unit=Number(value[0]),count=Array.from(span.textContent||'').length;
+      if(!Number.isFinite(unit)||unit<0||unit>200||!count||span.querySelector('br,img'))continue;
+      span.style.letterSpacing='0px';
+      const range=span.ownerDocument.createRange();range.selectNodeContents(span);
+      const rects=[...range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0);
+      if(!rects.length||rects.some(rect=>Math.abs(rect.top-rects[0].top)>.5*scale))continue;
+      const width=Math.max(...rects.map(rect=>rect.right))-Math.min(...rects.map(rect=>rect.left));
+      const spacing=unit-width/scale/count;
+      if(Number.isFinite(spacing)&&Math.abs(spacing)<=20)span.style.letterSpacing=`${spacing}px`;
+    }
     for(const table of page.querySelectorAll<HTMLTableElement>('table')){
       const first=table.rows[0]?.cells[0],origin=layoutOf(table);
       if(!first||origin?.nativeGrid!==1)continue;

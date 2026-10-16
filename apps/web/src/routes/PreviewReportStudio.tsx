@@ -1182,16 +1182,19 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         if(JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('Word 사진의 순서·크기를 보존하지 못해 적용하지 않았습니다. 기존 원고는 유지됩니다.');
       }
       assertCurrent();
-      if (activeStep === 4 && selectedChapter) {
+      if (activeStep === 4 && selectedChapter && !values.layoutPreserved) {
         const chapterTitle = outlineTitles[selectedChapter.id]?.trim() || selectedChapter.title;
         applyChapterText(selectedChapter.chapterCode, chapterTitle, importedContent);
         setMemoryNotice(`Word DOCX 본문·표·사진을 ${selectedChapter.chapterCode} 챕터에 반영했습니다. 페이지 배치·머리말·꼬리말은 미리보기에서 확인하세요.`);
       } else {
-        const nextContent = activeStep === 3 ? wholeReportDocument(importedContent) : importedContent;
+        const nextContent = activeStep === 3 || values.layoutPreserved ? wholeReportDocument(importedContent) : importedContent;
+        const importedJson=parseStructuredDocumentMarkdown(nextContent);
+        if(values.layoutPreserved&&(nextContent.length>500000||JSON.stringify(importedJson).length>2000000))throw Error('편집 가능한 Word 보고서가 서버 저장 한도를 넘었습니다. 기존 원고는 유지됩니다.');
         titleRef.current=values.reportTitle;contentRef.current=nextContent;
-        setTitle(values.reportTitle);setContent(nextContent);setEditorJson(parseStructuredDocumentMarkdown(nextContent));setDraftMethod('MANUAL');setDirty(true);
-        if(activeStep===3)setReportFrontMatter({...reportFrontMatterRef.current,enabled:false});
-        setMemoryNotice('Word DOCX 본문·표·사진을 반영하고 자동 저장을 시작합니다. 페이지 배치·머리말·꼬리말은 미리보기에서 확인하세요.');
+        setTitle(values.reportTitle);setContent(nextContent);setEditorJson(importedJson);setDraftMethod('MANUAL');setDirty(true);
+        if(activeStep===3||values.layoutPreserved)setReportFrontMatter({...reportFrontMatterRef.current,enabled:false});
+        if(values.layoutPreserved){setReportHeader({enabled:false,text:null});setMemoryNotice('내보낸 Word 보고서의 문장·표·사진과 페이지 배치를 반영하고 자동 저장을 시작합니다.');}
+        else setMemoryNotice('Word DOCX 본문·표·사진을 반영하고 자동 저장을 시작합니다. 페이지 배치·머리말·꼬리말은 미리보기에서 확인하세요.');
       }
     }catch(reason){if(!controller.signal.aborted&&selectedCaseRef.current===requestCaseId)setError(`${reason instanceof Error?reason.message:'Word 보고서를 읽지 못했습니다.'}${storedImages?` 저장된 사진 ${storedImages}개는 프로젝트 자료실에 보존됩니다.`:''}`);}
     finally{pageImportInFlight.current=false;if(pageImportAbort.current===controller)pageImportAbort.current=null;setSaving(false);if(reportDocxInputRef.current)reportDocxInputRef.current.value='';}

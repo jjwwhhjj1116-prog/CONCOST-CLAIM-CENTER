@@ -177,7 +177,7 @@ export function syncReportNativeSource(editor: Editor, document: JSONContent | n
   }
   // Keep the replacement body and its source reference in one undo event.
   // Neither the preceding manuscript nor the next edit may merge into it.
-  editor.chain().command(({ tr }) => { closeHistory(tr);for(const [key,value]of Object.entries(metadata))tr.setDocAttribute(key,value);return true; })
+  editor.chain().command(({ tr }) => { closeHistory(tr);tr.setMeta('preserveHwpAdvances',true);for(const [key,value]of Object.entries(metadata))tr.setDocAttribute(key,value);return true; })
     .setContent(content, { emitUpdate }).run();
   editor.view.dispatch(closeHistory(editor.state.tr));
 }

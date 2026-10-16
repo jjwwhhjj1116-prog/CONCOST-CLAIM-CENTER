@@ -1,4 +1,4 @@
-import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, ImageRun, ImportedXmlComponent, LeaderType, LineRuleType, Packer, PageOrientation, Paragraph, ShadingType, Tab, Table, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, VerticalAlign, WidthType, type IRunOptions } from 'docx';
+import { AlignmentType, BorderStyle, Document, ExternalHyperlink, Footer, FrameAnchorType, FrameWrap, HeightRule, ImageRun, ImportedXmlComponent, LeaderType, LineRuleType, Packer, PageOrientation, Paragraph, ShadingType, Tab, Table, TableAnchorType, TableCell, TableLayoutType, TableRow, TabStopType, TextRun, VerticalAlign, WidthType, type IFrameOptions, type IRunOptions } from 'docx';
 import {strFromU8,strToU8,unzipSync,zipSync} from 'fflate';
 import {prepareDocumentExportFonts,resolveDocumentExportFontFamily} from './document-export-fonts';
 
@@ -7,6 +7,7 @@ type Run = TextRun | ImageRun | ExternalHyperlink;
 const px = (value: string): number => Number.parseFloat(value) || 0;
 const twips = (value: number): number => Math.max(0, Math.round(value * 15));
 const style = (node: Element): CSSStyleDeclaration => node.ownerDocument.defaultView!.getComputedStyle(node);
+const measuredSize=(element:HTMLElement)=>{const page=element.closest<HTMLElement>('[data-export-page]'),scale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):1,rect=element.getBoundingClientRect();return{width:rect.width/scale,height:rect.height/scale};};
 const language = (node: Element) => {
   const tag=node.closest('[lang]')?.getAttribute('lang');
   const value=tag==='ko'?'ko-KR':tag||undefined;
@@ -35,7 +36,12 @@ export function documentBlockImageAlignment(image: HTMLImageElement): 'left' | '
 }
 const border = (css: CSSStyleDeclaration, side: 'Top' | 'Right' | 'Bottom' | 'Left') => {
   const width = px(css[`border${side}Width`]);
-  return { style: !width || css[`border${side}Style`] === 'none' ? BorderStyle.NONE : css[`border${side}Style`] === 'dashed' ? BorderStyle.DASHED : css[`border${side}Style`] === 'dotted' ? BorderStyle.DOTTED : BorderStyle.SINGLE, size: Math.max(1, Math.round(width * 6)), color: color(css[`border${side}Color`]) ?? '000000' };
+  return { style: !width || css[`border${side}Style`] === 'none' ? BorderStyle.NONE : css[`border${side}Style`] === 'dashed' ? BorderStyle.DASHED : css[`border${side}Style`] === 'dotted' ? BorderStyle.DOTTED : css[`border${side}Style`]==='double'?BorderStyle.DOUBLE:BorderStyle.SINGLE, size: Math.max(1, Math.round(width * 6)), color: color(css[`border${side}Color`]) ?? '000000' };
+};
+const cellBorder=(cell:HTMLElement,side:'Top'|'Right'|'Bottom'|'Left')=>{
+  let layout:Record<string,unknown>={};try{layout=JSON.parse(cell.getAttribute('data-hwp-layout')||'{}');}catch{/* ordinary cell */}
+  const edge=String(layout[`border${side}`]||'').match(/^([\d.]+)px \w+ #([0-9a-f]{6})$/iu),pattern=layout[`border${side}Pattern`];
+  return edge&&['DOUBLE_SLIM','SLIM_THICK_SLIM'].includes(String(pattern))?{style:pattern==='DOUBLE_SLIM'?BorderStyle.DOUBLE:BorderStyle.TRIPLE,size:Math.max(1,Math.round(Number(edge[1])*6)),color:edge[2]}:border(style(cell),side);
 };
 
 export async function documentImageData(image: HTMLImageElement): Promise<{bytes:Uint8Array;type:'png'|'jpg'|'gif'|'bmp';width:number;height:number}> {
@@ -50,8 +56,10 @@ export async function documentImageData(image: HTMLImageElement): Promise<{bytes
   let type: 'png' | 'jpg' | 'gif' | 'bmp' | null = bytes[0] === 137 && bytes[1] === 80 ? 'png' : bytes[0] === 255 && bytes[1] === 216 ? 'jpg' : bytes[0] === 71 && bytes[1] === 73 ? 'gif' : bytes[0] === 66 && bytes[1] === 77 ? 'bmp' : null;
   try { await image.decode(); } catch { throw new Error(`DOCX 이미지가 손상되었습니다: ${image.alt || '첨부 이미지'}`); }
   const css = style(image);
-  const width = image.offsetWidth || px(css.width) || image.naturalWidth;
-  const height = image.offsetHeight || px(css.height) || image.naturalHeight;
+  const measured=measuredSize(image);
+  const authoredWidth=Number(image.getAttribute('width')),authoredHeight=Number(image.getAttribute('height'));
+  const width = authoredWidth>0&&Math.abs(authoredWidth-measured.width)<.03?authoredWidth:measured.width || px(css.width) || image.naturalWidth;
+  const height = authoredHeight>0&&Math.abs(authoredHeight-measured.height)<.03?authoredHeight:measured.height || px(css.height) || image.naturalHeight;
   if (!width || !height) throw new Error('DOCX 이미지 크기를 확인하지 못했습니다.');
   const fitScale=Math.min(width/image.naturalWidth,height/image.naturalHeight,...(css.objectFit==='scale-down'?[1]:[]));
   const fitted = ['contain', 'scale-down'].includes(css.objectFit) && (Math.abs(width-image.naturalWidth*fitScale)>.01 || Math.abs(height-image.naturalHeight*fitScale)>.01);
@@ -99,12 +107,19 @@ class FittedSpace extends TextRun {
     this.properties.push(new ImportedXmlComponent('w:fitText',{'w:val':twips(width),'w:id':0}));
   }
 }
+class FittedText extends TextRun {
+  constructor(options:IRunOptions,text:string,width:number){super({...options,text});this.properties.push(new ImportedXmlComponent('w:fitText',{'w:val':twips(width),'w:id':0}));}
+}
 
 function textRuns(node: Node, inherited: Element, options: IRunOptions): TextRun[] {
   const original=node.textContent||'',pre=style(inherited).whiteSpace.startsWith('pre');
   const page=inherited.closest<HTMLElement>('[data-export-page]');
   const scale=page?.offsetWidth?page.getBoundingClientRect().width/page.offsetWidth:1;
   const result:TextRun[]=[],range=node.ownerDocument!.createRange();
+  if(inherited.closest('[data-hwp-import-page]')&&original){
+    range.selectNodeContents(node);const rects=range.getClientRects();
+    if(rects.length===1&&twips(rects[0].width/scale)>0)return[new FittedText(options,original,rects[0].width/scale)];
+  }
   let start=0,pending='';
   const flush=()=>{if(pending)result.push(new TextRun({...options,text:pending}));pending='';};
   for(const match of original.matchAll(pre?/ /gu:/\s+/gu)){
@@ -130,9 +145,10 @@ async function runs(nodes: readonly Node[], inherited: Element): Promise<Run[]> 
       const text = css.whiteSpace.startsWith('pre') ? node.textContent || '' : (node.textContent || '').replace(/\s+/gu, ' ');
       if (!text) continue;
       const font = await resolveDocumentExportFontFamily(css.fontFamily,inherited.ownerDocument);
-      result.push(...textRuns(node,inherited,{font,language:language(inherited),size:Math.max(1,Math.round((px(css.fontSize)||16)*1.5)),bold:Number(css.fontWeight)>=600||css.fontWeight==='bold',italics:css.fontStyle==='italic',color:color(css.color),underline:css.textDecorationLine.includes('underline')?{}:undefined,strike:css.textDecorationLine.includes('line-through'),subScript:css.verticalAlign==='sub',superScript:css.verticalAlign==='super'}));
+      result.push(...textRuns(node,inherited,{font,language:language(inherited),size:Math.max(1,Math.round((px(css.fontSize)||16)*1.5)),characterSpacing:Math.round(px(css.letterSpacing)*15),bold:Number(css.fontWeight)>=600||css.fontWeight==='bold',italics:css.fontStyle==='italic',color:color(css.color),underline:css.textDecorationLine.includes('underline')?{}:undefined,strike:css.textDecorationLine.includes('line-through'),subScript:css.verticalAlign==='sub',superScript:css.verticalAlign==='super'}));
     } else if (node instanceof Element && !ignored(node)) {
       if (node instanceof HTMLImageElement) result.push(await imageRun(node));
+      else if(node.hasAttribute('data-hwp-tab'))result.push(new TextRun({children:[new Tab()]}));
       else if (node.tagName === 'BR') result.push(new TextRun({ break: 1 }));
       else if (node instanceof HTMLAnchorElement && node.getAttribute('href')) {
         const children = await runs([...node.childNodes], node);
@@ -153,7 +169,7 @@ function collapsedParagraph(element: Element): boolean {
   return !authoredSpacing && element.getBoundingClientRect().height === 0;
 }
 
-async function paragraph(nodes: readonly Node[], element: Element, marker = '', spacing?: {before:number;after:number}): Promise<Paragraph> {
+async function paragraph(nodes: readonly Node[], element: Element, marker = '', spacing?: {before:number;after:number},frame?:IFrameOptions): Promise<Paragraph> {
   const css = style(element);
   const children = await runs(nodes, element);
   const containsImage = children.some(child => child instanceof ImageRun) || nodes.some(node => node instanceof Element && !ignored(node) && [...node.querySelectorAll('img')].some(image => !ignored(image)));
@@ -176,10 +192,12 @@ async function paragraph(nodes: readonly Node[], element: Element, marker = '', 
   }
   // CSS line-height is an absolute length here, not Word's 240ths-of-a-line.
   // Inline photographs must still be allowed to grow their line box.
-  return new Paragraph({ children, outlineLevel: heading && !element.closest('.report-final-cover') ? Number(element.tagName[1]) - 1 : undefined, alignment: paragraphAlignment, spacing: { before: twips(spacing?.before??px(css.marginTop)), after: twips(spacing?.after??px(css.marginBottom)), ...(px(css.lineHeight) ? { line: twips(px(css.lineHeight)), lineRule: containsImage ? LineRuleType.AT_LEAST : LineRuleType.EXACT } : {}) }, indent: { left: cellText?0:twips(px(css.paddingLeft)), right: cellText?0:twips(px(css.paddingRight)) }, keepNext: heading });
+  const page=element.closest<HTMLElement>('[data-export-page]'),scale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):1,box=element.getBoundingClientRect();
+  const tabStops=[...element.querySelectorAll<HTMLElement>('[data-hwp-tab]')].map(tab=>({type:TabStopType.LEFT,position:twips((tab.getBoundingClientRect().right-box.left)/scale)}));
+  return new Paragraph({ children,frame,tabStops, outlineLevel: heading && !element.closest('.report-final-cover') ? Number(element.tagName[1]) - 1 : undefined, alignment: paragraphAlignment, spacing: { before: twips(spacing?.before??px(css.marginTop)), after: twips(spacing?.after??px(css.marginBottom)), ...(px(css.lineHeight) ? { line: twips(px(css.lineHeight)), lineRule: containsImage ? LineRuleType.AT_LEAST : LineRuleType.EXACT } : {}) }, indent: { left: cellText?0:twips(px(css.paddingLeft)), right: cellText?0:twips(px(css.paddingRight)) }, keepNext: heading });
 }
 
-async function table(element: HTMLTableElement): Promise<Table> {
+async function table(element: HTMLTableElement,position?:{left:number;top:number}): Promise<Table> {
   const css = style(element);
   const rows: TableRow[] = [];
   for (const row of [...element.rows]) {
@@ -190,12 +208,40 @@ async function table(element: HTMLTableElement): Promise<Table> {
       const cellStyle = style(cell);
       const children = await blocks(cell);
       if (!children.length || children[children.length - 1] instanceof Table) children.push(new Paragraph(''));
-      cells.push(new TableCell({ children, columnSpan: cell.colSpan, rowSpan: cell.rowSpan === 0 ? element.rows.length - row.rowIndex : cell.rowSpan, width: { size: twips(cell.offsetWidth || px(cellStyle.width)), type: WidthType.DXA }, verticalAlign: cellStyle.verticalAlign === 'middle' ? VerticalAlign.CENTER : cellStyle.verticalAlign === 'bottom' ? VerticalAlign.BOTTOM : VerticalAlign.TOP, shading: color(cellStyle.backgroundColor) ? { type: ShadingType.CLEAR, fill: color(cellStyle.backgroundColor) } : undefined, borders: { top: border(cellStyle, 'Top'), right: border(cellStyle, 'Right'), bottom: border(cellStyle, 'Bottom'), left: border(cellStyle, 'Left') }, margins: { top: twips(px(cellStyle.paddingTop)), right: twips(px(cellStyle.paddingRight)), bottom: twips(px(cellStyle.paddingBottom)), left: twips(px(cellStyle.paddingLeft)) } }));
+      cells.push(new TableCell({ children, columnSpan: cell.colSpan, rowSpan: cell.rowSpan === 0 ? element.rows.length - row.rowIndex : cell.rowSpan, width: { size: twips(measuredSize(cell).width || px(cellStyle.width)), type: WidthType.DXA }, verticalAlign: cellStyle.verticalAlign === 'middle' ? VerticalAlign.CENTER : cellStyle.verticalAlign === 'bottom' ? VerticalAlign.BOTTOM : VerticalAlign.TOP, shading: color(cellStyle.backgroundColor) ? { type: ShadingType.CLEAR, fill: color(cellStyle.backgroundColor) } : undefined, borders: { top: cellBorder(cell,'Top'), right: cellBorder(cell,'Right'), bottom: cellBorder(cell,'Bottom'), left: cellBorder(cell,'Left') }, margins: { top: twips(px(cellStyle.paddingTop)), right: twips(px(cellStyle.paddingRight)), bottom: twips(px(cellStyle.paddingBottom)), left: twips(px(cellStyle.paddingLeft)) } }));
     }
-    if (cells.length) rows.push(new TableRow({ children: cells, tableHeader: row.parentElement?.tagName === 'THEAD', cantSplit: true }));
+    if (cells.length) rows.push(new TableRow({ children: cells, ...(element.closest('[data-hwp-import-page]')?{height:{value:twips(measuredSize(row).height),rule:HeightRule.EXACT}}:{}),tableHeader: row.parentElement?.tagName === 'THEAD', cantSplit: true }));
   }
   if (!rows.length) throw new Error('DOCX 표에 표시할 행이 없습니다.');
-  return new Table({ rows, layout: TableLayoutType.FIXED, width: { size: twips(element.offsetWidth || px(css.width)), type: WidthType.DXA }, alignment: alignment(css.textAlign) === AlignmentType.JUSTIFIED ? AlignmentType.LEFT : alignment(css.textAlign) as typeof AlignmentType.LEFT | typeof AlignmentType.CENTER | typeof AlignmentType.RIGHT });
+  const columns=[...element.querySelectorAll<HTMLTableColElement>(':scope > colgroup > col')].map(column=>measuredSize(column).width);
+  const bounds=element.getBoundingClientRect(),page=element.closest<HTMLElement>('[data-export-page]'),scale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):1;
+  const boundaries=[...new Set([...element.querySelectorAll<HTMLTableCellElement>('tr > td,tr > th')].flatMap(cell=>{const rect=cell.getBoundingClientRect();return[Math.round((rect.left-bounds.left)/scale*1000)/1000,Math.round((rect.right-bounds.left)/scale*1000)/1000];}))].sort((a,b)=>a-b);
+  const grid=columns.length&&columns.every(width=>width>0)?columns:boundaries.slice(1).map((right,index)=>right-boundaries[index]);
+  let edge=0;
+  const columnWidths=grid.map(width=>{const left=twips(edge);edge+=width;return twips(edge)-left;});
+  return new Table({ rows,columnWidths, ...(position?{float:{horizontalAnchor:TableAnchorType.PAGE,verticalAnchor:TableAnchorType.PAGE,absoluteHorizontalPosition:twips(position.left),absoluteVerticalPosition:twips(position.top),topFromText:0,bottomFromText:0,leftFromText:0,rightFromText:0}}:{}),layout: TableLayoutType.FIXED, width: { size: twips(measuredSize(element).width || px(css.width)), type: WidthType.DXA }, alignment: alignment(css.textAlign) === AlignmentType.JUSTIFIED ? AlignmentType.LEFT : alignment(css.textAlign) as typeof AlignmentType.LEFT | typeof AlignmentType.CENTER | typeof AlignmentType.RIGHT });
+}
+
+async function positionedBlocks(page:HTMLElement):Promise<Block[]>{
+  const source=page.matches('[data-hwp-import-page]')?page:page.querySelector<HTMLElement>('[data-hwp-import-page]');
+  if(!source)throw Error('DOCX 원본 페이지 배치가 없습니다.');
+  const paper=source.getBoundingClientRect(),scale=paper.width/Number(source.getAttribute('data-hwp-width'));
+  const frame=(element:HTMLElement):IFrameOptions=>{const r=element.getBoundingClientRect();return{type:'absolute',position:{x:Math.round((r.left-paper.left)/scale*15),y:Math.round((r.top-paper.top)/scale*15)},width:twips(r.width/scale),height:Math.max(1,twips(r.height/scale)),anchor:{horizontal:FrameAnchorType.PAGE,vertical:FrameAnchorType.PAGE},wrap:FrameWrap.NOT_BESIDE,rule:HeightRule.ATLEAST,space:{horizontal:0,vertical:0}};};
+  const result:Block[]=[];
+  for(const element of [...source.children] as HTMLElement[]){
+    if(ignored(element))continue;
+    if(element.hasAttribute('data-hwp-text-box')){
+      for(const p of [...element.children] as HTMLElement[])result.push(await paragraph([...p.childNodes],p,'',{before:0,after:0},frame(p)));
+    }else if(element instanceof HTMLTableElement){const r=element.getBoundingClientRect();result.push(await table(element,{left:(r.left-paper.left)/scale,top:(r.top-paper.top)/scale}));}
+    else if(element instanceof HTMLImageElement)result.push(await paragraph([element],element,'',{before:0,after:0},frame(element)));
+    else if(element.hasAttribute('data-hwp-import-rule')){
+      const css=style(element),vertical=Number(element.getAttribute('data-hwp-rule-height'))>Number(element.getAttribute('data-hwp-rule-width'));
+      const stroke=Number(element.getAttribute('data-hwp-rule-stroke'))||1,edgeColor=element.getAttribute('data-hwp-rule-color')||color(css.color)||'#000000';
+      result.push(new Paragraph({children:[],frame:frame(element),spacing:{before:0,after:0,line:1,lineRule:LineRuleType.EXACT},border:{[vertical?'left':'top']:{style:element.getAttribute('data-hwp-rule-style')==='dotted'?BorderStyle.DOTTED:BorderStyle.SINGLE,size:Math.max(1,Math.round(stroke*6)),color:edgeColor.replace('#','')}}}));
+    }else if(element.tagName==='P')result.push(await paragraph([...element.childNodes],element,'',{before:0,after:0},frame(element)));
+    else throw Error('DOCX에서 보존하지 못하는 페이지 개체가 있습니다. 기존 보고서는 유지됩니다.');
+  }
+  return result;
 }
 
 export function listMarker(item: Element): string {
@@ -285,7 +331,8 @@ export async function createEditableDocx(root: HTMLElement, orientation: 'portra
     const css = style(page);
     let children:Block[];
     let coverSignature:Table|undefined;
-    if(page.matches('.proposal-final-cover')&&page.querySelector(':scope > .proposal-cover-heading')){
+    if(page.matches('[data-hwp-import-page]')||page.querySelector('[data-hwp-import-page]'))children=await positionedBlocks(page);
+    else if(page.matches('.proposal-final-cover')&&page.querySelector(':scope > .proposal-cover-heading')){
       children=[];
       const rect=page.getBoundingClientRect(),scale=rect.width/page.offsetWidth||1;
       let previousBottom=rect.top+(px(css.paddingTop)+px(css.borderTopWidth))*scale;
@@ -392,6 +439,10 @@ export async function createEditableDocx(root: HTMLElement, orientation: 'portra
     for(const drawing of drawings)drawing.setAttribute('id',String(++drawingId));
     for(const space of spaces)space.setAttributeNS(ns,'w:id',String(++spaceId));
     archive[path]=strToU8(new XMLSerializer().serializeToString(part));
+  }
+  if(pages.every(page=>page.matches('[data-hwp-import-page]')||page.querySelector('[data-hwp-import-page]'))){
+    const {embedDocxLayout}=await import('./docx-layout-roundtrip');
+    await embedDocxLayout(archive,pages);
   }
   return zipSync(archive);
 }

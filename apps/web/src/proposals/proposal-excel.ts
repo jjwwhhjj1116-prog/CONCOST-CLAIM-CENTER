@@ -40,6 +40,7 @@ export interface ReportDocxValues {
   reportTitle: string;
   reportContent: string;
   images?: Array<{ source: string; file: File }>;
+  layoutPreserved?:boolean;
 }
 
 export interface MeetingMinutesExcelValues {
@@ -706,6 +707,9 @@ export async function readProposalDocx(file: File): Promise<ProposalDocxChapter[
 export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   if(!file.name.toLowerCase().endsWith('.docx')||file.size>20_000_000)throw new Error('20MB 이하의 Word DOCX 보고서만 가져올 수 있습니다.');
   const bytes=new Uint8Array(await file.arrayBuffer());
+  const {readDocxLayout}=await import('../documents/docx-layout-roundtrip');
+  const layout=await readDocxLayout(bytes);
+  if(layout)return{reportTitle:file.name.replace(/\.docx$/iu,'').slice(0,300),...layout,layoutPreserved:true};
   const documentXml=await zipEntry(bytes,'word/document.xml');
   const document = new DOMParser().parseFromString(documentXml, 'application/xml');
   const elements = [...document.getElementsByTagName('*')];
@@ -715,6 +719,7 @@ export async function readReportDocx(file: File): Promise<ReportDocxValues> {
   if (elements.some(element=>['pict','object','altChunk','oMath','oMathPara','footnoteReference','endnoteReference'].includes(element.localName))) {
     throw new Error('이 Word 문서에는 지원하지 않는 그림·개체·수식 또는 각주가 포함되어 있습니다. 해당 내용을 누락하지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. 텍스트·표와 본문에 삽입한 PNG·JPEG 사진을 지원합니다. 나머지는 Word 원본에서 확인해 주세요.');
   }
+  if(elements.some(element=>['framePr','tblpPr'].includes(element.localName)))throw new Error('이 Word 문서의 고정 문단·표 배치를 현재 가져오기 경로에서 보존할 수 없습니다. 배치를 잃은 본문으로 덮어쓰지 않도록 중단했습니다. 기존 보고서는 유지됩니다.');
   if (elements.some(element => element.localName === 'numPr')) {
     throw new Error('이 Word 문서에는 자동 번호·글머리표가 있습니다. 번호가 누락되지 않도록 가져오기를 중단했습니다. 기존 보고서는 유지됩니다. Word에서 번호를 일반 텍스트로 바꾼 사본을 가져오거나 목록을 편집기에 직접 추가하세요.');
   }

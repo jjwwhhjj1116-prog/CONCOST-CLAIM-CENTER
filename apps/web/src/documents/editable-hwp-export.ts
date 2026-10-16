@@ -1,5 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
+import {positionNativeHwp} from './positioned-hwp-export';
 
 /** The audited engine is injected so the exact same conversion runs in browser and regression tests. */
 export interface NativeHwpDocument {
@@ -16,6 +17,7 @@ export interface NativeHwpDocument {
   free(): void;
 }
 export interface NativeHwpEngine { new(bytes: Uint8Array): NativeHwpDocument }
+export interface NativeHwpLines {text:string;starts:number[];lineHeight:number;fontSize?:number;empty?:boolean;align?:string;widths?:number[];lefts?:number[];firstXs?:number[];inputs?:Array<{from:number;widths:number[]}>;glyphs?:Array<{at:number;x:number}>;anchor?:{x:number;baseline:number}}
 export interface NativeHwpContent {
   html: string;
   /** Visible source text, in reading order, independent of the HTML converter. */
@@ -23,8 +25,9 @@ export interface NativeHwpContent {
   tables: number;
   images: number;
   tableCells?: Array<Array<{ row: number; col: number; rowSpan: number; colSpan: number; text: string }>>;
-  pictures?: Array<{ bytes: Uint8Array; width: number; height: number }>;
-  tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number}}>}>;
+  pictures?: Array<{ bytes: Uint8Array; width: number; height: number; floating?:boolean }>;
+  tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number};borders?:Record<string,{type:string;width:number;color:string}>;lines?:NativeHwpLines[]}>}>;
+  tabs?:number[];
 }
 export interface NativeHwpPage extends NativeHwpContent {
   width: number;
@@ -34,6 +37,7 @@ export interface NativeHwpPage extends NativeHwpContent {
   frame?:{left:number;top:number;width:number;height:number;color:string;stroke:number};
   rules?:Array<{left:number;top:number;width:number;height:number;colors:[string]|[string,string];dotted?:boolean;stroke?:number}>;
   paragraphInsets?:Array<{left:number;right:number}>;
+  positioned?:Array<{marker:string;kind:'text'|'table'|'image'|'rule';left:number;top:number;width:number;height:number;anchor?:{x:number;baseline:number};stroke?:number;color?:string;lineStyle?:string;lines?:NativeHwpLines[]}>;
 }
 
 const pageShapes=(page:NativeHwpPage)=>[...(page.frame?[{...page.frame,colors:undefined as string[]|undefined,dotted:false}]:[]),...(page.rules||[]).map(rule=>({...rule,color:rule.colors[0],stroke:rule.stroke??0,dotted:!!rule.dotted}))];
@@ -44,7 +48,7 @@ const decodeXml = (value: string) => value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|
   if (entity.startsWith('#')) return String.fromCodePoint(Number.parseInt(entity.slice(entity[1].toLowerCase() === 'x' ? 2 : 1), entity[1].toLowerCase() === 'x' ? 16 : 10));
   return ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" } as Record<string, string>)[entity];
 });
-const textOf = (xml: string) => [...xml.matchAll(/<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>/gu)].map(match => decodeXml(match[1].replace(/<hp:lineBreak\b[^>]*\/>/gu, '\n').replace(/<[^>]+>/gu, ''))).join('');
+const textOf = (xml: string) => [...xml.matchAll(/<hp:t(?:\s[^>]*)?>([\s\S]*?)<\/hp:t>/gu)].map(match => decodeXml(match[1].replace(/<hp:lineBreak\b[^>]*\/>/gu, '\n').replace(/<hp:tab\b[^>]*\/>/gu,'\t').replace(/<[^>]+>/gu, ''))).join('');
 const attribute = (xml: string, name: string) => xml.match(new RegExp(`\\b${name}="([^"]*)"`, 'u'))?.[1];
 // Quantize once in native HU; the default representation stores twice that value.
 const paragraphInsetValue=(pixels:number,factor:number)=>Math.round(pixels*75)*(factor/75);
@@ -90,7 +94,7 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
       });
     }
     if(verifyFrame&&pageShapes(source).length){
-      const rectangles=elements(xml,'rect');
+      const rectangles=elements(xml,'rect').filter(rect=>!rect.includes('<hp:drawText'));
       const lines=elements(xml,'line');
       if(rectangles.length!==pageShapes(source).filter(shape=>!shape.dotted).length||lines.length!==pageShapes(source).filter(shape=>shape.dotted).length)throw new Error('HWP 갑지 테두리·장식선이 누락되었습니다.');
       for(const frame of pageShapes(source)){
@@ -142,6 +146,10 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
         elements(own,'tc',true).forEach((cell,cellIndex)=>{
           const expected=geometry.cells[cellIndex],size=cell.match(/<hp:cellSz\b[^>]*\/>/u)?.[0]||'',padding=cell.match(/<hp:cellMargin\b[^>]*\/>/u)?.[0]||'';
           if(!expected||Number(attribute(size,'width'))!==Math.round(expected.width*75)||Number(attribute(size,'height'))!==Math.round(expected.height*75)||Object.entries(expected.padding).some(([side,value])=>Number(attribute(padding,side))!==Math.round(value*75)))throw new Error('HWP 표 셀 크기·여백이 원문과 다릅니다.');
+          if(expected.borders){
+            const definition=[...strFromU8(files['Contents/header.xml']).matchAll(/<hh:borderFill\b[^>]*>[\s\S]*?<\/hh:borderFill>/gu)].find(match=>attribute(match[0],'id')===attribute(cell,'borderFillIDRef'))?.[0]||'';
+            for(const [side,edge]of Object.entries(expected.borders)){const actual=definition.match(new RegExp(`<hh:${side}Border\\b[^>]*/>`,'u'))?.[0]||'',width=parseFloat(attribute(actual,'width')||'NaN');if(attribute(actual,'type')!==edge.type||!Number.isFinite(width)||Math.abs(width-edge.width)>.00001||attribute(actual,'color')?.toLowerCase()!==edge.color.toLowerCase())throw Error('HWP 표 셀의 테두리 종류·폭·색상이 원문과 다릅니다.');}
+          }
           if(expected.singleLine){
             if(attribute(cell.match(/<hp:subList\b[^>]*>/u)?.[0]||'','lineWrap')!=='SQUEEZE')throw Error('HWP 한 줄 셀 속성이 원문과 다릅니다.');
             for(const paragraph of elements(cell,'p',true).filter(p=>normalize(textOf(p)))){
@@ -177,6 +185,45 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
 function combinedContent(page:NativeHwpPage):NativeHwpPage{
   const footer=page.footer;if(!footer)return page;
   return {...page,text:footer.text+page.text,tables:footer.tables+page.tables,images:footer.images+page.images,tableCells:[...(footer.tableCells||[]),...(page.tableCells||[])],pictures:[...(footer.pictures||[]),...(page.pictures||[])],tableGeometry:[...(footer.tableGeometry||[]),...(page.tableGeometry||[])]};
+}
+
+function restorePictureGeometry(xml:string,pictures:NativeHwpContent['pictures']):string{
+ const actual=elements(xml,'pic');if(actual.length!==(pictures?.length??0))throw Error('HWP 사진 누락: 배치 대조 자료가 부족합니다.');
+ actual.forEach((original,index)=>{
+  const picture=pictures![index],width=Math.round(picture.width*75),height=Math.round(picture.height*75);
+  // Fresh pasteHtml truncates fractional pixels to HU. Normalize the display
+  // rectangle once; intrinsic bitmap/crop coordinates and bytes stay intact.
+  let next=original.replace(/<hp:(?:orgSz|curSz|sz)\b[^>]*\/>/gu,tag=>tag.replace(/\bwidth="[^"]*"/u,`width="${width}"`).replace(/\bheight="[^"]*"/u,`height="${height}"`));
+  next=next.replace(/<hp:imgRect\b[^>]*>[\s\S]*?<\/hp:imgRect>/u,rect=>rect.replace(/<hc:pt([0-3])\b[^>]*\/>/gu,(_,point)=>`<hc:pt${point} x="${point==='1'||point==='2'?width:0}" y="${point==='2'||point==='3'?height:0}"/>`));
+  if(picture.floating)next=next.replace(/<hp:pic\b[^>]*>/u,tag=>tag.replace(/textWrap="[^"]*"/u,'textWrap="IN_FRONT_OF_TEXT"')).replace(/<hp:pos\b[^>]*\/>/u,tag=>tag.replace(/allowOverlap="[^"]*"/u,'allowOverlap="1"'));
+  xml=xml.replace(original,next);
+ });return xml;
+}
+
+function restoreTableBorders(xml:string,geometries:NativeHwpContent['tableGeometry'],files:Record<string,Uint8Array>):string{
+ let header=strFromU8(files['Contents/header.xml']);
+ const definitions=[...header.matchAll(/<hh:borderFill\b[^>]*>[\s\S]*?<\/hh:borderFill>/gu)].map(match=>match[0]);
+ let id=Math.max(0,...definitions.map(def=>Number(attribute(def,'id'))))+1;
+ const added:string[]=[],cache=new Map<string,string>();
+ elements(xml,'tbl').forEach((table,index)=>{
+  let next=table;
+  elements(table,'tc',true).forEach((cell,cellIndex)=>{
+   const edges=geometries?.[index]?.cells[cellIndex]?.borders;if(!edges)return;
+   const previous=attribute(cell,'borderFillIDRef'),key=JSON.stringify([previous,edges]);let ref=cache.get(key);
+   if(!ref){
+    let definition=definitions.find(def=>attribute(def,'id')===previous);if(!definition)throw Error('HWP 셀 테두리 참조가 없습니다.');
+    ref=String(id++);definition=definition.replace(/\bid="[^"]*"/u,`id="${ref}"`);
+    for(const [side,edge]of Object.entries(edges)){
+     const pattern=new RegExp(`<hh:${side}Border\\b[^>]*/>`,'u');if(!pattern.test(definition))throw Error('HWP 셀 테두리의 네 면이 없습니다.');
+     definition=definition.replace(pattern,`<hh:${side}Border type="${edge.type}" width="${edge.width} mm" color="${edge.color}"/>`);
+    }
+    added.push(definition);cache.set(key,ref);
+   }
+   next=next.replace(cell,cell.replace(/\bborderFillIDRef="[^"]*"/u,`borderFillIDRef="${ref}"`));
+  });xml=xml.replace(table,next);
+ });
+ if(added.length){header=header.replace('</hh:borderFills>',added.join('')+'</hh:borderFills>').replace(/<hh:borderFills\b[^>]*>/u,tag=>tag.replace(/itemCnt="(\d+)"/u,(_,count)=>`itemCnt="${Number(count)+added.length}"`));files['Contents/header.xml']=strToU8(header);}
+ return xml;
 }
 
 function restoreTableGeometry(xml:string,geometries:NativeHwpContent['tableGeometry']):string{
@@ -374,6 +421,9 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
     pages.forEach((page, index) => {
       const path = `Contents/section${index}.xml`;
       let xml = strFromU8(native[path]);
+      let tab=0;
+      if(page.tabs?.length)xml=xml.replace(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu,'').replace(/\ue001/gu,()=>{const width=page.tabs?.[tab++];if(width===undefined||!Number.isFinite(width)||width<0)throw Error('HWP 탭 폭 대조 자료가 없습니다.');return `<hp:tab width="${Math.round(width*75)}" leader="0" type="0"/>`;});
+      if(tab!==(page.tabs?.length??0))throw Error('HWP 탭 개수가 원문과 다릅니다.');
       // Restore real inline breaks without introducing paragraph spacing.
       // Discard only affected layout caches so the engine measures new lines.
       for(const paragraph of elements(xml,'p').reverse())if(paragraph.includes(breakMarker))xml=xml.replace(paragraph,paragraph.replace(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu,'').replace(/<hp:t(?:\s[^>]*)?>[\s\S]*?<\/hp:t>/gu,text=>text.replaceAll(breakMarker,'<hp:lineBreak/>')));
@@ -403,9 +453,9 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
         withoutMarker=withoutMarker.slice(0,start)+'</hs:sec>';
         controls+=`<hp:run charPrIDRef="0"><hp:ctrl><hp:footer id="0" applyPageType="BOTH"><hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="BOTTOM" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">${footer}</hp:subList></hp:footer></hp:ctrl></hp:run>`;
       }
-      native[path] = strToU8(restoreParagraphInsets(restoreTableAdvances(clearImportedTableIndent(restoreTableGeometry(withoutMarker.replace(/(<hp:p\b[^>]*>)/u, `$1${controls}`),combinedContent(page).tableGeometry),native),native,combinedContent(page).tableGeometry),native,page.paragraphInsets));
+      native[path] = strToU8(restoreParagraphInsets(restoreTableAdvances(clearImportedTableIndent(restoreTableGeometry(restoreTableBorders(restorePictureGeometry(withoutMarker.replace(/(<hp:p\b[^>]*>)/u, `$1${controls}`),combinedContent(page).pictures),combinedContent(page).tableGeometry,native),combinedContent(page).tableGeometry),native),native,combinedContent(page).tableGeometry),native,page.paragraphInsets));
     });
-    const normalized = zipSync(native);
+    const normalized = pages.some(page=>page.positioned)?positionNativeHwp(native,pages,Engine):zipSync(native);
     verifyNativeHwpContent(normalized, pages, false);
     const prepared = new Engine(normalized);
     try {

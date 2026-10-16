@@ -33,7 +33,7 @@ import { findDocumentTextMatches, applyDocumentAction, documentActionLabel, Docu
 import { DocumentReviewPages, type DocumentReviewPagesHandle } from './DocumentPreviewPane';
 import { ReportSourceChapterLinks, type SourceChapterLinkSettings } from './ReportSourceChapterLinks';
 import { ScaledImage, ScaledTableResize, selectTableCells, syncImageDimensions } from './document-resize-scale';
-import { HWP_IMPORT_EXTENSIONS, HWP_IMPORT_DATA_ATTRIBUTES, DocumentTableCell, DocumentTableHeader, DocumentMeasuredTable, normalizeHwpLayout, hwpLayoutStyle } from './hwp-import-nodes';
+import { HWP_IMPORT_EXTENSIONS, HWP_IMPORT_DATA_ATTRIBUTES, DocumentTableCell, DocumentTableHeader, DocumentMeasuredTable, normalizeHwpLayout, hwpLayoutStyle, compactHwpTextStyle, compactHwpPageFonts, compactHwpLayout } from './hwp-import-nodes';
 import { alignImportedHwpPages } from './hwp-import-alignment';
 import './hwp-import.css';
 
@@ -248,6 +248,7 @@ export const DocumentTextStyle = Mark.create({
       tag: 'span',
       getAttrs: (node) => {
         if (!(node instanceof HTMLElement)) return false;
+        if (node.hasAttribute('data-hwp-text-style')) return false;
         const fontFamily = normalizeFontFamily(node.style.fontFamily);
         const fontSize = normalizeFontSize(node.style.fontSize);
         const color = normalizeTextColor(node.style.color);
@@ -547,10 +548,13 @@ const compactHwpPage = (node: HTMLElement): string => {
     const alignment=element.style.textAlign;
     element.removeAttribute('style');
     if(alignment&&/^(P|H[1-6])$/u.test(element.tagName))element.style.textAlign=alignment;
+    const layout=element.getAttribute('data-hwp-layout');
+    if(layout)element.setAttribute('data-hwp-layout',JSON.stringify(compactHwpLayout(JSON.parse(layout))));
     const textStyle=element.getAttribute('data-hwp-text-style');
-    if(textStyle){const value=JSON.parse(textStyle);if(!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(['fontFamily','fontSize','color','letterSpacing','trackingCorrection','baselineShift'].map(key=>value[key]??null)));}
+    if(textStyle){const value=JSON.parse(textStyle);if(!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(compactHwpTextStyle(value)));}
     if(element.hasAttribute('data-hwp-import-rule'))element.replaceChildren();
   }
+  compactHwpPageFonts(page);
   return DOMPurify.sanitize(page.outerHTML,{ADD_ATTR:[...HWP_IMPORT_DATA_ATTRIBUTES,'style','colwidth','colspan','rowspan','width','height']});
 };
 
