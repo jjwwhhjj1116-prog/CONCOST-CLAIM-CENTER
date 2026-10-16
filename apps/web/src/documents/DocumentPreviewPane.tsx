@@ -1,5 +1,6 @@
 import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import './DocumentReviewWorkspace.css';
+import { alignImportedHwpPages } from './hwp-import-alignment';
 
 /** Only the read-only display is scaled; document metrics and editor hit testing stay unchanged. */
 export function DocumentPreviewPane({ children, title = '출력 미리보기', width = 794 }: { children: ReactNode; title?: string; width?: number }) {
@@ -39,6 +40,10 @@ export const DocumentReviewPages = forwardRef<DocumentReviewPagesHandle, {
   const [zoom, setZoom] = useState('fit');
   const [sourcePage, setSourcePage] = useState(1);
   const [navigationNotice, setNavigationNotice] = useState('');
+  useLayoutEffect(()=>{
+    if(spreadRef.current)alignImportedHwpPages(spreadRef.current);
+    window.dispatchEvent(new Event('final-document:refit'));
+  },[zoom,fit]);
   useLayoutEffect(() => { setSourcePage(1); setNavigationNotice(''); }, [sourcePageCount, sourceNavigationKey]);
   useLayoutEffect(() => {
     const spread = spreadRef.current;

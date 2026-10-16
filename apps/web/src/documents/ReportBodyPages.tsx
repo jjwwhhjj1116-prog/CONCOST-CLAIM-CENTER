@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { paginateReport } from './report-pagination';
 import { prepareReportPrint, reportContentsPages } from './report-print-structure';
 import { importedHwpPages } from './hwp-import-overflow';
+import { alignImportedHwpPages } from './hwp-import-alignment';
 
 export function ReportBodyPages({ html, header, contents = false, tocTitle = '목 차', tocTitles }: { html: string; header?: ReactNode; contents?: boolean; tocTitle?: string; tocTitles?: Record<string,string> }): React.ReactElement {
   const sourceRef = useRef<HTMLElement>(null);
@@ -19,6 +20,7 @@ export function ReportBodyPages({ html, header, contents = false, tocTitle = '�
     const paginate = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
+        alignImportedHwpPages(source);
         const importedPages = importedHwpPages(source);
         if (importedPages) {
           if (active) setLayout({...importedPages,toc:[],ready:document.fonts.status==='loaded'&&[...source.querySelectorAll('img')].every(image=>image.complete)});

@@ -2,15 +2,16 @@ import type { JSONContent } from '@tiptap/core';
 import { unzipSync, strFromU8 } from 'fflate';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
 import { assertReportNativeImportContainer } from './report-native-source';
+import { alignImportedHwpPages, measureImportedHwpOffsets } from './hwp-import-alignment';
 import './hwp-import.css';
 
 // Read meaning from HWPX and page placement from the same pinned document.
 type Box={x:number;y:number;w:number;h:number};
 type CellPath=Array<{controlIndex:number;cellIndex:number;cellParaIndex:number}>;
-type Run=Box&{text:string;secIdx:number;paraIdx:number;charStart:number;charX:number[];fontFamily:string;fontSize:number;bold:boolean;italic:boolean;underline:boolean;strikethrough:boolean;textColor:string;ratio:number;letterSpacing:number;charShapeId?:number;cellPath?:CellPath;parentParaIdx?:number};
+type Run=Box&{baseline?:number;text:string;secIdx:number;paraIdx:number;charStart:number;charX:number[];fontFamily:string;fontSize:number;bold:boolean;italic:boolean;underline:boolean;strikethrough:boolean;textColor:string;ratio:number;letterSpacing:number;charShapeId?:number;cellPath?:CellPath;parentParaIdx?:number};
 type Control=Box&{type:string;secIdx:number;paraIdx:number;controlIdx:number;cellPath?:CellPath;cells?:Array<Box&{row:number;col:number;rowSpan:number;colSpan:number}>};
 type Info={width:number;height:number;sectionIndex:number;bodyLeft:number;bodyRight:number;columns:unknown[]};
-type Reader={pageCount():number;free():void;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
+type Reader={pageCount():number;free():void;renderPageSvgWithProfile(p:number,profile:string):string;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
 const children=(e:Element,name?:string)=>Array.from(e.children).filter(x=>!name||x.localName===name);
 const all=(e:Element|Document,name:string)=>Array.from(e.getElementsByTagName('*')).filter(x=>x.localName===name);
 const one=(e:Element|Document,name:string)=>all(e,name)[0];
@@ -26,6 +27,8 @@ const pathEquals=(a:CellPath|undefined,b:CellPath|undefined)=>JSON.stringify(a??
 export async function readReportHwp(file:File):Promise<{document:JSONContent;images:Array<{key:string;file:File}>;pageCount:number;sourceName:string}>{
  const bytes=await file.arrayBuffer();assertReportNativeImportContainer(bytes,file.name);
  let measure:HTMLSpanElement|undefined;
+ let calibration:HTMLElement|undefined;
+ const calibrationUrls:string[]=[];
  const Engine=await loadNativeHwpEngine(),native=new Engine(new Uint8Array(bytes)) as unknown as Reader;
  try{
   if(typeof native.exportHwpxWithReport!=='function')fail('승인 엔진의 손실 보고 API 없음');
@@ -40,6 +43,23 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
   const sections=sectionRefs.map(id=>parse(files[attr(assets.get(id),'href')]));
   const count=native.pageCount(),pages=Array.from({length:count},(_,page)=>({info:JSON.parse(native.getPageInfo(page)) as Info,runs:(JSON.parse(native.getPageTextLayout(page)).runs??[]) as Run[],controls:(JSON.parse(native.getPageControlLayout(page)).controls??[]) as Control[],content:[] as JSONContent[]}));
   if(!count||!sections.length)fail('빈 문서');
+  // Public run.y is the em-box top, not the painted baseline. Resolve the latter
+  // from the same native print SVG; 0.2px covers two 0.1px public-coordinate roundings.
+  for(const [index,page] of pages.entries()){
+   const svg=new DOMParser().parseFromString(native.renderPageSvgWithProfile(index,'print'),'image/svg+xml');
+   if(svg.getElementsByTagName('parsererror').length)fail('원본 기준선 SVG');
+   const glyphs=all(svg,'text');
+   for(const run of page.runs){const baselines:number[]=[];
+    for(const [offset,char]of Array.from(run.text).entries()){
+     if(/\s/u.test(char))continue;
+     const matches=glyphs.filter(glyph=>glyph.textContent===char&&Math.abs(Number(attr(glyph,'x'))-run.x-run.charX[offset])<=.2&&Math.abs(Number(attr(glyph,'font-size'))-run.fontSize)<=.1&&Number(attr(glyph,'y'))>=run.y&&Number(attr(glyph,'y'))<=run.y+run.h*2);
+     if(matches.length!==1)fail('원본 글자 기준선 매핑');
+     for(let e:Element|null=matches[0];e;e=e.parentElement)if(e.hasAttribute('transform'))fail('기준선 변환 좌표');
+     baselines.push(number(matches[0],'y'));
+    }
+    if(baselines.length){if(Math.max(...baselines)-Math.min(...baselines)>.1)fail('한 글자 구간의 여러 기준선');run.baseline=baselines[0];}
+   }
+  }
   for(const p of pages){if(!Number.isFinite(p.info.width)||!Number.isFinite(p.info.height)||p.info.width<200||p.info.height<200||p.info.width>2400||p.info.height>4000)fail('용지 크기');if(Math.abs(p.info.width-794)>1||Math.abs(p.info.height-1123)>1)fail('A4 세로 외 용지');if(Array.isArray(p.info.columns)&&p.info.columns.length>1)fail('다단 문서');for(const c of p.controls)if(!['table','image','line'].includes(c.type))fail(`지원하지 않는 ${c.type} 개체`);}
   const images:Array<{key:string;file:File}>=[],imageKeys=new Map<string,string>();
   // Cropping cannot silently turn into an uncropped editable image.
@@ -116,10 +136,10 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
     const colspan=number(span,'colSpan'),rowspan=number(span,'rowSpan');
     if(!control.cells?.some(c=>c.row===row&&c.col===col&&c.rowSpan===rowspan&&c.colSpan===colspan))fail('표 셀 병합 배치 없음');
     const colwidth=Array.from({length:colspan},(_,i)=>columnEdges[col+i+1]-columnEdges[col+i]);
-    layout.height=rowEdges[row+rowspan]-rowEdges[row];
+    layout.height=rowEdges[row+rowspan]-rowEdges[row];layout.nativeX=columnEdges[col];layout.nativeY=rowEdges[row];
     return{type:attr(tc,'header')==='1'?'tableHeader':'tableCell',attrs:{colspan,rowspan,colwidth,verticalAlignment:attr(sub,'vertAlign').toLowerCase()==='center'?'middle':attr(sub,'vertAlign').toLowerCase(),hwpLayout:layout},content:content.length?content:[{type:'paragraph'}]};
    })}));
-   return{type:'table',attrs:{hwpLayout:absolute(control)},content:rows};
+   return{type:'table',attrs:{hwpLayout:{...absolute(control),marginTop:0,marginBottom:0,marginLeft:0,marginRight:0,nativeGrid:1}},content:rows};
   };
   const parseParagraph=(p:Element,sec:number,para:number,page:number,path:CellPath|undefined,root:boolean):JSONContent[]=>{
    const pageRuns=pages[page].runs.filter(r=>r.secIdx===sec&&(path?r.parentParaIdx:r.paraIdx)===para&&pathEquals(r.cellPath,path));
@@ -143,8 +163,17 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
    }
    if(tokens.length&&blocks.some(b=>b.type==='image'||b.type==='table'))fail('한 문단 안의 문자와 사진·표 혼합 순서');
    if(plain.replace(/\s/gu,'')!==pageRuns.map(r=>r.text).join('').replace(/\s/gu,''))fail(`본문 문자 매핑 ${sec}:${para}`);
-   if(tokens.length){
-    const style=paragraphStyle(p);if(new Set(pageRuns.filter(run=>run.text).map(run=>run.y)).size===1)Object.assign(style.hwpLayout,{whiteSpace:'pre'});const paragraph:JSONContent={type:'paragraph',attrs:style,content:tokens};
+   if(tokens.length||(!root&&!blocks.length&&pageRuns.length)){
+    const style=paragraphStyle(p),layout=style.hwpLayout as Record<string,string|number>;
+    const fontSize=Math.max(...pageRuns.map(run=>run.fontSize)),lineOf=(run:Run)=>run.baseline??run.y,lines=[...new Set(pageRuns.map(run=>Math.round(lineOf(run)*10)/10))].sort((a,b)=>a-b),lastHeight=Math.max(...pageRuns.filter(run=>Math.abs(lineOf(run)-lines.at(-1)!)<.1).map(run=>run.h));
+    const lineHeight=lines.length>1?lines[1]-lines[0]:lastHeight;
+    if(lines.some((y,i)=>i>0&&Math.abs(y-lines[i-1]-lineHeight)>.2))fail('문단 줄 간격 매핑');
+    delete layout.lineHeightRatio;
+    Object.assign(layout,{fontSize,fontFamily:face(pageRuns[0]),lineHeight,marginBottom:Number(layout.marginBottom)-(lineHeight-lastHeight)});
+    if(lines.length===1)layout.whiteSpace='pre';
+    const first=pageRuns.find(run=>run.baseline!==undefined);
+    if(first)Object.assign(layout,{nativeX:first.x,nativeBaseline:first.baseline});
+    const paragraph:JSONContent={type:'paragraph',attrs:style,...(tokens.length?{content:tokens}:{})};
     if(root){
      const b=bounds(pageRuns),left=style.hwpLayout.marginLeft,right=style.hwpLayout.marginRight,width=pages[page].info.bodyRight-pages[page].info.bodyLeft-left-right;
      if(width<=0)fail('본문 문단 유효 폭');
@@ -160,8 +189,18 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
    const page=hits[0]??JSON.parse(native.getPageOfPosition(sec,para)).page;if(!pages[page])fail('문단 페이지 없음');
    pages[page].content.push(...parseParagraph(p,sec,para,page,undefined,true));
   }));
-  for(const page of pages){const footers=page.runs.filter(r=>r.paraIdx===4294967295);const lines=new Map<number,Run[]>();for(const r of footers)lines.set(r.y,[...(lines.get(r.y)??[]),r]);for(const rs of lines.values()){const sorted=rs.sort((a,b)=>a.x-b.x);page.content.push({type:'hwpImportedTextBox',attrs:{hwpLayout:absolute(bounds(sorted))},content:[{type:'paragraph',attrs:{textAlign:'left'},content:sorted.map(r=>({type:'text',text:r.text,marks:fontMarks(r)}))}]});}}
+  for(const page of pages){const footers=page.runs.filter(r=>r.paraIdx===4294967295);const lines=new Map<number,Run[]>();for(const r of footers)lines.set(r.y,[...(lines.get(r.y)??[]),r]);for(const rs of lines.values()){const sorted=rs.sort((a,b)=>a.x-b.x);page.content.push({type:'hwpImportedTextBox',attrs:{hwpLayout:absolute(bounds(sorted))},content:[{type:'paragraph',attrs:{textAlign:'left',hwpLayout:{fontFamily:face(sorted[0]),fontSize:Math.max(...sorted.map(r=>r.fontSize)),lineHeight:Math.max(...sorted.map(r=>r.h)),nativeX:sorted[0].x,nativeBaseline:sorted.find(r=>r.baseline!==undefined)?.baseline}},content:sorted.map(r=>({type:'text',text:r.text,marks:fontMarks(r)}))}]});}}
   measure.remove();
-  return{document:{type:'doc',content:pages.map(p=>({type:'hwpImportedPage',attrs:{width:p.info.width,height:p.info.height},content:p.content}))},images,pageCount:count,sourceName:file.name};
- }finally{measure?.remove();native.free();}
+  const documentJson:JSONContent={type:'doc',content:pages.map(p=>({type:'hwpImportedPage',attrs:{width:p.info.width,height:p.info.height},content:p.content}))};
+  const {renderStructuredDocumentHtml}=await import('./StructuredDocumentEditor');
+  calibration=document.createElement('div');calibration.className='structured-editor';calibration.style.cssText='position:fixed;left:-20000px;top:0;width:794px;visibility:hidden;pointer-events:none';
+  const preview=document.createElement('article');preview.className='structured-editor__preview';preview.style.cssText='padding:0;margin:0;width:794px;max-width:none';preview.innerHTML=renderStructuredDocumentHtml(documentJson);calibration.append(preview);document.body.append(calibration);
+  await Promise.all(Array.from(preview.querySelectorAll('img')).map(async image=>{const file=images.find(item=>image.getAttribute('src')===`/__hwp_import_image__/${item.key}`)?.file;if(!file)fail('사진 측정 원본');const url=URL.createObjectURL(file!);calibrationUrls.push(url);image.src=url;await image.decode();}));
+  alignImportedHwpPages(preview);
+  const offsets=measureImportedHwpOffsets(preview),paragraphs:JSONContent[]=[];
+  const visit=(node:JSONContent)=>{if(node.type==='paragraph')paragraphs.push(node);node.content?.forEach(visit);};visit(documentJson);
+  if(offsets.length!==paragraphs.length)fail('문단 기준선 측정 개수');
+  offsets.forEach((offset,index)=>{if(!offset)return;if(!Number.isFinite(offset.left)||!Number.isFinite(offset.top)||Math.abs(offset.left)>50||Math.abs(offset.top)>50)fail('문단 기준선 보정 범위');Object.assign(paragraphs[index].attrs!.hwpLayout,{position:'relative',left:offset.left,top:offset.top});});
+  return{document:documentJson,images,pageCount:count,sourceName:file.name};
+ }finally{calibration?.remove();calibrationUrls.forEach(url=>URL.revokeObjectURL(url));measure?.remove();native.free();}
 }

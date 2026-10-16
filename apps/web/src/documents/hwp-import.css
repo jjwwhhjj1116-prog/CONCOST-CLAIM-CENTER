@@ -10,7 +10,7 @@
 .hwp-import-page table{border:0;border-collapse:collapse;margin:0;max-width:none;table-layout:fixed}
 .hwp-import-page td,.hwp-import-page th{position:relative;box-sizing:border-box;overflow:visible}
 .hwp-import-page td>p,.hwp-import-page th>p{max-width:none}
-.hwp-import-page img{max-width:none;max-height:none;object-fit:contain}
+.hwp-import-page img{display:block;max-width:none;max-height:none;object-fit:contain}
 .tiptap:has(>[data-hwp-import-page]){padding:0!important;width:794px;max-width:none;min-height:1123px}
 .report-final-document .report-hwp-structured-sheet[data-export-page]{padding:0!important;border:0;border-radius:0;box-shadow:none;overflow:visible}
 .report-final-document .report-hwp-structured-sheet>.structured-editor__preview{padding:0;margin:0;width:794px;height:1123px;flex:none}

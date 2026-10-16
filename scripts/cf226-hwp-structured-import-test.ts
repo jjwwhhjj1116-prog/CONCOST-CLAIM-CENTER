@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { DocumentMeasuredTable, DocumentTableCell, DocumentTableHeader, HWP_IMPORT_EXTENSIONS, hwpStructuredSignature, normalizeHwpLayout } from '../apps/web/src/documents/hwp-import-nodes';
+import { DocumentMeasuredTable, DocumentTableCell, DocumentTableHeader, HWP_IMPORT_EXTENSIONS, hwpStructuredSignature, normalizeHwpLayout, hwpLayoutStyle } from '../apps/web/src/documents/hwp-import-nodes';
 
 const requireWeb = createRequire(resolve('apps/web/package.json'));
 const { getSchema, commands } = requireWeb('@tiptap/core');
@@ -49,4 +49,18 @@ test('CF226 preservation signature joins equal text runs but catches geometry, t
 
 test('CF226 stored layout rejects arbitrary CSS and retains measured numeric precision', () => {
   assert.deepEqual(normalizeHwpLayout({position:'absolute',left:82.15,width:630,backgroundImage:'url(https://invalid)',top:Infinity,height:10001,borderTop:'1px solid #111111'}),{position:'absolute',left:82.15,width:630,borderTop:'1px solid #111111'});
+});
+
+test('CF227 native coordinates remain metadata while local baseline corrections survive rendering',()=>{
+  const original={nativeX:82.1,nativeY:98,nativeBaseline:108.0133,fontSize:12,fontFamily:'HwpImport Noto Serif KR',lineHeight:18.6,marginBottom:-6.6,position:'relative',left:.02,top:-.9867};
+  const layout=normalizeHwpLayout(original)!;
+  assert.deepEqual(layout,original);
+  const css=hwpLayoutStyle(layout);
+  assert.doesNotMatch(css,/native/);
+  assert.match(css,/top:-0.9867px/);
+  assert.match(css,/font-family:"HwpImport Noto Serif KR"/);
+  assert.match(hwpLayoutStyle({nativeX:82,paddingTop:8,borderTop:'1.889px solid #111111'}),/max\(var\(--hwp-device-pixel, 1px\), round\(down/);
+  assert.equal(normalizeHwpLayout({fontFamily:'serif;position:fixed',nativeBaseline:Infinity}),null);
+  const paragraph={type:'paragraph',attrs:{hwpLayout:layout},content:[{type:'text',text:'수정 가능한 문장'}]};
+  assert.notEqual(hwpStructuredSignature(paragraph),hwpStructuredSignature({...paragraph,attrs:{hwpLayout:{...layout,top:0}}}));
 });

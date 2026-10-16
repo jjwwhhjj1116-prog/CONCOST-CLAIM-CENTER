@@ -34,6 +34,7 @@ import { DocumentReviewPages, type DocumentReviewPagesHandle } from './DocumentP
 import { ReportSourceChapterLinks, type SourceChapterLinkSettings } from './ReportSourceChapterLinks';
 import { ScaledImage, ScaledTableResize, selectTableCells, syncImageDimensions } from './document-resize-scale';
 import { HWP_IMPORT_EXTENSIONS, HWP_IMPORT_DATA_ATTRIBUTES, DocumentTableCell, DocumentTableHeader, DocumentMeasuredTable, normalizeHwpLayout, hwpLayoutStyle } from './hwp-import-nodes';
+import { alignImportedHwpPages } from './hwp-import-alignment';
 import './hwp-import.css';
 
 export interface StructuredSelection {
@@ -363,6 +364,7 @@ export class DocumentTableView extends TableView {
     if(imported){
       this.dom.style.cssText=hwpLayoutStyle(imported)+';overflow:visible;margin:0;box-sizing:border-box';
       this.table.style.cssText='position:relative;left:0;top:0;width:100%;height:100%;margin:0;table-layout:fixed;border-collapse:collapse;min-width:0;max-width:none';
+      this.table.dataset.hwpLayout=JSON.stringify(imported);
       return;
     }
     const width = Math.min(100, Math.max(35, Number(node.attrs.tableWidth) || 100));
@@ -899,6 +901,17 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     },
     onTransaction: ({ editor: activeEditor }) => syncContextualControls(activeEditor)
   }, [documentKey, collaborationSession]);
+
+  useEffect(() => {
+    if(!editor||editor.isDestroyed)return;
+    let active=true,frame=0;
+    const align=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{if(active&&!editor.isDestroyed)alignImportedHwpPages(editor.view.dom);});};
+    editor.on('update',align);window.addEventListener('resize',align);window.addEventListener('final-document:refit',align);
+    const images=Array.from(editor.view.dom.querySelectorAll('img'));
+    images.forEach(image=>image.addEventListener('load',align));
+    void document.fonts.ready.then(align);align();
+    return()=>{active=false;cancelAnimationFrame(frame);editor.off('update',align);window.removeEventListener('resize',align);window.removeEventListener('final-document:refit',align);images.forEach(image=>image.removeEventListener('load',align));};
+  },[editor,editorJson]);
 
   useEffect(() => {
     if (!editor?.isInitialized || editor.isDestroyed) return;

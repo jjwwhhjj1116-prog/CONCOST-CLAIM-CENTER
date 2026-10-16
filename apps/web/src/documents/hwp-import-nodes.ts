@@ -26,7 +26,8 @@ export const DocumentTableHeader = TableHeader.extend({
 
 /** Versioned measurements from the HWP parser; never accept arbitrary CSS. */
 export type HwpLayout = Record<string, string | number>;
-const lengths = new Set(['left','top','width','height','minHeight','marginTop','marginBottom','marginLeft','marginRight','paddingTop','paddingBottom','paddingLeft','paddingRight','lineHeight','textIndent','letterSpacing']);
+const lengths = new Set(['left','top','width','height','minHeight','marginTop','marginBottom','marginLeft','marginRight','paddingTop','paddingBottom','paddingLeft','paddingRight','lineHeight','textIndent','letterSpacing','fontSize']);
+const measurements = new Set(['nativeX','nativeY','nativeBaseline','nativeGrid']);
 const choices: Record<string, readonly string[]> = {
   position: ['absolute','relative'], textAlign: ['left','center','right','justify'],
   verticalAlign: ['top','middle','bottom'], whiteSpace: ['pre-wrap','pre','normal'],
@@ -37,8 +38,9 @@ export function normalizeHwpLayout(value:unknown):HwpLayout|null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const result:HwpLayout={};
   for (const [key,item] of Object.entries(value)) {
-    if (lengths.has(key) && typeof item==='number' && Number.isFinite(item) && Math.abs(item)<=10000) result[key]=item;
+    if ((lengths.has(key)||measurements.has(key)) && typeof item==='number' && Number.isFinite(item) && Math.abs(item)<=10000) result[key]=item;
     else if(key==='lineHeightRatio'&&typeof item==='number'&&Number.isFinite(item)&&item>=.5&&item<=10)result[key]=item;
+    else if(key==='fontFamily'&&typeof item==='string'&&item.length<=120&&!/[;{}<>\\]/u.test(item))result[key]=item;
     else if (choices[key]?.includes(String(item))) result[key]=String(item);
     else if (['color','backgroundColor'].includes(key) && typeof item==='string' && /^#[0-9a-f]{6}$/iu.test(item)) result[key]=item;
     else if (/^border(Top|Bottom|Left|Right)$/u.test(key) && typeof item==='string' && /^(?:0|none|(?:\d+(?:\.\d+)?px (?:solid|dotted|dashed|double|none) #[0-9a-f]{6}))$/iu.test(item)) result[key]=item;
@@ -48,7 +50,13 @@ export function normalizeHwpLayout(value:unknown):HwpLayout|null {
 export function hwpLayoutStyle(value:unknown):string {
   const layout=normalizeHwpLayout(value);
   if(!layout)return '';
-  return Object.entries(layout).map(([key,value])=>`${key==='lineHeightRatio'?'line-height':cssName(key)}:${value}${lengths.has(key)?'px':''}`).join(';');
+  return Object.entries(layout).filter(([key])=>!measurements.has(key)).map(([key,value])=>{
+    if(/^padding(Top|Bottom|Left|Right)$/u.test(key)&&typeof layout.nativeX==='number'){
+      const edge=String(layout[key.replace('padding','border')]??'none').match(/^(\d+(?:\.\d+)?)px/u);
+      if(edge&&Number(edge[1])>0)return `${cssName(key)}:max(0px,calc(${value}px - max(var(--hwp-device-pixel, 1px), round(down, ${edge[1]}px, var(--hwp-device-pixel, 1px))) / 2))`;
+    }
+    return `${key==='lineHeightRatio'?'line-height':cssName(key)}:${key==='fontFamily'?JSON.stringify(value):value}${lengths.has(key)?'px':''}`;
+  }).join(';');
 }
 function readLayout(element:HTMLElement):HwpLayout|null {
   try {return normalizeHwpLayout(JSON.parse(element.getAttribute('data-hwp-layout')||'null'));} catch {return null;}
