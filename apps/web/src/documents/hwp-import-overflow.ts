@@ -30,7 +30,7 @@ export function importedHwpPages(source: HTMLElement): { pages: string[]; overfl
     for (let a = 0; a < boxes.length; a++) for (let b = a + 1; b < boxes.length; b++) {
       if (boxes[a].some(first => boxes[b].some(second => Math.min(first.right, second.right) - Math.max(first.left, second.left) > tolerance && Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top) > tolerance))) overflow = true;
     }
-    for (const image of node.querySelectorAll('img')) if (image.complete && image.naturalWidth === 0) overflow = true;
+    for (const image of node.querySelectorAll<HTMLImageElement>('img:not(.ProseMirror-separator)')) if (image.complete && image.naturalWidth === 0) overflow = true;
     for (const cell of node.querySelectorAll('td,th')) {
       const range = source.ownerDocument.createRange(); range.selectNodeContents(cell);
       const box = cell.getBoundingClientRect();

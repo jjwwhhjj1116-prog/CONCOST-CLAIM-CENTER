@@ -3,13 +3,14 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
 import { assertReportNativeImportContainer } from './report-native-source';
 import { alignImportedHwpPages, measureImportedHwpOffsets } from './hwp-import-alignment';
+import { prepareDocumentExportFonts, resolveDocumentExportFontFamily } from './document-export-fonts';
 import './hwp-import.css';
 
 // Read meaning from HWPX and page placement from the same pinned document.
 type Box={x:number;y:number;w:number;h:number};
 type CellPath=Array<{controlIndex:number;cellIndex:number;cellParaIndex:number}>;
 type Run=Box&{baseline?:number;text:string;secIdx:number;paraIdx:number;charStart:number;charX:number[];fontFamily:string;fontSize:number;bold:boolean;italic:boolean;underline:boolean;strikethrough:boolean;textColor:string;ratio:number;letterSpacing:number;charShapeId?:number;cellPath?:CellPath;parentParaIdx?:number};
-type Control=Box&{type:string;secIdx:number;paraIdx:number;controlIdx:number;cellPath?:CellPath;cells?:Array<Box&{row:number;col:number;rowSpan:number;colSpan:number}>};
+type Control=Box&{type:string;wrap?:string;secIdx:number;paraIdx:number;controlIdx:number;cellPath?:CellPath;cells?:Array<Box&{row:number;col:number;rowSpan:number;colSpan:number}>};
 type Info={width:number;height:number;sectionIndex:number;bodyLeft:number;bodyRight:number;columns:unknown[]};
 type Reader={pageCount():number;free():void;renderPageSvgWithProfile(p:number,profile:string):string;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
 const children=(e:Element,name?:string)=>Array.from(e.children).filter(x=>!name||x.localName===name);
@@ -41,7 +42,11 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
   const sectionRefs=all(manifest,'itemref').map(e=>attr(e,'idref')).filter(id=>/^section\d+$/u.test(id));
   if(!sectionRefs.length||new Set(sectionRefs).size!==sectionRefs.length||sectionRefs.some((id,index)=>id!==`section${index}`))fail('구역 순서 매핑');
   const sections=sectionRefs.map(id=>parse(files[attr(assets.get(id),'href')]));
+  const pageNumbers=sections.flatMap(section=>all(section,'pageNum'));
+  if(pageNumbers.some(item=>attr(item,'formatType')!=='DIGIT'))fail('쪽번호 형식');
   const count=native.pageCount(),pages=Array.from({length:count},(_,page)=>({info:JSON.parse(native.getPageInfo(page)) as Info,runs:(JSON.parse(native.getPageTextLayout(page)).runs??[]) as Run[],controls:(JSON.parse(native.getPageControlLayout(page)).controls??[]) as Control[],content:[] as JSONContent[]}));
+  const consumedRuns=new Set<Run>();
+  const nativeFontStacks=new Map<string,string>();
   if(!count||!sections.length)fail('빈 문서');
   // Public run.y is the em-box top, not the painted baseline. Resolve the latter
   // from the same native print SVG; 0.2px covers two 0.1px public-coordinate roundings.
@@ -49,11 +54,20 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
    const svg=new DOMParser().parseFromString(native.renderPageSvgWithProfile(index,'print'),'image/svg+xml');
    if(svg.getElementsByTagName('parsererror').length)fail('원본 기준선 SVG');
    const glyphs=all(svg,'text');
+   // Page borders are decorative strokes outside the native body control list.
+   // Copy only direct, axis-aligned vector lines, never page text or raster pages.
+   const pageBorder=all(sections[page.info.sectionIndex],'pageBorderFill').some(ref=>{const definition=borders.get(attr(ref,'borderFillIDRef'));return definition&&['left','right','top','bottom'].some(side=>!['','NONE'].includes(attr(one(definition,side+'Border'),'type')));});
+   if(pageBorder)for(const line of children(svg.documentElement,'line')){
+    const x1=number(line,'x1'),y1=number(line,'y1'),x2=number(line,'x2'),y2=number(line,'y2');
+    if(x1!==x2&&y1!==y2||attr(line,'transform')||attr(line,'stroke-dasharray'))fail('페이지 테두리 선');
+    page.content.push({type:'hwpImportedRule',attrs:{left:Math.min(x1,x2),top:Math.min(y1,y2),width:Math.abs(x2-x1),height:Math.abs(y2-y1),color:color(attr(line,'stroke')),stroke:number(line,'stroke-width'),style:'solid',nativeVector:1}});
+   }
    for(const run of page.runs){const baselines:number[]=[];
     for(const [offset,char]of Array.from(run.text).entries()){
      if(/\s/u.test(char))continue;
      const matches=glyphs.filter(glyph=>glyph.textContent===char&&Math.abs(Number(attr(glyph,'x'))-run.x-run.charX[offset])<=.2&&Math.abs(Number(attr(glyph,'font-size'))-run.fontSize)<=.1&&Number(attr(glyph,'y'))>=run.y&&Number(attr(glyph,'y'))<=run.y+run.h*2);
      if(matches.length!==1)fail('원본 글자 기준선 매핑');
+     nativeFontStacks.set(run.fontFamily,attr(matches[0],'font-family'));
      for(let e:Element|null=matches[0];e;e=e.parentElement)if(e.hasAttribute('transform'))fail('기준선 변환 좌표');
      baselines.push(number(matches[0],'y'));
     }
@@ -61,16 +75,33 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
    }
   }
   for(const p of pages){if(!Number.isFinite(p.info.width)||!Number.isFinite(p.info.height)||p.info.width<200||p.info.height<200||p.info.width>2400||p.info.height>4000)fail('용지 크기');if(Math.abs(p.info.width-794)>1||Math.abs(p.info.height-1123)>1)fail('A4 세로 외 용지');if(Array.isArray(p.info.columns)&&p.info.columns.length>1)fail('다단 문서');for(const c of p.controls)if(!['table','image','line'].includes(c.type))fail(`지원하지 않는 ${c.type} 개체`);}
-  const images:Array<{key:string;file:File}>=[],imageKeys=new Map<string,string>();
+  const images:Array<{key:string;file:File}>=[],imageKeys=new Map<string,string>(),imageFiles=new Map<string,File>();
   // Cropping cannot silently turn into an uncropped editable image.
   for(const section of sections)for(const pic of all(section,'pic')){
-   const entry=assets.get(attr(one(pic,'img'),'binaryItemIDRef')),path=attr(entry,'href'),bytes=files[path];
-   if(!bytes||!['image/png','image/jpeg'].includes(attr(entry,'media-type')))fail('사진 바이너리 형식');
+   const id=attr(one(pic,'img'),'binaryItemIDRef'),entry=assets.get(id),path=attr(entry,'href'),bytes=files[path],mime=attr(entry,'media-type');
+   if(!bytes||!['image/png','image/jpeg','image/bmp'].includes(mime))fail('사진 바이너리 형식');
    const bitmap=await createImageBitmap(new Blob([new Uint8Array(bytes)],{type:attr(entry,'media-type')}));
-   try{const clip=one(pic,'imgClip');if(!clip||number(clip,'left')!==0||number(clip,'top')!==0||number(clip,'right')!==bitmap.width*75||number(clip,'bottom')!==bitmap.height*75)fail('사진 잘라내기 또는 이미지 좌표 단위 미확인');}finally{bitmap.close();}
+   try{const clip=one(pic,'imgClip'),dim=one(pic,'imgDim');
+    // HWP stores the full crop coordinate extent separately from raster pixels.
+    // Older reports need not use 75 HWPUNIT per pixel (the native renderer uses imgDim).
+    const dimWidth=dim?number(dim,'dimwidth'):0,dimHeight=dim?number(dim,'dimheight'):0;
+    const width=dimWidth===0&&dimHeight===0?bitmap.width*75:dimWidth,height=dimWidth===0&&dimHeight===0?bitmap.height*75:dimHeight;
+    if(width<=0||height<=0||!clip||number(clip,'left')!==0||number(clip,'top')!==0||number(clip,'right')!==width||number(clip,'bottom')!==height)fail('사진 잘라내기 또는 이미지 좌표 단위 미확인');
+    if(!imageFiles.has(id)){
+     let blob:Blob=new Blob([new Uint8Array(bytes)],{type:mime}),name=path.split('/').pop()!;
+     // Keep raster pixels losslessly; PNG also works in the existing DOCX/PDF exporters.
+     // The complete original HWP is retained separately by the normal import receipt.
+     if(mime==='image/bmp'){const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;const context=canvas.getContext('2d');if(!context)fail('BMP 사진 변환');context!.drawImage(bitmap,0,0);blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('BMP 사진 변환 실패')),'image/png'));name=name.replace(/\.[^.]+$/u,'.png');}
+     imageFiles.set(id,new File([blob],name,{type:blob.type}));
+    }
+   }finally{bitmap.close();}
   }
   // The SDK's stored advances differ from browser shaping (notably half-em spaces).
   // Measure the actual loaded face and keep original tracking separately from that adjustment.
+  await prepareDocumentExportFonts(document);
+  const resolvedFaces=new Map<string,string>();
+  for(const [family,stack]of nativeFontStacks)if(stack&&!['Noto Serif KR','Noto Sans KR'].includes(family))resolvedFaces.set(family,await resolveDocumentExportFontFamily(stack,document));
+  for(const page of pages)for(const run of page.runs)run.fontFamily=resolvedFaces.get(run.fontFamily)??run.fontFamily;
   const face=(run:Run)=>['Noto Serif KR','Noto Sans KR'].includes(run.fontFamily)?`HwpImport ${run.fontFamily}`:run.fontFamily;
   const fontRequests=new Set(pages.flatMap(page=>page.runs.filter(run=>run.text).map(run=>`${run.italic?'italic ':''}${run.bold?700:400} ${run.fontSize}px ${JSON.stringify(face(run))}`)));
   await Promise.all([...fontRequests].map(font=>document.fonts.load(font)));
@@ -108,12 +139,12 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
   };
   const image=(pic:Element):JSONContent=>{
    if(attr(one(pic,'rotationInfo'),'angle')!=='0'||all(pic,'flip').some(e=>attr(e,'horizontal')!=='0'||attr(e,'vertical')!=='0')||(one(pic,'effects')?.children.length??0)>0)fail('사진 회전·효과');
-   for(const tag of ['transMatrix','scaMatrix','rotMatrix'])for(const matrix of all(pic,tag))if(['e1','e2','e3','e4','e5','e6'].some((k,i)=>number(matrix,k)!==[1,0,0,0,1,0][i]))fail('사진 변환 행렬');
+   for(const tag of ['transMatrix','scaMatrix','rotMatrix'])for(const matrix of all(pic,tag))if(['e1','e2','e3','e4','e5','e6'].some((k,i)=>tag==='scaMatrix'&&(i===0||i===4)?number(matrix,k)<=0:number(matrix,k)!==[1,0,0,0,1,0][i]))fail('사진 변환 행렬');
    const img=one(pic,'img'),id=attr(img,'binaryItemIDRef'),entry=assets.get(id),path=attr(entry,'href');
    if(!/^BinData\/[^/]+$/u.test(path)||!files[path])fail('사진 원본 참조');
-   const mime=attr(entry,'media-type');if(!['image/png','image/jpeg'].includes(mime))fail(`사진 형식 ${mime}`);
+   const mime=attr(entry,'media-type');if(!['image/png','image/jpeg','image/bmp'].includes(mime))fail(`사진 형식 ${mime}`);
    if(['bright','contrast','alpha'].some(k=>Number(attr(img,k)||0)!==0)||!['','REAL_PIC'].includes(attr(img,'effect')))fail('사진 색상 효과');
-   let key=imageKeys.get(id);if(!key){key=`image-${images.length+1}`;imageKeys.set(id,key);images.push({key,file:new File([new Uint8Array(files[path])],path.split('/').pop()!,{type:mime})});}
+   let key=imageKeys.get(id);if(!key){key=`image-${images.length+1}`;imageKeys.set(id,key);images.push({key,file:imageFiles.get(id)!});}
    const size=children(pic,'sz')[0];return{type:'image',attrs:{src:`/__hwp_import_image__/${key}`,alt:'',width:number(size,'width')/75,height:number(size,'height')/75}};
   };
   const table=(tbl:Element,sec:number,para:number,page:number,control:Control):JSONContent=>{
@@ -130,27 +161,46 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
     const sub=children(tc,'subList')[0],span=children(tc,'cellSpan')[0],size=children(tc,'cellSz')[0],margin=attr(tc,'hasMargin')==='1'?children(tc,'cellMargin')[0]:children(tbl,'inMargin')[0];
     if(!sub||attr(sub,'textDirection')!=='HORIZONTAL')fail('세로쓰기 셀');
     const bf=borders.get(attr(tc,'borderFillIDRef'));if(!bf)fail('셀 테두리 참조');
-    const layout:Record<string,unknown>={height:number(size,'height')/75};for(const side of ['left','right','top','bottom']){layout['padding'+side[0].toUpperCase()+side.slice(1)]=number(margin,side)/75;const edge=one(bf!,side+'Border'),style=attr(edge,'type');if(!['NONE','SOLID','DOT','DASH'].includes(style))fail(`셀 테두리 ${style}`);const mm=attr(edge,'width').match(/^([\d.]+) mm$/u);if(!mm)fail('셀 테두리 폭');layout['border'+side[0].toUpperCase()+side.slice(1)]=style==='NONE'?'none':`${Number(mm![1])*96/25.4}px ${style==='DOT'?'dotted':style==='DASH'?'dashed':'solid'} ${color(attr(edge,'color'))}`;}
+    const brush=one(bf!,'fillBrush'),fill=brush&&one(brush,'winBrush');
+    if(brush?.children.length&&(brush.children.length!==1||brush.children[0].localName!=='winBrush'))fail('표 배경 채움 형식');
+    const layout:Record<string,unknown>={height:number(size,'height')/75};
+    if(fill){if(!['','NONE'].includes(attr(fill,'hatchStyle'))||Number(attr(fill,'alpha')||0)!==0)fail('표 배경 무늬·투명도');if(attr(fill,'faceColor')!=='none')layout.backgroundColor=color(attr(fill,'faceColor'));}
+    for(const side of ['left','right','top','bottom']){layout['padding'+side[0].toUpperCase()+side.slice(1)]=number(margin,side)/75;const edge=one(bf!,side+'Border'),style=attr(edge,'type');if(!['NONE','SOLID','DOT','DASH','DOUBLE_SLIM','SLIM_THICK_SLIM'].includes(style))fail(`셀 테두리 ${style}`);if(['DOUBLE_SLIM','SLIM_THICK_SLIM'].includes(style))layout['border'+side[0].toUpperCase()+side.slice(1)+'Pattern']=style;const mm=attr(edge,'width').match(/^([\d.]+) mm$/u);if(!mm)fail('셀 테두리 폭');layout['border'+side[0].toUpperCase()+side.slice(1)]=style==='NONE'?'none':`${Number(mm![1])*96/25.4}px ${style==='DOT'?'dotted':style==='DASH'?'dashed':'solid'} ${color(attr(edge,'color'))}`;}
     const row=number(children(tc,'cellAddr')[0],'rowAddr'),col=number(children(tc,'cellAddr')[0],'colAddr'),cellIndex=all(tbl,'tc').indexOf(tc);
-    const content=children(sub,'p').flatMap((p,cellPara)=>parseParagraph(p,sec,para,page,[{controlIndex:control.controlIdx,cellIndex,cellParaIndex:cellPara}],false));
+    let content=children(sub,'p').flatMap((p,cellPara)=>parseParagraph(p,sec,para,page,[{controlIndex:control.controlIdx,cellIndex,cellParaIndex:cellPara}],false));
     const colspan=number(span,'colSpan'),rowspan=number(span,'rowSpan');
     if(!control.cells?.some(c=>c.row===row&&c.col===col&&c.rowSpan===rowspan&&c.colSpan===colspan))fail('표 셀 병합 배치 없음');
     const colwidth=Array.from({length:colspan},(_,i)=>columnEdges[col+i+1]-columnEdges[col+i]);
-    layout.height=rowEdges[row+rowspan]-rowEdges[row];layout.nativeX=columnEdges[col];layout.nativeY=rowEdges[row];
+    layout.height=rowEdges[row+rowspan]-rowEdges[row];layout.nativeX=columnEdges[col];layout.nativeY=rowEdges[row];layout.nativeWidth=columnEdges[col+colspan]-columnEdges[col];
+    if(content.length===1&&content[0].type==='paragraph'){
+     const p=content[0],metrics=p.attrs?.hwpLayout??{},lines=1+(p.content??[]).filter(n=>n.type==='hardBreak').length;
+     const available=Number(layout.height)-Number(layout.paddingTop)-Number(layout.paddingBottom),intrinsic=Number(metrics.lineHeight)*lines+Number(metrics.marginTop||0)+Number(metrics.marginBottom||0);
+     const runs=pages[page].runs.filter(r=>r.secIdx===sec&&r.parentParaIdx===para&&pathEquals(r.cellPath,[{controlIndex:control.controlIdx,cellIndex,cellParaIndex:0}]));
+     if(intrinsic>available+.1&&runs.some(r=>r.text.trim())){
+      const b=bounds(runs);
+      if(b.y>=Number(layout.nativeY)-.2&&b.y+b.h<=Number(layout.nativeY)+Number(layout.height)+.2){
+       // Native fixed-height cells may fit glyphs while CSS padding + line-box
+       // minima do not. Preserve that text in an editable, locally anchored box.
+       content=[{type:'hwpImportedTextBox',attrs:{hwpLayout:{position:'absolute',left:layout.paddingLeft,top:layout.paddingTop,width:Number(layout.nativeWidth)-Number(layout.paddingLeft)-Number(layout.paddingRight),height:Math.max(0,available),nativeCellPosition:1}},content:[p]}];
+      }
+     }
+    }
     return{type:attr(tc,'header')==='1'?'tableHeader':'tableCell',attrs:{colspan,rowspan,colwidth,verticalAlignment:attr(sub,'vertAlign').toLowerCase()==='center'?'middle':attr(sub,'vertAlign').toLowerCase(),hwpLayout:layout},content:content.length?content:[{type:'paragraph'}]};
    })}));
    return{type:'table',attrs:{hwpLayout:{...absolute(control),marginTop:0,marginBottom:0,marginLeft:0,marginRight:0,nativeGrid:1}},content:rows};
   };
   const parseParagraph=(p:Element,sec:number,para:number,page:number,path:CellPath|undefined,root:boolean):JSONContent[]=>{
    const pageRuns=pages[page].runs.filter(r=>r.secIdx===sec&&(path?r.parentParaIdx:r.paraIdx)===para&&pathEquals(r.cellPath,path));
-   const tokens:JSONContent[]=[],blocks:JSONContent[]=[];let plain='';
+   pageRuns.forEach(run=>consumedRuns.add(run));
+   const pageFrom=pageRuns.length?Math.min(...pageRuns.map(r=>r.charStart)):0,pageTo=pageRuns.length?Math.max(...pageRuns.map(r=>r.charStart+Array.from(r.text).length)):0;
+   let tokens:JSONContent[]=[];const blocks:JSONContent[]=[];let plain='';
    for(const run of children(p,'run'))for(const child of children(run)){
     if(child.localName==='t'){
      for(const n of Array.from(child.childNodes)){
-      if(n.nodeType===3){const text=n.textContent??'';const textStart=Array.from(plain).length;plain+=text;const def=charDefs.get(attr(run,'charPrIDRef'));if(text&&!def)fail('글자 서식 참조');if(def){for(const [tag,value]of [['ratio',100],['relSz',100],['offset',0]] as const){const e=one(def,tag);if(e&&Array.from(e.attributes).some(a=>Number(a.value)!==value))fail(`지원하지 않는 글자 ${tag}`);}if(['outline','shadow'].some(tag=>!['','NONE'].includes(attr(one(def,tag),'type'))))fail('글자 외곽선·그림자');}const styleRuns=pageRuns.filter(r=>r.charShapeId===Number(attr(run,'charPrIDRef')));if(text&&!styleRuns.length)fail('글자 서식 배치 매핑');if(text){const marks=fontMarks(styleRuns[0],text,advanceOf(pageRuns,textStart,text));if(styleRuns.some(r=>r.fontFamily!==styleRuns[0].fontFamily||r.fontSize!==styleRuns[0].fontSize||r.bold!==styleRuns[0].bold||r.italic!==styleRuns[0].italic||r.textColor!==styleRuns[0].textColor||r.letterSpacing!==styleRuns[0].letterSpacing))fail('한 XML run 안의 언어별 글꼴·서식 차이');tokens.push({type:'text',text,marks});}}
-      else if(n instanceof Element&&n.localName==='lineBreak'){tokens.push({type:'hardBreak'});plain+='\n';}else if(n.nodeType===1)fail(`문자 안 ${n.nodeName}`);
+      if(n.nodeType===3){const original=n.textContent??'',start=Array.from(plain).length;plain+=original;const textStart=Math.max(start,pageFrom),text=Array.from(original).slice(Math.max(0,pageFrom-start),Math.max(0,Math.min(Array.from(original).length,pageTo-start))).join('');const def=charDefs.get(attr(run,'charPrIDRef'));if(text&&!def)fail('글자 서식 참조');if(def){for(const [tag,value]of [['ratio',100],['relSz',100],['offset',0]] as const){const e=one(def,tag);if(e&&Array.from(e.attributes).some(a=>Number(a.value)!==value))fail(`지원하지 않는 글자 ${tag}`);}if(['outline','shadow'].some(tag=>!['','NONE'].includes(attr(one(def,tag),'type'))))fail('글자 외곽선·그림자');}const styleRuns=pageRuns.filter(r=>r.charShapeId===Number(attr(run,'charPrIDRef')));if(text&&!styleRuns.length)fail('글자 서식 배치 매핑');if(text){const marks=fontMarks(styleRuns[0],text,advanceOf(pageRuns,textStart,text));const anchor=pageRuns.find(r=>r.baseline!==undefined);if(anchor&&styleRuns[0].baseline!==undefined)Object.assign(marks[0].attrs!,{baselineShift:(styleRuns[0].baseline!-styleRuns[0].y)-(anchor.baseline!-anchor.y)});if(styleRuns.some(r=>r.fontFamily!==styleRuns[0].fontFamily||r.fontSize!==styleRuns[0].fontSize||r.bold!==styleRuns[0].bold||r.italic!==styleRuns[0].italic||r.textColor!==styleRuns[0].textColor||r.letterSpacing!==styleRuns[0].letterSpacing))fail('한 XML run 안의 언어별 글꼴·서식 차이');tokens.push({type:'text',text,marks});}}
+      else if(n instanceof Element&&n.localName==='lineBreak'){if(Array.from(plain).length>=pageFrom&&Array.from(plain).length<pageTo)tokens.push({type:'hardBreak'});plain+='\n';}else if(n instanceof Element&&n.localName==='tab'){if(number(n,'leader')!==0)fail('탭 안내선');if(Array.from(plain).length>=pageFrom&&Array.from(plain).length<pageTo){const width=advanceOf(pageRuns,Array.from(plain).length,'\t');tokens.push({type:'hwpImportedTab',attrs:{width}});}plain+='\t';}else if(n.nodeType===1)fail(`문자 안 ${n.nodeName}`);
      }
-    }else if(child.localName==='pic'){const node=image(child),style=paragraphStyle(p);node.attrs={...node.attrs,alignment:style.textAlign,hwpLayout:{...style.hwpLayout,width:node.attrs?.width,height:node.attrs?.height}};if(root){const placements=pages[page].controls.filter(c=>c.type==='image'&&c.secIdx===sec&&c.paraIdx===para&&!c.cellPath);if(placements.length!==1)fail('본문 사진 위치 매핑');node.attrs.hwpLayout={...style.hwpLayout,...absolute(placements[0]),marginTop:0,marginBottom:0,marginLeft:0,marginRight:0};}blocks.push(node);}
+    }else if(child.localName==='pic'){const node=image(child),style=paragraphStyle(p),placements=pages[page].controls.filter(c=>c.type==='image'&&c.secIdx===sec&&c.paraIdx===para&&pathEquals(c.cellPath,path));if(placements.length!==1)fail('사진 위치 매핑');const placement=placements[0];node.attrs={...node.attrs,width:placement.w,height:placement.h,alignment:['left','center','right'].includes(style.textAlign)?style.textAlign:'left',hwpLayout:{...style.hwpLayout,width:placement.w,height:placement.h}};if(root)node.attrs.hwpLayout={...style.hwpLayout,...absolute(placement),marginTop:0,marginBottom:0,marginLeft:0,marginRight:0};else if(placement.wrap==='inFrontOfText'){const cell=pages[page].controls.find(c=>c.type==='table'&&c.secIdx===sec&&c.paraIdx===para&&!c.cellPath)?.cells?.[path![0].cellIndex];if(!cell)fail('셀 안 고정 사진 위치');node.attrs.hwpLayout={...absolute({...placement,x:placement.x-cell!.x,y:placement.y-cell!.y}),marginTop:0,marginBottom:0,marginLeft:0,marginRight:0,nativeCellPosition:1};}blocks.push(node);}
     else if(child.localName==='tbl'){
      if(!root)fail('중첩 표');const controls=pages[page].controls.filter(c=>c.type==='table'&&c.secIdx===sec&&c.paraIdx===para&&!c.cellPath);
      if(controls.length!==1)fail('한 문단 여러 표 또는 표 위치 없음');blocks.push(table(child,sec,para,page,controls[0]));
@@ -158,21 +208,61 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
      if(!root)fail('셀 안 선');if(Number(attr(one(child,'rotationInfo'),'angle')||0)!==0||all(child,'flip').some(e=>attr(e,'horizontal')!=='0'||attr(e,'vertical')!=='0'))fail('선 회전·뒤집기');for(const tag of ['transMatrix','scaMatrix','rotMatrix'])for(const matrix of all(child,tag))if(['e1','e2','e3','e4','e5','e6'].some((k,i)=>number(matrix,k)!==[1,0,0,0,1,0][i]))fail('선 변환 행렬');const line=pages[page].controls.filter(c=>c.type==='line'&&c.secIdx===sec&&c.paraIdx===para)[blocks.filter(b=>b.type==='hwpImportedRule').length];if(!line)fail('선 위치 없음');
      const start=one(child,'startPt'),end=one(child,'endPt'),shape=one(child,'lineShape');if(number(start,'y')!==number(end,'y'))fail('비수평선');const style=attr(shape,'style');if(!['SOLID','DOT','DASH'].includes(style))fail('선 스타일');blocks.push({type:'hwpImportedRule',attrs:{left:line.x,top:line.y,width:line.w,height:line.h,color:color(attr(shape,'color')),stroke:number(shape,'width')/75,style:style==='DOT'?'dotted':style==='DASH'?'dashed':'solid'}});
     }else if(child.localName==='secPr'){}else if(child.localName==='ctrl'){
-     for(const c of children(child))if(!['colPr','footer','header'].includes(c.localName))fail(`제어 ${c.localName}`);
+     // Numbering/hiding controls have already been resolved by the same native page layout.
+     for(const c of children(child)){if(!['colPr','footer','header','pageNum','pageHiding','newNum'].includes(c.localName))fail(`제어 ${c.localName}`);if(c.localName==='newNum'&&attr(c,'numType')!=='PAGE')fail('쪽번호 외 새 번호');}
     }else fail(`개체 ${child.localName}`);
    }
    if(tokens.length&&blocks.some(b=>b.type==='image'||b.type==='table'))fail('한 문단 안의 문자와 사진·표 혼합 순서');
-   if(plain.replace(/\s/gu,'')!==pageRuns.map(r=>r.text).join('').replace(/\s/gu,''))fail(`본문 문자 매핑 ${sec}:${para}`);
+   const sourceRuns=pages.flatMap(page=>page.runs.filter(r=>r.secIdx===sec&&(path?r.parentParaIdx:r.paraIdx)===para&&pathEquals(r.cellPath,path))).sort((a,b)=>a.charStart-b.charStart);
+   if(plain.replace(/\s/gu,'')!==sourceRuns.map(r=>r.text).join('').replace(/\s/gu,''))fail(`전체 문단 문자 매핑 ${sec}:${para}`);
+   if(Array.from(plain).slice(pageFrom,pageTo).join('').replace(/\s/gu,'')!==pageRuns.map(r=>r.text).join('').replace(/\s/gu,''))fail(`본문 문자 매핑 ${sec}:${para}`);
+   // Preserve the native visual line boundaries inside the same editable paragraph.
+   // CSS/Korean word wrapping alone can otherwise move a whole word to another line.
+   const lineStarts=new Map<number,number>();for(const r of pageRuns)if(r.text){const y=Math.round(r.y*10);lineStarts.set(y,Math.min(lineStarts.get(y)??Infinity,r.charStart));}
+   const starts=new Set([...lineStarts.values()].sort((a,b)=>a-b).slice(1)),rebuilt:JSONContent[]=[];
+   // Public runs round their origins independently. Preserve the measured gap
+   // only after the last glyph, without spreading it over the preceding word.
+   const runGaps=new Map<Run,number>();
+   for(const r of pageRuns){
+    const end=r.charStart+Array.from(r.text).length,next=pageRuns.find(n=>n.charStart===end&&Math.abs(n.y-r.y)<.1);
+    if(next){const gap=next.x+next.charX[0]-r.x-r.charX.at(-1)!;if(Math.abs(gap)>1e-6)runGaps.set(r,gap);}
+   }
+
+   let position=pageFrom,firstText:Run|undefined,firstTextX:number|undefined;
+   for(const token of tokens){
+    if(token.type!=='text'){rebuilt.push(token);position++;continue;}
+    const chars=Array.from(token.text??''),end=position+chars.length;
+    const kind=(char:string)=>/\s/u.test(char)?'space':/^[0-9]$/u.test(char)?'digit':/^[A-Za-z]$/u.test(char)?'latin:'+char:/\p{Letter}/u.test(char)?'cjk':'symbol:'+char;
+    const classCuts=chars.flatMap((char,index)=>index&&kind(char)!==kind(chars[index-1])?[position+index]:[]);
+    const cuts=[...new Set([position,end,...classCuts,...pageRuns.map(r=>r.charStart).filter(n=>n>position&&n<end),...[...runGaps.keys()].map(r=>r.charStart+Array.from(r.text).length-1).filter(n=>n>position&&n<end),...[...starts].filter(n=>n>position&&n<end)])].sort((a,b)=>a-b),begin=position;
+    for(let i=0;i<cuts.length-1;i++){
+     const at=cuts[i],text=chars.slice(at-begin,cuts[i+1]-begin).join(''),r=pageRuns.find(r=>at>=r.charStart&&at<r.charStart+Array.from(r.text).length);
+     if(!r)fail('원본 줄 문자 위치');
+     if(starts.has(at)&&rebuilt.at(-1)?.type!=='hardBreak')rebuilt.push({type:'hardBreak'});
+     if(!firstText&&text.trim()&&r!.baseline!==undefined){firstText=r;firstTextX=r!.x+r!.charX[at-r!.charStart];}
+     const gap=at+Array.from(text).length===r!.charStart+Array.from(r!.text).length?runGaps.get(r!)??0:0;
+     const marks=fontMarks(r!,text,advanceOf(pageRuns,at,text)+gap),style=marks[0].attrs!;
+     const spacing=Math.round((Number(style.letterSpacing)+Number(style.trackingCorrection))*1e6)/1e6;
+     style.trackingCorrection=0;
+     if(firstText?.baseline!==undefined&&r!.baseline!==undefined)Object.assign(style,{baselineShift:Math.round(((r!.baseline!-r!.y)-(firstText!.baseline!-firstText!.y))*1e6)/1e6});
+     marks.push({type:'hwpTextAdvance',attrs:{letterSpacing:spacing}});
+     rebuilt.push({type:'text',text,marks});
+    }
+    position=end;
+   }
+   tokens=rebuilt;
    if(tokens.length||(!root&&!blocks.length&&pageRuns.length)){
     const style=paragraphStyle(p),layout=style.hwpLayout as Record<string,string|number>;
-    const fontSize=Math.max(...pageRuns.map(run=>run.fontSize)),lineOf=(run:Run)=>run.baseline??run.y,lines=[...new Set(pageRuns.map(run=>Math.round(lineOf(run)*10)/10))].sort((a,b)=>a-b),lastHeight=Math.max(...pageRuns.filter(run=>Math.abs(lineOf(run)-lines.at(-1)!)<.1).map(run=>run.h));
+    const fontSize=Math.max(...pageRuns.map(run=>run.fontSize)),lineOf=(run:Run)=>run.y,lines=[...new Set(pageRuns.map(run=>Math.round(lineOf(run)*10)/10))].sort((a,b)=>a-b),lastHeight=Math.max(...pageRuns.filter(run=>Math.abs(lineOf(run)-lines.at(-1)!)<.1).map(run=>run.h));
     const lineHeight=lines.length>1?lines[1]-lines[0]:lastHeight;
-    if(lines.some((y,i)=>i>0&&Math.abs(y-lines[i-1]-lineHeight)>.2))fail('문단 줄 간격 매핑');
+    if(lines.some((y,i)=>i>0&&Math.abs(y-lines[i-1]-lineHeight)>.2))fail(`문단 줄 간격 매핑 ${sec}:${para}`);
     delete layout.lineHeightRatio;
     Object.assign(layout,{fontSize,fontFamily:face(pageRuns[0]),lineHeight,marginBottom:Number(layout.marginBottom)-(lineHeight-lastHeight)});
-    if(lines.length===1)layout.whiteSpace='pre';
-    const first=pageRuns.find(run=>run.baseline!==undefined);
-    if(first)Object.assign(layout,{nativeX:first.x,nativeBaseline:first.baseline});
+    // Native visual breaks are already explicit. A second CSS wrap would add
+    // extra lines and move all following text away from its original position.
+    layout.whiteSpace='pre';
+    const first=firstText??pageRuns.find(run=>run.baseline!==undefined);
+    if(first)Object.assign(layout,{nativeX:firstTextX??first.x,nativeBaseline:first.baseline});
     const paragraph:JSONContent={type:'paragraph',attrs:style,...(tokens.length?{content:tokens}:{})};
     if(root){
      const b=bounds(pageRuns),left=style.hwpLayout.marginLeft,right=style.hwpLayout.marginRight,width=pages[page].info.bodyRight-pages[page].info.bodyLeft-left-right;
@@ -185,11 +275,16 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
   };
   sections.forEach((section,sec)=>children(section.documentElement,'p').forEach((p,para)=>{
    const hits=pages.map((page,index)=>page.runs.some(r=>r.secIdx===sec&&(r.cellPath?r.parentParaIdx:r.paraIdx)===para)||page.controls.some(c=>c.secIdx===sec&&c.paraIdx===para)?index:-1).filter(n=>n>=0);
-   if(hits.length>1)fail(`여러 쪽에 걸친 문단/표 ${sec}:${para}`);
-   const page=hits[0]??JSON.parse(native.getPageOfPosition(sec,para)).page;if(!pages[page])fail('문단 페이지 없음');
-   pages[page].content.push(...parseParagraph(p,sec,para,page,undefined,true));
+   if(hits.length>1&&['tbl','pic','line'].some(name=>all(p,name).length))fail(`여러 쪽에 걸친 표/개체 ${sec}:${para}`);
+   const placements=hits.length?hits:[JSON.parse(native.getPageOfPosition(sec,para)).page];
+   for(const page of placements){if(!pages[page])fail('문단 페이지 없음');pages[page].content.push(...parseParagraph(p,sec,para,page,undefined,true));}
   }));
-  for(const page of pages){const footers=page.runs.filter(r=>r.paraIdx===4294967295);const lines=new Map<number,Run[]>();for(const r of footers)lines.set(r.y,[...(lines.get(r.y)??[]),r]);for(const rs of lines.values()){const sorted=rs.sort((a,b)=>a.x-b.x);page.content.push({type:'hwpImportedTextBox',attrs:{hwpLayout:absolute(bounds(sorted))},content:[{type:'paragraph',attrs:{textAlign:'left',hwpLayout:{fontFamily:face(sorted[0]),fontSize:Math.max(...sorted.map(r=>r.fontSize)),lineHeight:Math.max(...sorted.map(r=>r.h)),nativeX:sorted[0].x,nativeBaseline:sorted.find(r=>r.baseline!==undefined)?.baseline}},content:sorted.map(r=>({type:'text',text:r.text,marks:fontMarks(r)}))}]});}}
+  for(const page of pages){const footers=page.runs.filter(r=>{
+   if(r.paraIdx===4294967295)return !!r.text;
+   if(r.secIdx===undefined&&r.paraIdx===undefined&&r.text){if(!pageNumbers.length||!/^\s*[-–]?\s*\d+\s*[-–]?\s*$/u.test(r.text))fail('자동 생성 문자 매핑');return true;}
+   return false;
+  });const lines=new Map<number,Run[]>();for(const r of footers){consumedRuns.add(r);lines.set(r.y,[...(lines.get(r.y)??[]),r]);}for(const rs of lines.values()){const sorted=rs.sort((a,b)=>a.x-b.x);page.content.push({type:'hwpImportedTextBox',attrs:{hwpLayout:absolute(bounds(sorted))},content:[{type:'paragraph',attrs:{textAlign:'left',hwpLayout:{fontFamily:face(sorted[0]),fontSize:Math.max(...sorted.map(r=>r.fontSize)),lineHeight:Math.max(...sorted.map(r=>r.h)),nativeX:sorted[0].x,nativeBaseline:sorted.find(r=>r.baseline!==undefined)?.baseline}},content:sorted.map(r=>({type:'text',text:r.text,marks:fontMarks(r)}))}]});}}
+  if(pages.some(page=>page.runs.some(run=>run.text.trim()&&!consumedRuns.has(run))))fail('미처리 원본 문자');
   measure.remove();
   const documentJson:JSONContent={type:'doc',content:pages.map(p=>({type:'hwpImportedPage',attrs:{width:p.info.width,height:p.info.height},content:p.content}))};
   const {renderStructuredDocumentHtml}=await import('./StructuredDocumentEditor');
@@ -200,7 +295,7 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
   const offsets=measureImportedHwpOffsets(preview),paragraphs:JSONContent[]=[];
   const visit=(node:JSONContent)=>{if(node.type==='paragraph')paragraphs.push(node);node.content?.forEach(visit);};visit(documentJson);
   if(offsets.length!==paragraphs.length)fail('문단 기준선 측정 개수');
-  offsets.forEach((offset,index)=>{if(!offset)return;if(!Number.isFinite(offset.left)||!Number.isFinite(offset.top)||Math.abs(offset.left)>50||Math.abs(offset.top)>50)fail('문단 기준선 보정 범위');Object.assign(paragraphs[index].attrs!.hwpLayout,{position:'relative',left:offset.left,top:offset.top});});
+  offsets.forEach((offset,index)=>{if(!offset)return;if(!Number.isFinite(offset.left)||!Number.isFinite(offset.top)||Math.abs(offset.left)>Math.max(...pages.map(p=>p.info.width))||Math.abs(offset.top)>Math.max(...pages.map(p=>p.info.height)))fail(`문단 기준선 보정 범위 ${index}: ${offset.left.toFixed(1)}, ${offset.top.toFixed(1)}`);Object.assign(paragraphs[index].attrs!.hwpLayout,{position:'relative',left:offset.left,top:offset.top});});
   return{document:documentJson,images,pageCount:count,sourceName:file.name};
  }finally{calibration?.remove();calibrationUrls.forEach(url=>URL.revokeObjectURL(url));measure?.remove();native.free();}
 }

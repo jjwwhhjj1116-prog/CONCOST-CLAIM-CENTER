@@ -541,6 +541,20 @@ export const markdownToEditorHtml = (markdown: string): string => {
 
 const escapeHtmlAttribute = (value: string): string => value.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;');
 
+const compactHwpPage = (node: HTMLElement): string => {
+  const page=node.cloneNode(true) as HTMLElement;
+  // The shared schema reconstructs derived CSS from the authored metadata.
+  for(const element of [page,...page.querySelectorAll<HTMLElement>('[data-hwp-layout],[data-hwp-text-style],[data-hwp-advance],[data-hwp-tab],[data-hwp-import-rule]')]){
+    const alignment=element.style.textAlign;
+    element.removeAttribute('style');
+    if(alignment&&/^(P|H[1-6])$/u.test(element.tagName))element.style.textAlign=alignment;
+    const textStyle=element.getAttribute('data-hwp-text-style');
+    if(textStyle){const value=JSON.parse(textStyle);if(!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(['fontFamily','fontSize','color','letterSpacing','trackingCorrection','baselineShift'].map(key=>value[key]??null)));}
+    if(element.hasAttribute('data-hwp-import-rule'))element.replaceChildren();
+  }
+  return DOMPurify.sanitize(page.outerHTML,{ADD_ATTR:[...HWP_IMPORT_DATA_ATTRIBUTES,'style','colwidth','colspan','rowspan','width','height']});
+};
+
 const createTurndown = () => {
   const service = new TurndownService({
     blankReplacement: (_content, node) => {
@@ -558,7 +572,7 @@ const createTurndown = () => {
   });
   service.addRule('hwp-imported-page',{
     filter:node=>node instanceof HTMLElement&&node.hasAttribute('data-hwp-import-page'),
-    replacement:(_content,node)=>`\n\n${DOMPurify.sanitize((node as HTMLElement).outerHTML,{ADD_ATTR:[...HWP_IMPORT_DATA_ATTRIBUTES,'style','colwidth','colspan','rowspan','width','height']})}\n\n`
+    replacement:(_content,node)=>`\n\n${compactHwpPage(node as HTMLElement)}\n\n`
   });
   service.use(gfm);
   service.addRule('emptyParagraph', {
@@ -626,7 +640,24 @@ const createTurndown = () => {
   return service;
 };
 
-export const editorHtmlToMarkdown = (html: string): string => createTurndown().turndown(html).replace(/\n{3,}/gu, '\n\n').trim();
+export const editorHtmlToMarkdown = (html: string): string => {
+  let source=html;
+  const pages:Array<{key:string;html:string}>=[];
+  if(html.includes('data-hwp-import-page')){
+    const parsed=new DOMParser().parseFromString(html,'text/html'),prefix=`HWPIMPORT${crypto.randomUUID().replaceAll('-','')}`;
+    // Turndown collapses whitespace BEFORE custom rules. Protect the complete
+    // measured page first, including leading/trailing spaces and blank text runs.
+    for(const page of parsed.querySelectorAll<HTMLElement>('section[data-hwp-import-page]')){
+      const key=prefix+'PAGE'+pages.length;
+      pages.push({key,html:compactHwpPage(page)});
+      const placeholder=parsed.createElement('p');placeholder.textContent=key;page.replaceWith(placeholder);
+    }
+    source=parsed.body.innerHTML;
+  }
+  let markdown=createTurndown().turndown(source).replace(/\n{3,}/gu,'\n\n').trim();
+  for(const page of pages)markdown=markdown.replace(page.key,page.html);
+  return markdown;
+};
 
 export const parseStructuredDocumentMarkdown = (markdown: string): JSONContent => generateJSON(markdownToEditorHtml(markdown), [
   StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }), Highlight.configure({ multicolor: false }),

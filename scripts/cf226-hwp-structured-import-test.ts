@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { DocumentMeasuredTable, DocumentTableCell, DocumentTableHeader, HWP_IMPORT_EXTENSIONS, hwpStructuredSignature, normalizeHwpLayout, hwpLayoutStyle } from '../apps/web/src/documents/hwp-import-nodes';
+import { DocumentMeasuredTable, DocumentTableCell, DocumentTableHeader, HWP_IMPORT_EXTENSIONS, HwpTextStyle, HwpTextAdvance, hwpStructuredSignature, normalizeHwpLayout, hwpLayoutStyle } from '../apps/web/src/documents/hwp-import-nodes';
 
 const requireWeb = createRequire(resolve('apps/web/package.json'));
 const { getSchema, commands } = requireWeb('@tiptap/core');
@@ -63,4 +63,36 @@ test('CF227 native coordinates remain metadata while local baseline corrections 
   assert.equal(normalizeHwpLayout({fontFamily:'serif;position:fixed',nativeBaseline:Infinity}),null);
   const paragraph={type:'paragraph',attrs:{hwpLayout:layout},content:[{type:'text',text:'수정 가능한 문장'}]};
   assert.notEqual(hwpStructuredSignature(paragraph),hwpStructuredSignature({...paragraph,attrs:{hwpLayout:{...layout,top:0}}}));
+});
+
+test('CF228 tabs and mixed-font baseline offsets survive the editable schema',()=>{
+  const paragraph={type:'paragraph',content:[{type:'hwpImportedTab',attrs:{width:13.3}},{type:'text',text:'원본 문장',marks:[{type:'hwpTextStyle',attrs:{fontFamily:'Noto Serif KR',fontSize:14.7,baselineShift:1.4}}]},{type:'hardBreak'},{type:'text',text:'다음 줄'}]};
+  const node=schema.nodeFromJSON(paragraph),roundtrip=node.toJSON();
+  assert.equal(hwpStructuredSignature(roundtrip),hwpStructuredSignature(paragraph));
+  assert.equal(node.child(0).isInline,true);
+  assert.equal(node.child(0).isAtom,true);
+  assert.notEqual(hwpStructuredSignature(roundtrip),hwpStructuredSignature({...paragraph,content:[{type:'hwpImportedTab',attrs:{width:12}},...paragraph.content.slice(1)]}));
+});
+
+test('CF228 compound cell borders keep measured geometry and distinct native strokes',()=>{
+  const layout={nativeX:75.6,nativeY:80,nativeWidth:200,height:30,borderTop:'0.4535px solid #112233',borderTopPattern:'SLIM_THICK_SLIM',borderBottom:'0.4535px solid #112233',borderBottomPattern:'DOUBLE_SLIM'};
+  assert.deepEqual(normalizeHwpLayout(layout),layout);
+  const css=hwpLayoutStyle(layout);
+  assert.equal((css.match(/linear-gradient\(/gu)||[]).length,5);
+  assert.match(css,/calc\(100% - 16px\) 1.2px/u);
+  assert.equal(hwpLayoutStyle({...layout,nativeWidth:300,height:60}).split('--hwp-cell-border-image:')[1],css.split('--hwp-cell-border-image:')[1]);
+  assert.match(css,/border-top:0.4535px solid transparent/u);
+  assert.doesNotMatch(css,/border-top-pattern|native-width/u);
+  assert.equal(normalizeHwpLayout({borderTopPattern:'url(https://invalid)',nativeWidth:Infinity}),null);
+});
+
+test('CF228 compact font records preserve values and reject malformed advance records',()=>{
+  const parse=HwpTextStyle.config.parseHTML!.call(HwpTextStyle)[0].getAttrs!;
+  const expected={fontFamily:'Batang',fontSize:14.7,color:'#000000',letterSpacing:0,trackingCorrection:0,baselineShift:.033333};
+  assert.deepEqual(parse({getAttribute:()=>JSON.stringify(Object.values(expected))} as never),expected);
+  assert.deepEqual(parse({getAttribute:()=>JSON.stringify(expected)} as never),expected);
+  assert.equal(parse({getAttribute:()=>'[1,2]'} as never),false);
+  const advance=HwpTextAdvance.config.parseHTML!.call(HwpTextAdvance)[0].getAttrs!;
+  assert.deepEqual(advance({getAttribute:()=>'.0025'} as never),{letterSpacing:.0025});
+  for(const raw of ['Infinity','NaN','21','url(https://invalid)'])assert.equal(advance({getAttribute:()=>raw} as never),false);
 });

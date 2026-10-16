@@ -34,14 +34,19 @@ export function measureImportedHwpOffsets(source:HTMLElement):Array<{left:number
     for(const paragraph of page.querySelectorAll<HTMLElement>('p')){
       const origin=layoutOf(paragraph);
       if(typeof origin?.nativeBaseline!=='number'){offsets.push(null);continue;}
-      const span=paragraph.querySelector<HTMLElement>('span[data-hwp-text-style]');
-      if(!span){offsets.push(null);continue;}
+      const walker=source.ownerDocument.createTreeWalker(paragraph,NodeFilter.SHOW_TEXT);
+      let text:Text|null=null,offset=0;
+      while(walker.nextNode()){
+        const candidate=walker.currentNode as Text,index=candidate.data.search(/[^\s\u200b]/u);
+        if(index>=0&&candidate.parentElement?.closest('[data-hwp-text-style]')){text=candidate;offset=index;break;}
+      }
+      if(!text){offsets.push(null);continue;}
       const probe=source.ownerDocument.createElement('span');
       probe.style.cssText='display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline';
-      span.prepend(probe);
+      text.parentElement!.insertBefore(probe,text);
       const baseline=(probe.getBoundingClientRect().top-paper.top)/scale;
       probe.remove();
-      const range=source.ownerDocument.createRange();range.selectNodeContents(span);
+      const range=source.ownerDocument.createRange();range.setStart(text,offset);range.setEnd(text,offset+1);
       const rect=range.getClientRects()[0];
       offsets.push({top:origin.nativeBaseline-baseline,left:rect&&typeof origin.nativeX==='number'?origin.nativeX-(rect.left-paper.left)/scale:0});
     }

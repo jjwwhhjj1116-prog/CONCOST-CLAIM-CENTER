@@ -1,5 +1,6 @@
 import { Extension, Mark, Node, mergeAttributes, type JSONContent } from '@tiptap/core';
 import { Table, TableCell, TableHeader, createColGroup } from '@tiptap/extension-table';
+import { hwpTableBorderDecoration } from './hwp-table-borders';
 
 export const DocumentMeasuredTable=Table.extend({
   renderHTML(props){
@@ -27,11 +28,12 @@ export const DocumentTableHeader = TableHeader.extend({
 /** Versioned measurements from the HWP parser; never accept arbitrary CSS. */
 export type HwpLayout = Record<string, string | number>;
 const lengths = new Set(['left','top','width','height','minHeight','marginTop','marginBottom','marginLeft','marginRight','paddingTop','paddingBottom','paddingLeft','paddingRight','lineHeight','textIndent','letterSpacing','fontSize']);
-const measurements = new Set(['nativeX','nativeY','nativeBaseline','nativeGrid']);
+const measurements = new Set(['nativeX','nativeY','nativeWidth','nativeBaseline','nativeGrid','nativeCellPosition']);
 const choices: Record<string, readonly string[]> = {
   position: ['absolute','relative'], textAlign: ['left','center','right','justify'],
   verticalAlign: ['top','middle','bottom'], whiteSpace: ['pre-wrap','pre','normal'],
   borderCollapse: ['collapse','separate'], tableLayout: ['fixed','auto'],
+  ...Object.fromEntries(['Top','Bottom','Left','Right'].map(side=>[`border${side}Pattern`,['DOUBLE_SLIM','SLIM_THICK_SLIM']])),
 };
 const cssName=(name:string)=>name.replace(/[A-Z]/gu,c=>'-'+c.toLowerCase());
 export function normalizeHwpLayout(value:unknown):HwpLayout|null {
@@ -50,13 +52,22 @@ export function normalizeHwpLayout(value:unknown):HwpLayout|null {
 export function hwpLayoutStyle(value:unknown):string {
   const layout=normalizeHwpLayout(value);
   if(!layout)return '';
-  return Object.entries(layout).filter(([key])=>!measurements.has(key)).map(([key,value])=>{
+  const borderWidth=(side:string)=>{
+    const edge=String(layout[`border${side}`]??'none').match(/^(\d+(?:\.\d+)?)px/u);
+    return edge&&Number(edge[1])>0?`max(var(--hwp-device-pixel, 1px), round(down, ${edge[1]}px, var(--hwp-device-pixel, 1px)))`:'0px';
+  };
+  const styles=Object.entries(layout).filter(([key])=>!measurements.has(key)&&!key.endsWith('Pattern')).map(([key,value])=>{
+    if(layout.nativeCellPosition===1&&(key==='left'||key==='top'))return `${key}:calc(${value}px - var(--hwp-cell-border-${key==='left'?'left':'top'}-width, 0px) / 2)`;
+    if(/^border(Top|Bottom|Left|Right)$/u.test(key)&&layout[`${key}Pattern`])return `${cssName(key)}:${String(value).replace(/#[0-9a-f]{6}$/iu,'transparent')}`;
     if(/^padding(Top|Bottom|Left|Right)$/u.test(key)&&typeof layout.nativeX==='number'){
       const edge=String(layout[key.replace('padding','border')]??'none').match(/^(\d+(?:\.\d+)?)px/u);
       if(edge&&Number(edge[1])>0)return `${cssName(key)}:max(0px,calc(${value}px - max(var(--hwp-device-pixel, 1px), round(down, ${edge[1]}px, var(--hwp-device-pixel, 1px))) / 2))`;
     }
     return `${key==='lineHeightRatio'?'line-height':cssName(key)}:${key==='fontFamily'?JSON.stringify(value):value}${lengths.has(key)?'px':''}`;
-  }).join(';');
+  });
+  if(typeof layout.nativeWidth==='number')for(const side of ['Top','Right','Bottom','Left'])styles.push(`--hwp-cell-border-${side.toLowerCase()}-width:${borderWidth(side)}`);
+  const decoration=hwpTableBorderDecoration(layout);if(decoration)styles.push(decoration);
+  return styles.join(';');
 }
 function readLayout(element:HTMLElement):HwpLayout|null {
   try {return normalizeHwpLayout(JSON.parse(element.getAttribute('data-hwp-layout')||'null'));} catch {return null;}
@@ -83,7 +94,7 @@ export const HwpImportedPage=Node.create({
     width:{default:794,parseHTML:element=>Number(element.getAttribute('data-hwp-width'))||794},
     height:{default:1123,parseHTML:element=>Number(element.getAttribute('data-hwp-height'))||1123},
   };},
-  parseHTML(){return [{tag:'section[data-hwp-import-page]'}];},
+  parseHTML(){return [{tag:'section[data-hwp-import-page]',preserveWhitespace:'full'}];},
   renderHTML({node,HTMLAttributes}){
     const width=Math.min(2400,Math.max(200,Number(node.attrs.width)||794));
     const height=Math.min(4000,Math.max(200,Number(node.attrs.height)||1123));
@@ -92,24 +103,35 @@ export const HwpImportedPage=Node.create({
 });
 export const HwpImportedRule=Node.create({
   name:'hwpImportedRule',group:'block',atom:true,selectable:true,
-  addAttributes(){return Object.fromEntries(['left','top','width','height','stroke','color','style'].map(key=>[key,{default:key==='color'?'#000000':key==='style'?'solid':0,parseHTML:(element:HTMLElement)=>{const raw=element.getAttribute('data-hwp-rule-'+key);return ['color','style'].includes(key)?raw:Number(raw)||0;}}]));},
+  addAttributes(){return Object.fromEntries(['left','top','width','height','stroke','color','style','nativeVector'].map(key=>[key,{default:key==='color'?'#000000':key==='style'?'solid':0,parseHTML:(element:HTMLElement)=>{const raw=element.getAttribute('data-hwp-rule-'+key);return ['color','style'].includes(key)?raw:Number(raw)||0;}}]));},
   parseHTML(){return [{tag:'div[data-hwp-import-rule]'}];},
   renderHTML({node}){
     const a=node.attrs,layout=normalizeHwpLayout({position:'absolute',left:a.left,top:a.top,width:a.width,height:a.height})!;
     const color=/^#[0-9a-f]{6}$/iu.test(a.color)?a.color:'#000000',style=['solid','dotted','dashed','double'].includes(a.style)?a.style:'solid';
     const stroke=Math.min(12,Math.max(.1,Number(a.stroke)||1));
-    const attrs:Record<string,string>={'data-hwp-import-rule':'1',contenteditable:'false',style:hwpLayoutStyle(layout)+`;border-top:${stroke}px ${style} ${color};pointer-events:none;box-sizing:border-box`};
-    for(const key of ['left','top','width','height','stroke','color','style'])attrs['data-hwp-rule-'+key]=String(a[key]);
+    const attrs:Record<string,string>={'data-hwp-import-rule':'1',contenteditable:'false',style:hwpLayoutStyle(layout)+`;border-${Number(a.height)>Number(a.width)?'left':'top'}:${stroke}px ${style} ${color};pointer-events:none;box-sizing:border-box`};
+    for(const key of ['left','top','width','height','stroke','color','style','nativeVector'])attrs['data-hwp-rule-'+key]=String(a[key]);
+    if(Number(a.nativeVector)===1){
+      const width=Number(layout.width),height=Number(layout.height),half=stroke/2;
+      attrs.style=hwpLayoutStyle(layout)+';overflow:visible;pointer-events:none';
+      return ['div',attrs,['http://www.w3.org/2000/svg svg',{width:width+stroke,height:height+stroke,viewBox:`0 0 ${width+stroke} ${height+stroke}`,style:`position:absolute;left:-${half}px;top:-${half}px;overflow:visible`},['http://www.w3.org/2000/svg line',{x1:half,y1:half,x2:width+half,y2:height+half,stroke:color,'stroke-width':stroke}]]];
+    }
     return ['div',attrs];
   }
+});
+export const HwpImportedTab=Node.create({
+  name:'hwpImportedTab',group:'inline',inline:true,atom:true,selectable:false,
+  addAttributes(){return {width:{default:0,parseHTML:element=>Number(element.getAttribute('data-hwp-tab'))||0}};},
+  parseHTML(){return [{tag:'span[data-hwp-tab]'}];},
+  renderHTML({node}){const width=Math.min(2000,Math.max(0,Number(node.attrs.width)||0));return ['span',{'data-hwp-tab':String(width),contenteditable:'false',style:`display:inline-block;width:${width}px;height:0;vertical-align:baseline;white-space:pre;user-select:none`},'\u200b'];}
 });
 export const HwpTextStyle=Mark.create({
   name:'hwpTextStyle',priority:1000,
   addAttributes(){return {
-    fontFamily:{default:null},fontSize:{default:null},color:{default:null},letterSpacing:{default:null},trackingCorrection:{default:null},
+    fontFamily:{default:null},fontSize:{default:null},color:{default:null},letterSpacing:{default:null},trackingCorrection:{default:null},baselineShift:{default:null},
   };},
   parseHTML(){return [{tag:'span[data-hwp-text-style]',getAttrs:element=>{
-    try{return JSON.parse((element as HTMLElement).getAttribute('data-hwp-text-style')||'{}');}catch{return false;}
+    try{const value=JSON.parse((element as HTMLElement).getAttribute('data-hwp-text-style')||'{}');return Array.isArray(value)?value.length===6?Object.fromEntries(['fontFamily','fontSize','color','letterSpacing','trackingCorrection','baselineShift'].map((key,index)=>[key,value[index]])):false:value;}catch{return false;}
   }}];},
   renderHTML({HTMLAttributes:a}){
     const style:string[]=[],attrs:Record<string,string|number>={};
@@ -120,6 +142,7 @@ export const HwpTextStyle=Mark.create({
     }
     if(Number.isFinite(a.fontSize)&&a.fontSize>0&&a.fontSize<=200){attrs.fontSize=a.fontSize;style.push(`font-size:${a.fontSize}px`);}
     if(typeof a.color==='string'&&/^#[0-9a-f]{6}$/iu.test(a.color)){attrs.color=a.color;style.push(`color:${a.color}`);}
+    if(Number.isFinite(a.baselineShift)&&Math.abs(a.baselineShift)<=50){attrs.baselineShift=a.baselineShift;style.push(`position:relative;top:${a.baselineShift}px`);}
     if(Number.isFinite(a.letterSpacing)&&Math.abs(a.letterSpacing)<=20){
       attrs.letterSpacing=a.letterSpacing;
       const correction=Number.isFinite(a.trackingCorrection)&&Math.abs(a.trackingCorrection)<=20?a.trackingCorrection:0;
@@ -129,8 +152,15 @@ export const HwpTextStyle=Mark.create({
     return ['span',{'data-hwp-text-style':JSON.stringify(attrs),style:style.join(';')},0];
   }
 });
-export const HWP_IMPORT_EXTENSIONS=[HwpImportedPage,HwpImportedTextBox,HwpImportedRule,HwpImportedLayout,HwpTextStyle];
-export const HWP_IMPORT_DATA_ATTRIBUTES=['data-hwp-import-page','data-hwp-width','data-hwp-height','data-hwp-layout','data-hwp-text-box','data-hwp-text-style','data-hwp-import-rule',...['left','top','width','height','stroke','color','style'].map(key=>'data-hwp-rule-'+key)];
+/** Local advances vary between spaces, Korean and Latin even in one native font run. */
+export const HwpTextAdvance=Mark.create({
+  name:'hwpTextAdvance',priority:900,
+  addAttributes(){return {letterSpacing:{default:0}};},
+  parseHTML(){return [{tag:'span[data-hwp-advance]',getAttrs:element=>{const value=Number((element as HTMLElement).getAttribute('data-hwp-advance'));return Number.isFinite(value)&&Math.abs(value)<=20?{letterSpacing:value}:false;}}];},
+  renderHTML({HTMLAttributes}){const value=Number(HTMLAttributes.letterSpacing),spacing=Number.isFinite(value)&&Math.abs(value)<=20?value:0;return ['span',{'data-hwp-advance':String(spacing),style:`letter-spacing:${spacing}px`},0];}
+});
+export const HWP_IMPORT_EXTENSIONS=[HwpImportedPage,HwpImportedTextBox,HwpImportedRule,HwpImportedTab,HwpImportedLayout,HwpTextStyle,HwpTextAdvance];
+export const HWP_IMPORT_DATA_ATTRIBUTES=['data-hwp-import-page','data-hwp-width','data-hwp-height','data-hwp-layout','data-hwp-text-box','data-hwp-text-style','data-hwp-advance','data-hwp-tab','data-hwp-import-rule',...['left','top','width','height','stroke','color','style','nativeVector'].map(key=>'data-hwp-rule-'+key)];
 /** Compare authored content/layout before upload; schema defaults are immaterial. */
 export function hwpStructuredSignature(node:JSONContent):string {
   const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
@@ -144,7 +174,7 @@ export function hwpStructuredSignature(node:JSONContent):string {
       if(child.type==='text'&&previous?.type==='text'&&JSON.stringify(marks(child))===JSON.stringify(marks(previous))) previous.text=(previous.text??'')+(child.text??'');
       else children.push({...child});
     }
-    return {type:n.type,text:n.text??'',attrs:canonical(Object.fromEntries(Object.entries(n.attrs??{}).filter(([key])=>['hwpLayout','textAlign','alignment','verticalAlignment','colspan','rowspan','colwidth','src','width','height','alt','left','top','stroke','color','style'].includes(key)))),marks:marks(n),content:children.map(visit)};
+    return {type:n.type,text:n.text??'',attrs:canonical(Object.fromEntries(Object.entries(n.attrs??{}).filter(([key,value])=>['hwpLayout','textAlign','alignment','verticalAlignment','colspan','rowspan','colwidth','src','width','height','alt','left','top','stroke','color','style'].includes(key)||key==='nativeVector'&&value===1))),marks:marks(n),content:children.map(visit)};
   };
   return JSON.stringify(visit(node));
 }
