@@ -1,4 +1,17 @@
 /** Validate editable page contents after fonts/images have settled, without changing saved text. */
+const contentRects=(source:HTMLElement):DOMRect[]=>{
+  const rects:DOMRect[]=[],walker=source.ownerDocument.createTreeWalker(source,NodeFilter.SHOW_TEXT);
+  while(walker.nextNode()){
+    const text=walker.currentNode;
+    if(!text.textContent?.trim())continue;
+    const range=source.ownerDocument.createRange();range.selectNodeContents(text);
+    rects.push(...Array.from(range.getClientRects()));
+  }
+  // A paragraph's line box includes trailing leading, which is not painted text.
+  // Keep real objects in the guard, including newly inserted tables and spacers.
+  for(const object of source.querySelectorAll('img:not(.ProseMirror-separator),table,hr,[data-document-spacer]'))rects.push(object.getBoundingClientRect());
+  return rects.filter(box=>box.width>0&&box.height>0);
+};
 export function importedHwpPages(source: HTMLElement): { pages: string[]; overflow: boolean } | null {
   if (!source.querySelector(':scope > [data-hwp-import-page]')) return null;
   const pages: string[] = [];
@@ -20,8 +33,7 @@ export function importedHwpPages(source: HTMLElement): { pages: string[]; overfl
       if (!(block instanceof HTMLElement) || block.hasAttribute('data-hwp-import-rule')) continue;
       const rects: DOMRect[] = [];
       if (block.matches('[data-hwp-text-box]')) {
-        const range = source.ownerDocument.createRange(); range.selectNodeContents(block);
-        rects.push(...Array.from(range.getClientRects()).filter(box => box.width > 0 && box.height > 0));
+        rects.push(...contentRects(block));
       } else rects.push(block.getBoundingClientRect());
       if (rects.some(outside)) overflow = true;
       boxes.push(rects);
@@ -32,9 +44,8 @@ export function importedHwpPages(source: HTMLElement): { pages: string[]; overfl
     }
     for (const image of node.querySelectorAll<HTMLImageElement>('img:not(.ProseMirror-separator)')) if (image.complete && image.naturalWidth === 0) overflow = true;
     for (const cell of node.querySelectorAll('td,th')) {
-      const range = source.ownerDocument.createRange(); range.selectNodeContents(cell);
       const box = cell.getBoundingClientRect();
-      if (Array.from(range.getClientRects()).some(rect => rect.width > 0 && (rect.left < box.left - tolerance || rect.right > box.right + tolerance || rect.top < box.top - tolerance || rect.bottom > box.bottom + tolerance))) overflow = true;
+      if (contentRects(cell as HTMLElement).some(rect => rect.left < box.left - tolerance || rect.right > box.right + tolerance || rect.top < box.top - tolerance || rect.bottom > box.bottom + tolerance)) overflow = true;
     }
   }
   return { pages, overflow };

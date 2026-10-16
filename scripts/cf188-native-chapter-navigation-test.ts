@@ -55,6 +55,24 @@ test('CF188 metadata-only synchronization creates no Undo event and preserves pr
   assert.equal(state.doc.textContent, '확정 금액 123,456원');
   assert.deepEqual(state.doc.attrs.reportNativeSource, changed.attrs!.reportNativeSource, 'Body Undo retains explicit saved navigation');
 });
+
+test('CF228 replacing an HWP source updates import provenance and later edits keep the new binding',()=>{
+  const webRequire=createRequire(new URL('../apps/web/package.json',import.meta.url));
+  const {Schema}=webRequire('@tiptap/pm/model'),{EditorState}=webRequire('@tiptap/pm/state'),{history,undo,undoDepth}=webRequire('@tiptap/pm/history');
+  const schema=new Schema({nodes:{doc:{content:'paragraph+',attrs:{reportNativeSource:{default:null},reportHwpImport:{default:null}}},paragraph:{content:'text*'},text:{}}});
+  const oldImport={pages:5,source:{sha256:'a'.repeat(64)}},nextImport={pages:11,source:{sha256:'b'.repeat(64)}};
+  let state=EditorState.create({schema,doc:schema.node('doc',{reportHwpImport:oldImport},[schema.node('paragraph',null,[schema.text('이전 작업')])]),plugins:[history()]});
+  const dispatch=(tr:any)=>{state=state.apply(tr);};
+  const editor={get state(){return state;},view:{dispatch}} as unknown as Editor;
+  syncReportNativeSource(editor,{type:'doc',attrs:{reportHwpImport:nextImport}});
+  assert.equal(undoDepth(state),0);
+  dispatch(state.tr.insertText('검수',1));
+  assert.deepEqual(JSON.parse(JSON.stringify(state.doc.toJSON())).attrs.reportHwpImport,nextImport);
+  assert.equal(undo(state,dispatch),true);
+  assert.deepEqual(state.doc.attrs.reportHwpImport,nextImport);
+  syncReportNativeSource(editor,null);
+  assert.equal(state.doc.attrs.reportHwpImport,null);
+});
 test('CF188 partial maps and several chapters on one physical page are valid; clearing removes only navigation', async () => {
   const original = await fixture(), first = updateReportNativeChapterPage(original, caseId, ids[0], 1, ids);
   assert.equal(reportNativeChapterPage(first, caseId, ids[1], ids), null);

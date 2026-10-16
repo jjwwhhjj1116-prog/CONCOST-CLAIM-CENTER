@@ -29,7 +29,7 @@ import * as Y from 'yjs';
 import { structuredDocumentContentSignature } from './structured-document-sync';
 import { fitImageDimensions, inferredTableColumnWeight, normalizeColumnWidths, tableCellColumnIndexes } from './structured-document-layout';
 import { expandDocumentSpacingMarkers, normalizeSpacerHeight, spacerMarker } from './document-spacing';
-import { applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
+import { findDocumentTextMatches, applyDocumentAction, documentActionLabel, DocumentSpacingSelection, preserveSpacingSelection, selectedSpacingPositions, type RepeatableDocumentAction } from './document-editing-actions';
 import { DocumentReviewPages, type DocumentReviewPagesHandle } from './DocumentPreviewPane';
 import { ReportSourceChapterLinks, type SourceChapterLinkSettings } from './ReportSourceChapterLinks';
 import { ScaledImage, ScaledTableResize, selectTableCells, syncImageDimensions } from './document-resize-scale';
@@ -397,7 +397,6 @@ export class DocumentTableView extends TableView {
   }
 }
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 const markerPattern = /<!--\s*((?:(?:AI|MANUAL)-CHAPTER:[^:]+:(?:START|END)|MANUAL-WHOLE-DOCUMENT:(?:START|END)))\s*-->/gu;
 
 const rightAlignedTableHeader = /(?:금액|공사비|단가|연면적|면적|수량|총액|합계|계약금|증감액|비율|세대수|동수|㎡|m²|원|억원)/iu;
@@ -693,19 +692,7 @@ const ToolbarButton = ({ active = false, disabled = false, label, tone, onClick,
   <button type="button" className={active ? 'is-active' : ''} data-tone={tone} disabled={disabled} title={label} aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick}>{children}</button>
 );
 
-const findMatches = (editor: Editor, query: string): Array<{ from: number; to: number }> => {
-  const matches: Array<{ from: number; to: number }> = [];
-  if (!query) return matches;
-  const pattern = new RegExp(escapeRegExp(query), 'giu');
-  editor.state.doc.descendants((node, pos) => {
-    if (!node.isText || !node.text) return;
-    for (const match of node.text.matchAll(pattern)) {
-      if (match.index === undefined) continue;
-      matches.push({ from: pos + match.index, to: pos + match.index + match[0].length });
-    }
-  });
-  return matches;
-};
+const findMatches = (editor: Editor, query: string) => findDocumentTextMatches(editor.state.doc,query);
 
 const collaborationColor = (identity: string): string => {
   const palette = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#0891b2', '#059669', '#4f46e5', '#be123c'];
@@ -966,7 +953,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     lastAppliedContentSignature.current = desiredSignature;
     if (editorJson) {
       const withoutSource = (document: JSONContent) => {
-        const { reportNativeSource: _source, ...attrs } = document.attrs ?? {};
+        const { reportNativeSource: _source, reportHwpImport: _import, ...attrs } = document.attrs ?? {};
         const body = { ...document };
         if (Object.keys(attrs).length) body.attrs = attrs; else delete body.attrs;
         return JSON.stringify(body);

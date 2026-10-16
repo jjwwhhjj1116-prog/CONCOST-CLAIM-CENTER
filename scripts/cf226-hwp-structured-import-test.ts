@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { findDocumentTextMatches } from '../apps/web/src/documents/document-editing-actions';
 import { DocumentMeasuredTable, DocumentTableCell, DocumentTableHeader, HWP_IMPORT_EXTENSIONS, HwpTextStyle, HwpTextAdvance, hwpStructuredSignature, normalizeHwpLayout, hwpLayoutStyle } from '../apps/web/src/documents/hwp-import-nodes';
 
 const requireWeb = createRequire(resolve('apps/web/package.json'));
@@ -95,4 +96,21 @@ test('CF228 compact font records preserve values and reject malformed advance re
   const advance=HwpTextAdvance.config.parseHTML!.call(HwpTextAdvance)[0].getAttrs!;
   assert.deepEqual(advance({getAttribute:()=>'.0025'} as never),{letterSpacing:.0025});
   for(const raw of ['Infinity','NaN','21','url(https://invalid)'])assert.equal(advance({getAttribute:()=>raw} as never),false);
+});
+
+test('CF228 search and replace spans font marks but stops at inline objects and paragraphs',()=>{
+  const doc=schema.nodeFromJSON({type:'doc',content:[
+    {type:'paragraph',content:[{type:'text',text:'웹',marks:[{type:'bold'}]},{type:'text',text:'편집'},{type:'text',text:'확인 [12.',marks:[{type:'italic'}]},{type:'text',text:'5]'}]},
+    {type:'paragraph',content:[{type:'text',text:'A'},{type:'hwpImportedTab',attrs:{width:10}},{type:'text',text:'B'},{type:'hardBreak'},{type:'text',text:'C'}]},
+    {type:'paragraph',content:[{type:'text',text:'D'}]}
+  ]});
+  const matches=findDocumentTextMatches(doc,'웹편집확인');
+  assert.equal(matches.length,1);
+  assert.equal(doc.textBetween(matches[0].from,matches[0].to),'웹편집확인');
+  const amount=findDocumentTextMatches(doc,'[12.5]');
+  assert.equal(amount.length,1);
+  const changed=EditorState.create({schema,doc}).tr.insertText('[13.5]',amount[0].from,amount[0].to).doc;
+  assert.equal(findDocumentTextMatches(changed,'[13.5]').length,1);
+  assert.equal(findDocumentTextMatches(changed,'[12.5]').length,0);
+  for(const query of ['AB','BC','CD',''])assert.equal(findDocumentTextMatches(doc,query).length,0);
 });

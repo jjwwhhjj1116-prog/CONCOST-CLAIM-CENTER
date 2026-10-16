@@ -7,6 +7,21 @@ import { closeHistory } from '@tiptap/pm/history';
 import { normalizeSpacerHeight } from './document-spacing';
 import { writeTableColumnWidths } from './document-resize-scale';
 
+/** Marks may split one sentence into many text nodes. Never search across objects or blocks. */
+export function findDocumentTextMatches(doc:DocumentNode,query:string):Array<{from:number;to:number}>{
+  const matches:Array<{from:number;to:number}>=[];
+  if(!query)return matches;
+  const pattern=new RegExp(query.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&'),'giu');
+  doc.descendants((node,pos)=>{
+    if(!node.isTextblock)return;
+    let text='',from=pos+1;
+    const flush=()=>{for(const match of text.matchAll(pattern))matches.push({from:from+match.index!,to:from+match.index!+match[0].length});text='';};
+    node.forEach((child,offset)=>{if(child.isText){if(!text)from=pos+1+offset;text+=child.text;}else flush();});
+    flush();return false;
+  });
+  return matches;
+}
+
 const spacingKey = new PluginKey<number[] | null>('document-spacing-selection');
 const isBlank = (node: DocumentNode | null) => node?.type.name === 'documentSpacer'
   || (node?.type.name === 'paragraph' && node.content.content.every(child => child.isText ? !child.text?.trim() : child.type.name === 'hardBreak'));

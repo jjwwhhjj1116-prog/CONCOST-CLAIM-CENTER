@@ -169,13 +169,15 @@ export async function readBoundReportNativeSource(document: JSONContent | null, 
 /** Tiptap setContent replaces children, not root attributes. Clear stale links on replacement. */
 export function syncReportNativeSource(editor: Editor, document: JSONContent | null | undefined, content?: JSONContent | string, emitUpdate = true): void {
   const source = document?.attrs?.reportNativeSource ?? null;
+  const metadata={reportNativeSource:source,...('reportHwpImport' in editor.state.doc.attrs?{reportHwpImport:document?.attrs?.reportHwpImport??null}:{})};
   if (content === undefined) {
-    editor.view.dispatch(editor.state.tr.setDocAttribute('reportNativeSource', source).setMeta('preventUpdate', true).setMeta('addToHistory', false));
+    const tr=editor.state.tr;for(const [key,value]of Object.entries(metadata))tr.setDocAttribute(key,value);
+    editor.view.dispatch(tr.setMeta('preventUpdate', true).setMeta('addToHistory', false));
     return;
   }
   // Keep the replacement body and its source reference in one undo event.
   // Neither the preceding manuscript nor the next edit may merge into it.
-  editor.chain().command(({ tr }) => { closeHistory(tr); tr.setDocAttribute('reportNativeSource', source); return true; })
+  editor.chain().command(({ tr }) => { closeHistory(tr);for(const [key,value]of Object.entries(metadata))tr.setDocAttribute(key,value);return true; })
     .setContent(content, { emitUpdate }).run();
   editor.view.dispatch(closeHistory(editor.state.tr));
 }
