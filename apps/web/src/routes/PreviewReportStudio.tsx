@@ -584,6 +584,9 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     const requestTitle = titleRef.current;
     const requestContent = contentRef.current;
     const requestEditorJson = joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current);
+    // Compare the ACK with the document actually sent, even if a nested editor
+    // object changes while the request is in flight.
+    const requestEditorJsonSnapshot = JSON.stringify(requestEditorJson);
     const requestVersion = versionRef.current;
     const requestWizardStep = activeStepRef.current;
     const requestChapterId = selectedChapterRef.current || null;
@@ -600,14 +603,24 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
         || typeof result.draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(result.draft.updatedAt))
         || result.draft.title !== requestTitle.trim() || result.draft.content !== requestContent
         || result.draft.wizardStep !== requestWizardStep || result.draft.selectedChapterId !== requestChapterId
-        || JSON.stringify(result.draft.editorJson) !== JSON.stringify(requestEditorJson)) {
+        || JSON.stringify(result.draft.editorJson) !== requestEditorJsonSnapshot) {
+        const draft=result.draft;
+        // Field names only: never log the report, title, image URLs or account.
+        console.error('REPORT_SAVE_ACK_MISMATCH',Object.entries({
+          draft:!!draft,case: draft?.caseId===requestCaseId,
+          version:!!draft&&Number.isSafeInteger(draft.version)&&draft.version>=Math.max(1,requestVersion)&&draft.version<=requestVersion+1,
+          updatedAt:typeof draft?.updatedAt==='string'&&Number.isFinite(Date.parse(draft.updatedAt)),
+          title:draft?.title===requestTitle.trim(),content:draft?.content===requestContent,
+          wizardStep:draft?.wizardStep===requestWizardStep,chapter:draft?.selectedChapterId===requestChapterId,
+          editorJson:JSON.stringify(draft?.editorJson)===requestEditorJsonSnapshot,
+        }).filter(([,valid])=>!valid).map(([field])=>field),{requestEditorJsonMutated:JSON.stringify(requestEditorJson)!==requestEditorJsonSnapshot});
         throw new Error('저장 완료 응답을 확인하지 못했습니다. 화면의 편집 내용은 유지됩니다. 저장을 다시 시도해 주세요.');
       }
       setVersion(result.draft.version);
       setSavedAt(result.draft.updatedAt);
       setBackups(result.backups ?? []);
       setSaveError('');
-      const unsavedChanges = titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current)) !== JSON.stringify(requestEditorJson);
+      const unsavedChanges = titleRef.current !== requestTitle || contentRef.current !== requestContent || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current)) !== requestEditorJsonSnapshot;
       setDirty(unsavedChanges);
       setWorkspaceDirty(activeStepRef.current !== requestWizardStep || (selectedChapterRef.current || null) !== requestChapterId);
       if (!unsavedChanges && !outlineDirtyRef.current && !Object.keys(chapterDraftsRef.current).some(id => chapterDraftsRef.current[id] !== chapterSavedRef.current[id] || chapterDocumentsRef.current[id] !== chapterSavedDocumentsRef.current[id])) {
