@@ -56,7 +56,7 @@ npm run cf:env:sync:test -- --file .env.cloudflare.shared.local
 npm run cf:env:sync:both -- --file .env.cloudflare.shared.local
 ```
 
-`wrangler secret bulk`는 Worker별 새 버전을 즉시 배포한다. 따라서 가오픈 동기화 명령은 일반 테스트 수정 중 실행하지 않는다. 공통 파일에서 빠진 routine secret은 stale 값을 남기지 않도록 두 Worker에서 함께 제거되지만, 암호화 master key는 삭제·교체하지 않는다.
+`wrangler secret bulk`는 Worker별 새 버전을 즉시 배포한다. 따라서 가오픈 동기화 명령은 일반 테스트 수정 중 실행하지 않는다. 공통 파일에 명시된 허용 키만 반영하며, 파일에서 빠진 기존 secret은 유지한다. 암호화 master key는 동기화 대상에서 제외하며 삭제·교체하지 않는다.
 
 ## D1 관리자 설정
 
