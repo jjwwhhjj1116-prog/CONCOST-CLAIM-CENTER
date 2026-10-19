@@ -8539,7 +8539,13 @@ async function handleCaseEvidence(request: Request, env: CloudflareEnv, url: URL
     if (manualRetry && form!.get('versionChoice') === 'REPLACE_AS_LATEST') return json({ error: '수동 복구 시에는 기존 원본을 변경하지 않습니다. 최신본 대체 대신 별도 자료로 저장해 주세요.', code: 'MANUAL_RETRY_PRESERVES_ORIGINALS' }, 409);
     try { await db.prepare('SELECT evidence_id FROM preview_evidence_versions LIMIT 0').all(); }
     catch { return json({ error: '자료실 버전 관리 마이그레이션이 필요합니다.', code: 'EVIDENCE_SCHEMA_UPGRADE_REQUIRED' }, 503); }
-    const previous = (await categoryEvidence(db, caseId, category)).find((entry) => entry.idempotencyKey === idempotencyKey);
+    // Most uploads have a new key. Do not build and parse the entire version
+    // list twice before the existing version/lock checks for that common path.
+    const hasReplay = await db.prepare(
+      'SELECT 1 AS found FROM preview_case_evidence WHERE organization_id=? AND case_id=? AND workflow_category=? AND idempotency_key=? ' +
+      'UNION ALL SELECT 1 AS found FROM preview_google_case_evidence WHERE organization_id=? AND case_id=? AND workflow_category=? AND idempotency_key=? LIMIT 1'
+    ).bind(PREVIEW_ORGANIZATION_ID,caseId,category,idempotencyKey,PREVIEW_ORGANIZATION_ID,caseId,category,idempotencyKey).first<{found:number}>();
+    const previous = hasReplay ? (await categoryEvidence(db, caseId, category)).find((entry) => entry.idempotencyKey === idempotencyKey) : undefined;
     if (previous) return previous.requestFingerprint === fingerprint ? json({ file: await projectFile(previous), replay: true }) : json({ error: 'Idempotency key belongs to another file', code: 'IDEMPOTENCY_MISMATCH' }, 409);
     const prepared = await prepareEvidenceVersion({ db, caseId, category, userId: user.id, sha256: validated.sha256, fingerprint, form: form!, fileName: file.name,
       analyze: (candidates) => analyzeEvidenceVersions(env, candidates, file.name, validated.mimeType, validated.bytes) });

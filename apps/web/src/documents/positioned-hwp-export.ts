@@ -91,28 +91,47 @@ function calibrateBodyInputs(files:Record<string,Uint8Array>,bodies:BodyAnchor[]
  * drift only when the current editable line exceeds 0.5px, using standard
  * integer-percent character spacing and a bounded, verified feedback pass.
  * No original line cache, substituted font, inserted text or raster is used. */
-function refineTextAdvances(files:Record<string,Uint8Array>,anchors:BodyAnchor[],Engine:NativeHwpEngine):void{
+function refineTextAdvances(files:Record<string,Uint8Array>,anchors:BodyAnchor[],pages:NativeHwpPage[],Engine:NativeHwpEngine):void{
  // Keep multiple TABs in their existing native run: the pinned engine starts
  // its TAB-width cursor again at each split run. Normal export already keeps
  // those groups intact; per-character feedback must not split them again.
- const candidates=anchors.filter(a=>a.block.lines?.length===1&&a.block.lines[0].starts.length===1&&a.block.lines[0].glyphs?.length&&(a.block.lines[0].text.match(/\t/gu)?.length??0)<=1);
+ type Target=BodyAnchor&{cell?:{table:number;index:number;paragraph:number}};
+ const candidates:Target[]=anchors.filter(a=>a.block.lines?.length===1&&a.block.lines[0].starts.length===1&&a.block.lines[0].glyphs?.length&&(a.block.lines[0].text.match(/\t/gu)?.length??0)<=1);
+ // A retyped right-aligned amount is positioned by the widths of all later
+ // runs. Verify those native run boundaries too, rather than treating each
+ // rounded character width as an independent advance.
+ pages.forEach((page,sec)=>{
+  const xml=parse(files[`Contents/section${sec}.xml`]),root=direct(xml.documentElement,'p');
+  all(xml,'tbl').forEach((table,tableIndex)=>all(table,'tc').forEach((cell,index)=>{
+   const source=page.tableGeometry?.[tableIndex]?.cells[index]?.lines?.filter(line=>line.text.trim()),paragraphs=direct(direct(cell,'subList')[0],'p').map((p,i)=>({p,i})).filter(({p})=>nativeParagraphText(p).text.trim());
+   source?.forEach((line,i)=>{
+    if(line.align!=='right'||line.starts.length!==1||line.text.includes('\t')||!line.glyphs?.length||!line.inputs?.length)return;
+    const typed=new Set(line.inputs.flatMap(input=>input.widths.map((_,i)=>input.from+i)));
+    if(line.glyphs.some(glyph=>!typed.has(glyph.at)))return;
+    if(source.length!==paragraphs.length)throw Error('HWP 표의 정밀 글자 위치 대응이 다릅니다.');
+    candidates.push({sec,para:root.findIndex(p=>all(p,'tbl').includes(table)),cell:{table:tableIndex,index,paragraph:paragraphs[i].i},block:{marker:'',kind:'text',left:0,top:0,width:0,height:0,lines:[line]}});
+   });
+  }));
+ });
  if(!candidates.length)return;
- const positions=(document:Reader,entry:BodyAnchor)=>{
+ const positions=(document:Reader,entry:Target)=>{
   const runs=(JSON.parse(document.getPageTextLayout(entry.sec)).runs??[]) as Array<NativeGlyphRun&{charStart:number}>;
-  const relevant=runs.filter(r=>r.parentParaIdx===entry.para&&r.text.trim());
+  const control=entry.cell?(JSON.parse(document.getPageControlLayout(entry.sec)).controls as Array<{type:string;controlIdx:number;cellPath?:unknown}>).filter(c=>c.type==='table'&&!c.cellPath)[entry.cell.table]:undefined;
+  if(entry.cell&&!control)throw Error('HWP 표의 정밀 글자 위치가 없습니다.');
+  const relevant=runs.filter(r=>r.parentParaIdx===entry.para&&r.text.trim()&&(!entry.cell||JSON.stringify(r.cellPath)===JSON.stringify([{controlIndex:control!.controlIdx,cellIndex:entry.cell.index,cellParaIndex:entry.cell.paragraph}])));
   const svg=parse(strToU8(document.renderPageSvgWithProfile?.(entry.sec,'print')??document.renderPageSvg(entry.sec)));
   const matched=resolveNativeHwpGlyphs(relevant,svg,why=>{throw Error(`HWP 글자 간격 대조: ${why}`);});
   return relevant.flatMap(r=>(matched.get(r)??[]).map(g=>({at:r.charStart+g.offset,x:Number(g.glyph.getAttribute('x'))}))).sort((a,b)=>a.at-b.at);
  };
- const errors=(actual:Array<{at:number;x:number}>,entry:BodyAnchor)=>{
+ const errors=(actual:Array<{at:number;x:number}>,entry:Target)=>{
   const target=entry.block.lines![0].glyphs!;
   if(actual.length!==target.length||actual.some((g,i)=>g.at!==target[i].at))throw Error('HWP 검수한 글자 위치 대응이 다릅니다.');
-  return actual.map((g,i)=>(g.x-actual[0].x)-(target[i].x-target[0].x));
+  return actual.map((g,i)=>entry.cell?g.x-target[i].x:(g.x-actual[0].x)-(target[i].x-target[0].x));
  };
- const initial=new Engine(zipSync(files)) as Reader;let pending:BodyAnchor[];
+ const initial=new Engine(zipSync(files)) as Reader;let pending:Target[];
  try{pending=candidates.filter(entry=>errors(positions(initial,entry),entry).some(dx=>Math.abs(dx)>.5));}finally{initial.free();}
  for(const entry of pending){
-  const path=`Contents/section${entry.sec}.xml`,xml=parse(files[path]),carrier=direct(xml.documentElement,'p')[entry.para],p=all(carrier,'drawText').flatMap(draw=>direct(direct(draw,'subList')[0],'p'))[0];
+  const path=`Contents/section${entry.sec}.xml`,xml=parse(files[path]),carrier=direct(xml.documentElement,'p')[entry.para],p=entry.cell?direct(direct(all(all(xml,'tbl')[entry.cell.table],'tc')[entry.cell.index],'subList')[0],'p')[entry.cell.paragraph]:all(carrier,'drawText').flatMap(draw=>direct(direct(draw,'subList')[0],'p'))[0];
   if(!p||nativeParagraphText(p).text!==entry.block.lines![0].text)throw Error('HWP 정밀 글자 간격의 편집 문단이 다릅니다.');
   const header=parse(files['Contents/header.xml']),properties=all(header,'charPr'),container=properties[0]?.parentElement;
   if(!container)throw Error('HWP 정밀 글자 간격의 글꼴이 없습니다.');
@@ -140,14 +159,15 @@ function refineTextAdvances(files:Record<string,Uint8Array>,anchors:BodyAnchor[]
    files[path]=write(xml);files['Contents/header.xml']=write(header);
    const current=new Engine(zipSync(files)) as Reader;let dx:number[];
    try{dx=errors(positions(current,entry),entry);}finally{current.free();}
-   const bad=dx.findIndex(value=>Math.abs(value)>.5);
+   let bad=dx.findIndex(value=>Math.abs(value)>.5);
+   if(entry.cell)for(let i=dx.length-1;i>bad;i--)if(Math.abs(dx[i])>.5){bad=i;break;}
    if(bad<0){verified=true;break;}
-   const glyph=entry.block.lines![0].glyphs![bad];let before=glyph.at-1;
+   const glyph=entry.block.lines![0].glyphs![bad];let before=glyph.at-(entry.cell?0:1);
    while(before>=0&&typeof tokens[before]?.text!=='string')before--;
    if(before<0)throw Error('HWP 첫 글자 간격을 보존하지 못했습니다.');
    const spacings=all(tokens[before].definition,'spacing');if(!spacings.length)throw Error('HWP 표준 자간 속성이 없습니다.');
    for(const spacing of spacings)for(const a of [...spacing.attributes]){
-    const value=Number(a.value)+(dx[bad]>0?-1:1);
+    const value=Number(a.value)+(dx[bad]>0?(entry.cell?1:-1):(entry.cell?-1:1));
     if(!Number.isSafeInteger(value)||value< -50||value>50)throw Error('HWP 정밀 글자 간격이 표준 자간 범위를 넘습니다.');spacing.setAttribute(a.name,String(value));
    }
    const state=tokens.map(t=>all(t.definition,'spacing').map(s=>[...s.attributes].map(a=>a.value).join(',')).join('/')).join(';');
@@ -352,7 +372,7 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
  calibrateBodyInputs(generated,bodies,pages,Engine);
  positionCellsWithEmptyParagraphs(generated,pages,Engine);
  restoreCellParagraphGaps(generated,pages,Engine);
- refineTextAdvances(generated,anchors,Engine);
+ refineTextAdvances(generated,anchors,pages,Engine);
  const positioned=new Engine(zipSync(generated)) as Reader;
  try{
   if(positioned.pageCount()!==pages.length)throw Error(`HWP 고정 배치 쪽수가 다릅니다 (${positioned.pageCount()}/${pages.length}).`);

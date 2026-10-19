@@ -57,10 +57,10 @@ test('CF199 real attachment dialog protects uploads and prints selected photos p
   const xlsx = workbook(); const stored = new Map<string, { bytes: Uint8Array; file: Record<string, unknown> }>();
   let savedDraft: unknown = null, mode = '', posts = 0, latest = true, release: (() => void) | undefined;
   const files = () => [1, 2, 3].map(id => ({ id: String(id), originalName: `사진${id}.jpg`, mimeType: 'image/jpeg', category: 'SITE_PHOTO', downloadUrl: `/api/cases/evidence/${id}/download` })).concat([{ id: '4', originalName: '구조내역.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', category: 'REPORT_REFERENCE', downloadUrl: '/api/cases/evidence/4/download', byteSize: xlsx.length, sha256: sha(xlsx), versionNumber: 2, isLatest: latest } as any]);
-  const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
+  const server = await createServer({ root: resolve('apps/web'), ...(process.env.CF149_CACHE_ROOT ? {cacheDir:process.env.CF149_CACHE_ROOT}:{}), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
     name: 'cf199-evidence',
     configureServer(s) { s.middlewares.use(async (req, res, next) => {
-      const url = req.url ?? '';
+      const url = new URL(req.url ?? '', 'http://localhost').pathname;
       if (url === `/api/cases/${caseId}/evidence` || url === `/api/cases/${nextCase}/evidence`) {
         res.setHeader('Content-Type', 'application/json');
         if (req.method !== 'POST') { res.end(JSON.stringify(mode === 'list' ? {} : { files: files() })); return; }
@@ -188,9 +188,9 @@ print(json.dumps(ratios))`;
       const result=await page.evaluate(async()=>{
         const path='/src/documents/editable-docx-export.ts';const{createEditableDocx}=await import(path),zipPath='/node_modules/.vite/deps/fflate.js';const{unzipSync}=await import(zipPath);
         const root=document.createElement('article');root.dataset.exportDocumentKind='REPORT';root.innerHTML='<section data-export-page><p style="line-height:24px"><a href="https://example.invalid/source"><img src="/api/cases/evidence/1/download" width="200" height="180"></a></p><p style="line-height:24px"><a href="https://example.invalid/text">정상 텍스트 링크</a></p><p><a href="javascript:alert(1)">안전한 원문 보존</a><a href="file:///private">파일 링크 텍스트</a></p></section>';document.body.append(root);
-        try{await Promise.all([...root.querySelectorAll('img')].map(img=>img.decode()));const zip=unzipSync(await createEditableDocx(root,'portrait'));const doc=new DOMParser().parseFromString(new TextDecoder().decode(zip['word/document.xml']),'application/xml'),ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main';return{xml:new TextDecoder().decode(zip['word/document.xml']),rels:new TextDecoder().decode(zip['word/_rels/document.xml.rels']),rules:[...doc.getElementsByTagNameNS(ns,'p')].map(p=>p.getElementsByTagNameNS(ns,'spacing')[0]?.getAttributeNS(ns,'lineRule'))};}finally{root.remove();}
+        try{await Promise.all([...root.querySelectorAll('img')].map(img=>img.decode()));const zip=unzipSync(await createEditableDocx(root,'portrait'));const doc=new DOMParser().parseFromString(new TextDecoder().decode(zip['word/document.xml']),'application/xml'),ns='http://schemas.openxmlformats.org/wordprocessingml/2006/main';return{xml:new TextDecoder().decode(zip['word/document.xml']),text:[...doc.getElementsByTagNameNS(ns,'t')].map(node=>node.textContent).join(''),rels:new TextDecoder().decode(zip['word/_rels/document.xml.rels']),rules:[...doc.getElementsByTagNameNS(ns,'p')].map(p=>p.getElementsByTagNameNS(ns,'spacing')[0]?.getAttributeNS(ns,'lineRule'))};}finally{root.remove();}
       });
-      assert.equal(result.rules[0],'atLeast');assert.equal(result.rules[1],'exact');assert.match(result.xml,/<w:drawing/);assert.match(result.xml,/안전한 원문 보존/);assert.match(result.xml,/파일 링크 텍스트/);assert.doesNotMatch(result.rels,/javascript:|file:/);assert.match(result.rels,/example.invalid\/source/);await page.close();
+      assert.equal(result.rules[0],'atLeast');assert.equal(result.rules[1],'exact');assert.match(result.xml,/<w:drawing/);assert.match(result.text,/안전한 원문 보존/);assert.match(result.text,/파일 링크 텍스트/);assert.doesNotMatch(result.rels,/javascript:|file:/);assert.match(result.rels,/example.invalid\/source/);await page.close();
     });
   }finally{release?.();await browser.close();await server.close();}
 });

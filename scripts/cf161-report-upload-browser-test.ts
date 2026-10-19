@@ -10,7 +10,7 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
   assert.equal((source.match(/reportUploads\.upload\([^\n]*isCurrent\)/g) ?? []).length, 4);
   assert.doesNotMatch(source, /fetchEvidenceUpload/);
   const { createServer } = await import('../apps/web/qa/vite-server.js');
-  const server = await createServer({ root: resolve('apps/web'), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
+  const server = await createServer({ root: resolve('apps/web'), ...(process.env.CF149_CACHE_ROOT ? {cacheDir:process.env.CF149_CACHE_ROOT}:{}), server: { host: '127.0.0.1', port: 0, hmr: false }, logLevel: 'error', plugins: [{
     name: 'cf161-report-upload',
     transform(code, id) {
       if (!id.endsWith('/report-evidence-upload.ts')) return;
@@ -36,6 +36,7 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
         const req = route.request(), url = new URL(req.url());
         if (url.origin !== origin) return route.abort();
         if (!url.pathname.startsWith('/api/')) return route.continue();
+        if(req.method()==='GET')return route.fulfill({json:{files:[]}});
         keys.push(req.headers()['idempotency-key']);
         if (mode.startsWith('late-')) await page.evaluate(() => { (window as any).current = false; });
         if (mode === 'network') return route.abort();
@@ -66,6 +67,7 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
         const req = route.request(), url = new URL(req.url());
         if (url.origin !== origin) return route.abort();
         if (!url.pathname.startsWith('/api/')) return route.continue();
+        if(req.method()==='GET')return route.fulfill({json:{files:[]}});
         keys.push(req.headers()['idempotency-key']);
         if (keys.length > 1) return route.fulfill({ json: { file: stored } });
         return route.fulfill({ status: 409, json: mode === 'comparison' ? { code: 'VERSION_ANALYSIS_UNAVAILABLE', error: '합성 비교 불가' } : { status: mode === 'duplicate' ? 'DUPLICATE_EXACT' : 'VERSION_CONFLICT_CONFIRMATION', reviewId: 'review', nextVersion: 2, existing_file: { name: '이전.hwp', uploader: '시험', created_at: '2026-10-01' }, file: stored } });
@@ -86,6 +88,28 @@ test('report HWP/original/PDF page uploads stop uncertain retries and stale conf
       assert.equal(await page.evaluate(id => (window as any).uploader.isBlocked(id), caseId), false);
       if (mode === 'duplicate') assert.equal(result, 'saved');
       else assert.match(result, /취소/);
+      await page.close();
+    });
+    for(const mode of ['exact','other-category','other-size','wrong-url','stale','list-error'] as const)await t.test('receipt preflight '+mode,async()=>{
+      const page=await browser.newPage();let posts=0,reads=0;
+      await page.route('**/*',async route=>{
+        const request=route.request(),url=new URL(request.url());
+        if(url.origin!==origin)return route.abort();
+        if(!url.pathname.startsWith('/api/'))return route.continue();
+        if(request.method()==='GET'){
+          reads++;assert.equal(url.searchParams.get('category'),'REPORT_REFERENCE');
+          if(mode==='stale')await page.evaluate(()=>{(window as any).current=false;});
+          if(mode==='list-error')return route.fulfill({status:503,body:''});
+          return route.fulfill({json:{files:[{...stored,category:mode==='other-category'?'SITE_PHOTO':'REPORT_REFERENCE',...(mode==='other-size'?{byteSize:6}:{}),...(mode==='wrong-url'?{downloadUrl:'https://example.invalid/file'}:{})}]}});
+        }
+        posts++;return route.fulfill({json:{file:stored}});
+      });
+      await page.goto(origin+'/report-upload-test');await page.waitForFunction(()=>Boolean((window as any).uploader));
+      const result=await page.evaluate(id=>(window as any).send(id),caseId);
+      assert.equal(reads,1);
+      assert.equal(posts,['other-category','other-size'].includes(mode)?1:0,'only unmatched bytes/category may upload');
+      assert.equal(await page.evaluate(id=>(window as any).uploader.isBlocked(id),caseId),false,'read-only failures cannot create an uncertain write');
+      if(['exact','other-category','other-size'].includes(mode))assert.equal(result,'saved');else assert.notEqual(result,'saved');
       await page.close();
     });
   } finally { await browser.close(); await server.close(); }

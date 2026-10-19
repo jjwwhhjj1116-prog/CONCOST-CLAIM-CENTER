@@ -6,6 +6,7 @@ import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 import { createNativeHwp, type NativeHwpPage } from './editable-hwp-export';
 import { collectNativeHwpPages } from './native-hwp-pages';
 import { loadNativeHwpEngine } from './native-hwp-runtime';
+import { prepareHwpPdfDecorations } from './hwp-pdf-decorations';
 import { apiDownload, apiRequest } from '../api';
 import { assertReportNativeA4Portrait, readBoundReportNativeSource, reportSourceSha256 } from './report-native-source';
 import type { JSONContent } from '@tiptap/core';
@@ -241,6 +242,7 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
         clonedPage.querySelectorAll<HTMLElement>('ol, ul, li').forEach((node, listIndex) => {
           listStyles[listIndex]?.forEach(([property, value]) => node.style.setProperty(property, value, 'important'));
         });
+        prepareHwpPdfDecorations(clonedPage);
       },
     }).finally(() => { delete elements[index].dataset.finalExportCapture; });
     if (isFittedSheet) {

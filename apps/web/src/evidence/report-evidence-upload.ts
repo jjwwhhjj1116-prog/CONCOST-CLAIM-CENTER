@@ -21,6 +21,19 @@ export function createReportEvidenceUploader() {
       try {
         const sha256 = await reportSourceSha256(await file.arrayBuffer());
         if (!isCurrent()) throw new Error('프로젝트 또는 원고가 변경되어 전송하지 않았습니다.');
+        // Imported reports commonly contain photos already stored on this
+        // project. Read their verified receipts before sending the same bytes
+        // through multipart parsing and Drive duplicate checks again.
+        const existingResponse=await fetch(`/api/cases/${encodeURIComponent(caseId)}/evidence?category=${category}`,{signal});
+        if(!existingResponse.ok)throw new Error('기존 보고서 자료를 확인하지 못했습니다. 파일은 다시 전송하지 않았습니다. 잠시 후 다시 시도해 주세요.');
+        const existing=await existingResponse.json() as {files?:StoredReportFile[]};
+        if(!Array.isArray(existing.files))throw new Error('기존 보고서 자료의 확인 응답이 올바르지 않습니다. 파일은 전송하지 않았습니다.');
+        if(!isCurrent())throw new Error('프로젝트 또는 원고가 변경되어 전송하지 않았습니다.');
+        const exact=existing.files.find(stored=>stored.sha256===sha256&&stored.byteSize===file.size&&(!stored.category||stored.category===category));
+        if(exact){
+          if(!exact.id||exact.downloadUrl!==`/api/cases/evidence/${encodeURIComponent(exact.id)}/download`)throw new Error('기존 보고서 자료의 파일 연결을 확인하지 못했습니다. 파일은 전송하지 않았습니다.');
+          return exact;
+        }
         const fingerprint = JSON.stringify([caseId, category, file.name, file.size, sha256]);
         const key = keys.get(fingerprint) ?? crypto.randomUUID();
         keys.set(fingerprint, key);
