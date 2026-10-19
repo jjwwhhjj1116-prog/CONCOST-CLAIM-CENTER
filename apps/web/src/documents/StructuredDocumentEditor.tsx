@@ -551,7 +551,7 @@ const compactHwpPage = (node: HTMLElement): string => {
     const layout=element.getAttribute('data-hwp-layout');
     if(layout)element.setAttribute('data-hwp-layout',JSON.stringify(compactHwpLayout(JSON.parse(layout))));
     const textStyle=element.getAttribute('data-hwp-text-style');
-    if(textStyle){const value=JSON.parse(textStyle);if(!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(compactHwpTextStyle(value)));}
+    if(textStyle){const value=JSON.parse(textStyle);if(value&&typeof value==='object'&&!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(compactHwpTextStyle(value)));}
     if(element.hasAttribute('data-hwp-import-rule'))element.replaceChildren();
   }
   compactHwpPageFonts(page);

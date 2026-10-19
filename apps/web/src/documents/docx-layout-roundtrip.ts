@@ -13,9 +13,7 @@ const clean=(html:string)=>DOMPurify.sanitize(html,{ADD_ATTR:[...HWP_IMPORT_DATA
 /** Optional editing-layout part, bound to every actual Word part and photo.
  * Word still receives native frames/tables/pictures. A changed Word file must
  * never restore stale web content from this part instead of the changed file. */
-export async function embedDocxLayout(files:Record<string,Uint8Array>,pages:HTMLElement[]):Promise<void>{
-  const media=new Map<string,string>();
-  for(const path of wordParts(files).filter(path=>path.startsWith('word/media/')))media.set(await digest(files[path]),path);
+export async function captureEditablePageLayout(pages:HTMLElement[],media:Map<string,string>,imagePrefix='/__docx_import_image__/'):Promise<string[]>{
   const html:string[]=[];
   for(const paper of pages){
     const source=paper.matches('[data-hwp-import-page]')?paper:paper.querySelector<HTMLElement>('[data-hwp-import-page]');
@@ -38,12 +36,15 @@ export async function embedDocxLayout(files:Record<string,Uint8Array>,pages:HTML
     }
     for(const element of [page,...page.querySelectorAll<HTMLElement>('*')]){
       const align=element.style.textAlign;
+      const font=element.tagName==='SPAN'&&!element.hasAttribute('data-hwp-text-style')
+        ? ['font-family','font-size','color'].map(name=>[name,element.style.getPropertyValue(name)]).filter(([,value])=>value) : [];
       element.removeAttribute('style');element.removeAttribute('contenteditable');
       if(align&&element.tagName==='P')element.style.textAlign=align;
+      for(const [name,value]of font)element.style.setProperty(name,value);
       const layout=element.getAttribute('data-hwp-layout');
       if(layout)element.setAttribute('data-hwp-layout',JSON.stringify(compactHwpLayout(JSON.parse(layout))));
       const textStyle=element.getAttribute('data-hwp-text-style');
-      if(textStyle){const value=JSON.parse(textStyle);if(!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(compactHwpTextStyle(value)));}
+      if(textStyle){const value=JSON.parse(textStyle);if(value&&typeof value==='object'&&!Array.isArray(value))element.setAttribute('data-hwp-text-style',JSON.stringify(compactHwpTextStyle(value)));}
       if(element.hasAttribute('data-hwp-import-rule'))element.replaceChildren();
     }
     const originals=[...source.querySelectorAll<HTMLImageElement>('img:not(.ProseMirror-separator)')],copies=[...page.querySelectorAll('img:not(.ProseMirror-separator)')];
@@ -51,10 +52,17 @@ export async function embedDocxLayout(files:Record<string,Uint8Array>,pages:HTML
     for(const [i,image]of originals.entries()){
       const {bytes}=await documentImageData(image),path=media.get(await digest(bytes));
       if(!path)throw Error('DOCX의 실제 사진과 편집 배치가 일치하지 않습니다.');
-      copies[i].setAttribute('src',`/__docx_import_image__/${path}`);
+      copies[i].setAttribute('src',imagePrefix+path);
     }
     compactHwpPageFonts(page);html.push(clean(page.outerHTML));
   }
+  return html;
+}
+
+export async function embedDocxLayout(files:Record<string,Uint8Array>,pages:HTMLElement[]):Promise<void>{
+  const media=new Map<string,string>();
+  for(const path of wordParts(files).filter(path=>path.startsWith('word/media/')))media.set(await digest(files[path]),path);
+  const html=await captureEditablePageLayout(pages,media);
   // Bind the layout itself back into the native Word body using standard
   // empty bookmarks, without adding visible report content.
   const layoutHash=await digest(strToU8(JSON.stringify(html))),document=new DOMParser().parseFromString(strFromU8(files['word/document.xml']),'application/xml');

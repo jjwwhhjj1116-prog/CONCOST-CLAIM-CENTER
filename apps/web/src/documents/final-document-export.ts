@@ -457,6 +457,10 @@ export async function downloadFinalDocument(options: {
       const pages = await collectNativeHwpPages(options.root, orientation);
       pageCount = pages.length;
       bytes = await createHwp(pages, orientation, options.onProgress, containsSourcePages);
+      if(pages.every(page=>page.positioned)){
+        const {embedHwpLayout}=await import('./hwp-layout-roundtrip');
+        bytes=await embedHwpLayout(bytes,elements,await loadNativeHwpEngine());
+      }
     }
   } else {
     const revision = options.root.querySelector<HTMLElement>('[data-export-document-revision]')?.dataset.exportDocumentRevision?.trim() ?? '';
