@@ -14,7 +14,7 @@ type CellPath=Array<{controlIndex:number;cellIndex:number;cellParaIndex:number}>
 type Run=Box&{baseline?:number;text:string;secIdx:number;paraIdx:number;charStart:number;charX:number[];fontFamily:string;nativeFontFamily?:string;fontSize:number;bold:boolean;italic:boolean;underline:boolean;strikethrough:boolean;textColor:string;ratio:number;letterSpacing:number;charShapeId?:number;cellPath?:CellPath;parentParaIdx?:number};
 type Control=Box&{type:string;wrap?:string;secIdx:number;paraIdx:number;controlIdx:number;cellPath?:CellPath;cells?:Array<Box&{row:number;col:number;rowSpan:number;colSpan:number}>};
 type Info={width:number;height:number;sectionIndex:number;bodyLeft:number;bodyRight:number;columns:unknown[]};
-type Reader={pageCount():number;free():void;renderPageSvgWithProfile(p:number,profile:string):string;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
+type Reader={pageCount():number;free():void;renderPageSvgWithProfile(p:number,profile:string):string;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;insertText(s:number,p:number,offset:number,text:string):string;insertTextInCellByPath(s:number,p:number,path:string,offset:number,text:string):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
 const children=(e:Element,name?:string)=>Array.from(e.children).filter(x=>!name||x.localName===name);
 const all=(e:Element|Document,name:string)=>Array.from(e.getElementsByTagName('*')).filter(x=>x.localName===name);
 const one=(e:Element|Document,name:string)=>all(e,name)[0];
@@ -66,6 +66,34 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
    }
    const matched=resolveNativeHwpGlyphs(page.runs,svg,fail);
    for(const [run,list]of matched)nativeFontStacks.set(run.fontFamily,attr(list[0].glyph,'font-family'));
+  }
+  // Empty paragraphs have no painted glyph from which to resolve the native
+  // font stack. Probe the same character shape in an isolated byte clone so
+  // newly typed text inherits the same web face as a later HWP reimport.
+  // A TAB/space run in a populated paragraph is not an empty caret: inserting
+  // there may inherit the preceding run's different character shape.
+  const emptyFaces=new Map(pages.flatMap(page=>page.runs).filter(run=>run.text.length===0&&!nativeFontStacks.has(run.fontFamily)&&!['Noto Serif KR','Noto Sans KR'].includes(run.fontFamily)).map(run=>[run.fontFamily,run]));
+  for(const [family,source]of emptyFaces){
+   const probe=new Engine(new Uint8Array(bytes)) as unknown as Reader;
+   try{
+    const result=JSON.parse(source.cellPath?.length
+     ?probe.insertTextInCellByPath(source.secIdx,source.parentParaIdx!,JSON.stringify(source.cellPath),source.charStart,'한')
+     :probe.insertText(source.secIdx,source.paraIdx,source.charStart,'한'));
+    if(result.ok!==true)fail('빈 문단 글꼴 확인');
+    const stacks=new Set<string>();
+    for(let index=0;index<probe.pageCount();index++){
+     const runs=((JSON.parse(probe.getPageTextLayout(index)).runs??[]) as Run[]).filter(run=>run.secIdx===source.secIdx&&run.paraIdx===source.paraIdx&&run.parentParaIdx===source.parentParaIdx&&pathEquals(run.cellPath,source.cellPath)&&run.charShapeId===source.charShapeId&&run.fontFamily===family&&Array.from(run.text)[source.charStart-run.charStart]==='한');
+     if(!runs.length)continue;
+     const svg=new DOMParser().parseFromString(probe.renderPageSvgWithProfile(index,'print'),'image/svg+xml');
+     if(svg.getElementsByTagName('parsererror').length)fail('빈 문단 글꼴 SVG');
+     for(const [run,glyphs]of resolveNativeHwpGlyphs(runs,svg,fail)){
+      const glyph=glyphs.find(item=>item.offset===source.charStart-run.charStart)?.glyph;
+      if(glyph)stacks.add(attr(glyph,'font-family'));
+     }
+    }
+    if(stacks.size!==1||![...stacks][0])fail('빈 문단 글꼴 매핑');
+    nativeFontStacks.set(family,[...stacks][0]);
+   }finally{probe.free();}
   }
   for(const p of pages){if(!Number.isFinite(p.info.width)||!Number.isFinite(p.info.height)||p.info.width<200||p.info.height<200||p.info.width>2400||p.info.height>4000)fail('용지 크기');if(Math.abs(p.info.width-794)>1||Math.abs(p.info.height-1123)>1)fail('A4 세로 외 용지');if(Array.isArray(p.info.columns)&&p.info.columns.length>1)fail('다단 문서');for(const c of p.controls)if(!['table','image','line','shape'].includes(c.type))fail(`지원하지 않는 ${c.type} 개체`);}
   const images:Array<{key:string;file:File}>=[],imageKeys=new Map<string,string>(),imageFiles=new Map<string,File>();

@@ -17,7 +17,7 @@ export interface NativeHwpDocument {
   free(): void;
 }
 export interface NativeHwpEngine { new(bytes: Uint8Array): NativeHwpDocument }
-export interface NativeHwpLines {text:string;starts:number[];lineHeight:number;fontSize?:number;empty?:boolean;align?:string;widths?:number[];lefts?:number[];firstXs?:number[];inputs?:Array<{from:number;widths:number[]}>;glyphs?:Array<{at:number;x:number}>;anchor?:{x:number;baseline:number}}
+export interface NativeHwpLines {text:string;starts:number[];lineHeight:number;fontSize?:number;empty?:boolean;unmarkedInput?:boolean;align?:string;widths?:number[];lefts?:number[];firstXs?:number[];inputs?:Array<{from:number;widths:number[]}>;glyphs?:Array<{at:number;x:number}>;anchor?:{x:number;baseline:number}}
 export interface NativeHwpContent {
   html: string;
   /** Visible source text, in reading order, independent of the HTML converter. */

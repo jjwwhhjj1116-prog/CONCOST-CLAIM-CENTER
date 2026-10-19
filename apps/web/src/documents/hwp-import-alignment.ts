@@ -57,13 +57,17 @@ export function measureImportedHwpOffsets(source:HTMLElement):Array<{left:number
         if(index>=0&&candidate.parentElement?.closest('[data-hwp-text-style]')){text=candidate;offset=index;break;}
       }
       if(!text){offsets.push(null);continue;}
+      const range=source.ownerDocument.createRange();range.setStart(text,offset);range.setEnd(text,offset+1);
+      const rect=range.getClientRects()[0];
       const probe=source.ownerDocument.createElement('span');
       probe.style.cssText='display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline';
       text.parentElement!.insertBefore(probe,text);
-      const baseline=(probe.getBoundingClientRect().top-paper.top)/scale;
+      // The probe can enlarge a zero-leading inline's line box and move all
+      // content in a vertically centred cell. Remove that measurement-induced
+      // shift instead of persisting it as a document offset.
+      const shifted=range.getClientRects()[0];
+      const baseline=(probe.getBoundingClientRect().top-paper.top-(rect&&shifted?shifted.top-rect.top:0))/scale;
       probe.remove();
-      const range=source.ownerDocument.createRange();range.setStart(text,offset);range.setEnd(text,offset+1);
-      const rect=range.getClientRects()[0];
       offsets.push({top:origin.nativeBaseline-baseline,left:rect&&typeof origin.nativeX==='number'?origin.nativeX-(rect.left-paper.left)/scale:0});
     }
   }

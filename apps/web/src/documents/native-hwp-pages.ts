@@ -20,7 +20,9 @@ function textAnchor(element:HTMLElement):NativeHwpLines['anchor']{
     const text=walker.currentNode as Text,index=text.data.search(/[^\s\u200b]/u);if(index<0)continue;
     const range=element.ownerDocument.createRange();range.setStart(text,index);range.setEnd(text,index+Array.from(text.data.slice(index))[0].length);
     const glyph=range.getBoundingClientRect(),probe=element.ownerDocument.createElement('span');probe.style.cssText='display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline';text.parentElement!.insertBefore(probe,text);
-    const anchor={x:(glyph.left-paper.left)/scale,baseline:(probe.getBoundingClientRect().top-paper.top)/scale};probe.remove();return anchor;
+    // A zero-height probe can still change a centred cell's line box.
+    const moved=range.getBoundingClientRect().top-glyph.top;
+    const anchor={x:(glyph.left-paper.left)/scale,baseline:(probe.getBoundingClientRect().top-paper.top-moved)/scale};probe.remove();return anchor;
   }
 }
 function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
@@ -35,7 +37,7 @@ function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
         if(rect?.width){if(!/\s|\u200b/u.test(char)){if(firstXs[bounds.length-1]===undefined)firstXs[bounds.length-1]=rect.left;if(page)glyphs.push({at:position,x:(rect.left-page.getBoundingClientRect().left)/scale});}input.widths.push(rect.width/scale);}
         text+=char;position++;offset+=char.length;
       }
-      if(parent?.closest('[data-hwp-text-style]')&&!parent.closest('[data-hwp-advance]')&&input.widths.length===Array.from(node.textContent||'').length)inputs.push(input);
+      if(page&&parent&&!parent.closest('[data-hwp-advance]')&&input.widths.length===Array.from(node.textContent||'').length)inputs.push(input);
     }else if(node instanceof Element){
       if(node.hasAttribute('data-hwp-tab')){text+='\t';position++;addBounds(node.getBoundingClientRect());return;}
       if(node.tagName==='BR'){if(node.classList.contains('ProseMirror-trailingBreak'))return;if(!node.hasAttribute('data-hwp-soft-break')){text+='\n';position++;}if(starts.at(-1)!==position){starts.push(position);bounds.push({left:Infinity,right:-Infinity});}lineY=undefined;return;}
@@ -49,7 +51,7 @@ function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
     const bounds=probe.getBoundingClientRect(),paper=page.getBoundingClientRect();anchor={x:(bounds.left-paper.left)/scale,baseline:(bounds.top-paper.top)/scale};probe.remove();
   }
   const paperLeft=page?.getBoundingClientRect().left??0;
-  return{text,starts,lineHeight,fontSize:px(css.fontSize),...(empty?{empty:true}:{}),align:css.textAlign,widths:bounds.map(b=>Number.isFinite(b.left)?(b.right-b.left)/scale:0),lefts:bounds.map(b=>Number.isFinite(b.left)?(b.left-paperLeft)/scale:0),firstXs:firstXs.map(x=>(x-paperLeft)/scale),...(inputs.length?{inputs}:{}),...(glyphs.length&&paragraph.querySelector('[data-hwp-advance]')?{glyphs}:{}),anchor};
+  return{text,starts,lineHeight,fontSize:px(css.fontSize),...(empty?{empty:true}:{}),...(inputs.length&&!paragraph.querySelector('[data-hwp-text-style],[data-hwp-advance]')?{unmarkedInput:true}:{}),align:css.textAlign,widths:bounds.map(b=>Number.isFinite(b.left)?(b.right-b.left)/scale:0),lefts:bounds.map(b=>Number.isFinite(b.left)?(b.left-paperLeft)/scale:0),firstXs:firstXs.map(x=>(x-paperLeft)/scale),...(inputs.length?{inputs}:{}),...(glyphs.length&&(inputs.length||paragraph.querySelector('[data-hwp-advance]'))?{glyphs}:{}),anchor};
 }
 function singleTextLine(element:Element):boolean{
   if(!element.textContent?.trim()||element.querySelector('br,img,table'))return false;

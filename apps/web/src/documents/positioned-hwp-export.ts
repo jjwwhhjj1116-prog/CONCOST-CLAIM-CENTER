@@ -97,17 +97,20 @@ function refineTextAdvances(files:Record<string,Uint8Array>,anchors:BodyAnchor[]
  // those groups intact; per-character feedback must not split them again.
  type Target=BodyAnchor&{cell?:{table:number;index:number;paragraph:number}};
  const candidates:Target[]=anchors.filter(a=>a.block.lines?.length===1&&a.block.lines[0].starts.length===1&&a.block.lines[0].glyphs?.length&&(a.block.lines[0].text.match(/\t/gu)?.length??0)<=1);
- // A retyped right-aligned amount is positioned by the widths of all later
- // runs. Verify those native run boundaries too, rather than treating each
- // rounded character width as an independent advance.
+ // A right-aligned cell is positioned by the widths of all later runs.
+ // Verify retained text as well as newly typed amounts against the current
+ // web coordinates, rather than treating rounded advances independently.
  pages.forEach((page,sec)=>{
   const xml=parse(files[`Contents/section${sec}.xml`]),root=direct(xml.documentElement,'p');
   all(xml,'tbl').forEach((table,tableIndex)=>all(table,'tc').forEach((cell,index)=>{
-   const source=page.tableGeometry?.[tableIndex]?.cells[index]?.lines?.filter(line=>line.text.trim()),paragraphs=direct(direct(cell,'subList')[0],'p').map((p,i)=>({p,i})).filter(({p})=>nativeParagraphText(p).text.trim());
+   const geometry=page.tableGeometry?.[tableIndex]?.cells[index],source=geometry?.lines?.filter(line=>line.text.trim()),paragraphs=direct(direct(cell,'subList')[0],'p').map((p,i)=>({p,i})).filter(({p})=>nativeParagraphText(p).text.trim());
    source?.forEach((line,i)=>{
-    if(line.align!=='right'||line.starts.length!==1||line.text.includes('\t')||!line.glyphs?.length||!line.inputs?.length)return;
-    const typed=new Set(line.inputs.flatMap(input=>input.widths.map((_,i)=>input.from+i)));
-    if(line.glyphs.some(glyph=>!typed.has(glyph.at)))return;
+    const shortJustify=line.align==='justify'&&typeof line.widths?.[0]==='number'&&line.widths[0]<geometry!.width-geometry!.padding.left-geometry!.padding.right-.5;
+    if((line.align!=='right'&&!(line.unmarkedInput&&(['left','start'].includes(line.align??'')||shortJustify)))||line.starts.length!==1||line.text.includes('\t')||!line.glyphs?.length)return;
+    if(line.align!=='right'){
+     const typed=new Set(line.inputs?.flatMap(input=>input.widths.map((_,i)=>input.from+i)));
+     if(line.glyphs.some(glyph=>!typed.has(glyph.at)))return;
+    }
     if(source.length!==paragraphs.length)throw Error('HWP 표의 정밀 글자 위치 대응이 다릅니다.');
     candidates.push({sec,para:root.findIndex(p=>all(p,'tbl').includes(table)),cell:{table:tableIndex,index,paragraph:paragraphs[i].i},block:{marker:'',kind:'text',left:0,top:0,width:0,height:0,lines:[line]}});
    });
@@ -121,12 +124,27 @@ function refineTextAdvances(files:Record<string,Uint8Array>,anchors:BodyAnchor[]
   const relevant=runs.filter(r=>r.parentParaIdx===entry.para&&r.text.trim()&&(!entry.cell||JSON.stringify(r.cellPath)===JSON.stringify([{controlIndex:control!.controlIdx,cellIndex:entry.cell.index,cellParaIndex:entry.cell.paragraph}])));
   const svg=parse(strToU8(document.renderPageSvgWithProfile?.(entry.sec,'print')??document.renderPageSvg(entry.sec)));
   const matched=resolveNativeHwpGlyphs(relevant,svg,why=>{throw Error(`HWP 글자 간격 대조: ${why}`);});
-  return relevant.flatMap(r=>(matched.get(r)??[]).map(g=>({at:r.charStart+g.offset,x:Number(g.glyph.getAttribute('x'))}))).sort((a,b)=>a.at-b.at);
+  return relevant.flatMap(r=>(matched.get(r)??[]).map(g=>({at:r.charStart+g.offset,x:Number(g.glyph.getAttribute('x')),end:Number(g.glyph.getAttribute('x'))+r.charX[g.offset+1]-r.charX[g.offset]}))).sort((a,b)=>a.at-b.at);
  };
- const errors=(actual:Array<{at:number;x:number}>,entry:Target)=>{
-  const target=entry.block.lines![0].glyphs!;
+ const terminalWidth=(entry:Target)=>{
+  // For a wholly new left-aligned last line, keep the final advance too.
+  // It has no following glyph to expose a width error. Centre/right alignment
+  // and trailing whitespace have different anchoring and are excluded here.
+  const line=entry.block.lines![0],last=line.glyphs!.at(-1)!;
+  if(!entry.cell||!line.unmarkedInput||line.align==='right'||last.at!==Array.from(line.text).length-1)return;
+  const input=line.inputs?.find(input=>last.at>=input.from&&last.at<input.from+input.widths.length);
+  return input?.widths[last.at-input.from];
+ };
+ const errors=(actual:Array<{at:number;x:number;end:number}>,entry:Target)=>{
+  const target=entry.block.lines![0].glyphs!,width=terminalWidth(entry);
   if(actual.length!==target.length||actual.some((g,i)=>g.at!==target[i].at))throw Error('HWP 검수한 글자 위치 대응이 다릅니다.');
-  return actual.map((g,i)=>entry.cell?g.x-target[i].x:(g.x-actual[0].x)-(target[i].x-target[0].x));
+  const result=actual.map((g,i)=>entry.cell?g.x-target[i].x:(g.x-actual[0].x)-(target[i].x-target[0].x));
+  if(width!==undefined){
+   const delta=actual.at(-1)!.end-target.at(-1)!.x-width;
+   if(!Number.isFinite(delta))throw Error('HWP 마지막 글자의 폭을 대조하지 못했습니다.');
+   result.push(delta);
+  }
+  return result;
  };
  const initial=new Engine(zipSync(files)) as Reader;let pending:Target[];
  try{pending=candidates.filter(entry=>errors(positions(initial,entry),entry).some(dx=>Math.abs(dx)>.5));}finally{initial.free();}
@@ -159,15 +177,17 @@ function refineTextAdvances(files:Record<string,Uint8Array>,anchors:BodyAnchor[]
    files[path]=write(xml);files['Contents/header.xml']=write(header);
    const current=new Engine(zipSync(files)) as Reader;let dx:number[];
    try{dx=errors(positions(current,entry),entry);}finally{current.free();}
+   const rightCell=entry.cell&&entry.block.lines![0].align==='right';
    let bad=dx.findIndex(value=>Math.abs(value)>.5);
-   if(entry.cell)for(let i=dx.length-1;i>bad;i--)if(Math.abs(dx[i])>.5){bad=i;break;}
+   if(rightCell)for(let i=dx.length-1;i>bad;i--)if(Math.abs(dx[i])>.5){bad=i;break;}
    if(bad<0){verified=true;break;}
-   const glyph=entry.block.lines![0].glyphs![bad];let before=glyph.at-(entry.cell?0:1);
+   const glyphs=entry.block.lines![0].glyphs!,terminal=bad===glyphs.length;
+   const glyph=terminal?glyphs.at(-1)!:glyphs[bad];let before=glyph.at-(rightCell||terminal?0:1);
    while(before>=0&&typeof tokens[before]?.text!=='string')before--;
    if(before<0)throw Error('HWP 첫 글자 간격을 보존하지 못했습니다.');
    const spacings=all(tokens[before].definition,'spacing');if(!spacings.length)throw Error('HWP 표준 자간 속성이 없습니다.');
    for(const spacing of spacings)for(const a of [...spacing.attributes]){
-    const value=Number(a.value)+(dx[bad]>0?(entry.cell?1:-1):(entry.cell?-1:1));
+    const value=Number(a.value)+(dx[bad]>0?(rightCell?1:-1):(rightCell?-1:1));
     if(!Number.isSafeInteger(value)||value< -50||value>50)throw Error('HWP 정밀 글자 간격이 표준 자간 범위를 넘습니다.');spacing.setAttribute(a.name,String(value));
    }
    const state=tokens.map(t=>all(t.definition,'spacing').map(s=>[...s.attributes].map(a=>a.value).join(',')).join('/')).join(';');
@@ -374,13 +394,14 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
  restoreCellParagraphGaps(generated,pages,Engine);
  refineTextAdvances(generated,anchors,pages,Engine);
  const positioned=new Engine(zipSync(generated)) as Reader;
+ const cellBaselines:Array<{page:number;table:number;cell:number;paragraph:number;delta:number}>=[];
  try{
   if(positioned.pageCount()!==pages.length)throw Error(`HWP 고정 배치 쪽수가 다릅니다 (${positioned.pageCount()}/${pages.length}).`);
   for(let page=0;page<pages.length;page++){
    const runs=(JSON.parse(positioned.getPageTextLayout(page)).runs??[]) as NativeGlyphRun[];
    const svg=new DOMParser().parseFromString(positioned.renderPageSvgWithProfile?.(page,'print')??positioned.renderPageSvg(page),'image/svg+xml');
    const matched=resolveNativeHwpGlyphs(runs,svg,why=>{throw Error(`HWP 출력 위치 대조: ${why}`);});
-   const controls=JSON.parse(positioned.getPageControlLayout(page)).controls as Array<{type:string;secIdx:number;paraIdx:number;controlIdx:number;x:number;y:number}>;
+   const controls=JSON.parse(positioned.getPageControlLayout(page)).controls as Array<{type:string;secIdx:number;paraIdx:number;controlIdx:number;x:number;y:number;cellPath?:unknown}>;
    for(const entry of anchors.filter(anchor=>anchor.sec===page)){
     const control=controls.find(c=>c.type==='shape'&&c.secIdx===entry.sec&&c.paraIdx===entry.para);
     const first=runs.find(r=>r.secIdx===entry.sec&&r.parentParaIdx===entry.para&&r.text.trim()&&matched.has(r));
@@ -389,8 +410,33 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
     const dx=entry.block.anchor!.x-Number(glyph.getAttribute('x')),dy=entry.block.anchor!.baseline-Number(glyph.getAttribute('y'));
     check(positioned.setShapeProperties(entry.sec,entry.para,control.controlIdx,JSON.stringify({horzOffset:hu(entry.block.left+dx),vertOffset:hu(entry.block.top+dy)})));
    }
+   // Plain text typed into a formerly empty cell has no imported baseline
+   // offset. Preserve its measured baseline in the native single-line cache.
+   const tables=all(parse(generated[`Contents/section${page}.xml`]),'tbl'),tableControls=controls.filter(c=>c.type==='table'&&!c.cellPath);
+   pages[page].tableGeometry?.forEach((table,tableIndex)=>table.cells.forEach((cell,cellIndex)=>{
+    const source=cell.lines?.filter(line=>line.text.trim());if(!source?.some(line=>line.unmarkedInput&&line.starts.length===1))return;
+    const control=tableControls[tableIndex],nativeCell=tables[tableIndex]&&all(tables[tableIndex],'tc')[cellIndex];
+    if(!control||!nativeCell)throw Error('HWP 새 셀 글자의 위치가 없습니다.');
+    const paragraphs=direct(direct(nativeCell,'subList')[0],'p').map((p,index)=>({p,index})).filter(({p})=>nativeParagraphText(p).text.trim());
+    if(paragraphs.length!==source.length)throw Error('HWP 새 셀 글자의 문단 대응이 다릅니다.');
+    source.forEach((line,index)=>{
+     if(!line.unmarkedInput||line.starts.length!==1)return;
+     const paragraph=paragraphs[index];if(nativeParagraphText(paragraph.p).text!==line.text||!line.anchor)throw Error('HWP 새 셀 글자의 원고가 다릅니다.');
+     const run=runs.find(r=>r.secIdx===page&&r.parentParaIdx===control.paraIdx&&r.text.trim()&&JSON.stringify(r.cellPath)===JSON.stringify([{controlIndex:control.controlIdx,cellIndex,cellParaIndex:paragraph.index}])&&matched.has(r));
+     const glyph=run&&matched.get(run)?.[0].glyph;if(!glyph)throw Error('HWP 새 셀 글자의 기준선이 없습니다.');
+     const delta=hu(line.anchor.baseline-Number(glyph.getAttribute('y')));
+     if(delta)cellBaselines.push({page,table:tableIndex,cell:cellIndex,paragraph:paragraph.index,delta});
+    });
+   }));
   }
   const output=unzipSync(positioned.exportHwpx());
+  for(const entry of cellBaselines){
+   const path=`Contents/section${entry.page}.xml`,xml=parse(output[path]),cell=all(all(xml,'tbl')[entry.table],'tc')[entry.cell],paragraph=direct(direct(cell,'subList')[0],'p')[entry.paragraph],segments=all(paragraph,'lineseg');
+   if(segments.length!==1)throw Error('HWP 새 셀 글자의 줄 수가 다릅니다.');
+   const baseline=Number(segments[0].getAttribute('baseline'))+entry.delta,height=Number(segments[0].getAttribute('vertsize'));
+   if(!Number.isSafeInteger(baseline)||baseline<=0||baseline>height)throw Error('HWP 새 셀 글자의 기준선이 줄 범위를 벗어납니다.');
+   segments[0].setAttribute('baseline',String(baseline));output[path]=write(xml);
+  }
   if(bodies.length){
    const definitions=parse(output['Contents/header.xml']),properties=all(definitions,'paraPr'),container=properties[0]?.parentElement;
    let id=Math.max(...properties.map(p=>Number(p.getAttribute('id'))))+1,added=0;
