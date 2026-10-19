@@ -25,7 +25,7 @@ export interface NativeHwpContent {
   tables: number;
   images: number;
   tableCells?: Array<Array<{ row: number; col: number; rowSpan: number; colSpan: number; text: string }>>;
-  pictures?: Array<{ bytes: Uint8Array; width: number; height: number; floating?:boolean }>;
+  pictures?: Array<{ bytes: Uint8Array; width: number; height: number; floating?:boolean; anchor?:{x:number;y:number} }>;
   tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number};borders?:Record<string,{type:string;width:number;color:string}>;lines?:NativeHwpLines[]}>}>;
   tabs?:number[];
 }
@@ -195,7 +195,7 @@ function restorePictureGeometry(xml:string,pictures:NativeHwpContent['pictures']
   // rectangle once; intrinsic bitmap/crop coordinates and bytes stay intact.
   let next=original.replace(/<hp:(?:orgSz|curSz|sz)\b[^>]*\/>/gu,tag=>tag.replace(/\bwidth="[^"]*"/u,`width="${width}"`).replace(/\bheight="[^"]*"/u,`height="${height}"`));
   next=next.replace(/<hp:imgRect\b[^>]*>[\s\S]*?<\/hp:imgRect>/u,rect=>rect.replace(/<hc:pt([0-3])\b[^>]*\/>/gu,(_,point)=>`<hc:pt${point} x="${point==='1'||point==='2'?width:0}" y="${point==='2'||point==='3'?height:0}"/>`));
-  if(picture.floating)next=next.replace(/<hp:pic\b[^>]*>/u,tag=>tag.replace(/textWrap="[^"]*"/u,'textWrap="IN_FRONT_OF_TEXT"')).replace(/<hp:pos\b[^>]*\/>/u,tag=>tag.replace(/allowOverlap="[^"]*"/u,'allowOverlap="1"'));
+  if(picture.floating)next=next.replace(/<hp:pic\b[^>]*>/u,tag=>tag.replace(/textWrap="[^"]*"/u,'textWrap="IN_FRONT_OF_TEXT"')).replace(/<hp:pos\b[^>]*\/>/u,tag=>tag.replace(/allowOverlap="[^"]*"/u,'allowOverlap="1"').replace(/\b(treatAsChar|affectLSpacing|flowWithText)="[^"]*"/gu,'$1="0"'));
   xml=xml.replace(original,next);
  });return xml;
 }

@@ -22,7 +22,15 @@ function textAnchor(element:HTMLElement):NativeHwpLines['anchor']{
     const glyph=range.getBoundingClientRect(),probe=element.ownerDocument.createElement('span');probe.style.cssText='display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline';text.parentElement!.insertBefore(probe,text);
     // A zero-height probe can still change a centred cell's line box.
     const moved=range.getBoundingClientRect().top-glyph.top;
-    const anchor={x:(glyph.left-paper.left)/scale,baseline:(probe.getBoundingClientRect().top-paper.top-moved)/scale};probe.remove();return anchor;
+    const anchor={x:(glyph.left-paper.left)/scale,baseline:(probe.getBoundingClientRect().top-paper.top-moved)/scale};probe.remove();
+    // The measured DOM is quantized at the current zoom. Reuse a matching
+    // current paragraph anchor within that paint quantum, so another export
+    // does not turn subpixel measurement error into document movement.
+    const paragraph=text.parentElement!.closest('p');
+    let native:Record<string,unknown>={};try{native=JSON.parse(paragraph?.getAttribute('data-hwp-layout')||'{}');}catch{/* authored paragraph */}
+    if(typeof native.nativeX==='number'&&Math.abs(anchor.x-native.nativeX)<=.05)anchor.x=native.nativeX;
+    if(typeof native.nativeBaseline==='number'&&Math.abs(anchor.baseline-native.nativeBaseline)<=.05)anchor.baseline=native.nativeBaseline;
+    return anchor;
   }
 }
 function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
@@ -47,8 +55,13 @@ function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
   };paragraph.childNodes.forEach(visit);
   let anchor=textAnchor(paragraph);const empty=/^[\s\u200b]*$/u.test(text)&& !paragraph.querySelector('img,table');
   if(empty&&page){
-    const probe=paragraph.ownerDocument.createElement('span');probe.style.cssText='display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline';paragraph.prepend(probe);
-    const bounds=probe.getBoundingClientRect(),paper=page.getBoundingClientRect();anchor={x:(bounds.left-paper.left)/scale,baseline:(bounds.top-paper.top)/scale};probe.remove();
+    // A zero-height probe changes tiny blank line boxes. Match the native
+    // caret-top proxy instead, retaining an empty paragraph as editable flow.
+    const bounds=paragraph.getBoundingClientRect(),paper=page.getBoundingClientRect();
+    anchor={x:(bounds.left-paper.left)/scale+px(css.borderLeftWidth)+px(css.paddingLeft)+px(css.textIndent),baseline:(bounds.top-paper.top)/scale+px(css.borderTopWidth)+px(css.paddingTop)+px(css.fontSize)*.8};
+    let native:Record<string,unknown>={};try{native=JSON.parse(paragraph.getAttribute('data-hwp-layout')||'{}');}catch{/* authored blank */}
+    if(typeof native.nativeX==='number'&&Math.abs(anchor.x-native.nativeX)<=.05)anchor.x=native.nativeX;
+    if(typeof native.nativeBaseline==='number'&&Math.abs(anchor.baseline-native.nativeBaseline)<=.05)anchor.baseline=native.nativeBaseline;
   }
   const paperLeft=page?.getBoundingClientRect().left??0;
   return{text,starts,lineHeight,fontSize:px(css.fontSize),...(empty?{empty:true}:{}),...(inputs.length&&!paragraph.querySelector('[data-hwp-text-style],[data-hwp-advance]')?{unmarkedInput:true}:{}),align:css.textAlign,widths:bounds.map(b=>Number.isFinite(b.left)?(b.right-b.left)/scale:0),lefts:bounds.map(b=>Number.isFinite(b.left)?(b.left-paperLeft)/scale:0),firstXs:firstXs.map(x=>(x-paperLeft)/scale),...(inputs.length?{inputs}:{}),...(glyphs.length&&(inputs.length||paragraph.querySelector('[data-hwp-advance]'))?{glyphs}:{}),anchor};
@@ -87,7 +100,14 @@ async function image(source:HTMLImageElement):Promise<NativeHwpContent>{
   result.html=`<img src="data:image/${type==='jpg'?'jpeg':type};base64,${base64(bytes)}" width="${width}" height="${height}" style="text-align:${alignment??css.textAlign};${margins}">`;
   let floating=false;
   try{floating=!!source.closest('td,th')&&JSON.parse(source.getAttribute('data-hwp-layout')||'{}').nativeCellPosition===1;}catch{/* ordinary photo */}
-  result.images=1;result.pictures!.push({bytes,width,height,...(floating?{floating:true}:{})});return result;
+  let anchor:{x:number;y:number}|undefined;
+  if(floating){
+    const page=source.closest<HTMLElement>('[data-hwp-import-page]');if(!page)throw Error('HWP 고정 셀 사진의 페이지가 없습니다.');
+    const paper=page.getBoundingClientRect(),rect=source.getBoundingClientRect(),scale=paper.width/Number(page.getAttribute('data-hwp-width'));
+    if(!(scale>0))throw Error('HWP 고정 셀 사진의 배율이 없습니다.');
+    anchor={x:(rect.left-paper.left)/scale,y:(rect.top-paper.top)/scale};
+  }
+  result.images=1;result.pictures!.push({bytes,width,height,...(floating?{floating:true,anchor}:{})});return result;
 }
 
 async function inline(nodes:readonly Node[],parent:Element):Promise<NativeHwpContent>{
@@ -168,7 +188,12 @@ async function paragraph(element:Element,nodes:readonly Node[]=[...element.child
 }
 
 async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
-  const columns=[...source.querySelectorAll<HTMLTableColElement>(':scope > colgroup > col')].map(col=>measured(col).width);
+  const cols=[...source.querySelectorAll<HTMLTableColElement>(':scope > colgroup > col')],painted=cols.map(col=>measured(col).width);
+  // Current authored column widths include user resizing. Avoid projecting the
+  // same logical grid through the browser's paint rounding on every export.
+  const authored=cols.map(col=>/^\d+(?:\.\d+)?px$/u.test(col.style.width)?px(col.style.width):NaN);
+  const precise=source.hasAttribute('data-hwp-layout')&&authored.length>0&&authored.every((w,i)=>w>0&&Math.abs(w-painted[i])<=.5);
+  const columns=precise?authored:painted;
   const gridWidth=source.hasAttribute('data-hwp-layout')&&columns.length&&columns.every(w=>w>0)?columns.reduce((sum,w)=>sum+w,0):measured(source).width;
   const result=empty(),cells:NonNullable<NativeHwpContent['tableCells']>[number]=[],geometry:NonNullable<NativeHwpContent['tableGeometry']>[number]={width:gridWidth,reflowCellLines:true,cells:[]};
   result.tables=1;result.tableCells!.push(cells);result.tableGeometry!.push(geometry);
@@ -201,9 +226,11 @@ async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
       // Use its precision only when it represents the same visible height.
       const preciseHeight=typeof native.nativeHeight==='number'&&native.nativeHeight>0&&Math.abs(native.nativeHeight-Number(native.height))<=.05?native.nativeHeight:typeof native.height==='number'?native.height:size.height;
       const height=typeof native.nativeWidth==='number'&&typeof native.height==='number'&&!cell.parentElement?.hasAttribute('data-row-height-mm')?preciseHeight:size.height;
-      geometry.cells.push({width:size.width,height,singleLine,padding,borders:nativeBorders,lines:typeof native.nativeWidth==='number'?[...cell.querySelectorAll<HTMLElement>('p')].map(paragraphLines):undefined});
+      const cellWidth=precise?columns.slice(column,column+colSpan).reduce((sum,w)=>sum+w,0):size.width;
+      if(!(cellWidth>0))throw Error('HWP 현재 표 열 너비가 없습니다.');
+      geometry.cells.push({width:cellWidth,height,singleLine,padding,borders:nativeBorders,lines:typeof native.nativeWidth==='number'?[...cell.querySelectorAll<HTMLElement>('p')].map(paragraphLines):undefined});
       const borders=['top','right','bottom','left'].map(side=>`border-${side}:${css.getPropertyValue(`border-${side}-width`)} ${css.getPropertyValue(`border-${side}-style`)} ${color(css.getPropertyValue(`border-${side}-color`))}`).join(';');
-      rowHtml+=`<td rowspan="${rowSpan}" colspan="${colSpan}" style="width:${size.width}px;height:${height}px;padding:0;vertical-align:${css.verticalAlign};background-color:${color(css.backgroundColor)};${borders}">${body.html}</td>`;
+      rowHtml+=`<td rowspan="${rowSpan}" colspan="${colSpan}" style="width:${cellWidth}px;height:${height}px;padding:0;vertical-align:${css.verticalAlign};background-color:${color(css.backgroundColor)};${borders}">${body.html}</td>`;
       result.text+=body.text;result.images+=body.images;result.tables+=body.tables;result.pictures!.push(...body.pictures!);result.tableCells!.push(...body.tableCells!);result.tableGeometry!.push(...body.tableGeometry!);
       result.tabs!.push(...body.tabs??[]);
       column+=colSpan;

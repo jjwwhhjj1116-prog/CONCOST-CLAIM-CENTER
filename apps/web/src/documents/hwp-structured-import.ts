@@ -14,7 +14,7 @@ type CellPath=Array<{controlIndex:number;cellIndex:number;cellParaIndex:number}>
 type Run=Box&{baseline?:number;text:string;secIdx:number;paraIdx:number;charStart:number;charX:number[];fontFamily:string;nativeFontFamily?:string;fontSize:number;bold:boolean;italic:boolean;underline:boolean;strikethrough:boolean;textColor:string;ratio:number;letterSpacing:number;charShapeId?:number;cellPath?:CellPath;parentParaIdx?:number};
 type Control=Box&{type:string;wrap?:string;secIdx:number;paraIdx:number;controlIdx:number;cellPath?:CellPath;cells?:Array<Box&{row:number;col:number;rowSpan:number;colSpan:number}>};
 type Info={width:number;height:number;sectionIndex:number;bodyLeft:number;bodyRight:number;columns:unknown[]};
-type Reader={pageCount():number;free():void;renderPageSvgWithProfile(p:number,profile:string):string;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;insertText(s:number,p:number,offset:number,text:string):string;insertTextInCellByPath(s:number,p:number,path:string,offset:number,text:string):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
+type Reader={getCursorRectInCell(sec:number,para:number,control:number,cell:number,cellPara:number,offset:number):string;pageCount():number;free():void;renderPageSvgWithProfile(p:number,profile:string):string;getPageInfo(p:number):string;getPageTextLayout(p:number):string;getPageControlLayout(p:number):string;getPageOfPosition(s:number,p:number):string;insertText(s:number,p:number,offset:number,text:string):string;insertTextInCellByPath(s:number,p:number,path:string,offset:number,text:string):string;exportHwpxWithReport():{contentLoss():string;takeBytes():Uint8Array;free():void}};
 const children=(e:Element,name?:string)=>Array.from(e.children).filter(x=>!name||x.localName===name);
 const all=(e:Element|Document,name:string)=>Array.from(e.getElementsByTagName('*')).filter(x=>x.localName===name);
 const one=(e:Element|Document,name:string)=>all(e,name)[0];
@@ -48,6 +48,7 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
   if(pageNumbers.some(item=>attr(item,'formatType')!=='DIGIT'))fail('쪽번호 형식');
   const count=native.pageCount(),pages=Array.from({length:count},(_,page)=>({info:JSON.parse(native.getPageInfo(page)) as Info,runs:(JSON.parse(native.getPageTextLayout(page)).runs??[]) as Run[],controls:(JSON.parse(native.getPageControlLayout(page)).controls??[]) as Control[],content:[] as JSONContent[]}));
   const consumedRuns=new Set<Run>();
+  const paintedXs=new Map<Run,Map<number,number>>();
   const nativeFontStacks=new Map<string,string>();
   if(!count||!sections.length)fail('빈 문서');
   // Public run.y is the em-box top, not the painted baseline. Resolve the latter
@@ -65,7 +66,10 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
     page.content.push({type:'hwpImportedRule',attrs:{left:Math.min(x1,x2),top:Math.min(y1,y2),width:Math.abs(x2-x1),height:Math.abs(y2-y1),color:color(attr(line,'stroke')),stroke:number(line,'stroke-width'),style:'solid',nativeVector:1}});
    }
    const matched=resolveNativeHwpGlyphs(page.runs,svg,fail);
-   for(const [run,list]of matched)nativeFontStacks.set(run.fontFamily,attr(list[0].glyph,'font-family'));
+   for(const [run,list]of matched){
+    nativeFontStacks.set(run.fontFamily,attr(list[0].glyph,'font-family'));
+    paintedXs.set(run,new Map(list.map(({offset,glyph})=>[offset,number(glyph,'x')])));
+   }
   }
   // Empty paragraphs have no painted glyph from which to resolve the native
   // font stack. Probe the same character shape in an isolated byte clone so
@@ -188,7 +192,24 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
     const boundaries:Array<number|undefined>=Array.from({length:count+1});
     for(const cell of control.cells??[]){const start=cell[index],end=start+cell[span];if(!Number.isSafeInteger(start)||start<0||!Number.isSafeInteger(end)||end>count)fail('표 병합 범위');for(const [at,value]of [[start,cell[axis]],[end,cell[axis]+cell[size]]] as const){if(!Number.isFinite(value))fail('표 경계 수치');if(boundaries[at]!==undefined&&Math.abs(boundaries[at]!-value)>.5)fail('표 병합 경계 충돌');if(boundaries[at]===undefined)boundaries[at]=value;}}
     if(boundaries.some(v=>v===undefined))fail(`병합 표 ${index==='col'?'열':'행'} 내부 경계 근거 없음`);
-    const values=boundaries as number[];if(values.some((v,i)=>i>0&&v<=values[i-1]))fail('표 경계 순서');return values;
+    const values=boundaries as number[];if(values.some((v,i)=>i>0&&v<=values[i-1]))fail('표 경계 순서');
+    // Public x/w are independently rounded to 0.1px: one cell's right edge
+    // can differ from its neighbour's left. Use the current file's integer-HU
+    // sizes for one shared grid when they describe the same native layout.
+    const exact:Array<number|undefined>=Array.from({length:count+1});exact[0]=0;let consistent=true;
+    const constraints=all(tbl,'tc').map(tc=>{const address=children(tc,'cellAddr')[0],spans=children(tc,'cellSpan')[0],sizeNode=children(tc,'cellSz')[0];const start=number(address,index==='col'?'colAddr':'rowAddr'),end=start+number(spans,span),extent=number(sizeNode,size==='w'?'width':'height')/75;return{start,end,extent};}).sort((a,b)=>(a.end-a.start)-(b.end-b.start));
+    for(let pass=0;pass<=count;pass++)for(const c of constraints){
+     if(c.start<0||c.end>count||c.end<=c.start||!(c.extent>0)){consistent=false;continue;}
+     if(exact[c.start]!==undefined&&exact[c.end]===undefined)exact[c.end]=exact[c.start]!+c.extent;
+     else if(exact[c.end]!==undefined&&exact[c.start]===undefined)exact[c.start]=exact[c.end]!-c.extent;
+     else if(exact[c.start]!==undefined&&exact[c.end]!==undefined&&Math.abs(exact[c.end]!-exact[c.start]!-c.extent)>(c.end-c.start>1?.2:1/75+.000001))consistent=false;
+    }
+    if(consistent&&exact.every((v,i)=>v!==undefined&&Number.isFinite(v)&&(i===0||v>exact[i-1]!)&&Math.abs(values[0]+v-values[i])<=.5))return (exact as number[]).map(v=>values[0]+v);
+    // Individual rows/columns define shared edges before redundant merged
+    // spans; accept only small span discrepancies consistent with every
+    // observed public edge. Single-row/column conflicts retain the 1-HU gate.
+    // Native minimum-content expansion may legitimately exceed raw cellSz.
+    return values;
    };
    const columnEdges=grid('x','w','col','colSpan',columns),rowEdges=grid('y','h','row','rowSpan',rowCount);
    const rows=children(tbl,'tr').map((tr,rowIndex)=>({type:'tableRow',attrs:{hwpLayout:{height:rowEdges[rowIndex+1]-rowEdges[rowIndex]}},content:children(tr,'tc').map(tc=>{
@@ -293,7 +314,7 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
      const at=cuts[i],text=chars.slice(at-begin,cuts[i+1]-begin).join(''),r=pageRuns.find(r=>at>=r.charStart&&at<r.charStart+Array.from(r.text).length);
      if(!r)fail('원본 줄 문자 위치');
      if(starts.has(at)&&rebuilt.at(-1)?.type!=='hardBreak')rebuilt.push({type:'hardBreak',attrs:{hwpSoftBreak:true}});
-     if(!firstText&&text.trim()&&r!.baseline!==undefined){firstText=r;firstTextX=r!.x+r!.charX[at-r!.charStart];}
+     if(!firstText&&text.trim()&&r!.baseline!==undefined){firstText=r;firstTextX=paintedXs.get(r!)?.get(at-r!.charStart);if(firstTextX===undefined)fail('첫 글자 정밀 좌표');}
      const gap=at+Array.from(text).length===r!.charStart+Array.from(r!.text).length?runGaps.get(r!)??0:0;
      const marks=fontMarks(r!,text,advanceOf(pageRuns,at,text)+gap),style=marks[0].attrs!;
      style.trackingCorrection=0;
@@ -316,6 +337,15 @@ export async function readReportHwp(file:File):Promise<{document:JSONContent;ima
     layout.whiteSpace='pre';
     const first=firstText??pageRuns.find(run=>run.baseline!==undefined);
     if(first)Object.assign(layout,{nativeX:firstTextX??first.x,nativeBaseline:first.baseline});
+    // Empty cell paragraphs have no SVG glyph. Preserve the same native caret
+    // proxy used by export, instead of measuring a zero-height CSS probe.
+    if(!tokens.length&&path?.length===1&&pageRuns.every(run=>!run.text.length)){
+     const control=pages[page].controls.find(c=>c.type==='table'&&c.secIdx===sec&&c.paraIdx===para&&c.controlIdx===path[0].controlIndex&&!c.cellPath);
+     if(control){const cursor=JSON.parse(native.getCursorRectInCell(sec,para,control.controlIdx,path[0].cellIndex,path[0].cellParaIndex,0));
+      if(cursor.cellOverflowed||cursor.pageIndex!==page||!Number.isFinite(cursor.x)||!Number.isFinite(cursor.y)||Math.abs(Number(cursor.height)-fontSize)>.11)fail('빈 셀 문단 캐럿 배치');
+      Object.assign(layout,{nativeBaseline:Number(cursor.y)+fontSize*.8});
+     }
+    }
     const paragraph:JSONContent={type:'paragraph',attrs:style,...(tokens.length?{content:tokens}:{})};
     if(root){
      const b=bounds(pageRuns);let left=Number(style.hwpLayout.marginLeft),right=Number(style.hwpLayout.marginRight);

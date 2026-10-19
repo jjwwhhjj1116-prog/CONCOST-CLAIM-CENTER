@@ -15,6 +15,12 @@ const attrs=(element:Element,values:Record<string,string|number>)=>{for(const [k
 type Reader=NativeHwpDocument&{getPageTextLayout(page:number):string;getPageControlLayout(page:number):string;getCursorRectInCell(sec:number,para:number,control:number,cell:number,cellPara:number,offset:number):string};
 type Block=NonNullable<NativeHwpPage['positioned']>[number];
 type BodyAnchor={sec:number;para:number;block:Block};
+const paintedPicture=(svg:Document,control:{x:number;y:number;w:number;h:number})=>{
+ const matches=all(svg,'image').filter(image=>Math.abs(Number(image.getAttribute('x'))-control.x)<=.2&&Math.abs(Number(image.getAttribute('y'))-control.y)<=.2&&Math.abs(Number(image.getAttribute('width'))-control.w)<=.2&&Math.abs(Number(image.getAttribute('height'))-control.h)<=.2);
+ if(matches.length!==1)throw Error('HWP 고정 셀 사진의 실제 좌표가 모호합니다.');
+ for(let element:Element|null=matches[0];element;element=element.parentElement)if(element.hasAttribute('transform'))throw Error('HWP 고정 셀 사진의 변환 좌표를 보존하지 못했습니다.');
+ return matches[0];
+};
 const bodyBlock=(block:Block)=>{
  const line=block.lines?.length===1?block.lines[0]:undefined;
  return block.kind==='text'&&line?.align==='justify'&&!!line.inputs?.length&&line.starts.length>1&&line.widths?.length===line.starts.length&&line.widths.every(w=>Number.isFinite(w)&&w>0)&&line.lefts?.length===line.starts.length&&line.firstXs?.length===line.starts.length&&Math.max(...line.widths)-Math.min(...line.widths)>14;
@@ -310,7 +316,7 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
     const para=paragraphs.findIndex(p=>text(p)===block.marker);
     if(para<0)throw Error('HWP 고정 배치 경계를 찾지 못했습니다.');
     const width=block.width;
-    const created=check(source.createShapeControl(JSON.stringify({sectionIdx:sec,paraIdx:para,charOffset:0,shapeType:block.kind==='text'?'textbox':'line',width:Math.max(1,hu(width)),height:Math.max(1,hu(block.height+(block.kind==='text'?4:0))),horzOffset:hu(block.left),vertOffset:hu(block.top),treatAsChar:false,textWrap:'InFrontOfText'})));
+    const created=check(source.createShapeControl(JSON.stringify({sectionIdx:sec,paraIdx:para,charOffset:0,shapeType:block.kind==='text'?'textbox':'line',width:Math.max(1,hu(width)),height:Math.max(1,hu(block.height)),horzOffset:hu(block.left),vertOffset:hu(block.top),treatAsChar:false,textWrap:'InFrontOfText'})));
     const rgb=block.color||'#000000',bgr=parseInt(rgb.slice(1).match(/../gu)!.reverse().join(''),16);
     check(source.setShapeProperties(sec,created.paraIdx,created.controlIdx,JSON.stringify({horzRelTo:'Paper',vertRelTo:'Paper',fillType:'none',borderWidth:block.kind==='rule'?hu(block.stroke||1):0,borderColor:bgr,lineType:block.lineStyle==='dotted'?3:block.lineStyle==='dashed'?2:1})));
    }
@@ -395,13 +401,25 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
  refineTextAdvances(generated,anchors,pages,Engine);
  const positioned=new Engine(zipSync(generated)) as Reader;
  const cellBaselines:Array<{page:number;table:number;cell:number;paragraph:number;delta:number}>=[];
+ const pictureOffsets:Array<{page:number;index:number;dx:number;dy:number}>=[];
  try{
   if(positioned.pageCount()!==pages.length)throw Error(`HWP 고정 배치 쪽수가 다릅니다 (${positioned.pageCount()}/${pages.length}).`);
   for(let page=0;page<pages.length;page++){
    const runs=(JSON.parse(positioned.getPageTextLayout(page)).runs??[]) as NativeGlyphRun[];
    const svg=new DOMParser().parseFromString(positioned.renderPageSvgWithProfile?.(page,'print')??positioned.renderPageSvg(page),'image/svg+xml');
    const matched=resolveNativeHwpGlyphs(runs,svg,why=>{throw Error(`HWP 출력 위치 대조: ${why}`);});
-   const controls=JSON.parse(positioned.getPageControlLayout(page)).controls as Array<{type:string;secIdx:number;paraIdx:number;controlIdx:number;x:number;y:number;cellPath?:unknown}>;
+   const controls=JSON.parse(positioned.getPageControlLayout(page)).controls as Array<{type:string;secIdx:number;paraIdx:number;controlIdx:number;x:number;y:number;w:number;h:number;cellPath?:unknown}>;
+   const pictures=pages[page].pictures??[],images=controls.filter(c=>c.type==='image');
+   if(pictures.some(picture=>picture.anchor)){
+    if(images.length!==pictures.length)throw Error('HWP 고정 셀 사진의 순서가 다릅니다.');
+    pictures.forEach((picture,index)=>{
+     if(!picture.anchor)return;
+     const image=paintedPicture(svg,images[index]);
+     const dx=hu(picture.anchor.x-Number(image.getAttribute('x'))),dy=hu(picture.anchor.y-Number(image.getAttribute('y')));
+     if(!Number.isSafeInteger(dx)||!Number.isSafeInteger(dy))throw Error('HWP 고정 셀 사진의 좌표가 없습니다.');
+     if(dx||dy)pictureOffsets.push({page,index,dx,dy});
+    });
+   }
    for(const entry of anchors.filter(anchor=>anchor.sec===page)){
     const control=controls.find(c=>c.type==='shape'&&c.secIdx===entry.sec&&c.paraIdx===entry.para);
     const first=runs.find(r=>r.secIdx===entry.sec&&r.parentParaIdx===entry.para&&r.text.trim()&&matched.has(r));
@@ -410,17 +428,17 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
     const dx=entry.block.anchor!.x-Number(glyph.getAttribute('x')),dy=entry.block.anchor!.baseline-Number(glyph.getAttribute('y'));
     check(positioned.setShapeProperties(entry.sec,entry.para,control.controlIdx,JSON.stringify({horzOffset:hu(entry.block.left+dx),vertOffset:hu(entry.block.top+dy)})));
    }
-   // Plain text typed into a formerly empty cell has no imported baseline
-   // offset. Preserve its measured baseline in the native single-line cache.
+   // Rebuild the single-line cache from the current baseline on every export,
+   // including after newly typed text has become imported native text.
    const tables=all(parse(generated[`Contents/section${page}.xml`]),'tbl'),tableControls=controls.filter(c=>c.type==='table'&&!c.cellPath);
    pages[page].tableGeometry?.forEach((table,tableIndex)=>table.cells.forEach((cell,cellIndex)=>{
-    const source=cell.lines?.filter(line=>line.text.trim());if(!source?.some(line=>line.unmarkedInput&&line.starts.length===1))return;
+    const source=cell.lines?.filter(line=>line.text.trim());if(!source?.some(line=>line.anchor&&line.starts.length===1))return;
     const control=tableControls[tableIndex],nativeCell=tables[tableIndex]&&all(tables[tableIndex],'tc')[cellIndex];
     if(!control||!nativeCell)throw Error('HWP 새 셀 글자의 위치가 없습니다.');
     const paragraphs=direct(direct(nativeCell,'subList')[0],'p').map((p,index)=>({p,index})).filter(({p})=>nativeParagraphText(p).text.trim());
     if(paragraphs.length!==source.length)throw Error('HWP 새 셀 글자의 문단 대응이 다릅니다.');
     source.forEach((line,index)=>{
-     if(!line.unmarkedInput||line.starts.length!==1)return;
+     if(!line.anchor||line.starts.length!==1)return;
      const paragraph=paragraphs[index];if(nativeParagraphText(paragraph.p).text!==line.text||!line.anchor)throw Error('HWP 새 셀 글자의 원고가 다릅니다.');
      const run=runs.find(r=>r.secIdx===page&&r.parentParaIdx===control.paraIdx&&r.text.trim()&&JSON.stringify(r.cellPath)===JSON.stringify([{controlIndex:control.controlIdx,cellIndex,cellParaIndex:paragraph.index}])&&matched.has(r));
      const glyph=run&&matched.get(run)?.[0].glyph;if(!glyph)throw Error('HWP 새 셀 글자의 기준선이 없습니다.');
@@ -430,6 +448,13 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
    }));
   }
   const output=unzipSync(positioned.exportHwpx());
+  for(const entry of pictureOffsets){
+   const path=`Contents/section${entry.page}.xml`,xml=parse(output[path]),picture=all(xml,'pic')[entry.index],pos=picture&&direct(picture,'pos')[0];
+   if(!pos||pos.getAttribute('treatAsChar')!=='0')throw Error('HWP 고정 셀 사진이 떠 있는 개체가 아닙니다.');
+   const x=Number(pos.getAttribute('horzOffset'))+entry.dx,y=Number(pos.getAttribute('vertOffset'))+entry.dy;
+   if(!Number.isSafeInteger(x)||!Number.isSafeInteger(y))throw Error('HWP 고정 셀 사진의 위치 단위가 다릅니다.');
+   attrs(pos,{horzOffset:x,vertOffset:y});output[path]=write(xml);
+  }
   for(const entry of cellBaselines){
    const path=`Contents/section${entry.page}.xml`,xml=parse(output[path]),cell=all(all(xml,'tbl')[entry.table],'tc')[entry.cell],paragraph=direct(direct(cell,'subList')[0],'p')[entry.paragraph],segments=all(paragraph,'lineseg');
    if(segments.length!==1)throw Error('HWP 새 셀 글자의 줄 수가 다릅니다.');
@@ -468,6 +493,17 @@ export function positionNativeHwp(files:Record<string,Uint8Array>,pages:NativeHw
    }
    container!.setAttribute('itemCnt',String(properties.length+added));output['Contents/header.xml']=write(definitions);
   }
-  return zipSync(output);
+  const result=zipSync(output);
+  if(pages.some(page=>page.pictures?.some(picture=>picture.anchor))){
+   const verified=new Engine(result) as Reader;
+   try{pages.forEach((page,index)=>{
+    if(!page.pictures?.some(picture=>picture.anchor))return;
+    const controls=JSON.parse(verified.getPageControlLayout(index)).controls.filter((control:{type:string})=>control.type==='image') as Array<{x:number;y:number;w:number;h:number}>;
+    if(controls.length!==page.pictures.length)throw Error('HWP 최종 고정 셀 사진의 순서가 다릅니다.');
+    const svg=parse(strToU8(verified.renderPageSvgWithProfile?.(index,'print')??verified.renderPageSvg(index)));
+    page.pictures.forEach((picture,i)=>{if(!picture.anchor)return;const image=paintedPicture(svg,controls[i]);if(Math.abs(Number(image.getAttribute('x'))-picture.anchor.x)>.05||Math.abs(Number(image.getAttribute('y'))-picture.anchor.y)>.05)throw Error('HWP 최종 고정 셀 사진의 위치가 현재 원고와 다릅니다.');});
+   });}finally{verified.free();}
+  }
+  return result;
  }finally{positioned.free();}
 }

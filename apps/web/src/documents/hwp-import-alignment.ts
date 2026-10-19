@@ -56,7 +56,14 @@ export function measureImportedHwpOffsets(source:HTMLElement):Array<{left:number
         const candidate=walker.currentNode as Text,index=candidate.data.search(/[^\s\u200b]/u);
         if(index>=0&&candidate.parentElement?.closest('[data-hwp-text-style]')){text=candidate;offset=index;break;}
       }
-      if(!text){offsets.push(null);continue;}
+      if(!text){
+        if(!paragraph.textContent?.replace(/[\s\u200b]/gu,'')&&!paragraph.querySelector('img,table')&&typeof origin.fontSize==='number'){
+          const box=paragraph.getBoundingClientRect(),css=getComputedStyle(paragraph),px=(value:string)=>Number.parseFloat(value)||0;
+          const y=(box.top-paper.top)/scale+px(css.borderTopWidth)+px(css.paddingTop)+origin.fontSize*.8;
+          offsets.push({left:0,top:origin.nativeBaseline-y});
+        }else offsets.push(null);
+        continue;
+      }
       const range=source.ownerDocument.createRange();range.setStart(text,offset);range.setEnd(text,offset+1);
       const rect=range.getClientRects()[0];
       const probe=source.ownerDocument.createElement('span');
