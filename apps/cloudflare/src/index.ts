@@ -4053,11 +4053,11 @@ interface PreviewReportBackupRow {
   savedByName: string;
 }
 
-async function previewReportHourlyBackups(env: CloudflareEnv, caseId: string): Promise<PreviewReportBackupRow[]> {
+async function previewReportHourlyBackups(env: CloudflareEnv, caseId: string, summary = false): Promise<PreviewReportBackupRow[]> {
   if (!env.DB) return [];
   try {
     const rows = await env.DB.prepare(
-      'SELECT b.id,b.report_version AS reportVersion,b.title,b.content,b.editor_json AS editorJson,b.content_sha256 AS contentSha256,b.backup_hour AS backupHour,b.saved_at AS savedAt,u.id AS savedById,u.display_name AS savedByName ' +
+      `SELECT b.id,b.report_version AS reportVersion,b.title,${summary ? 'NULL AS content,NULL AS editorJson' : 'b.content,b.editor_json AS editorJson'},b.content_sha256 AS contentSha256,b.backup_hour AS backupHour,b.saved_at AS savedAt,u.id AS savedById,u.display_name AS savedByName ` +
       'FROM preview_report_hourly_backups b JOIN preview_users u ON u.id=b.saved_by WHERE b.case_id=? AND b.organization_id=? ORDER BY b.saved_at DESC LIMIT 48'
     ).bind(caseId, PREVIEW_ORGANIZATION_ID).all<PreviewReportBackupRow>();
     return rows.results;
@@ -4108,7 +4108,7 @@ function parsePreviewEditorJson(value: string | null): Record<string, unknown> |
   }
 }
 
-async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise<Response> {
+async function previewReportPayload(env: CloudflareEnv, caseId: string, summary = false): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
   const editorSchema = await previewReportEditorSchemaAvailable(env);
@@ -4118,11 +4118,11 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
     'JOIN preview_users u ON u.id = d.updated_by WHERE d.case_id = ? AND d.organization_id = ?'
   ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<PreviewReportDraftRow>();
   const revisions = await env.DB.prepare(
-    `SELECT r.id, r.version, r.title, r.content, ${editorSchema ? 'r.editor_json' : 'NULL'} AS editorJson, r.content_sha256 AS contentSha256, r.saved_at AS savedAt, u.id AS savedById, u.display_name AS savedByName ` +
+    `SELECT r.id, r.version, r.title, ${summary ? 'NULL' : 'r.content'} AS content, ${editorSchema && !summary ? 'r.editor_json' : 'NULL'} AS editorJson, r.content_sha256 AS contentSha256, r.saved_at AS savedAt, u.id AS savedById, u.display_name AS savedByName ` +
     'FROM preview_report_revisions r JOIN preview_users u ON u.id = r.saved_by WHERE r.case_id = ? ORDER BY r.version DESC LIMIT 20'
   ).bind(caseId).all<{ id: string; version: number; title: string; content: string; editorJson: string | null; contentSha256: string; savedAt: string; savedById: string; savedByName: string }>();
   const backupSchema = await previewReportHourlyBackupSchemaAvailable(env);
-  const backups = backupSchema ? await previewReportHourlyBackups(env, caseId) : [];
+  const backups = backupSchema ? await previewReportHourlyBackups(env, caseId, summary) : [];
   const payload: Record<string, unknown> = {
     draft: draft ? {
       caseId: draft.caseId,
@@ -4142,6 +4142,7 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
       title: revision.title,
       content: revision.content,
       editorJson: parsePreviewEditorJson(revision.editorJson),
+      ...(summary ? { contentDeferred: true } : {}),
       contentSha256: revision.contentSha256,
       savedAt: revision.savedAt,
       savedBy: { id: revision.savedById, name: revision.savedByName }
@@ -4154,6 +4155,7 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string): Promise
       title: backup.title,
       content: backup.content,
       editorJson: parsePreviewEditorJson(backup.editorJson),
+      ...(summary ? { contentDeferred: true } : {}),
       contentSha256: backup.contentSha256,
       backupHour: backup.backupHour,
       savedAt: backup.savedAt,
@@ -4177,7 +4179,7 @@ async function canManagePreviewProjectReport(env: CloudflareEnv, user: SessionUs
   return assignment?.found === 1;
 }
 
-async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
+async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, url: URL, parsedBody?: Record<string, unknown> | null): Promise<Response> {
   if (!env.DB) return json({ error: 'D1 database is not bound', code: 'D1_NOT_CONFIGURED' }, 503);
   const user = await previewSessionUser(request, env);
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
@@ -4187,12 +4189,23 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   const caseRow = await accessiblePreviewCase(env, user, caseId);
   if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
 
-  if (request.method === 'GET') return previewReportPayload(env, caseId);
+  const summary = url.searchParams.get('history') === 'summary';
+  if (request.method === 'GET') {
+    const backupId = url.searchParams.get('backupId');
+    if (backupId !== null) {
+      if (!PREVIEW_DRAFT_KEY.test(backupId)) return json({ error: 'A valid backupId is required', code: 'INVALID_BACKUP_ID' }, 400);
+      const backup = await env.DB.prepare('SELECT b.id,b.report_version AS version,b.title,b.content,b.editor_json AS editorJson,b.content_sha256 AS contentSha256,b.backup_hour AS backupHour,b.saved_at AS savedAt,u.id AS savedById,u.display_name AS savedByName FROM preview_report_hourly_backups b JOIN preview_users u ON u.id=b.saved_by WHERE b.id=? AND b.case_id=? AND b.organization_id=?')
+        .bind(backupId, caseId, PREVIEW_ORGANIZATION_ID).first<PreviewReportBackupRow & { version: number }>();
+      if (!backup) return json({ error: '해당 보고서의 백업을 찾을 수 없습니다.', code: 'REPORT_BACKUP_NOT_FOUND' }, 404);
+      return json({ backup: { id: backup.id, version: Number(backup.version), title: backup.title, content: backup.content, editorJson: parsePreviewEditorJson(backup.editorJson), contentSha256: backup.contentSha256, backupHour: backup.backupHour, savedAt: backup.savedAt, savedBy: { id: backup.savedById, name: backup.savedByName } } });
+    }
+    return previewReportPayload(env, caseId, summary);
+  }
   if (request.method !== 'PUT') return json({ error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
   if (!await canManagePreviewProjectReport(env, user, caseId)) return json({ error: '보고서 전체 초안은 담당 PM 또는 관리자만 저장할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
   const workspaceSchema = await previewReportWorkspaceSchemaAvailable(env);
   const editorSchema = await previewReportEditorSchemaAvailable(env);
-  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  const body = parsedBody === undefined ? await request.json().catch(() => null) as Record<string, unknown> | null : parsedBody;
   if (!body || !exactObjectKeys(body, ['title', 'content', 'editorJson', 'expectedVersion', 'wizardStep', 'selectedChapterId', 'saveKind']) || typeof body.title !== 'string' || typeof body.content !== 'string' || !Number.isInteger(body.expectedVersion) || (body.editorJson !== undefined && body.editorJson !== null && (typeof body.editorJson !== 'object' || Array.isArray(body.editorJson))) || (body.wizardStep !== undefined && !Number.isInteger(body.wizardStep)) || (body.selectedChapterId !== undefined && !(body.selectedChapterId === null || typeof body.selectedChapterId === 'string')) || (body.saveKind !== undefined && !['AUTO','MANUAL','NAVIGATION'].includes(String(body.saveKind)))) {
     return json({ error: 'Report draft payload is invalid', code: 'INVALID_REPORT_PAYLOAD' }, 400);
   }
@@ -4251,7 +4264,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
       console.error(JSON.stringify({ event: 'REPORT_INITIAL_SAVE_FAILED', category: details.some(message => /constraint|SQLITE_CONSTRAINT/i.test(message)) ? 'CONSTRAINT' : 'STORAGE', stage, errorName, diagnostic }));
       return json({ error: '보고서 초기 저장에 실패해 다음 단계로 이동하지 않았습니다. 입력 내용은 화면에 유지됩니다. 저장을 다시 시도해 주세요.', code: 'REPORT_STORAGE_FAILED' }, 503);
     }
-    return previewReportPayload(env, caseId);
+    return previewReportPayload(env, caseId, summary);
   }
 
   if (expectedVersion !== Number(existing.version)) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(existing.version) }, 409);
@@ -4262,7 +4275,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
         .bind(wizardStep, selectedChapterId, caseId, PREVIEW_ORGANIZATION_ID, expectedVersion).run();
       if (result.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
     }
-    return previewReportPayload(env, caseId);
+    return previewReportPayload(env, caseId, summary);
   }
   const nextVersion = Number(existing.version) + 1;
   const now = new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString();
@@ -4287,7 +4300,7 @@ async function handlePreviewReportDraft(request: Request, env: CloudflareEnv, ur
   );
   const results = await env.DB.batch(statements) as Array<{ meta?: { changes?: number } }>;
   if (results[0]?.meta?.changes !== 1) return json({ error: 'Report version changed in another session', code: 'VERSION_CONFLICT' }, 409);
-  return previewReportPayload(env, caseId);
+  return previewReportPayload(env, caseId, summary);
 }
 
 // Deletion is an append-only catalog action: preserve the report, revisions and project sources.
@@ -9026,9 +9039,12 @@ const worker = {
     const reportDeleteMatch = url.pathname.match(/^\/api\/report-workspaces\/([^/]+)\/delete$/u);
     if (reportDeleteMatch) return handlePreviewReportWorkspaceDelete(request, env, reportDeleteMatch[1]);
 
+    // Share the parsed draft body with the handler; large imported reports must not be parsed twice.
+    let reportDraftBody: Record<string, unknown> | null | undefined;
     // A deleted workspace must not reopen as an empty draft or continue background authoring.
     if (env.DB && /^\/api\/(?:report-drafts|report-chapter-collaboration|report-authoring|report-reviews|report-finalizations)(?:\/|$)/u.test(url.pathname)) {
       const body = request.method === 'GET' ? null : await request.clone().json().catch(() => null) as Record<string, unknown> | null;
+      if (url.pathname === '/api/report-drafts' && request.method !== 'GET') reportDraftBody = body;
       const queryCaseId = url.searchParams.get('caseId');
       const bodyCaseId = typeof body?.caseId === 'string' ? body.caseId : null;
       if (queryCaseId !== null && bodyCaseId !== null && queryCaseId !== bodyCaseId) return json({ error: '요청의 프로젝트가 일치하지 않습니다.', code: 'INVALID_CASE_ID' }, 400);
@@ -9046,7 +9062,7 @@ const worker = {
     }
 
     if (url.pathname === '/api/report-drafts') {
-      return handlePreviewReportDraft(request, env, url);
+      return handlePreviewReportDraft(request, env, url, reportDraftBody);
     }
 
     if (url.pathname === '/api/report-chapter-collaboration') {

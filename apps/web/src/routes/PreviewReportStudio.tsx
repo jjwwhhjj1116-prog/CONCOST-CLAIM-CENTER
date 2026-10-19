@@ -47,7 +47,7 @@ interface ReportDraft {
   updatedBy: { id: string; name: string };
 }
 interface ReportRevision {
-  id: string; version: number; title: string; content: string; editorJson: import('@tiptap/core').JSONContent | null; contentSha256: string; savedAt: string;
+  id: string; version: number; title: string; content: string | null; editorJson: import('@tiptap/core').JSONContent | null; contentDeferred?: boolean; contentSha256: string; savedAt: string;
   savedBy: { id: string; name: string };
 }
 interface ReportBackup extends ReportRevision { backupHour: string }
@@ -483,7 +483,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     qaSnapshotRef.current = null; setQaSnapshot(null); setQaExportError(''); setQaExportMessage(''); setWorkingOutputOpen(false);
     try {
       const [result, reviewResult, finalizationResult, authoringResult, collaborationResult] = await Promise.all([
-        apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`),
+        apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}&history=summary`),
         apiRequest<{ reviews: PreviewReportReview[] }>(`/api/report-reviews?caseId=${encodeURIComponent(caseId)}`),
         apiRequest<{ finalizations: Finalization[] }>(`/api/report-finalizations?caseId=${encodeURIComponent(caseId)}`),
         apiRequest<AuthoringConfig>(`/api/report-authoring/config?caseId=${encodeURIComponent(caseId)}`),
@@ -594,7 +594,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     draftSaveInFlight.current = true;
     setSaving(true);
     try {
-      const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(requestCaseId)}`, {
+      const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(requestCaseId)}&history=summary`, {
         method: 'PUT', body: JSON.stringify({ title: requestTitle, content: requestContent, editorJson: requestEditorJson, expectedVersion: requestVersion, wizardStep: requestWizardStep, selectedChapterId: requestChapterId, saveKind })
       });
       if (selectedCaseRef.current !== requestCaseId) return false;
@@ -1407,8 +1407,26 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     await applySourcePagesToReport(pages.length, 'HWP', index => hwpSvgPageForUpload(pages[index], `report-hwp-page-${index + 1}.jpg`), editedSource, originalSource);
   };
 
-  const restoreRevision = (revision: ReportRevision) => {
+  const restoreRevision = async (selectedRevision: ReportRevision) => {
     if (!editable || saving || improving || chapterBusy || outlineSaveInFlight.current || draftSaveInFlight.current || outlineSyncPendingRef.current) return;
+    const caseId = selectedCaseId;
+    const before = JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current));
+    const beforeContent = contentRef.current, beforeTitle = titleRef.current, beforeVersion = versionRef.current;
+    let revision = selectedRevision;
+    if (revision.contentDeferred) {
+      try {
+        const result = await apiRequest<{ backup: ReportBackup }>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}&backupId=${encodeURIComponent(revision.id)}`);
+        const backup = result.backup;
+        if (!backup || backup.contentDeferred || typeof backup.content !== 'string' || backup.id !== revision.id || backup.version !== revision.version || backup.contentSha256 !== revision.contentSha256 || backup.savedAt !== revision.savedAt
+          || (backup.editorJson !== null && (typeof backup.editorJson !== 'object' || Array.isArray(backup.editorJson)))) throw new Error('선택한 백업의 원고를 확인하지 못했습니다. 현재 편집 내용은 유지됩니다.');
+        revision = backup;
+      } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return; }
+    }
+    if (typeof revision.content !== 'string') return;
+    if (selectedCaseRef.current !== caseId || versionRef.current !== beforeVersion || titleRef.current !== beforeTitle || contentRef.current !== beforeContent
+      || JSON.stringify(joinReportPresentation(editorJsonRef.current, reportHeaderRef.current, reportFrontMatterRef.current)) !== before || draftSaveInFlight.current || outlineSaveInFlight.current || outlineSyncPendingRef.current) {
+      setError('백업을 확인하는 동안 원고 또는 프로젝트가 변경됐습니다. 현재 편집 내용은 유지됩니다. 다시 불러와 주세요.'); return;
+    }
     if ((dirty || outlineDirty || chaptersDirty) && !window.confirm('저장하지 않은 편집 내용이 있습니다. 백업 본문으로 바꾸시겠습니까? 협업 원고와 목차는 별도로 유지됩니다.')) return;
     titleRef.current = revision.title; contentRef.current = revision.content;
     setTitle(revision.title); setContent(revision.content); const presentation = splitReportPresentation(revision.editorJson); setEditorJson(presentation.body); setReportHeader(presentation.header); setReportFrontMatter(presentation.frontMatter); setDraftMethod('MANUAL'); setDirty(true);
@@ -1627,7 +1645,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
     qaExportInFlight.current = true; setQaExportBusy(true); setQaExportError(''); setQaExportMessage('');
     qaSnapshotRef.current = null; setQaSnapshot(null);
     try {
-      const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}`);
+      const result = await apiRequest<ReportPayload>(`/api/report-drafts?caseId=${encodeURIComponent(caseId)}&history=summary`);
       if (!result.draft || result.draft.caseId !== caseId || !Number.isSafeInteger(result.draft.version) || result.draft.version < 1
         || typeof result.draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(result.draft.updatedAt))
         || typeof result.draft.title !== 'string' || typeof result.draft.content !== 'string'
@@ -2004,7 +2022,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
             </div>
             <Input required label="보고서 제목" value={title} maxLength={300} readOnly={!editable} onChange={(event) => { titleRef.current = event.target.value; setTitle(event.target.value); setDirty(true); }} />
             {activeStep === 4 && reportView === 'chapter' && renderChapterEditor()}
-            {activeStep === 4 && reportView === 'whole' && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor reportMode sourceChapterLinks={sourceChapterLinks} beforeContent={<ReportFrontMatterEditor title={title} caseTitle={selectedCase?.title ?? ''} html={reportPreviewHtml(content, editorJson)} value={reportFrontMatter} disabled={!editable || linkingHwp || saving || generating || improving || Boolean(chapterBusy)} onEditNative={readReportNativeSource(editorJson, selectedCaseId) ? () => void reopenNativeSource() : undefined} onTitle={next => { titleRef.current = next; setTitle(next); setDirty(true); }} onChange={next => { setReportFrontMatter(next); setDirty(true); }}/>} ref={reportBodyRef} previewWidth={794} onRequestInsertImage={requestReportEvidenceInsert} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader, reportFrontMatter)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || Boolean(chapterBusy)} onSelectionChange={recordSelection} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
+            {activeStep === 4 && reportView === 'whole' && <>{renderReportHeaderControls(4)}<div className="document-review-split"><StructuredDocumentEditor reportMode sourceChapterLinks={sourceChapterLinks} beforeContent={<ReportFrontMatterEditor title={title} caseTitle={selectedCase?.title ?? ''} html={reportPreviewHtml(content, editorJson)} value={reportFrontMatter} disabled={!editable || linkingHwp || saving || generating || improving || Boolean(chapterBusy)} onEditNative={readReportNativeSource(editorJson, selectedCaseId) ? () => void reopenNativeSource() : undefined} onTitle={next => { titleRef.current = next; setTitle(next); setDirty(true); }} onChange={next => { setReportFrontMatter(next); setDirty(true); }}/>} ref={reportBodyRef} previewWidth={794} onRequestInsertImage={requestReportEvidenceInsert} previewContent={<ReportFinalDocumentPreview caseNumber={selectedCase?.caseNumber??''} caseTitle={selectedCase?.title??''} title={title} content={content} editorJson={joinReportPresentation(editorJson, reportHeader, reportFrontMatter)}/>} documentKey={`report-step4-${selectedCaseId}`} label="보고서 본문 편집" value={content} editorJson={editorJson} readOnly={!editable || savingOutline || improving || linkingHwp || pageImportInFlight.current || Boolean(chapterBusy)} onSelectionChange={recordSelection} selectionAssistant={{busy:improving,disabled:!authoring?.assistantConnected,instruction:improvementInstruction,onInstructionChange:setImprovementInstruction,extraControls:<details><summary>기타 AI 도구</summary><Button variant="secondary" onClick={()=>onNavigate('/settings')}>Gemini 설정</Button><Button variant="secondary" disabled={!selectedTemplateCategory} onClick={()=>setShowTemplatePreview(true)}>원본 템플릿</Button><Button variant="secondary" onClick={()=>void improveWriting()} disabled={!authoring?.assistantConnected||!content.trim()||dirty||saving||improving||improvementInstruction.trim().length<3}>본문 전체 개선</Button></details>,onImprove:(mode,selection)=>void improveSelectedWriting(mode==='professional'?'문법과 맞춤법을 바로잡고 건설 클레임 보고서 문체로 전문적으로 다듬어 주세요. 사실과 수치는 유지하세요.':mode==='concise'?'중복 표현을 제거하고 더 간결하고 명확하게 고쳐 주세요. 사실과 수치는 유지하세요.':improvementInstruction,selection)}} onChange={(next, json) => { contentRef.current = next; setContent(next); setEditorJson(json); setDirty(true); }} /></div></>}
             {editable && selectedChapter && <details className="report-memory-feedback report-advanced-panel"><summary>AI 개선 피드백 등록</summary><header><div><span>FEEDBACK → REVIEW → MEMORY</span><strong>다음 보고서에서 같은 실수를 반복하지 않게 알려주세요.</strong><small>현재 프로젝트 저장본은 단기기억으로, 승인된 개인·유형·챕터 규칙은 장기기억으로 구분합니다. 채팅 기록 전체를 저장하거나 다른 사건의 내용을 섞지 않습니다.</small></div><em>APPROVED MEMORY</em></header><div className="report-memory-feedback__form"><label>적용 범위<select value={memoryScope} onChange={(event) => { setMemoryScope(event.target.value as MemoryScope); memoryRequestKey.current=crypto.randomUUID(); }}><option value="CHAPTER">현재 챕터</option><option value="CLAIM_TYPE">현재 클레임 유형</option><option value="REPORT_TYPE">현재 보고서 유형</option><option value="USER_FEEDBACK">내 반복 피드백</option><option value="GLOBAL">회사 전체</option></select></label><label>다음번에 개선할 점<input value={memoryFeedback} maxLength={2000} onChange={(event) => { setMemoryFeedback(event.target.value); memoryRequestKey.current=crypto.randomUUID(); }} placeholder="예: 책임소재를 너무 단정적으로 쓰지 말고 계약조항을 먼저 보여줘" /></label><Button onClick={() => void submitMemoryFeedback()} disabled={!memoryFeedback.trim() || memoryFeedback.trim().length < 3 || dirty || saving || submittingMemory}>{submittingMemory ? '분석·등록 중…' : '학습 후보 등록'}</Button></div>{dirty && <small>수정한 본문을 먼저 저장해야 AI 초안과 사람 수정본의 차이를 비교할 수 있습니다.</small>}{memoryNotice && <p className="notice-box">{memoryNotice}</p>}</details>}
             <p className="muted">{editable ? '입력이 멈춘 뒤 3초 후 자동 저장됩니다. 복구용 백업본은 변경된 작업을 기준으로 매시간 한 번 생성됩니다.' : 'Reviewer 계정은 저장된 보고서를 읽을 수 있지만 본문은 수정할 수 없습니다.'} {savedAt ? `마지막 저장 ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
           </fieldset>
