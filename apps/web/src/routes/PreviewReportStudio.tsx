@@ -1720,9 +1720,10 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
   };
 
   const projectStepComplete = Boolean(selectedCaseId && loadedCaseId === selectedCaseId && authoring?.available);
-  const outlineStepComplete = projectStepComplete && outlineStatus === 'CONFIRMED' && !outlineDirty && !outlineSyncPending && !savingOutline;
   const wholeDocumentImported = content.includes(WHOLE_DOCUMENT_START) && content.includes(WHOLE_DOCUMENT_END);
   const wholeDocumentHasBody = wholeDocumentImported && reportBodyHasContent(editorJson ?? parseStructuredDocumentMarkdown(content));
+  // Whole-document imports already contain the report structure; a separate chapter outline is optional.
+  const outlineStepComplete = projectStepComplete && (outlineStatus === 'CONFIRMED' || wholeDocumentHasBody) && !outlineDirty && !outlineSyncPending && !savingOutline;
   const chapterStepComplete = Boolean(outlineStepComplete && (wholeDocumentHasBody || (authoring?.chapters.length && authoredChapterCodes.size === authoring.chapters.length)));
   const editingStepComplete = Boolean(chapterStepComplete && version > 0 && title.trim() && content.trim() && !dirty && !saving);
   const outputStepComplete = Boolean(editingStepComplete && currentFinalization);
