@@ -7,7 +7,10 @@ async function target(){if(!before)return worker;const path='../tmp/cf238-qa/bef
 async function setup(email='pm@example.invalid',login='pm-login@example.invalid',legacyApproval=false){
   const {sql,env}=await databaseFixture({adminLogin:login}),w=await target();
   sql.exec(readFileSync('apps/cloudflare/migrations/0067_cf221_assigned_report_approval.sql','utf8'));
-  if(!before)sql.exec(readFileSync('apps/cloudflare/migrations/0068_cf238_approval_email_delivery.sql','utf8'));
+  if(!before){
+    sql.exec(readFileSync('apps/cloudflare/migrations/0068_cf238_approval_email_delivery.sql','utf8'));
+    sql.exec(readFileSync('apps/cloudflare/migrations/0069_cf239_d1_email_whitespace.sql','utf8'));
+  }
   sql.run("UPDATE preview_users SET department_code='TECHNICAL_HQ',version=version+1 WHERE id=?",[REVIEWER_ID]);
   sql.run('UPDATE preview_users SET email=?,version=version+1 WHERE id=?',[email,ADMIN_ID]);
   const accounts=JSON.stringify(sql.exec('SELECT * FROM preview_users ORDER BY id'));
