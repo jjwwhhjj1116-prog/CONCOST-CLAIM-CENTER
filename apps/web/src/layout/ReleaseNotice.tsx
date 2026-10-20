@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-10-20';
 export const RELEASE_DATE_LABEL = '2026년 10월 20일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v1:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v2:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 20일 · 프로젝트 업무일지 연동',text:'프로젝트 워크에 업무일지를 추가했습니다. 이경훈 센터장·최영배 본부장·장범선 실장은 기존 본인 계정으로 배정된 프로젝트의 수행 업무·다음 계획·특이사항을 저장하고 다시 열 수 있습니다. 기술본부의 클레임센터 업무일지도 같은 저장본을 사용합니다. 대표·부사장은 작성 대상에서 제외하며 기존 조회·결재 권한은 유지합니다. 두 사이트는 각각 기존 로그인이 필요합니다.'},
   { title: '10월 20일 · 보고서 작업 화면·임시복구', text: '큰 상단 소개 영역을 정리하고, 담당자 검수의 목차 제목 수정·챕터별 분담·판례 인용 검수를 나란한 선택 도구로 모았습니다. 이전 자료는 ‘이전 작업 복구’를 눌러 선택합니다. 임시 복구본은 마지막 보관 후 7일간 유지하며, 만료본은 사이트 사용 중 정리합니다. 서버 저장본과 직접 보관한 파일은 이 정책으로 삭제하지 않습니다.' },
   { title: '10월 20일 · HWP·DOCX 가져오기와 편집', text: 'HWP·DOCX에서 가져온 문장·표·사진을 웹 보고서에서 편집하고 서버에 저장·다시 열 수 있도록 보완했습니다. 원본 열람이나 PDF 이미지 페이지와는 구분됩니다. 적용 후 글자·표·사진과 페이지 배치를 확인하고 자동 저장 완료를 기다리세요. 모든 외부 문서의 배치가 완전히 같다는 보장은 아닙니다.' },
   { title: '10월 20일 · 지정 결재와 최종 출력', text: '5단계에서 저장 버전과 최종 결재자를 확인해 상신합니다. 지정 결재자는 업무 알림·결재함에서 상신본을 확인하고 승인 또는 수정 요청을 합니다. 승인 후 ‘승인본 확정·출력 준비’ 또는 첫 출력으로 승인 버전을 확정해 DOCX·HWP·PDF를 내려받습니다. 앞 단계의 작성본 출력은 검수용이며, 확정 후에는 확정 당시 본문으로 출력합니다.' },

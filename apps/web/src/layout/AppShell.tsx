@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Dialog, Drawer, SkipLink } from '@claim-studio/ui';
 import { apiRequest } from '../api';
+import {requestNavigation} from '../navigation-guard';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 import { WorkspaceHelpCenter } from './WorkspaceHelpCenter';
@@ -27,7 +28,7 @@ const NAVIGATION_GROUPS: readonly {
   },
   {
     label: '프로젝트 워크', eyebrow: '프로젝트 실행', icon: 'work',
-    routeIds: ['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
+    routeIds: ['PROJ-01', 'WL-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
     nestedGroups: [{ label: '프로젝트 보고서', eyebrow: '보고서 관리', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
   },
   { label: 'ES 산출프로그램', eyebrow: '독립 물가변동 산출', icon: 'es', routeIds: ['ES-01', 'ES-02'] },
@@ -198,6 +199,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   };
 
   const routeWithProjectContext = (routeId: string, path: string) => {
+    if(routeId==='WL-01'){const worklogCase=contextCaseId||(contextProjectId?.startsWith('project-')?contextProjectId.slice(8):'');if(worklogCase)return `${path}?caseId=${encodeURIComponent(worklogCase)}`;}
     if (!selectedProject) return path;
     const projectId = encodeURIComponent(selectedProject.id);
     const caseId = encodeURIComponent(selectedProject.caseId);
@@ -316,7 +318,7 @@ export const AppShell: React.FC<AppShellProps> = ({
         <button type="button" className="theme-toggle" aria-label="현재 화면 도움말 열기" onClick={() => openUtility(() => setHelpRequest(value => value + 1))}>도움말</button>
         <button type="button" className="theme-toggle member-alert-button" aria-label={`업무 알림 ${alertCount}건`} onClick={() => openUtility(() => setAlertsOpen(true))}>알림 {alertCount}</button>
         <button type="button" className="theme-toggle" aria-label="가오픈 이용 안내 열기" onClick={() => openUtility(() => setNoticeRequest(value => value + 1))}>이용 안내</button>
-        <Button size="sm" variant="ghost" onClick={onExpireSession}>로그아웃</Button>
+        <Button size="sm" variant="ghost" onClick={()=>{if(!requestNavigation('/login',onExpireSession))onExpireSession();}}>로그아웃</Button>
       </div>}
     </footer></>
   );

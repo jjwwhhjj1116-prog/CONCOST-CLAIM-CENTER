@@ -54,6 +54,8 @@ import { fetchEsPublicSources } from './es-public-sources';
 import { fetchEsPairSources } from './es-pair-sources';
 import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../packages/document-engine/src/es-ecos';
 
+import {handleProjectWorklogs,techWorklogIdentity} from './project-worklogs';
+
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
   all<T>(): Promise<{ results: T[] }>;
@@ -6976,7 +6978,7 @@ async function fetchPreviewLawApi(env: CloudflareEnv, path: 'search' | 'detail',
   catch { throw new Error('LAW_API_CONNECTION_FAILED'); }
   finally { clearTimeout(timer); }
   if (!response.ok) throw new Error(`LAW_API_${response.status}`);
-  const raw = await response.json().catch(() => null);
+  const raw = await response.json().catch(() => null) as {PrecSearch?:{totalCnt?:unknown}}|null;
   if (!raw) throw new Error('LAW_API_INVALID_JSON');
   const candidates = nestedLawRecords(raw).map(previewLawCandidate).filter((row): row is PreviewCaseLawCandidate => Boolean(row));
   // A provider error delivered as HTTP 200 must not look like a successful empty search.
@@ -8909,6 +8911,21 @@ async function handleBusinessCards(request: Request, env: CloudflareEnv, url: UR
   }
 }
 
+/** Private service entrypoint: source identity comes only from the Tech server session. */
+export async function handleTechWorklogs(request:Request,env:CloudflareEnv):Promise<Response>{
+  if(env.RELEASE_MAINTENANCE==='1'||!env.DB)return json({error:'업무일지 연결 점검 중입니다.'},503);
+  if(request.method!=='POST')return json({error:'지원하지 않는 요청입니다.'},405);
+  const raw=await request.text();if(new TextEncoder().encode(raw).byteLength>45000)return json({error:'요청이 너무 큽니다.'},413);
+  let input:any;try{input=JSON.parse(raw);}catch{return json({error:'입력 형식을 확인하세요.'},400);}
+  const identity=techWorklogIdentity(input?.actor);
+  if(!identity)return json({error:'기존 클레임센터 계정과 연결된 사용자만 접근할 수 있습니다.'},403);
+  if(!['GET','PUT'].includes(input.method)||typeof input.path!=='string'||!/^\/api\/project-worklogs(?:\/[0-9a-f-]{36})?(?:\?date=\d{4}-\d{2}-\d{2})?$/.test(input.path))return json({error:'업무일지 경로를 확인하세요.'},400);
+  const user=await env.DB.prepare('SELECT id,login_id AS loginId,display_name AS displayName,roles_json AS rolesJson FROM preview_users WHERE id IN (?,?) AND login_id=? AND is_active=1').bind(identity.id,'developmentId' in identity?identity.developmentId:identity.id,identity.loginId).first<{id:string;loginId:string;displayName:string;rolesJson:string}>();
+  if(!user)return json({error:'기존 클레임센터 계정을 확인할 수 없습니다.'},403);
+  const forwarded=new Request('https://claim-worklogs.internal'+input.path,{method:input.method,headers:{'Content-Type':'application/json'},...(input.method==='PUT'?{body:JSON.stringify(input.body)}:{})});
+  return handleProjectWorklogs(forwarded,env.DB,{...user,roles:parsePreviewRoles(user.rolesJson)});
+}
+
 // Router dispatch
 const worker = {
   async fetch(request: Request, env: CloudflareEnv): Promise<Response> {
@@ -8954,6 +8971,13 @@ const worker = {
 
     if (url.pathname === '/api/dashboard/kpi') {
       return handlePreviewDashboard(request, env);
+    }
+
+    if(url.pathname==='/api/project-worklogs'||url.pathname.startsWith('/api/project-worklogs/')){
+      const user=await previewSessionUser(request,env);
+      if(!user)return json({error:'로그인이 필요합니다.'},401);
+      if(!env.DB)return json({error:'업무일지 저장소가 준비되지 않았습니다.'},503);
+      return handleProjectWorklogs(request,env.DB,user);
     }
 
     if (url.pathname === '/api/es/import/contract') return handleEsContractImport(request, env, url);

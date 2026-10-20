@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "concost-claim-center-preview",
-  "main": "apps/cloudflare/src/index.ts",
+  "main": "apps/cloudflare/src/service-entry.ts",
   "services": [{"binding":"APPROVAL_MAILER","service":"concost-migration-trial","entrypoint":"ClaimApprovalMailer"}],
   "d1_databases": [
     {

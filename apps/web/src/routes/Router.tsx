@@ -30,6 +30,7 @@ import { PreviewSettings } from './PreviewSettings';
 import { PreviewDocumentTemplates } from './PreviewDocumentTemplates';
 import { BusinessCardContacts } from './BusinessCardContacts';
 import { EsStudio } from '../es/EsStudio';
+import { ProjectWorklogs } from '../workflow/ProjectWorklogs';
 
 export const USER_ROLES = ['ceo', 'director', 'pm', 'staff', 'reviewer', 'admin'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
@@ -78,6 +79,7 @@ export const ROUTES: RouteConfig[] = [
   { id: 'PROP-04', path: '/proposals/database', name: '제안서 DB관리', allowedRoles: ADMIN_ONLY },
   { id: 'PROJ-01', path: '/projects/schedule', name: '프로젝트 일정표' },
   { id: 'PROJ-02', path: '/projects/workflow', name: '프로젝트 세부 워크플로우' },
+  { id: 'WL-01', path: '/projects/worklogs', name: '업무일지' },
   { id: 'PROJ-PRINT', path: '/print/projects/month-a4', name: '프로젝트 일정표 A4 출력' },
   { id: 'WF-01', path: '/workflow/proposal-link', name: '1. 제안서 연동' },
   { id: 'WF-02', path: '/workflow/award', name: '프로젝트 접수' },
@@ -197,6 +199,7 @@ export const RouterView: React.FC<RouterProps> = ({ currentPath, currentSearch =
     );
   }
   if (!canAccessRoute(currentRoute, roles)) return <ForbiddenRoute route={currentRoute} onNavigate={onNavigate} />;
+  if(currentRoute.id==='WL-01')return <ProjectWorklogs key={userEmail+currentSearch} actorKey={userEmail}/>;
   if (currentRoute.id === 'ES-01' || currentRoute.id === 'ES-02') return <EsStudio key={currentPath + currentSearch} mode={currentRoute.id === 'ES-01' ? 'list' : 'editor'} search={currentSearch} onNavigate={onNavigate} />;
   if (currentRoute.id === 'RESP-01') return <ComponentCatalog />;
   if (previewMode && ['WF-03', 'WF-04', 'WF-05'].includes(currentRoute.id)) {

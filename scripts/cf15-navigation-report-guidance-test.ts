@@ -15,7 +15,8 @@ test('CF15 sidebar follows the requested workflow with proposal authoring nested
   assert.match(shell, /routeIds: \['CASE-06', 'CASE-09'\]/u);
   assert.match(shell, /nestedGroups: \[\s*\{ label: '프로젝트 의뢰'.*routeIds: \['CASE-02', 'CASE-07', 'CASE-08'\]/su);
   assert.match(shell, /\{ label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\] \}/u);
-  assert.match(shell, /routeIds: \['PROJ-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'\]/u);
+  assert.match(shell, /routeIds: \['PROJ-01', 'WL-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'\]/u);
+  assert.match(router, /WL-01'.*'업무일지'/u);
   assert.match(shell, /nestedGroups: \[\{ label: '프로젝트 보고서'.*routeIds: \['REPO-02', 'REPO-03', 'REPO-04'\]/u);
   assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
@@ -43,7 +44,8 @@ test('CF15 sidebar follows the requested workflow with proposal authoring nested
 test('CF15 report writing menu opens the real studio with template, outline, tutorial and admin prompt boundaries', () => {
   assert.match(router, /REPO-02'.*'보고서 작성'/u);
   assert.match(router, /previewMode && currentRoute\.id === 'REPO-02'.*PreviewReportStudio/u);
-  assert.match(studio, /지금은 \{activeStep\}단계입니다/u);
+  assert.match(studio, /aria-current=\{current \? 'step' : undefined\}/u);
+  assert.match(studio, /current \? '지금 진행 중'/u);
   assert.match(studio, /이 단계 완료 · 다음 단계/u);
   assert.match(studio, /renderStageHeader\(2\)/u);
   assert.match(studio, /report-step-card--2 report-stage-card/u);
