@@ -23,7 +23,7 @@ export interface PreviewReportReview {
   reviewedBy: { id: string; name: string | null } | null;
   decisionNote: string | null;
   reviewedAt: string | null;
-  deliveryNotification: { id: string; emailStatus: 'PENDING' | 'SENT' | 'FAILED' | 'CONFIG_REQUIRED' } | null;
+  deliveryNotification: { id: string; emailStatus: 'PENDING' | 'SENT' | 'FAILED' | 'CONFIG_REQUIRED' | 'RECIPIENT_REQUIRED' } | null;
 }
 
 const REVIEW_ROLES: readonly UserRole[] = ['admin', 'ceo', 'director', 'reviewer'];
@@ -163,7 +163,7 @@ export function PreviewApprovalInbox({ roles, onNavigate, search = '' }: { roles
             </section>}
             <p className="muted">요청 {new Date(review.requestedAt).toLocaleString('ko-KR')} · {review.requestedBy.name}{review.reviewedBy ? ` / 결정 ${review.reviewedBy.name}` : ''}</p>
             {review.decisionNote && <p className="notice-box"><strong>결정 의견</strong><br />{review.decisionNote}</p>}
-            {review.status === 'APPROVED' && review.deliveryNotification && <p className="notice-box"><strong>프로젝트 PM 납품 알림 생성 완료</strong><br />개인 알림은 즉시 저장되었습니다. 이메일 상태: {review.deliveryNotification.emailStatus === 'SENT' ? '발송 완료' : review.deliveryNotification.emailStatus === 'CONFIG_REQUIRED' ? '메일 발송 브리지 설정 필요' : review.deliveryNotification.emailStatus === 'FAILED' ? '발송 실패 · 관리자 재처리 필요' : '발송 대기'}</p>}
+            {review.status === 'APPROVED' && review.deliveryNotification && <p className="notice-box"><strong>프로젝트 PM 납품 알림 생성 완료</strong><br />개인 알림은 즉시 저장되었습니다. 이메일 상태: {review.deliveryNotification.emailStatus === 'SENT' ? '발송 완료' : review.deliveryNotification.emailStatus === 'RECIPIENT_REQUIRED' ? '수신 이메일 주소 확인 필요' : review.deliveryNotification.emailStatus === 'CONFIG_REQUIRED' ? '메일 발송 브리지 설정 필요' : review.deliveryNotification.emailStatus === 'FAILED' ? '발송 실패 · 관리자 재처리 필요' : '발송 대기'}</p>}
             {review.status === 'PENDING' && canReview && <>
               <label htmlFor={`decision-note-${review.id}`}>검토 의견</label>
               <textarea id={`decision-note-${review.id}`} className="report-editor report-editor--decision" value={notes[review.id] ?? ''} maxLength={4000} disabled={busyId === review.id} onChange={(event) => setNotes((current) => ({ ...current, [review.id]: event.target.value }))} placeholder="승인 근거 또는 수정할 내용을 입력하세요." />

@@ -7424,7 +7424,7 @@ function previewReviewProjection(row: PreviewReportReviewRow, userId: string): R
     reviewedBy: row.reviewedById ? { id: row.reviewedById, name: row.reviewedByName } : null,
     decisionNote: row.decisionNote,
     reviewedAt: row.reviewedAt
-    ,deliveryNotification: row.deliveryNotificationId ? { id: row.deliveryNotificationId, emailStatus: row.deliveryEmailStatus ?? 'PENDING' } : null
+    ,deliveryNotification: row.deliveryNotificationId ? { id: row.deliveryNotificationId, emailStatus: row.deliveryEmailStatus ?? 'RECIPIENT_REQUIRED' } : null
   };
 }
 
@@ -7671,18 +7671,23 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     if(status==='APPROVED'&&notificationSchema){
       pmRecipient=await env.DB.prepare("SELECT u.id,u.email,u.display_name AS displayName FROM preview_users u WHERE u.is_active=1 AND (EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=? AND a.user_id=u.id) OR u.id=?) AND (instr(u.roles_json,'\"pm\"')>0 OR u.id=?) ORDER BY CASE WHEN instr(u.roles_json,'\"pm\"')>0 THEN 0 ELSE 1 END LIMIT 1").bind(review.caseId,review.requestedBy,review.requestedBy).first<{id:string;email:string;displayName:string}>();
       if(!pmRecipient)return json({error:'납품 알림을 받을 프로젝트 PM 계정을 지정해 주세요.',code:'PROJECT_PM_REQUIRED'},409);
-      notificationId=crypto.randomUUID();outboxId=crypto.randomUUID();
+      notificationId=crypto.randomUUID();
+      // Legacy accounts can have a contact label instead of an email. Keep the
+      // in-app approval notification without inserting an invalid outbox row.
+      if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(pmRecipient.email))outboxId=crypto.randomUUID();
     }
     const statements=[
       env.DB.prepare('UPDATE preview_report_reviews SET status = ?, reviewed_by = ?, decision_note = ?, reviewed_at = ? WHERE id = ? AND organization_id = ? AND status = \'PENDING\' AND requested_by <> ? AND EXISTS (SELECT 1 FROM preview_report_revisions r WHERE r.id=preview_report_reviews.report_revision_id AND r.case_id=preview_report_reviews.case_id AND r.version=preview_report_reviews.report_version AND r.saved_by <> ?) AND ' + previewReportActiveSql('preview_report_reviews.case_id')).bind(status, user.id, note || null, now, review.id, PREVIEW_ORGANIZATION_ID, user.id, user.id),
       env.DB.prepare('INSERT INTO preview_report_review_events (id, review_id, event_type, actor_id, note, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.id, eventType, user.id, note || null, now, review.id, status, user.id),
       env.DB.prepare('INSERT INTO preview_case_activities (id, case_id, actor_id, event_type, title, description, created_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id = ? AND status = ? AND reviewed_by = ?)').bind(crypto.randomUUID(), review.caseId, user.id, eventType, status === 'APPROVED' ? `보고서 승인 · v${review.reportVersion}` : `보고서 수정 요청 · v${review.reportVersion}`, note || null, now, review.id, status, user.id)
     ];
-    if(status==='APPROVED'&&pmRecipient&&notificationId&&outboxId){
+    if(status==='APPROVED'&&pmRecipient&&notificationId){
       const title=`납품 필요 · 보고서 v${review.reportVersion} 승인 완료`;
       const message=`최종 결재자가 보고서 v${review.reportVersion}을 승인했습니다. 프로젝트 납품 절차를 진행해 주세요.`;
       statements.push(
-        env.DB.prepare("INSERT INTO preview_notifications (id,organization_id,user_id,case_id,review_id,notification_type,title,message,read_at,created_at) SELECT ?,?,?,?,?, 'REPORT_APPROVED_DELIVERY_REQUIRED',?,?,NULL,? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id=? AND status='APPROVED')").bind(notificationId,PREVIEW_ORGANIZATION_ID,pmRecipient.id,review.caseId,review.id,title,message,now,review.id),
+        env.DB.prepare("INSERT INTO preview_notifications (id,organization_id,user_id,case_id,review_id,notification_type,title,message,read_at,created_at) SELECT ?,?,?,?,?, 'REPORT_APPROVED_DELIVERY_REQUIRED',?,?,NULL,? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id=? AND status='APPROVED')").bind(notificationId,PREVIEW_ORGANIZATION_ID,pmRecipient.id,review.caseId,review.id,title,message,now,review.id)
+      );
+      if(outboxId)statements.push(
         env.DB.prepare("INSERT INTO preview_email_outbox (id,organization_id,notification_id,recipient_user_id,recipient_email,subject,body_text,status,attempt_count,provider_message_id,last_error_code,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'PENDING',0,NULL,NULL,?,? WHERE EXISTS (SELECT 1 FROM preview_notifications WHERE id=?)").bind(outboxId,PREVIEW_ORGANIZATION_ID,notificationId,pmRecipient.id,pmRecipient.email,`[클레임센터] ${title}`,`${pmRecipient.displayName}님,\n\n${message}\n\n프로젝트: ${review.caseId}\n검토번호: ${review.id}`,now,now,notificationId)
       );
     }
