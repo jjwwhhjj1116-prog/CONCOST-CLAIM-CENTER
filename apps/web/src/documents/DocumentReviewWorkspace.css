@@ -60,6 +60,7 @@
 .report-edit-canvas .report-chapter-hidden{display:none!important}
 .report-edit-canvas .report-chapter-heading::before{content:attr(data-report-chapter-number)}
 .structured-editor .report-edit-canvas .tiptap{padding:96px 80px 76px!important;font:16px/1.85 '휴먼명조','Noto Serif KR',Batang,serif;color:#111}
+.structured-editor .report-edit-canvas .tiptap:has(>[data-hwp-import-page]){padding:0!important}
 .structured-editor .report-edit-canvas .tiptap h1,.structured-editor .report-edit-canvas .tiptap h2,.structured-editor .report-edit-canvas .tiptap h3{font-family:inherit;color:#111;border:0;padding:0;line-height:1.6;word-break:keep-all}
 .structured-editor .report-edit-canvas .tiptap h1,.structured-editor .report-edit-canvas .tiptap .report-chapter-heading{font-size:24px;margin:0 0 24px}
 .structured-editor .report-edit-canvas .tiptap h2:not(.report-chapter-heading){font-size:20px;margin:28px 0 16px}
