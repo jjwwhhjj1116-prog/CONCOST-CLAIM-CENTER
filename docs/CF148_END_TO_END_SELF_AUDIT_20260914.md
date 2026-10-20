@@ -1,5 +1,14 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF236 정상 결재자 로그인 경로 재검수·인증 자료 부재 — 2026-10-20
+
+- **정상 UI 확인:** App.tsx는 기존 로그인 중에도 /login에서 정상 로그인 폼을 표시한다. 작성자 세션을 로그아웃하지 않고 별도 탭의 /login?returnTo=상신링크를 열었다. Chrome 자동완성에는 작성자 계정이 채워졌다. 기존 비밀번호 필드를 비우고 지정 결재자 아이디를 입력한 뒤 실제 화면을 확인했으나 결재자용 비밀번호는 자동완성되지 않았고 로그인 버튼은 disabled였다. 비밀번호 원문 읽기·표시·내보내기, 다른 계정 비밀번호 재사용·추측, 로그인 POST, 로그아웃, 계정 생성/초기화/역할변경은 모두0이다.
+- **계정 자료 조사:** 현재 저장소의 지정 환경/credential 원본 파일은 없고 예제만 있었다. 정확한 CEO 로그인 ID로 docs/scripts/apps/cloudflare 및 기존 인수인계 경로를 좁게 조사했으나 실계정 배포·비밀번호 전달·credential 파일 안내는 찾지 못했다. 두 소스 검색 결과는 제안서 회사 연락처였다. 개발 seed를 현재 가오픈 비밀번호로 추정하지 않았다. 대화 로그·브라우저 프로필·키체인·저장 세션 추출은 하지 않았다.
+- **미검증 유지:** 지정 결재자 현동명의 정상 인증수단을 확보하지 못해 review3899a538-d283-4b88-b5ab-10d6120351ea의 실제 승인·출력 활성화·승인본 DOCX/HWP/PDF 다운로드는 수행하지 못했다. 기존 localhost 결과를 실제 가오픈 승인으로 대체하지 않는다. 사용자에게 로그인·수동 출력 등의 작업은 요청하지 않았다. 정상 결재자 인증수단이 확보되면 위 동일 상신 건에서 이어가야 한다.
+- **원형 보존 확인:** 원래 PM 유종욱 세션으로 reload 후 QA19 v9/결재 대기/최종3출력 disabled를 확인했고 임시 로그인 탭은 닫았다. 전후 읽기 백업은 각14904892B/SHA c1d5c50f1f1f1a25a1f5a58c14520a004067a30ff82f341f85e344c2d13b40b8로 전체 byte exact다. 실제 DB/권한/비밀번호/세션/업무자료/키 변경0, 기존Worker4db5ffb6-fb17-4f56-b8bf-a1be1bd21010와secret이름2개 동일이다. 제품 코드·환경·배포 변경0이며 불필요한 재배포는 하지 않았다.
+- **증거·인수인계:** tmp/cf236-qa/auth-ui-receipt.json, before/after-proof.json, regression/final-comparison.json, code-map/exact-account-reference-review.json 및 gaopen-pending-preserved.png. 정상 로그인 진행에 필요한 유효 결재자 인증수단이 현재 없는 상태이며, 최종 승인 E2E 완료가 아니다. 기존 CF235 이하 본문과 사용자 삭제22개/package.json M/apps/web/tmp를 보존한다.
+
+
 ## CF235 최종 결재 진입 수정·가오픈 상신·격리 승인 출력 검수 — 2026-10-20
 
 - **발견·수정:** 실제 가오픈 QA19 v9의 전체 HWP 원고가 4단계에 열려 있지만 독립 목차 미확정 때문에 5단계가 잠겼다. PreviewReportStudio.tsx에서 양쪽 whole-document marker와 실제 본문이 있는 통문서만 별도 목차 확정을 대체하게 했다. project/loaded 일치·목차 dirty/sync/save·원고 version/title/content/dirty/save 조건과 개별 챕터 AI 목차 확정은 보존했다. 제품 74eca4d, 변경은 route 3줄과 실제 gate 회귀 스크립트다. 수정 전 음성 실패/수정 후15검사 PASS, 타입 검사·build·승인 runtime stage PASS. 기존 결재 회귀15/15(실제 Worker+SqlD1 로컬)도 PASS다. 자기승인·비지정 수신자·오래된 revision 차단, 고정 상신본/최종화 검사를 완화하지 않았다.
