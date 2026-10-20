@@ -3,6 +3,7 @@ import { Button, Dialog } from '@claim-studio/ui';
 import { apiRequest } from './api';
 import { AppShell } from './layout/AppShell';
 import { requestNavigation } from './navigation-guard';
+import { resolveLoginReturnTo } from './login-return';
 import { isSafeReturnTo, RouterView, type UserRole } from './routes/Router';
 import { ProjectSchedulePrint } from './workflow/ProjectSchedulePrint';
 import { PublicOAuthPages } from './routes/PublicOAuthPages';
@@ -102,7 +103,7 @@ export const App: React.FC = () => {
 
   const expireSession = async () => {
     try { await apiRequest('/auth/logout', { method: 'POST' }); } catch { /* Session may already be invalid. */ }
-    const returnTo = isSafeReturnTo(currentPath) && currentPath !== '/login' ? currentPath : '/dashboard';
+    const returnTo = resolveLoginReturnTo(currentLocationRef.current, isSafeReturnTo);
     setSession(null);
     setPreviewMode(false);
     navigate(`/login?returnTo=${encodeURIComponent(returnTo)}`);
@@ -116,8 +117,7 @@ export const App: React.FC = () => {
       if (!isSessionUser(user)) throw new Error('Invalid session response');
       setSession(user);
       setPreviewMode(user.previewMode === true);
-      const requested = new URLSearchParams(window.location.search).get('returnTo') ?? '/dashboard';
-      navigate(isSafeReturnTo(requested) && requested !== '/login' ? requested : '/dashboard', true);
+      navigate(resolveLoginReturnTo(currentBrowserLocation(), isSafeReturnTo), true);
     } catch (reason) {
       setLoginError(reason instanceof Error ? reason.message : String(reason));
     } finally {
