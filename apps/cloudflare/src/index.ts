@@ -93,6 +93,7 @@ export interface CloudflareEnv {
   ANTHROPIC_TEST_FETCH?: typeof fetch;
   PM_NOTIFICATION_WEBHOOK_URL?: string;
   PM_NOTIFICATION_WEBHOOK_SECRET?: string;
+  APPROVAL_MAILER?: AssetsLike;
   GEMINI_DATA_GOVERNANCE_MODE?: string;
   HERMES_TEST_FETCH?: MemoryBridgeFetch;
   ERP_PROJECT_WEBHOOK_URL?: string;
@@ -7444,7 +7445,7 @@ async function dispatchPreviewEmailOutbox(env:CloudflareEnv,outboxId:string):Pro
   if(!row)return;
   const now=new Date(Math.max(Date.now(),Date.parse(row.updatedAt)+1)).toISOString();
   const endpoint=env.PM_NOTIFICATION_WEBHOOK_URL?.trim()??'';
-  if(!/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/|$)/u.test(endpoint)||!env.PM_NOTIFICATION_WEBHOOK_SECRET){
+  if(!env.APPROVAL_MAILER&&(!/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/|$)/u.test(endpoint)||!env.PM_NOTIFICATION_WEBHOOK_SECRET)){
     if(row.status!=='CONFIG_REQUIRED')await env.DB.prepare("UPDATE preview_email_outbox SET status='CONFIG_REQUIRED',attempt_count=attempt_count+1,last_error_code='EMAIL_BRIDGE_NOT_CONFIGURED',updated_at=? WHERE id=? AND status=? AND attempt_count=?").bind(now,outboxId,row.status,row.attemptCount).run();
     return;
   }
@@ -7454,7 +7455,12 @@ async function dispatchPreviewEmailOutbox(env:CloudflareEnv,outboxId:string):Pro
   const current=await env.DB.prepare('SELECT status,attempt_count AS attempts FROM preview_email_outbox WHERE id=?').bind(outboxId).first<{status:string;attempts:number}>();
   if(current?.status!==row.status||current.attempts!==row.attemptCount){await env.DB.prepare('DELETE FROM preview_email_dispatch_claims WHERE outbox_id=? AND claim_token=?').bind(outboxId,claimToken).run();return;}
   let response:Response|null=null;
-  try{response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15_000),headers:{'Content-Type':'application/json',Authorization:`Bearer ${env.PM_NOTIFICATION_WEBHOOK_SECRET}`},body:JSON.stringify({messageType:'REPORT_APPROVED_DELIVERY_REQUIRED',to:row.recipientEmail,subject:row.subject,text:row.bodyText,idempotencyKey:row.id})});}catch{/* Retain the claim until an unknown provider result is reconciled. */}
+  try{
+    const payload=JSON.stringify({messageType:'REPORT_APPROVED_DELIVERY_REQUIRED',to:row.recipientEmail,subject:row.subject,text:row.bodyText,idempotencyKey:row.id});
+    response=env.APPROVAL_MAILER
+      ?await env.APPROVAL_MAILER.fetch(new Request('https://claim-center.internal/approved',{method:'POST',headers:{'Content-Type':'application/json'},body:payload}))
+      :await fetch(endpoint,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(15_000),headers:{'Content-Type':'application/json',Authorization:`Bearer ${env.PM_NOTIFICATION_WEBHOOK_SECRET}`},body:payload});
+  }catch{/* Retain the claim until an unknown provider result is reconciled. */}
   const providerMessageId=response?.headers.get('X-Message-Id')?.trim()||null;
   const sent=Boolean(response?.ok&&providerMessageId&&providerMessageId.length<=500);
   const knownRejected=Boolean(response&&[400,401,403,404,422].includes(response.status));

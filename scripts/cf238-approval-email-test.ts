@@ -67,3 +67,12 @@ for(const mode of ['missing-receipt','network-unknown'] as const)test('CF238 '+m
 test('CF238 known rejection can retry with the same identity up to the fixed attempt limit',async()=>{
   const f=await setup(),original=globalThis.fetch;try{bridge(f.env);let sends=0;globalThis.fetch=async()=>{sends++;return new Response(null,{status:401});};for(let i=0;i<7;i++)assert.equal((await f.retry()).status,200);assert.equal(sends,4);assert.equal(scalar(f.sql,'SELECT attempt_count FROM preview_email_outbox'),5);assert.equal(scalar(f.sql,'SELECT count(*) FROM preview_email_dispatch_claims'),0);assert.equal(JSON.stringify(f.sql.exec('SELECT * FROM preview_users ORDER BY id')),f.accounts);assert.equal(f.sql.exec('PRAGMA foreign_key_check').length,0);}finally{globalThis.fetch=original;f.sql.close();}
 });
+
+test('CF239 internal company mail binding takes precedence without copying a mail key or using the public webhook',async()=>{
+  const f=await setup(),original=globalThis.fetch;try{
+    bridge(f.env);let calls=0;
+    globalThis.fetch=async()=>{throw Error('Public mail webhook must not be called');};
+    f.env.APPROVAL_MAILER={async fetch(req){calls++;assert.equal(new URL(req.url).origin,'https://claim-center.internal');assert.equal(req.headers.has('Authorization'),false);assert.equal((await req.json() as any).to,'pm@example.invalid');return new Response(null,{headers:{'X-Message-Id':'synthetic-private-receipt'}});}};
+    assert.equal((await f.retry()).status,200);assert.equal((await f.retry()).status,200);assert.equal(calls,1);assert.equal(scalar(f.sql,'SELECT status FROM preview_email_outbox'),'SENT');assert.equal(JSON.stringify(f.sql.exec('SELECT * FROM preview_users ORDER BY id')),f.accounts);
+  }finally{globalThis.fetch=original;f.sql.close();}
+});
