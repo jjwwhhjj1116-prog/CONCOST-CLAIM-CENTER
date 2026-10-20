@@ -225,14 +225,16 @@ async function table(element: HTMLTableElement,position?:{left:number;top:number
 async function positionedBlocks(page:HTMLElement):Promise<Block[]>{
   const source=page.matches('[data-hwp-import-page]')?page:page.querySelector<HTMLElement>('[data-hwp-import-page]');
   if(!source)throw Error('DOCX 원본 페이지 배치가 없습니다.');
-  const paper=source.getBoundingClientRect(),scale=paper.width/Number(source.getAttribute('data-hwp-width'));
-  const frame=(element:HTMLElement):IFrameOptions=>{const r=element.getBoundingClientRect();return{type:'absolute',position:{x:Math.round((r.left-paper.left)/scale*15),y:Math.round((r.top-paper.top)/scale*15)},width:twips(r.width/scale),height:Math.max(1,twips(r.height/scale)),anchor:{horizontal:FrameAnchorType.PAGE,vertical:FrameAnchorType.PAGE},wrap:FrameWrap.NOT_BESIDE,rule:HeightRule.ATLEAST,space:{horizontal:0,vertical:0}};};
+  // Font/image reads below can yield while export progress reflows the UI.
+  // Measure the page and its child together, so their viewport origin cancels.
+  const position=(element:HTMLElement)=>{const paper=source.getBoundingClientRect(),scale=paper.width/Number(source.getAttribute('data-hwp-width')),r=element.getBoundingClientRect();return{left:(r.left-paper.left)/scale,top:(r.top-paper.top)/scale,width:r.width/scale,height:r.height/scale};};
+  const frame=(element:HTMLElement):IFrameOptions=>{const r=position(element);return{type:'absolute',position:{x:Math.round(r.left*15),y:Math.round(r.top*15)},width:twips(r.width),height:Math.max(1,twips(r.height)),anchor:{horizontal:FrameAnchorType.PAGE,vertical:FrameAnchorType.PAGE},wrap:FrameWrap.NOT_BESIDE,rule:HeightRule.ATLEAST,space:{horizontal:0,vertical:0}};};
   const result:Block[]=[];
   for(const element of [...source.children] as HTMLElement[]){
     if(ignored(element))continue;
     if(element.hasAttribute('data-hwp-text-box')){
       for(const p of [...element.children] as HTMLElement[])result.push(await paragraph([...p.childNodes],p,'',{before:0,after:0},frame(p)));
-    }else if(element instanceof HTMLTableElement){const r=element.getBoundingClientRect();result.push(await table(element,{left:(r.left-paper.left)/scale,top:(r.top-paper.top)/scale}));}
+    }else if(element instanceof HTMLTableElement){const r=position(element);result.push(await table(element,{left:r.left,top:r.top}));}
     else if(element instanceof HTMLImageElement)result.push(await paragraph([element],element,'',{before:0,after:0},frame(element)));
     else if(element.hasAttribute('data-hwp-import-rule')){
       const css=style(element),vertical=Number(element.getAttribute('data-hwp-rule-height'))>Number(element.getAttribute('data-hwp-rule-width'));
