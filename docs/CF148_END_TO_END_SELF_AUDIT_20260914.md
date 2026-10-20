@@ -1,5 +1,13 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF240 업데이트 안내·사용매뉴얼 최신화 및 양쪽 서버 반영 — 2026-10-20
+
+- **누락 확인·수정:** 사용자용 업데이트 안내가 9월 22일에 머물러 있었다. 제품 커밋 79c72161839020cc0a44ec14ead474cb60c2189d로 10월 20일 변경 이력을 추가하고 보고서/결재 도움말·튜토리얼 설명·가오픈 이용 안내를 실제 기능과 맞췄다. 임시복구 7일(사이트 사용 중 정리), 편집형 HWP/DOCX 가져오기, 서버 저장·재열기, 지정 결재자 상신·승인·확정 3종 출력, 승인 이메일 상태·재요청을 안내한다. 기존 이력과 튜토리얼 완료 버전은 유지한다. 전문 검수에서 발견한 HWP 페이지 적용/편집형 가져오기 경로 혼동을 수정해 실제 메뉴 ‘HWP/HWPX 문장·표·사진 가져오기’→‘N쪽 편집 가능하게 적용’과 DOCX 전체 적용을 명시했다. 모든 외부 파일의 완전한 동일 배치나 메일 받은함 확인을 약속하지 않는다.
+- **검수 PASS:** 기존 관련 11개 검사, 웹 타입검사, Vite 빌드 exit0. 변경 전 4개 실패는 오래된 메뉴/버튼 문구 검사였고 현재 동작에 맞게 교정했으며 권한·저장·이력 보호 검사는 유지했다. 도움말 절차는 데스크톱 2열·14px, 기존 모바일 1열을 유지한다. 로컬 실제 AppShell에서 새 공지→닫기→재로드 미노출/도움말을 확인하고 실제 390px에서 가로 넘침 없음을 확인했다. 세 전문 검수의 지적은 해소했다. 이 범위를 전체 업무 A–Z·모든 문서 호환성 재검수로 확대하지 않는다.
+- **동일 배포·실제 화면 PASS:** 테스트 Worker b8f7611b-24a0-4b91-8d25-5ed601b39b77, 가오픈 Worker 4f275c5a-0b9e-44c7-bbb2-55b78e3bbd8e. 두 사이트에서 동일 46파일/38,049,484B를 직접 받아 SHA256을 검증했다. entry /assets/index-BA2Otek7.js, canonical f9fcd86cae49514e166e3cf5ee56b24ab144b23d06ae0f2a50115f92f62e8569. health/readiness200, 비인증 /api/auth/me401. 기존 정상 로그인 세션을 사용하는 별도 가오픈 탭에서 10/20 공지 자동 표시·확인 후 재로드 미노출·계정 도구 재열기·보고서 도움말 10절차·이용 안내 4항목의 실제 표시를 확인했다. 마지막 HWP 경로 문구도 실제 DOM/유효 캡처에서 확인했다.
+- **보존 범위:** backend/config와 승인 native runtime 28파일은 불변이며 WASM bcc40a79… 그대로다. 이번 원격 DB/schema/계정·비밀번호·권한·키 수정, 원고 편집, 메일 재발송은 0이다. --keep-vars 및 기존 RELEASE_MAINTENANCE=0으로 배포했고 활성 버전 전후 설정 해시/키 이름 비교에서 양쪽 9개 binding 동일, 회사 발송 Worker 14개 binding/버전도 동일이다. /settings는 최신 미배포 CI 업로드의 4개 binding을 반환했으므로 실제 활성 deployment→version resources로 보존을 검증했다. secret 원문 동일성을 읽어 검증한 것은 아니다. 사용자 기존 삭제22개/package.json M/apps/web/tmp와 QS README2개 변경은 그대로 보존한다.
+- **증거·다음 시작:** private tmp/cf240-qa/{reviewed-release.json,final-tests-corrected.log,web-typecheck-corrected.log,web-build-release.log,settings-active-before.json,settings-active-after.json,development/live-artifact-proof.json,gaopen/live-artifact-proof.json,gaopen/help-proof.json,gaopen/guide-proof.json,gaopen/update-proof.json,gaopen/manual-refreshed.png}. 사용자 접근은 왼쪽 아래 ‘계정·업무 도구’→업데이트/도움말/이용 안내다. 문서 최신화와 양쪽 반영은 완료했다. CF239의 실제 회사 메일함 열람은 여전히 미검증이며 새 OAuth 연결·동의를 만들지 않는다. 아래 이전 감사 본문은 byte exact 보존한다.
+
 ## CF239 기존 회사 Resend 연결 구현·실행 검수 통과 / 명시 승인 대기 — 2026-10-20
 
 - **현재 판정:** 실제 발송·수신 검수는 미완료다. 로컬 제품 커밋 Claim Center21b79f74b4787b10623a57de9378ddb327e4416e(선행CF2383cebf2e 포함), 기존 회사메일서비스914e370eb5ccaf97b058ae456c6a4976d859a874만 보존했다. 실제 push·배포·원격 migration·메일 발송0. 자동 승인 검토의 차단을 우회하지 않았으며, 사용자에게 파일 출력·로그인 등의 수동 작업은 요청하지 않고 정확한 두 작업의 승인만 요청했다.
