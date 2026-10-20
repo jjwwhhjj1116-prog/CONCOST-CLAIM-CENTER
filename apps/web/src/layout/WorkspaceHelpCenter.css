@@ -61,8 +61,8 @@
 .workspace-help-center__grid strong { color: var(--text-primary); }
 .workspace-help-center__grid ul, .workspace-help-center__grid ol { display: grid; gap: 6px; margin: 10px 0 0; padding-left: 1.25rem; color: var(--text-secondary); line-height: 1.45; }
 .workspace-help-center__route { border: 1px solid #c7d2fe; border-radius: 15px; padding: 16px; background: linear-gradient(110deg, #eef2ff, #f0fdfa); }
-.workspace-help-center__route ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin: 12px 0; padding: 0; counter-reset: route-step; list-style: none; }
-.workspace-help-center__route li { min-width: 0; border-radius: 10px; padding: 10px; background: #fff; color: #334155; font-size: .72rem; font-weight: 750; }
+.workspace-help-center__route ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0; padding: 0; counter-reset: route-step; list-style: none; }
+.workspace-help-center__route li { min-width: 0; border-radius: 10px; padding: 12px; background: #fff; color: #334155; font-size: .875rem; font-weight: 500; line-height: 1.6; }
 .workspace-help-center__route li::before { counter-increment: route-step; content: counter(route-step); display: block; margin-bottom: 5px; color: #4f46e5; font: 850 .67rem 'DM Mono', monospace; }
 :root[data-theme='dark'] .workspace-tutorial-coach { border-color: #334155; background: rgba(15,23,42,.98); }
 :root[data-theme='dark'] .workspace-tutorial-coach__bar { border-color: #334155; background: #17233a; }

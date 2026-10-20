@@ -39,7 +39,7 @@ test('CF82 sidebar and contextual help use the member-facing category names', ()
 
 test('CF82 ordinary member surfaces describe outcomes instead of storage implementation', () => {
   assert.doesNotMatch(ordinaryMemberSources, /D1 LIVE|D1에 |D1 자동|D1 보고서|D1 임시보관|Cloudflare D1|R2 미사용|마이그레이션/u);
-  assert.match(shell, /업무공간 · 자동저장/u);
+  assert.match(shell, /계정·업무 도구/u);
   assert.match(router, /업무 기록 자동 저장/u);
   assert.match(ordinaryMemberSources, /자동 저장|안전하게 저장|임시 보관/u);
   assert.doesNotMatch(settings.slice(settings.indexOf("{section === 'PERSONAL'"), settings.indexOf("{section === 'ADMIN'")), /D1|Cloudflare|PBKDF2|PRIVATE_SERVER_BRIDGE|localhost/u);

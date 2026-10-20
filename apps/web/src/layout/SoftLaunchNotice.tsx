@@ -37,10 +37,10 @@ export const SoftLaunchNotice: React.FC<{ hideBanner?: boolean; openRequest?: nu
       <section className="soft-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="soft-launch-title">
         <header><div><span>SOFT LAUNCH · MEMBER GUIDE</span><h2 id="soft-launch-title">가오픈 이용 안내</h2></div><button ref={closeButtonRef} type="button" aria-label="가오픈 이용 안내 닫기" onClick={() => setDetailOpen(false)}>×</button></header>
         <div className="soft-launch-dialog__grid">
-          <article><span>01</span><div><h3>기본 업무 흐름</h3><p>프로젝트 의뢰 → 제안서 입력·초안·검수·확정 → 프로젝트 접수·담당 PM·기준 일정 → 착수회의·현장조사·물량산출 → 보고서 작성·검수·확정 순서로 이용합니다.</p></div></article>
-          <article><span>02</span><div><h3>문서 발송 전 확인</h3><p>DOCX·PDF·HWP 확정본은 미리보기 페이지를 A4 이미지로 보존해 출력합니다. 거래처 발송 전 내려받은 파일의 첫 장·중간 장·마지막 장을 반드시 열어 확인해 주세요.</p></div></article>
-          <article><span>03</span><div><h3>현재 주의사항</h3><p>여러 화면에서 같은 일정을 동시에 수정한 경우 최신 일정 확인 안내가 표시될 수 있습니다. 입력값은 유지되며, 최신 일정 다시 불러오기 후 재저장할 수 있습니다. 메일·Drive·AI 기능은 관리자 연결 상태에 따라 제한될 수 있습니다.</p></div></article>
-          <article><span>04</span><div><h3>추가 개발 예정</h3><p>실시간 공동 편집·변경자 표시, 문서 형식별 호환성 확대, 외부 메일 서버 실제 발송, Google Drive 및 AI 연결 상태 안내를 순차 보강합니다.</p></div></article>
+          <article><span>01</span><div><h3>기본 업무 흐름</h3><p>프로젝트 의뢰 → 제안서·프로젝트 접수 → 착수회의·현장조사·물량산출 → 보고서 작성·검수 → 5단계 결재상신 → 지정 결재자 승인 → 승인본 확정·출력 순서로 이용합니다.</p></div></article>
+          <article><span>02</span><div><h3>가져오기·최종 출력</h3><p>HWP·DOCX를 보고서에 적용한 뒤 문장·표·사진과 배치를 확인하고 저장 완료를 기다리세요. 앞 단계의 작성본 출력은 검수용입니다. 5단계 승인·확정 후 DOCX·HWP·PDF 최종본을 내려받으며, 외부 발송 전 실제 파일을 확인해 주세요.</p></div></article>
+          <article><span>03</span><div><h3>임시복구·서버 저장</h3><p>‘이전 작업 복구’에서 필요한 자료를 선택합니다. 임시 복구본은 마지막 보관 후 7일간 유지하며 사이트 사용 중 만료본을 정리합니다. 서버 저장 완료와는 별도이며, 서버 저장본과 직접 보관한 파일은 이 정책으로 삭제하지 않습니다.</p></div></article>
+          <article><span>04</span><div><h3>승인 이메일·도움말</h3><p>승인 이메일의 수신 담당자와 발송 상태를 확인하세요. 메일 서버 접수는 실제 받은함 도착·열람과 다릅니다. 제안서 메일 발송 준비는 별도 기능입니다. 왼쪽 아래 ‘계정·업무 도구’에서 업데이트·도움말·알림을 열 수 있고, 모바일은 메뉴를 먼저 엽니다.</p></div></article>
         </div>
         <footer><p>문제 신고 시 사용한 프로젝트명, 화면, 발생 시각과 캡처를 함께 전달해 주세요.</p><Button onClick={() => { dismiss(); setDetailOpen(false); }}>확인하고 시작하기</Button></footer>
       </section>

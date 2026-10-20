@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-09-22';
-export const RELEASE_DATE_LABEL = '2026년 9월 22일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v4:${userId}`;
+export const RELEASE_DATE = '2026-10-20';
+export const RELEASE_DATE_LABEL = '2026년 10월 20일';
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v1:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,10 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  { title: '10월 20일 · 보고서 작업 화면·임시복구', text: '큰 상단 소개 영역을 정리하고, 담당자 검수의 목차 제목 수정·챕터별 분담·판례 인용 검수를 나란한 선택 도구로 모았습니다. 이전 자료는 ‘이전 작업 복구’를 눌러 선택합니다. 임시 복구본은 마지막 보관 후 7일간 유지하며, 만료본은 사이트 사용 중 정리합니다. 서버 저장본과 직접 보관한 파일은 이 정책으로 삭제하지 않습니다.' },
+  { title: '10월 20일 · HWP·DOCX 가져오기와 편집', text: 'HWP·DOCX에서 가져온 문장·표·사진을 웹 보고서에서 편집하고 서버에 저장·다시 열 수 있도록 보완했습니다. 원본 열람이나 PDF 이미지 페이지와는 구분됩니다. 적용 후 글자·표·사진과 페이지 배치를 확인하고 자동 저장 완료를 기다리세요. 모든 외부 문서의 배치가 완전히 같다는 보장은 아닙니다.' },
+  { title: '10월 20일 · 지정 결재와 최종 출력', text: '5단계에서 저장 버전과 최종 결재자를 확인해 상신합니다. 지정 결재자는 업무 알림·결재함에서 상신본을 확인하고 승인 또는 수정 요청을 합니다. 승인 후 ‘승인본 확정·출력 준비’ 또는 첫 출력으로 승인 버전을 확정해 DOCX·HWP·PDF를 내려받습니다. 앞 단계의 작성본 출력은 검수용이며, 확정 후에는 확정 당시 본문으로 출력합니다.' },
+  { title: '10월 20일 · 담당자 승인 이메일', text: '승인 완료 메일을 기존 회사 발송 서비스에 연결하고 발송 오류를 수정했습니다. ‘결재 승인 이메일’에서 수신 담당자와 상태를 확인하고, 재요청이 가능한 경우 ‘담당자에게 승인 이메일 보내기’를 사용할 수 있습니다. 서버 접수는 실제 받은함 도착·열람과 다릅니다. 접수 완료 또는 결과 확인 중에는 중복 발송을 막습니다.' },
   { title: '9월 22일 · 테스트·가오픈 동일 소스 적용', text: '테스트서버의 수정 소스를 가오픈에도 적용했습니다. 기존 프로젝트와 저장 문서는 유지합니다. 서버별 연결 설정과 원본 템플릿 등록 자료는 별도로 관리되므로, 소스가 같아도 등록 자료까지 자동 복제되지는 않습니다.' },
   { title: '9월 22일 · 보고서·제안서 검수 보완', text: '보고서 A4 세로 편집·갑지·목차와 표·사진 출력 처리를 보완했습니다. 제안서의 계약된 프로젝트 연결, 공통양식 편집·이미지 추가와 페이지 이동을 개선했습니다. 기존 저장·승인 문서는 자동으로 다시 작성하지 않으며, 누락 자료와 과거 AI 초안은 담당자 확인이 필요합니다.' },
   { title: '9월 22일 · 원본 폴더 등록·설정 보존', text: '폴더 업로드에서 파일명에 폴더 경로가 섞여 원본 등록이 거절되던 오류를 수정했습니다. 공통 API 설정 동기화 시 입력하지 않은 기존 키는 삭제하지 않습니다. 전체 원본의 출력 동일성 및 AI 실제 연결 검수는 진행 중이며, 외부 제출 전 출력물을 확인해 주세요.' },
@@ -52,9 +56,9 @@ export function ReleaseNotice({ open, onClose }: { open: boolean; onClose: () =>
   return <dialog ref={dialogRef} className="release-notice" aria-labelledby="release-notice-title" aria-describedby="release-notice-description" onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <header><div><time dateTime={RELEASE_DATE}>{RELEASE_DATE_LABEL}</time><h2 id="release-notice-title">업데이트 안내</h2></div><button type="button" autoFocus aria-label="업데이트 안내 닫기" onClick={onClose}>×</button></header>
     <div className="release-notice__body">
-      <p id="release-notice-description">9월 22일 테스트서버와 가오픈서버에 동일 소스를 반영했습니다. 기존 데이터와 연결은 보존합니다.<br/>아래에는 이번 변경과 이전 개선 이력을 함께 표시합니다. 전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다.</p>
+      <p id="release-notice-description">10월 20일 테스트서버와 가오픈서버에 동일 소스를 반영했습니다. 보고서 복구·편집·최종 결재·출력과 승인 이메일 사용법을 갱신했습니다.<br/>아래에는 이번 변경과 이전 개선 이력을 함께 표시합니다. 전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다.</p>
       <div className="release-notice__updates">{RELEASE_UPDATES.map((update) => <section key={update.title}><h3>{update.title}</h3><p>{update.text}</p></section>)}</div>
-      <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
+      <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 제안서의 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 보고서 승인 이메일은 별도 실제 발송 기능이며, 메일 서버 접수와 받은함 도착은 구분합니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
     </div>
     <footer><p>이 브라우저에서 계정별로 한 번 안내합니다.<br/>계정·업무 도구의 ‘업데이트’ 버튼으로 다시 볼 수 있습니다.</p><Button onClick={onClose}>확인하고 시작하기</Button></footer>
   </dialog>;
