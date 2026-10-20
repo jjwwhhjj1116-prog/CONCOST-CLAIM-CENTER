@@ -51,7 +51,7 @@ class SqlD1 {
   }
 }
 
-async function databaseFixture(): Promise<{ sql: Database; env: CloudflareEnv }> {
+async function databaseFixture({adminLogin='admin'}:{adminLogin?:string}={}): Promise<{ sql: Database; env: CloudflareEnv }> {
   mkdirSync(join(process.cwd(),'tmp','cf221-qa','approval-tests'),{recursive:true});
   const SQL = await initSqlJs();
   const sql = new SQL.Database();
@@ -64,7 +64,7 @@ async function databaseFixture(): Promise<{ sql: Database; env: CloudflareEnv }>
   ]) sql.exec(migration(name));
   const now = new Date().toISOString();
   const addUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
-  addUser(ADMIN_ID, 'admin', '["admin"]');
+  addUser(ADMIN_ID, adminLogin, '["admin"]');
   addUser(REVIEWER_ID, 'reviewer', '["director"]');
   sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(ADMIN_TOKEN), ADMIN_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);
   sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(REVIEWER_TOKEN), REVIEWER_ID, now, new Date(Date.now() + 3_600_000).toISOString()]);

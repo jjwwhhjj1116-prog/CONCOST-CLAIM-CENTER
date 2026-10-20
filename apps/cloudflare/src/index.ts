@@ -7404,6 +7404,7 @@ interface PreviewReportReviewRow {
   reviewedAt: string | null;
   deliveryNotificationId?: string | null;
   deliveryEmailStatus?: string | null;
+  deliveryRecipientId?: string | null;
 }
 
 function previewReviewProjection(row: PreviewReportReviewRow, userId: string): Record<string, unknown> {
@@ -7424,30 +7425,73 @@ function previewReviewProjection(row: PreviewReportReviewRow, userId: string): R
     reviewedBy: row.reviewedById ? { id: row.reviewedById, name: row.reviewedByName } : null,
     decisionNote: row.decisionNote,
     reviewedAt: row.reviewedAt
-    ,deliveryNotification: row.deliveryNotificationId ? { id: row.deliveryNotificationId, emailStatus: row.deliveryEmailStatus ?? 'RECIPIENT_REQUIRED' } : null
+    ,deliveryNotification: row.deliveryNotificationId ? { id: row.deliveryNotificationId, emailStatus: row.deliveryEmailStatus ?? 'RECIPIENT_REQUIRED', canSendEmail:row.deliveryRecipientId===userId } : null
   };
+}
+
+function previewApprovalEmailAddress(email:string,loginId:string):string {
+  return [email,loginId].find(value=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value))??'';
+}
+
+function previewApprovalEmailBody(env:CloudflareEnv,request:Request,name:string,message:string,caseId:string,reviewId:string):string {
+  const origin=env.GOOGLE_OAUTH_REDIRECT_ORIGIN||new URL(request.url).origin;
+  return `${name}님,\n\n${message}\n\n승인 보고서 확인·출력: ${origin}/reports/studio?caseId=${encodeURIComponent(caseId)}&step=5\n결재 내용: ${origin}/approval?reviewId=${encodeURIComponent(reviewId)}`;
 }
 
 async function dispatchPreviewEmailOutbox(env:CloudflareEnv,outboxId:string):Promise<void>{
   if(!env.DB)return;
-  const row=await env.DB.prepare("SELECT id,recipient_email AS recipientEmail,subject,body_text AS bodyText,status,attempt_count AS attemptCount,updated_at AS updatedAt FROM preview_email_outbox WHERE id=? AND status='PENDING'").bind(outboxId).first<{id:string;recipientEmail:string;subject:string;bodyText:string;status:string;attemptCount:number;updatedAt:string}>();
+  const row=await env.DB.prepare("SELECT id,recipient_email AS recipientEmail,subject,body_text AS bodyText,status,attempt_count AS attemptCount,updated_at AS updatedAt FROM preview_email_outbox WHERE id=? AND status IN ('PENDING','CONFIG_REQUIRED','FAILED') AND attempt_count<5").bind(outboxId).first<{id:string;recipientEmail:string;subject:string;bodyText:string;status:string;attemptCount:number;updatedAt:string}>();
   if(!row)return;
   const now=new Date(Math.max(Date.now(),Date.parse(row.updatedAt)+1)).toISOString();
   const endpoint=env.PM_NOTIFICATION_WEBHOOK_URL?.trim()??'';
   if(!/^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/|$)/u.test(endpoint)||!env.PM_NOTIFICATION_WEBHOOK_SECRET){
-    await env.DB.prepare("UPDATE preview_email_outbox SET status='CONFIG_REQUIRED',attempt_count=attempt_count+1,last_error_code='EMAIL_BRIDGE_NOT_CONFIGURED',updated_at=? WHERE id=? AND status='PENDING' AND attempt_count=?").bind(now,outboxId,row.attemptCount).run();
+    if(row.status!=='CONFIG_REQUIRED')await env.DB.prepare("UPDATE preview_email_outbox SET status='CONFIG_REQUIRED',attempt_count=attempt_count+1,last_error_code='EMAIL_BRIDGE_NOT_CONFIGURED',updated_at=? WHERE id=? AND status=? AND attempt_count=?").bind(now,outboxId,row.status,row.attemptCount).run();
     return;
   }
-  let response:Response;
-  try{response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${env.PM_NOTIFICATION_WEBHOOK_SECRET}`},body:JSON.stringify({messageType:'REPORT_APPROVED_DELIVERY_REQUIRED',to:row.recipientEmail,subject:row.subject,text:row.bodyText,idempotencyKey:row.id})});}
-  catch{response=new Response(null,{status:503});}
-  const providerMessageId=response.headers.get('X-Message-Id');
-  await env.DB.prepare("UPDATE preview_email_outbox SET status=?,attempt_count=attempt_count+1,provider_message_id=?,last_error_code=?,updated_at=? WHERE id=? AND status='PENDING' AND attempt_count=?").bind(response.ok?'SENT':'FAILED',response.ok?(providerMessageId??`accepted-${row.id}`):null,response.ok?null:`EMAIL_BRIDGE_${response.status}`,now,outboxId,row.attemptCount).run();
+  const claimToken=crypto.randomUUID();
+  const claim=await env.DB.prepare('INSERT OR IGNORE INTO preview_email_dispatch_claims (outbox_id,claim_token,started_at) VALUES (?,?,?)').bind(outboxId,claimToken,now).run() as {meta?:{changes?:number}};
+  if(claim.meta?.changes!==1)return;
+  const current=await env.DB.prepare('SELECT status,attempt_count AS attempts FROM preview_email_outbox WHERE id=?').bind(outboxId).first<{status:string;attempts:number}>();
+  if(current?.status!==row.status||current.attempts!==row.attemptCount){await env.DB.prepare('DELETE FROM preview_email_dispatch_claims WHERE outbox_id=? AND claim_token=?').bind(outboxId,claimToken).run();return;}
+  let response:Response|null=null;
+  try{response=await fetch(endpoint,{method:'POST',redirect:'error',signal:AbortSignal.timeout(15_000),headers:{'Content-Type':'application/json',Authorization:`Bearer ${env.PM_NOTIFICATION_WEBHOOK_SECRET}`},body:JSON.stringify({messageType:'REPORT_APPROVED_DELIVERY_REQUIRED',to:row.recipientEmail,subject:row.subject,text:row.bodyText,idempotencyKey:row.id})});}catch{/* Retain the claim until an unknown provider result is reconciled. */}
+  const providerMessageId=response?.headers.get('X-Message-Id')?.trim()||null;
+  const sent=Boolean(response?.ok&&providerMessageId&&providerMessageId.length<=500);
+  const knownRejected=Boolean(response&&[400,401,403,404,422].includes(response.status));
+  const errorCode=sent?null:response?.ok?'EMAIL_BRIDGE_RECEIPT_MISSING':response?`EMAIL_BRIDGE_${response.status}`:'EMAIL_BRIDGE_RESULT_UNKNOWN';
+  const result=await env.DB.prepare("UPDATE preview_email_outbox SET status=?,attempt_count=attempt_count+1,provider_message_id=?,last_error_code=?,updated_at=? WHERE id=? AND status=? AND attempt_count=?").bind(sent?'SENT':'FAILED',sent?providerMessageId:null,errorCode,now,outboxId,row.status,row.attemptCount).run() as {meta?:{changes?:number}};
+  if(result.meta?.changes===1&&(sent||knownRejected))await env.DB.prepare('DELETE FROM preview_email_dispatch_claims WHERE outbox_id=? AND claim_token=?').bind(outboxId,claimToken).run();
 }
 
 async function handlePreviewNotifications(request:Request,env:CloudflareEnv):Promise<Response>{
   if(!env.DB)return json({error:'D1 database is not bound',code:'D1_NOT_CONFIGURED'},503);
   const user=await previewSessionUser(request,env);if(!user)return json({error:'Login is required',code:'AUTH_REQUIRED'},401);
+  const retry=new URL(request.url).pathname.match(/^\/api\/notifications\/([0-9a-f-]{36})\/email$/iu);
+  if(retry){
+    if(!['GET','POST'].includes(request.method))return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
+    if(request.method==='POST'){
+      const body=await request.json().catch(()=>null);
+      if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length)return json({error:'이메일 수신자는 저장된 승인 알림으로 결정됩니다.',code:'INVALID_EMAIL_PAYLOAD'},400);
+    }
+    const n=await env.DB.prepare("SELECT n.id,n.user_id AS userId,n.case_id AS caseId,n.review_id AS reviewId,n.title,n.message,u.email,u.login_id AS loginId,u.display_name AS displayName FROM preview_notifications n JOIN preview_users u ON u.id=n.user_id AND u.is_active=1 JOIN preview_report_reviews r ON r.id=n.review_id AND r.case_id=n.case_id AND r.status='APPROVED' JOIN preview_cases c ON c.id=n.case_id AND c.deleted_at IS NULL WHERE n.id=? AND n.organization_id=?").bind(retry[1],PREVIEW_ORGANIZATION_ID).first<{id:string;userId:string;caseId:string;reviewId:string;title:string;message:string;email:string;loginId:string;displayName:string}>();
+    if(!n||!await accessiblePreviewCase(env,user,n.caseId)||await previewReportDeleted(env,n.caseId))return json({error:'승인 알림을 찾을 수 없습니다.',code:'NOTIFICATION_NOT_FOUND'},404);
+    if(user.id!==n.userId&&!user.roles.includes('admin'))return json({error:'담당자 또는 관리자만 승인 이메일을 발송할 수 있습니다.',code:'EMAIL_RECIPIENT_REQUIRED'},403);
+    const email=previewApprovalEmailAddress(n.email,n.loginId);
+    try{await env.DB.prepare('SELECT outbox_id FROM preview_email_dispatch_claims LIMIT 0').all();}catch{return json({error:'이메일 발송 기능 업데이트가 필요합니다.',code:'EMAIL_SCHEMA_REQUIRED'},503);}
+    const describe=async()=>{
+      const row=await env.DB!.prepare('SELECT o.status,o.attempt_count AS attempts,o.last_error_code AS errorCode,q.outbox_id AS locked FROM preview_email_outbox o LEFT JOIN preview_email_dispatch_claims q ON q.outbox_id=o.id WHERE o.notification_id=?').bind(n.id).first<{status:string;attempts:number;errorCode:string|null;locked:string|null}>();
+      const status=row?.status??(email?'PENDING':'RECIPIENT_REQUIRED');
+      return json({email:{status,attempts:row?.attempts??0,errorCode:row?.errorCode??null,retryable:Boolean(email)&&!row?.locked&&status!=='SENT'&&(row?.attempts??0)<5,recipientName:n.displayName,recipientEmail:email},note:status==='SENT'?'메일 서버가 접수했습니다. 실제 수신함 도착은 별도로 확인해야 합니다.':row?.locked?'발송 결과를 확인 중입니다. 중복 발송 방지를 위해 다시 보내지 않습니다.':'메일 발송 설정 또는 오류를 확인해 주세요.'});
+    };
+    if(request.method==='GET')return describe();
+    if(!email)return json({error:'해당 담당자에게 등록된 이메일 주소가 없습니다.',code:'RECIPIENT_REQUIRED'},409);
+    const now=new Date().toISOString();
+    await env.DB.prepare("INSERT OR IGNORE INTO preview_email_outbox (id,organization_id,notification_id,recipient_user_id,recipient_email,subject,body_text,status,attempt_count,provider_message_id,last_error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,'PENDING',0,NULL,NULL,?,?)").bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,n.id,n.userId,email,`[클레임센터] ${n.title}`,previewApprovalEmailBody(env,request,n.displayName,n.message,n.caseId,n.reviewId),now,now).run();
+    const outbox=await env.DB.prepare('SELECT id,recipient_email AS email FROM preview_email_outbox WHERE notification_id=?').bind(n.id).first<{id:string;email:string}>();
+    if(!outbox||outbox.email.toLowerCase()!==email.toLowerCase())return json({error:'기존 발송 수신주소가 달라 자동 재발송을 중단했습니다.',code:'EMAIL_RECIPIENT_CHANGED'},409);
+    await dispatchPreviewEmailOutbox(env,outbox.id);
+    return describe();
+  }
   if(request.method!=='GET')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
   const rows=await env.DB.prepare('SELECT n.id,n.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,n.review_id AS reviewId,n.notification_type AS notificationType,n.title,n.message,n.read_at AS readAt,n.created_at AS createdAt,o.status AS emailStatus,o.recipient_email AS recipientEmail FROM preview_notifications n JOIN preview_cases c ON c.id=n.case_id LEFT JOIN preview_email_outbox o ON o.notification_id=n.id WHERE n.user_id=? ORDER BY n.created_at DESC LIMIT 100').bind(user.id).all<Record<string,unknown>>();
   return json({notifications:rows.results,phase:'CF36_APPROVAL_DELIVERY_NOTIFICATION'});
@@ -7539,7 +7583,7 @@ async function previewReportReviewList(env: CloudflareEnv, user: SessionUser, ca
   const recipientJoin = assignedSchema ? 'LEFT JOIN preview_users assignee ON assignee.id=v.assigned_reviewer_id ' : '';
   const recipientScope = assignedSchema && user.roles.some(role => PREVIEW_FINAL_APPROVAL_ROLES.has(role)) ? ' OR v.assigned_reviewer_id=?' : '';
   const deliveryColumns = notificationSchema
-    ? "(SELECT n.id FROM preview_notifications n WHERE n.review_id=v.id AND n.notification_type='REPORT_APPROVED_DELIVERY_REQUIRED' LIMIT 1) AS deliveryNotificationId, (SELECT o.status FROM preview_email_outbox o JOIN preview_notifications n ON n.id=o.notification_id WHERE n.review_id=v.id LIMIT 1) AS deliveryEmailStatus "
+    ? "(SELECT n.id FROM preview_notifications n WHERE n.review_id=v.id AND n.notification_type='REPORT_APPROVED_DELIVERY_REQUIRED' LIMIT 1) AS deliveryNotificationId, (SELECT n.user_id FROM preview_notifications n WHERE n.review_id=v.id AND n.notification_type='REPORT_APPROVED_DELIVERY_REQUIRED' LIMIT 1) AS deliveryRecipientId, (SELECT o.status FROM preview_email_outbox o JOIN preview_notifications n ON n.id=o.notification_id WHERE n.review_id=v.id LIMIT 1) AS deliveryEmailStatus "
     : 'NULL AS deliveryNotificationId, NULL AS deliveryEmailStatus ';
   const rows = await env.DB.prepare(
     'SELECT v.id, v.case_id AS caseId, c.case_number AS caseNumber, c.title AS caseTitle, v.report_revision_id AS reportRevisionId, ' +
@@ -7667,14 +7711,13 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
     if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
     const now = new Date(Math.max(Date.now(), Date.now() + 1)).toISOString();
     const eventType = status === 'APPROVED' ? 'REPORT_APPROVED' : 'CHANGES_REQUESTED';
-    let notificationId:string|null=null; let outboxId:string|null=null; let pmRecipient:{id:string;email:string;displayName:string}|null=null;
+    let notificationId:string|null=null; let outboxId:string|null=null; let pmRecipient:{id:string;email:string;loginId:string;displayName:string}|null=null;
     if(status==='APPROVED'&&notificationSchema){
-      pmRecipient=await env.DB.prepare("SELECT u.id,u.email,u.display_name AS displayName FROM preview_users u WHERE u.is_active=1 AND (EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=? AND a.user_id=u.id) OR u.id=?) AND (instr(u.roles_json,'\"pm\"')>0 OR u.id=?) ORDER BY CASE WHEN instr(u.roles_json,'\"pm\"')>0 THEN 0 ELSE 1 END LIMIT 1").bind(review.caseId,review.requestedBy,review.requestedBy).first<{id:string;email:string;displayName:string}>();
+      pmRecipient=await env.DB.prepare("SELECT u.id,u.email,u.login_id AS loginId,u.display_name AS displayName FROM preview_users u WHERE u.is_active=1 AND (EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=? AND a.user_id=u.id) OR u.id=?) AND (instr(u.roles_json,'\"pm\"')>0 OR u.id=?) ORDER BY CASE WHEN instr(u.roles_json,'\"pm\"')>0 THEN 0 ELSE 1 END LIMIT 1").bind(review.caseId,review.requestedBy,review.requestedBy).first<{id:string;email:string;loginId:string;displayName:string}>();
       if(!pmRecipient)return json({error:'납품 알림을 받을 프로젝트 PM 계정을 지정해 주세요.',code:'PROJECT_PM_REQUIRED'},409);
       notificationId=crypto.randomUUID();
-      // Legacy accounts can have a contact label instead of an email. Keep the
-      // in-app approval notification without inserting an invalid outbox row.
-      if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(pmRecipient.email))outboxId=crypto.randomUUID();
+      pmRecipient.email=previewApprovalEmailAddress(pmRecipient.email,pmRecipient.loginId);
+      if(pmRecipient.email)outboxId=crypto.randomUUID();
     }
     const statements=[
       env.DB.prepare('UPDATE preview_report_reviews SET status = ?, reviewed_by = ?, decision_note = ?, reviewed_at = ? WHERE id = ? AND organization_id = ? AND status = \'PENDING\' AND requested_by <> ? AND EXISTS (SELECT 1 FROM preview_report_revisions r WHERE r.id=preview_report_reviews.report_revision_id AND r.case_id=preview_report_reviews.case_id AND r.version=preview_report_reviews.report_version AND r.saved_by <> ?) AND ' + previewReportActiveSql('preview_report_reviews.case_id')).bind(status, user.id, note || null, now, review.id, PREVIEW_ORGANIZATION_ID, user.id, user.id),
@@ -7688,7 +7731,7 @@ async function handlePreviewReportReviews(request: Request, env: CloudflareEnv, 
         env.DB.prepare("INSERT INTO preview_notifications (id,organization_id,user_id,case_id,review_id,notification_type,title,message,read_at,created_at) SELECT ?,?,?,?,?, 'REPORT_APPROVED_DELIVERY_REQUIRED',?,?,NULL,? WHERE EXISTS (SELECT 1 FROM preview_report_reviews WHERE id=? AND status='APPROVED')").bind(notificationId,PREVIEW_ORGANIZATION_ID,pmRecipient.id,review.caseId,review.id,title,message,now,review.id)
       );
       if(outboxId)statements.push(
-        env.DB.prepare("INSERT INTO preview_email_outbox (id,organization_id,notification_id,recipient_user_id,recipient_email,subject,body_text,status,attempt_count,provider_message_id,last_error_code,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'PENDING',0,NULL,NULL,?,? WHERE EXISTS (SELECT 1 FROM preview_notifications WHERE id=?)").bind(outboxId,PREVIEW_ORGANIZATION_ID,notificationId,pmRecipient.id,pmRecipient.email,`[클레임센터] ${title}`,`${pmRecipient.displayName}님,\n\n${message}\n\n프로젝트: ${review.caseId}\n검토번호: ${review.id}`,now,now,notificationId)
+        env.DB.prepare("INSERT INTO preview_email_outbox (id,organization_id,notification_id,recipient_user_id,recipient_email,subject,body_text,status,attempt_count,provider_message_id,last_error_code,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'PENDING',0,NULL,NULL,?,? WHERE EXISTS (SELECT 1 FROM preview_notifications WHERE id=?)").bind(outboxId,PREVIEW_ORGANIZATION_ID,notificationId,pmRecipient.id,pmRecipient.email,`[클레임센터] ${title}`,previewApprovalEmailBody(env,request,pmRecipient.displayName,message,review.caseId,review.id),now,now,notificationId)
       );
     }
     const results = await env.DB.batch(statements) as Array<{ meta?: { changes?: number } }>;
@@ -9047,7 +9090,7 @@ const worker = {
     // Share the parsed draft body with the handler; large imported reports must not be parsed twice.
     let reportDraftBody: Record<string, unknown> | null | undefined;
     // A deleted workspace must not reopen as an empty draft or continue background authoring.
-    if (env.DB && /^\/api\/(?:report-drafts|report-chapter-collaboration|report-authoring|report-reviews|report-finalizations)(?:\/|$)/u.test(url.pathname)) {
+    if (env.DB && /^\/api\/(?:report-drafts|report-chapter-collaboration|report-authoring|report-reviews|report-finalizations|notifications)(?:\/|$)/u.test(url.pathname)) {
       const body = request.method === 'GET' ? null : await request.clone().json().catch(() => null) as Record<string, unknown> | null;
       if (url.pathname === '/api/report-drafts' && request.method !== 'GET') reportDraftBody = body;
       const queryCaseId = url.searchParams.get('caseId');
@@ -9082,7 +9125,7 @@ const worker = {
       return handlePreviewReportReviews(request, env, url);
     }
 
-    if (url.pathname === '/api/notifications') {
+    if (url.pathname === '/api/notifications' || url.pathname.startsWith('/api/notifications/')) {
       return handlePreviewNotifications(request, env);
     }
     if (url.pathname === '/api/member-alerts') {

@@ -16,6 +16,7 @@ import { loadNativeHwpEngine } from '../documents/native-hwp-runtime';
 import { DocumentToolMenus } from '../documents/DocumentToolMenus';
 import { FileFormatIcon } from '../documents/FileFormatIcon';
 import { downloadFinalDocument, type FinalDocumentFormat } from '../documents/final-document-export';
+import { ApprovalDeliveryEmail } from './ApprovalDeliveryEmail';
 import { expandDocumentSpacingMarkers } from '../documents/document-spacing';
 import { ReportEvidenceInsert } from '../documents/ReportEvidenceInsert';
 import { hwpSvgPageForUpload } from '../documents/hwp-page-image';
@@ -2046,6 +2047,7 @@ export function PreviewReportStudio({ roles, onNavigate }: { roles: UserRole[]; 
           {renderStageHeader(5)}
           <div className="form-stack">
             <h3>최종 결재상신</h3>
+            {currentReview?.status==='APPROVED'&&currentReview.deliveryNotification&&<ApprovalDeliveryEmail key={currentReview.deliveryNotification.id+currentReview.deliveryNotification.emailStatus} notification={currentReview.deliveryNotification} admin={roles.includes('admin')}/>}
             <p><strong>{title}</strong> · 저장본 v{version}{savedAt ? ` · ${new Date(savedAt).toLocaleString('ko-KR')}` : ''}</p>
             <div className="action-row"><span className="preview-pill">{currentReview ? currentReview.status === 'PENDING' ? `v${version} 결재 대기` : currentReview.status === 'APPROVED' ? `v${version} 승인 완료` : `v${version} 수정 요청` : pendingReview ? `v${pendingReview.reportVersion} 결재 중 · 현재 v${version}` : version ? `v${version} 상신 가능` : '저장 후 상신 가능'}</span><Button variant="secondary" onClick={() => setApprovalRefresh(value=>value+1)}>결재 상태 새로고침</Button>{currentReview && <Button variant="secondary" onClick={() => onNavigate(`/approval?reviewId=${encodeURIComponent(currentReview.id)}`)}>이 상신본·결재 내용 보기</Button>}</div>
             {currentReview && <p className="notice-box">상신자 {currentReview.requestedBy.name} · 결재자 {currentReview.assignedReviewer?.name ?? '기존 검토 요청'} · {new Date(currentReview.requestedAt).toLocaleString('ko-KR')}{currentReview.status==='PENDING'?' · 지정 결재자의 업무 알림에서 상신본을 확인할 수 있습니다.':''}</p>}
