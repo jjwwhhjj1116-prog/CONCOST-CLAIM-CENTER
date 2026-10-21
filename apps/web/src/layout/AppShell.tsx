@@ -28,8 +28,8 @@ const NAVIGATION_GROUPS: readonly {
   },
   {
     label: '프로젝트 워크', eyebrow: '프로젝트 실행', icon: 'work',
-    routeIds: ['PROJ-01', 'WL-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
-    nestedGroups: [{ label: '프로젝트 보고서', eyebrow: '보고서 관리', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
+    routeIds: ['PROJ-01', 'WL-01', 'WL-02', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'],
+    nestedGroups: [{label:'업무일지',eyebrow:'개인별 업무',routeIds:['WL-01','WL-02']},{ label: '프로젝트 보고서', eyebrow: '보고서 관리', routeIds: ['REPO-02', 'REPO-03', 'REPO-04'] }]
   },
   { label: 'ES 산출프로그램', eyebrow: '독립 물가변동 산출', icon: 'es', routeIds: ['ES-01', 'ES-02'] },
   { label: '드라이브', eyebrow: '자료 관리', icon: 'library', routeIds: ['CASE-06', 'CASE-09', 'CONTACT-01', 'CONTACT-02', 'CONTACT-03'], nestedGroups: [{ label: '자료실 이용', eyebrow: '자료·양식', routeIds: ['CASE-06', 'CASE-09'] }, { label: '인맥관리', eyebrow: '명함·연락처', routeIds: ['CONTACT-01', 'CONTACT-02', 'CONTACT-03'] }] },
@@ -199,7 +199,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   };
 
   const routeWithProjectContext = (routeId: string, path: string) => {
-    if(routeId==='WL-01'){const worklogCase=contextCaseId||(contextProjectId?.startsWith('project-')?contextProjectId.slice(8):'');if(worklogCase)return `${path}?caseId=${encodeURIComponent(worklogCase)}`;}
+    if(routeId==='WL-01'||routeId==='WL-02'){const worklogCase=contextCaseId||(contextProjectId?.startsWith('project-')?contextProjectId.slice(8):''),query=new URLSearchParams(),day=locationParams.get('date')||locationParams.get('week');if(worklogCase)query.set('caseId',worklogCase);if(day)query.set(routeId==='WL-02'?'week':'date',day);return path+(query.size?'?'+query:'');}
     if (!selectedProject) return path;
     const projectId = encodeURIComponent(selectedProject.id);
     const caseId = encodeURIComponent(selectedProject.caseId);

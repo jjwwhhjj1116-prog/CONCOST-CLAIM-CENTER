@@ -15,9 +15,11 @@ test('CF15 sidebar follows the requested workflow with proposal authoring nested
   assert.match(shell, /routeIds: \['CASE-06', 'CASE-09'\]/u);
   assert.match(shell, /nestedGroups: \[\s*\{ label: '프로젝트 의뢰'.*routeIds: \['CASE-02', 'CASE-07', 'CASE-08'\]/su);
   assert.match(shell, /\{ label: '프로젝트 제안서', eyebrow: '제안서 관리', routeIds: \['PROP-02', 'PROP-03', 'PROP-04'\] \}/u);
-  assert.match(shell, /routeIds: \['PROJ-01', 'WL-01', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'\]/u);
-  assert.match(router, /WL-01'.*'업무일지'/u);
-  assert.match(shell, /nestedGroups: \[\{ label: '프로젝트 보고서'.*routeIds: \['REPO-02', 'REPO-03', 'REPO-04'\]/u);
+  assert.match(shell, /routeIds: \['PROJ-01', 'WL-01', 'WL-02', 'WF-03', 'WF-04', 'WF-05', 'REPO-02', 'REPO-03', 'REPO-04'\]/u);
+  assert.match(router, /WL-01'.*'일일 업무일지'/u);
+  assert.match(router, /WL-02'.*'주간 업무일지'/u);
+  assert.match(shell, /label:'업무일지'.*routeIds:\['WL-01','WL-02'\]/u);
+  assert.match(shell, /\{ label: '프로젝트 보고서'.*routeIds: \['REPO-02', 'REPO-03', 'REPO-04'\]/u);
   assert.doesNotMatch(shell, /routeIds: \[[^\]]*'PROJ-02'/u);
   assert.doesNotMatch(shell, /routeIds: \['PROP-02', 'CASE-01', 'CASE-02'\]/u);
   assert.match(shell, /icon: 'proposal'/u);
