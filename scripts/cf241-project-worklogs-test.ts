@@ -12,6 +12,7 @@ async function fixture(){
  sql.run(`CREATE TABLE preview_users(id TEXT PRIMARY KEY,login_id TEXT,display_name TEXT,roles_json TEXT,is_active INTEGER);
  CREATE TABLE preview_cases(id TEXT PRIMARY KEY,organization_id TEXT,deleted_at TEXT,case_number TEXT,title TEXT,updated_at TEXT);
  CREATE TABLE preview_case_assignments(case_id TEXT,user_id TEXT);
+ CREATE TABLE preview_case_activities(id TEXT PRIMARY KEY,case_id TEXT,actor_id TEXT,event_type TEXT,title TEXT,created_at TEXT);
  CREATE TABLE preview_workflow_events(id TEXT PRIMARY KEY,case_id TEXT,actor_id TEXT,event_type TEXT,entity_id TEXT,detail_json TEXT,created_at TEXT);`);
  const actors=WORKLOG_IDENTITIES.map((p,i)=>({id:p.id,loginId:p.loginId,displayName:'Synthetic '+i,roles:i===5?['admin']:['pm']}));
  for(const a of actors)sql.run('INSERT INTO preview_users VALUES(?,?,?,?,1)',[a.id,a.loginId,a.displayName,JSON.stringify(a.roles)]);
@@ -26,7 +27,7 @@ test('CF241 three stable writers save/reopen exact, histories and project/author
  const f=await fixture();try{
  for(let i=0;i<3;i++)for(const id of [A,B]){const r=await f.call(i,'PUT',f.body({todayTask:`Task ${i} ${id}`,workHours:8}),id);assert.equal(r.status,200);assert.equal((await r.json() as any).log.version,1);}
  assert.equal(f.count(),6);
- const reopen=await (await f.call(0,'GET',f.body())).json() as any;assert.equal(reopen.logs.length,3);
+ const reopen=await (await f.call(5,'GET',f.body())).json() as any;assert.equal(reopen.logs.length,3);
  for(let i=0;i<3;i++){const row=reopen.logs.find((x:any)=>x.authorId===f.actors[i].id);assert.equal(row.todayTask,`Task ${i} ${A}`);assert.equal(row.workHours,8);assert.equal(row.version,1);}
  const before=JSON.stringify(f.sql.exec('SELECT * FROM preview_workflow_events ORDER BY id'));
  assert.equal((await f.call(0)).status,409);assert.equal(JSON.stringify(f.sql.exec('SELECT * FROM preview_workflow_events ORDER BY id')),before);
@@ -57,10 +58,11 @@ test('CF241 real Tech handler requires exact source id/login/email and active li
  const p=WORKLOG_IDENTITIES[1],actor={id:p.techId,login:p.techLogin,email:p.techEmail};
  const call=(a:any=actor,extra:object={})=>handleTechWorklogs(new Request('https://private.invalid',{method:'POST',body:JSON.stringify({actor:a,method:'PUT',path:'/api/project-worklogs/'+A,body:f.body(),...extra})}),{DB:f.db} as any);
  assert.ok(techWorklogIdentity(actor));for(const key of ['id','login','email']){const fake={...actor,[key]:'synthetic-forged'};assert.equal(techWorklogIdentity(fake),null);assert.equal((await call(fake)).status,403);}
- assert.equal(f.count(),0);assert.equal((await call()).status,200);
- assert.equal((await call()).status,409);
+ assert.equal(f.count(),0);assert.equal((await call()).status,405);
+ assert.equal((await f.call(1)).status,200);
+ assert.equal((await call()).status,405);
  const got=await call(actor,{method:'GET',path:'/api/project-worklogs/'+A+'?date=2026-10-20'});assert.equal(got.status,200);assert.equal((await got.json() as any).logs[0].authorId,p.id);
- f.sql.run('UPDATE preview_users SET is_active=0 WHERE id=?',[p.id]);assert.equal((await call()).status,403);assert.equal(f.count(),1);
+ f.sql.run('UPDATE preview_users SET is_active=0 WHERE id=?',[p.id]);assert.equal((await call(actor,{method:'GET',path:'/api/project-worklogs'})).status,403);assert.equal(f.count(),1);
  }finally{f.sql.close();}
 });
 
@@ -78,17 +80,17 @@ test('CF241 development account IDs resolve active metadata and preserve three-w
  const f=await fixture();try{
  const expected=['9ab3d678-0047-4b60-bfd5-5443fbe151fa','9ffc45e9-f599-4faf-9cc3-461cd63f239f','609e76ea-4524-478b-a6ea-c601d9dc7be4'];
  for(let i=0;i<3;i++){const old=f.actors[i].id;f.sql.run('UPDATE preview_users SET id=? WHERE id=?',[expected[i],old]);f.sql.run('UPDATE preview_case_assignments SET user_id=? WHERE user_id=?',[expected[i],old]);f.actors[i].id=expected[i];}
- const metadata=await handleProjectWorklogs(new Request('https://qa.invalid/api/project-worklogs'),f.db as any,f.actors[0]);
+ const metadata=await handleProjectWorklogs(new Request('https://qa.invalid/api/project-worklogs'),f.db as any,f.actors[5]);
  assert.equal(metadata.status,200);assert.deepEqual((await metadata.json() as any).writers.map((p:any)=>p.id),expected);
  for(let i=0;i<3;i++){const r=await f.call(i,'PUT',f.body({todayTask:'Development synthetic '+i}));assert.equal(r.status,200);assert.equal((await r.json() as any).log.authorId,expected[i]);}
- const rows=(await (await f.call(0,'GET',f.body())).json() as any).logs;
+ const rows=(await (await f.call(5,'GET',f.body())).json() as any).logs;
  assert.equal(rows.length,3);for(let i=0;i<3;i++)assert.equal(rows.find((r:any)=>r.authorId===expected[i]).todayTask,'Development synthetic '+i);
  const tech=WORKLOG_IDENTITIES[1];const bridged=await handleTechWorklogs(new Request('https://private.invalid',{method:'POST',body:JSON.stringify({actor:{id:tech.techId,login:tech.techLogin,email:tech.techEmail},method:'GET',path:'/api/project-worklogs/'+A+'?date=2026-10-20'})}),{DB:f.db} as any);
- assert.equal(bridged.status,200);assert.deepEqual((await bridged.json() as any).logs,rows);
+ assert.equal(bridged.status,200);assert.deepEqual((await bridged.json() as any).logs,rows.filter((r:any)=>r.authorId===expected[1]));
  const forgedId='10000000-0000-4000-8000-000000000099';f.sql.run('INSERT INTO preview_case_assignments VALUES(?,?)',[A,forgedId]);
  const forged={...f.actors[0],id:forgedId};
  assert.equal((await handleProjectWorklogs(new Request('https://qa.invalid/api/project-worklogs/'+A,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(f.body())}),f.db as any,forged)).status,403);
  f.sql.run('UPDATE preview_users SET is_active=0 WHERE id=?',[expected[2]]);
- const filtered=await handleProjectWorklogs(new Request('https://qa.invalid/api/project-worklogs'),f.db as any,f.actors[0]);assert.deepEqual((await filtered.json() as any).writers.map((p:any)=>p.id),expected.slice(0,2));assert.equal(f.count(),3);
+ const filtered=await handleProjectWorklogs(new Request('https://qa.invalid/api/project-worklogs'),f.db as any,f.actors[5]);assert.deepEqual((await filtered.json() as any).writers.map((p:any)=>p.id),expected.slice(0,2));assert.equal(f.count(),3);
  }finally{f.sql.close();}
 });

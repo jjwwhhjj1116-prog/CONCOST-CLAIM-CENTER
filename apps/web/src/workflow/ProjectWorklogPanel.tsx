@@ -4,6 +4,7 @@ type Project={id:string;caseNumber:string;title:string};
 type Writer={id:string;name:string;position:string};
 type Form={todayTask:string;tomorrowPlan:string;notes:string;workHours:number|null};
 type Log=Form&{id:string;authorId:string;authorName:string;date:string;version:number;updatedAt:string};
+type AutomaticEntry={id:string;authorId:string;authorName:string;eventType:string;title:string;createdAt:string};
 type Context={actor:{id:string;name:string;canWrite:boolean};writers:Writer[];projects:Project[]};
 const emptyForm=():Form=>({todayTask:'',tomorrowPlan:'',notes:'',workHours:null});
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -12,10 +13,11 @@ async function request<T>(path:string,options?:RequestInit):Promise<T>{
   const r=await fetch(path,{credentials:'same-origin',cache:'no-store',...options});
   const value=await r.json().catch(()=>null);if(!r.ok)throw Error(value?.error||'서버 연결을 확인하고 다시 시도하세요.');return value as T;
 }
-export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='',techLink=true,onDirtyChange}:{basePath?:string;actorKey?:string;techLink?:boolean;onDirtyChange?:(dirty:boolean)=>void}){
+export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='',onDirtyChange}:{basePath?:string;actorKey?:string;onDirtyChange?:(dirty:boolean)=>void}){
   const params=new URLSearchParams(window.location.search),initialCase=params.get('caseId')||'';
   const [context,setContext]=useState<Context|null>(null),[caseId,setCaseId]=useState(''),[day,setDay]=useState(params.get('date')||today()),[author,setAuthor]=useState('');
   const [logs,setLogs]=useState<Log[]>([]),[form,setForm]=useState<Form>(emptyForm),[original,setOriginal]=useState<Form>(emptyForm);
+  const [automatic,setAutomatic]=useState<AutomaticEntry[]>([]);
   const [loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[failure,setFailure]=useState(''),[notice,setNotice]=useState(''),[refresh,setRefresh]=useState(0),[loadedKey,setLoadedKey]=useState('');
   const generation=useRef(0),saveBusy=useRef(false),mounted=useRef(true),keyRef=useRef('');
   const key=[actorKey,context?.actor.id,caseId,day,author].join('|');keyRef.current=key;
@@ -24,7 +26,7 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
   useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;generation.current++;};},[]);
   useEffect(()=>{onDirtyChange?.(dirty);const warn=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',warn);return()=>{window.removeEventListener('beforeunload',warn);onDirtyChange?.(false);};},[dirty,onDirtyChange]);
   useEffect(()=>{
-    const controller=new AbortController();setContext(null);setCaseId('');setLogs([]);setForm(emptyForm());setOriginal(emptyForm());setLoading(true);setFailure('');
+    const controller=new AbortController();setContext(null);setCaseId('');setLogs([]);setAutomatic([]);setForm(emptyForm());setOriginal(emptyForm());setLoading(true);setFailure('');
     void request<Context>(basePath,{signal:controller.signal}).then(data=>{
       if(controller.signal.aborted)return;setContext(data);setAuthor(data.actor.canWrite?data.actor.id:data.writers[0]?.id||'');
       setCaseId(initialCase?(data.projects.some(p=>p.id===initialCase)?initialCase:''):'');
@@ -33,10 +35,10 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
     return()=>controller.abort();
   },[basePath,actorKey]);
   useEffect(()=>{
-    const seq=++generation.current,controller=new AbortController();setLoadedKey('');setLogs([]);setForm(emptyForm());setOriginal(emptyForm());setNotice('');
+    const seq=++generation.current,controller=new AbortController();setLoadedKey('');setLogs([]);setAutomatic([]);setForm(emptyForm());setOriginal(emptyForm());setNotice('');
     if(!context||!caseId)return()=>controller.abort();
     setLoading(true);setFailure('');
-    void request<{logs:Log[]}>(`${basePath}/${encodeURIComponent(caseId)}?date=${encodeURIComponent(day)}`,{signal:controller.signal}).then(data=>{if(seq===generation.current&&!controller.signal.aborted){setLogs(data.logs);setLoadedKey(caseId+'|'+day);}}).catch(e=>{if(seq===generation.current&&!controller.signal.aborted)setFailure(message(e));}).finally(()=>{if(seq===generation.current&&!controller.signal.aborted)setLoading(false);});
+    void request<{logs:Log[];automaticEntries?:AutomaticEntry[]}>(`${basePath}/${encodeURIComponent(caseId)}?date=${encodeURIComponent(day)}`,{signal:controller.signal}).then(data=>{if(seq===generation.current&&!controller.signal.aborted){setLogs(data.logs);setAutomatic(data.automaticEntries||[]);setLoadedKey(caseId+'|'+day);}}).catch(e=>{if(seq===generation.current&&!controller.signal.aborted)setFailure(message(e));}).finally(()=>{if(seq===generation.current&&!controller.signal.aborted)setLoading(false);});
     return()=>controller.abort();
   },[basePath,actorKey,context,caseId,day,refresh]);
   useEffect(()=>{const log=logs.find(entry=>entry.authorId===author),next=log?{todayTask:log.todayTask,tomorrowPlan:log.tomorrowPlan,notes:log.notes,workHours:log.workHours}:emptyForm();setForm(next);setOriginal(next);},[author,logs]);
@@ -50,24 +52,30 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
     }catch(e){if(mounted.current&&savedKey===keyRef.current)setFailure(message(e));}finally{saveBusy.current=false;if(mounted.current)setSaving(false);}
   };
   const project=context?.projects.find(p=>p.id===caseId);
+  const entries=automatic.filter(entry=>entry.authorId===author);
+  const summary=entries.reduce<Record<string,{title:string;count:number}>>((groups,entry)=>{const group=groups[entry.eventType]||(groups[entry.eventType]={title:entry.title.replace(/ · v\d+$/,''),count:0});group.count++;return groups;},{});
   return <section className="project-worklog" aria-label="프로젝트 업무일지">
-    <header><div><h2>프로젝트 업무일지</h2><p>프로젝트별 수행 업무와 다음 계획을 기록합니다. 클레임센터와 기술본부 스튜디오는 같은 저장본을 확인합니다.</p></div>{techLink&&caseId&&<a href={`https://concost-tech-scheduler.pages.dev/?view=claim-worklogs&caseId=${encodeURIComponent(caseId)}&date=${encodeURIComponent(day)}`} target="_blank" rel="noopener noreferrer">기술본부에서 같은 일지 열기 ↗</a>}</header>
-    <p className="project-worklog__policy">작성 대상: 이경훈 센터장 · 최영배 본부장 · 장범선 실장. 본인에게 배정된 프로젝트만 작성하며 대표·부사장은 기존 조회·결재 권한을 유지합니다.</p>
+    <header><div><h2>프로젝트 업무일지</h2><p>클레임센터에서 저장한 본인 업무를 프로젝트·날짜별로 자동 작성합니다.</p></div></header>
+    <p className="project-worklog__policy">작성 대상: 이경훈 센터장 · 최영배 본부장 · 장범선 실장. 대표·부사장·관리자 계정의 작업은 일지로 작성하지 않으며 기존 조회·결재 권한은 유지합니다.</p>
     {failure&&<div role="alert" className="project-worklog__error">{failure} <button type="button" onClick={()=>{if(!context)window.location.reload();else if(discard())setRefresh(n=>n+1);}} disabled={saving}>다시 불러오기</button></div>}
     {notice&&<p role="status">{notice}</p>}
     <div className="project-worklog__filters">
       <label>프로젝트<select value={caseId} disabled={saving||loading} onChange={e=>{if(discard())setCaseId(e.target.value);}}><option value="">프로젝트 선택</option>{context?.projects.map(p=><option key={p.id} value={p.id}>{p.caseNumber} · {p.title}</option>)}</select></label>
       <label>작성일<input type="date" value={day} disabled={saving||loading} onChange={e=>{if(e.target.value&&discard())setDay(e.target.value);}}/></label>
-      <label>작성자<select value={author} disabled={saving||loading} onChange={e=>{if(discard())setAuthor(e.target.value);}}>{context?.writers.map(p=><option key={p.id} value={p.id}>{p.name} {p.position}</option>)}</select></label>
+      <label>작성자{context?.actor.canWrite?<output>{context.writers.find(p=>p.id===author)?.name} {context.writers.find(p=>p.id===author)?.position} · 본인</output>:<select value={author} disabled={saving||loading} onChange={e=>{if(discard())setAuthor(e.target.value);}}>{!context?.writers.length&&<option value="">작성 대상 직원 없음</option>}{context?.writers.map(p=><option key={p.id} value={p.id}>{p.name} {p.position}</option>)}</select>}</label>
     </div>
     {loading?<p role="status">서버 업무일지를 불러오는 중입니다.</p>:!caseId?<p>배정된 프로젝트를 선택하세요. 프로젝트가 없으면 기존 프로젝트 배정 상태를 확인해야 합니다.</p>:<>
-      <div className="project-worklog__record"><strong>{project?.caseNumber} · {project?.title}</strong><span>{loadedKey!==caseId+'|'+day?'서버 저장본을 확인하지 못했습니다. 다시 불러오세요.':selected?`저장본 v${selected.version} · ${new Date(selected.updatedAt).toLocaleString('ko-KR')}`:'이 작성일에 저장된 업무일지가 없습니다.'}</span>{!canEdit&&<span>조회 화면입니다. 작성 대상 직원은 본인 계정으로 저장합니다.</span>}</div>
+      <div className="project-worklog__record"><strong>{project?.caseNumber} · {project?.title}</strong><span>{loadedKey!==caseId+'|'+day?'서버 저장본을 확인하지 못했습니다. 다시 불러오세요.':`자동 작성 ${entries.length}건${selected?' · 직접 기록 저장본 v'+selected.version:''}`}</span>{!canEdit&&<span>조회 전용 화면입니다.</span>}</div>
+      {loadedKey===caseId+'|'+day&&<section aria-label="자동 작성된 수행 업무" className="project-worklog__automatic"><h3>자동 작성된 수행 업무</h3>{entries.length?<><ul>{Object.entries(summary).map(([kind,group])=><li key={kind}>{group.title} · {group.count}회</li>)}</ul><details><summary>저장 이력 {entries.length}건 확인</summary><ol>{entries.map(entry=><li key={entry.id}><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleTimeString('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false})}</time> {entry.title}</li>)}</ol></details></>:<p>이 날짜에 본인 계정으로 저장한 업무가 없습니다. 보고서·착수회의·현장조사 등을 저장하면 여기에 자동 반영됩니다.</p>}<p>서버에 저장된 실제 작업 이력입니다. 조회·미저장 편집·타인의 작업·인력 배정만으로는 작성하지 않습니다. 업무시간과 다음 계획은 추정하지 않습니다.</p></section>}
+      <details className="project-worklog__manual" open={selected?true:undefined}><summary>직접 기록 추가·수정{selected?` · 저장본 v${selected.version}`:' · 선택'}</summary>
       <fieldset disabled={!canEdit||saving}>
-        <label>수행 업무 · 필수<textarea rows={6} value={form.todayTask} maxLength={10000} onChange={e=>change('todayTask',e.target.value)}/></label>
+        <label>추가 수행 업무 · 직접 기록 시 필수<textarea rows={6} value={form.todayTask} maxLength={10000} onChange={e=>change('todayTask',e.target.value)}/></label>
         <div className="project-worklog__details"><label>다음 업무 계획<textarea rows={4} value={form.tomorrowPlan} maxLength={10000} onChange={e=>change('tomorrowPlan',e.target.value)}/></label><label>특이사항·협의 내용<textarea rows={4} value={form.notes} maxLength={10000} onChange={e=>change('notes',e.target.value)}/></label></div>
         <label className="project-worklog__hours">실제 업무시간 · 선택<input type="number" min={0} max={24} step="any" value={form.workHours??''} onChange={e=>change('workHours',e.target.value===''?null:Number(e.target.value))}/></label>
       </fieldset>
-      <footer><span>{dirty?'저장하지 않은 변경이 있습니다.':loadedKey!==caseId+'|'+day?'저장본 확인이 필요합니다.':selected?'현재 서버 저장본입니다.':canEdit?'작성 후 저장을 눌러 보관합니다.':'조회 화면입니다.'}</span><button type="button" disabled={loading||saving} onClick={()=>{if(discard())setRefresh(n=>n+1);}}>서버 저장본 다시 열기</button>{canEdit&&<button type="button" className="project-worklog__save" disabled={saving||!form.todayTask.trim()} onClick={()=>void save()}>{saving?'저장 중…':'업무일지 저장'}</button>}</footer>
+      {canEdit&&<button type="button" className="project-worklog__save" disabled={saving||!form.todayTask.trim()} onClick={()=>void save()}>{saving?'저장 중…':'직접 기록 저장'}</button>}
+      </details>
+      <footer><span>{dirty?'저장하지 않은 직접 기록이 있습니다.':loadedKey!==caseId+'|'+day?'저장본 확인이 필요합니다.':entries.length?'자동 작성된 업무는 서버 작업 이력에 보관되어 있습니다.':selected?'현재 서버 직접 기록입니다.':'저장된 작업이 있으면 자동 반영됩니다.'}</span><button type="button" disabled={loading||saving} onClick={()=>{if(discard())setRefresh(n=>n+1);}}>서버 저장본 다시 열기</button></footer>
     </>}
   </section>;
 }

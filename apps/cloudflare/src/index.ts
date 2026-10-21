@@ -8919,11 +8919,16 @@ export async function handleTechWorklogs(request:Request,env:CloudflareEnv):Prom
   let input:any;try{input=JSON.parse(raw);}catch{return json({error:'입력 형식을 확인하세요.'},400);}
   const identity=techWorklogIdentity(input?.actor);
   if(!identity)return json({error:'기존 클레임센터 계정과 연결된 사용자만 접근할 수 있습니다.'},403);
+  if(input.method==='PUT')return json({error:'업무일지 작성은 클레임센터 스튜디오에서 진행합니다. 이 연결은 조회 전용입니다.'},405);
   if(!['GET','PUT'].includes(input.method)||typeof input.path!=='string'||!/^\/api\/project-worklogs(?:\/[0-9a-f-]{36})?(?:\?date=\d{4}-\d{2}-\d{2})?$/.test(input.path))return json({error:'업무일지 경로를 확인하세요.'},400);
   const user=await env.DB.prepare('SELECT id,login_id AS loginId,display_name AS displayName,roles_json AS rolesJson FROM preview_users WHERE id IN (?,?) AND login_id=? AND is_active=1').bind(identity.id,'developmentId' in identity?identity.developmentId:identity.id,identity.loginId).first<{id:string;loginId:string;displayName:string;rolesJson:string}>();
   if(!user)return json({error:'기존 클레임센터 계정을 확인할 수 없습니다.'},403);
   const forwarded=new Request('https://claim-worklogs.internal'+input.path,{method:input.method,headers:{'Content-Type':'application/json'},...(input.method==='PUT'?{body:JSON.stringify(input.body)}:{})});
-  return handleProjectWorklogs(forwarded,env.DB,{...user,roles:parsePreviewRoles(user.rolesJson)});
+  const result=await handleProjectWorklogs(forwarded,env.DB,{...user,roles:parsePreviewRoles(user.rolesJson)});
+  if(!result.ok||input.path!=='/api/project-worklogs')return result;
+  const context=await result.json() as {actor:{canWrite:boolean}};
+  context.actor.canWrite=false;
+  return json(context);
 }
 
 // Router dispatch

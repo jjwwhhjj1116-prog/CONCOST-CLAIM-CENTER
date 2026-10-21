@@ -14,7 +14,19 @@ export const WORKLOG_IDENTITIES=[
   {id:'d16dbd63-1074-4ab5-b686-e20e7eabe7dc',loginId:'yjw@con-cost.com',name:'유종욱',position:'관리자',writer:false,techId:'u_10',techLogin:'yjw',techEmail:'yjw@con-cost.com'}
 ] as const;
 const matchesAccount=(p:{id:string;developmentId?:string;loginId:string},actor:{id:string;loginId:string})=>p.loginId===actor.loginId&&(p.id===actor.id||p.developmentId===actor.id);
-export const worklogCanWrite=(actor:WorklogActor)=>WORKLOG_IDENTITIES.some(p=>p.writer&&matchesAccount(p,actor));
+export const worklogCanWrite=(actor:WorklogActor)=>!actor.roles.some(r=>['admin','ceo'].includes(r))&&WORKLOG_IDENTITIES.some(p=>p.writer&&matchesAccount(p,actor));
+const canReview=(actor:WorklogActor)=>actor.roles.some(r=>['admin','ceo','director'].includes(r))&&!worklogCanWrite(actor);
+const workflowTitles:Record<string,string>={KICKOFF_SAVED:'착수회의 기록 저장',KICKOFF_DRAFT_GENERATED:'착수회의 정리 저장',SITE_SURVEY_SAVED:'현장조사 기록 저장',SITE_SURVEY_DRAFT_GENERATED:'현장조사 정리 저장',SITE_SURVEY_CONFIRMED:'현장조사 결과 확정'};
+const activityTypes=['CASE_CREATED','STATUS_CHANGED','PARTY_ADDED','SCHEDULE_ADDED','PROPOSAL_CREATED','PROPOSAL_IMAGE_ADDED','PROPOSAL_VERSION_SAVED','PROPOSAL_CONFIRMED','PROPOSAL_LINKED','AWARD_DECIDED','LITIGATION_LINKED','LITIGATION_UPDATED','LITIGATION_EVENT_ADDED','INTAKE_SOURCE_SUMMARIZED','REPORT_AUTOSAVED','REPORT_SAVED','REPORT_CHAPTER_SAVED','REPORT_CHAPTER_APPLIED','REPORT_OUTLINE_SAVED','REPORT_OUTLINE_CONFIRMED','REPORT_REVIEW_REQUESTED','REPORT_FINALIZED','REPORT_OUTLINE_AI_SUGGESTED','REPORT_CHAPTER_AI_DRAFTED','REPORT_MEMORY_CANDIDATE_CREATED','EVIDENCE_UPLOADED','EVIDENCE_UPLOADED_TO_GOOGLE_DRIVE','PROJECT_SCHEDULE_SAVED','SCHEDULE_CHANGE_REQUESTED','SCHEDULE_CHANGE_DECIDED'];
+// Read the successful, persisted work itself. No duplicate daily copies, guessed hours,
+// assignment-as-performance attribution, or writes caused merely by opening a journal.
+async function automaticEntries(db:WorklogDatabase,caseId:string,day:string,authors:string[]){
+  if(!authors.length)return [];
+  const marks=authors.map(()=>'?').join(','),start=new Date(day+'T00:00:00+09:00'),end=new Date(start.getTime()+86400000);
+  const rows=await db.prepare(`SELECT 'activity:'||a.id AS id,a.actor_id AS authorId,u.display_name AS authorName,a.event_type AS eventType,a.title,a.created_at AS createdAt FROM preview_case_activities a JOIN preview_users u ON u.id=a.actor_id WHERE a.case_id=? AND a.actor_id IN (${marks}) AND julianday(a.created_at)>=julianday(?) AND julianday(a.created_at)<julianday(?) AND a.event_type IN (${activityTypes.map(()=>'?').join(',')}) UNION ALL SELECT 'workflow:'||e.id,e.actor_id,u.display_name,e.event_type,e.event_type,e.created_at FROM preview_workflow_events e JOIN preview_users u ON u.id=e.actor_id WHERE e.case_id=? AND e.actor_id IN (${marks}) AND julianday(e.created_at)>=julianday(?) AND julianday(e.created_at)<julianday(?) AND e.event_type IN (${Object.keys(workflowTitles).map(()=>'?').join(',')}) ORDER BY createdAt,id`)
+    .bind(caseId,...authors,start.toISOString(),end.toISOString(),...activityTypes,caseId,...authors,start.toISOString(),end.toISOString(),...Object.keys(workflowTitles)).all<{id:string;authorId:string;authorName:string;eventType:string;title:string;createdAt:string}>();
+  return rows.results.map(row=>({...row,title:row.id.startsWith('workflow:')?workflowTitles[row.eventType]:row.title,source:'CLAIM_CENTER'}));
+}
 export function techWorklogIdentity(actor:unknown){
   if(!actor||typeof actor!=='object')return null;
   const a=actor as Record<string,unknown>;
@@ -30,10 +42,10 @@ export async function handleProjectWorklogs(request:Request,db:WorklogDatabase,a
   const parts=url.pathname.match(/^\/api\/project-worklogs(?:\/([^/]+))?$/);
   if(!parts)return error('업무일지 경로를 확인하세요.',404);
   if(!['GET','PUT'].includes(request.method))return error('지원하지 않는 요청입니다.',405);
+  const accounts=await db.prepare("SELECT id,login_id AS loginId FROM preview_users WHERE is_active=1 AND login_id IN (?,?,?) AND NOT EXISTS(SELECT 1 FROM json_each(roles_json) r WHERE r.value IN ('admin','ceo'))").bind(...WORKLOG_IDENTITIES.filter(p=>p.writer).map(p=>p.loginId)).all<{id:string;loginId:string}>();
+  const writers=WORKLOG_IDENTITIES.filter(p=>p.writer).flatMap(p=>{const a=accounts.results.find(a=>matchesAccount(p,a));return a&&(canReview(actor)||a.id===actor.id)?[{id:a.id,name:p.name,position:p.position}]:[];});
   if(!parts[1]){
     if(request.method!=='GET')return error('프로젝트를 먼저 선택하세요.',400);
-    const accounts=await db.prepare('SELECT id,login_id AS loginId FROM preview_users WHERE is_active=1 AND login_id IN (?,?,?)').bind(...WORKLOG_IDENTITIES.filter(p=>p.writer).map(p=>p.loginId)).all<{id:string;loginId:string}>();
-    const writers=WORKLOG_IDENTITIES.filter(p=>p.writer).flatMap(p=>{const a=accounts.results.find(a=>matchesAccount(p,a));return a?[{id:a.id,name:p.name,position:p.position}]:[];});
     const projects=await db.prepare(`SELECT c.id,c.case_number AS caseNumber,c.title FROM preview_cases c WHERE ${accessSql} ORDER BY c.updated_at DESC,c.id`).bind(ORGANIZATION,admin,actor.id).all();
     return response({actor:{id:actor.id,name:actor.displayName,canWrite:worklogCanWrite(actor)},writers,projects:projects.results});
   }
@@ -43,7 +55,8 @@ export async function handleProjectWorklogs(request:Request,db:WorklogDatabase,a
   if(request.method==='GET'){
     const day=url.searchParams.get('date');if(!dayOK(day))return error('작성일을 확인하세요.',400);
     const rows=await db.prepare(`SELECT e.id,e.actor_id AS authorId,u.display_name AS authorName,e.detail_json AS detail,e.created_at AS updatedAt FROM preview_workflow_events e JOIN preview_users u ON u.id=e.actor_id WHERE e.case_id=? AND e.event_type=? AND e.entity_id=? AND NOT EXISTS(SELECT 1 FROM preview_workflow_events n WHERE n.case_id=e.case_id AND n.actor_id=e.actor_id AND n.event_type=e.event_type AND n.entity_id=e.entity_id AND n.rowid>e.rowid) ORDER BY e.created_at DESC`).bind(caseId,EVENT,'worklog:'+day).all<{id:string;authorId:string;authorName:string;detail:string;updatedAt:string}>();
-    return response({project,date:day,logs:rows.results.map(({detail,...row})=>({...row,...JSON.parse(detail)}))});
+    const allowed=writers.map(p=>p.id);
+    return response({project,date:day,logs:rows.results.filter(row=>allowed.includes(row.authorId)).map(({detail,...row})=>({...row,...JSON.parse(detail)})),automaticEntries:await automaticEntries(db,caseId,day,allowed)});
   }
   if(!worklogCanWrite(actor))return error('업무일지는 이경훈·최영배·장범선 본인 계정으로 작성합니다. 기존 조회·결재 권한은 유지됩니다.',403);
   const origin=request.headers.get('Origin');
