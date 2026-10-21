@@ -73,7 +73,7 @@ type ThemeMode = 'light' | 'dark';
 interface MemberAwardAlert { eventKey:string;caseId:string;caseNumber:string;projectTitle:string;message:string;awardedAt:string;projectStartOn:string|null;projectEndOn:string|null }
 interface MemberTodoAlert { eventKey:string;caseId:string;caseNumber:string;title:string;stageCode:string;stageLabel:string;startDate:string;endDate:string;status:string;noteText:string;message:string }
 interface MemberReportAlert { eventKey:string;reviewId:string;caseId:string;caseNumber:string;title:string;version:number;status:string;path:string;message:string;createdAt:string }
-interface MemberAlertsPayload { awards:MemberAwardAlert[];todos:MemberTodoAlert[];reports?:MemberReportAlert[];today:string;available:boolean }
+interface MemberAlertsPayload { awards:MemberAwardAlert[];todos:MemberTodoAlert[];reports?:MemberReportAlert[];worklogs?:{eventKey:string;title:string;status:string;path:string;message:string;createdAt:string}[];today:string;available:boolean }
 
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -184,14 +184,14 @@ export const AppShell: React.FC<AppShellProps> = ({
     let active=true, first=true;
     const refresh=()=>{void apiRequest<MemberAlertsPayload>('/api/member-alerts').then(payload=>{
       if(!active)return;setMemberAlerts(payload);
-      if(first&&(payload.awards.length||payload.todos.length||(payload.reports?.length??0)))setAlertsOpen(true);first=false;
+      if(first&&(payload.awards.length||payload.todos.length||(payload.reports?.length??0)||(payload.worklogs?.length??0)))setAlertsOpen(true);first=false;
     }).catch(()=>undefined);};
     refresh();const timer=window.setInterval(refresh,30_000);window.addEventListener('focus',refresh);
     return()=>{active=false;window.clearInterval(timer);window.removeEventListener('focus',refresh);};
   },[userId]);
 
-  const alertCount=memberAlerts.awards.length+memberAlerts.todos.length+(memberAlerts.reports?.length??0);
-  const acknowledgeAlerts=async()=>{const eventKeys=[...memberAlerts.awards,...memberAlerts.todos,...(memberAlerts.reports??[])].map((alert)=>alert.eventKey);if(!eventKeys.length){setAlertsOpen(false);return;}setAlertsBusy(true);try{await apiRequest('/api/member-alerts',{method:'PUT',body:JSON.stringify({eventKeys})});setMemberAlerts((current)=>({...current,awards:[],todos:[],reports:[]}));setAlertsOpen(false);}finally{setAlertsBusy(false);}};
+  const alertCount=memberAlerts.awards.length+memberAlerts.todos.length+(memberAlerts.reports?.length??0)+(memberAlerts.worklogs?.length??0);
+  const acknowledgeAlerts=async()=>{const eventKeys=[...memberAlerts.awards,...memberAlerts.todos,...(memberAlerts.reports??[]),...(memberAlerts.worklogs??[])].map((alert)=>alert.eventKey);if(!eventKeys.length){setAlertsOpen(false);return;}setAlertsBusy(true);try{await apiRequest('/api/member-alerts',{method:'PUT',body:JSON.stringify({eventKeys})});setMemberAlerts((current)=>({...current,awards:[],todos:[],reports:[],worklogs:[]}));setAlertsOpen(false);}finally{setAlertsBusy(false);}};
 
   const go = (path: string) => {
     onNavigate(path);
@@ -329,6 +329,7 @@ export const AppShell: React.FC<AppShellProps> = ({
       <ReleaseNotice open={releaseOpen} onClose={closeRelease} />
       <Dialog isOpen={alertsOpen && !releaseOpen} size="wide" hideDefaultAction title="업무 알림 · 결재·수주·프로젝트 투입" onClose={()=>!alertsBusy&&setAlertsOpen(false)}>
         <div className="member-alert-dialog">
+          <section><header><h3>주간 업무일지 결재</h3><span>{memberAlerts.worklogs?.length??0}건</span></header>{memberAlerts.worklogs?.length?<ul>{memberAlerts.worklogs.map(alert=><li key={alert.eventKey}><button type="button" onClick={()=>{go(alert.path);setAlertsOpen(false);}}><strong>{alert.title}</strong><span>{alert.message}</span><small>{new Date(alert.createdAt).toLocaleString('ko-KR')}</small></button></li>)}</ul>:<p className="empty-box">새로운 주간 업무일지 알림이 없습니다.</p>}</section>
           <section><header><h3>보고서 결재</h3><span>{memberAlerts.reports?.length??0}건</span></header>{memberAlerts.reports?.length?<ul>{memberAlerts.reports.map(alert=><li key={alert.eventKey}><button type="button" onClick={()=>{go(alert.path);setAlertsOpen(false);}}><strong>{alert.caseNumber} · {alert.title} · v{alert.version}</strong><span>{alert.message}</span><small>{new Date(alert.createdAt).toLocaleString('ko-KR')} · {alert.status==='PENDING'?'상신본 확인·결재':alert.status==='APPROVED'?'승인본 확정·출력':'수정 요청 확인'}</small></button></li>)}</ul>:<p className="empty-box">새로운 보고서 결재 알림이 없습니다.</p>}</section>
           {memberAlerts.awards.length>0&&<section><header><h3>신규 프로젝트 수주</h3><span>{memberAlerts.awards.length}건</span></header><ul>{memberAlerts.awards.map((alert)=><li key={alert.eventKey}><button type="button" onClick={()=>{go(`/projects/schedule?caseId=${encodeURIComponent(alert.caseId)}`);setAlertsOpen(false);}}><strong>{alert.caseNumber} · {alert.projectTitle}</strong><span>{alert.message}</span><small>{new Date(alert.awardedAt).toLocaleString('ko-KR')} · {alert.projectStartOn??'시작일 미정'} ~ {alert.projectEndOn??'종료일 미정'}</small></button></li>)}</ul></section>}
           <section><header><h3>{memberAlerts.today||'금일'} 투입 To-do</h3><span>{memberAlerts.todos.length}건</span></header>{memberAlerts.todos.length?<ul>{memberAlerts.todos.map((todo)=><li key={todo.eventKey}><button type="button" onClick={()=>{go(`/projects/schedule?caseId=${encodeURIComponent(todo.caseId)}`);setAlertsOpen(false);}}><strong>{todo.caseNumber} · {todo.stageLabel}</strong><span>{todo.title}</span><small>{todo.startDate} ~ {todo.endDate}{todo.noteText?` · ${todo.noteText}`:''}</small></button></li>)}</ul>:<p className="empty-box">오늘 배정된 프로젝트 단계 일정이 없습니다.</p>}</section>

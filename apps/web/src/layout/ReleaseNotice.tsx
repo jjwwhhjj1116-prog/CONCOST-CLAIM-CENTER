@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-10-21';
 export const RELEASE_DATE_LABEL = '2026년 10월 21일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v3:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v4:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 21일 · 주간 결재·정기보고',text:'주간 업무일지에서 접힌 수신자 선택을 열어 결재자를 지정하고 상신합니다. 상신 당시 날짜별 업무 표는 고정되며 수신자는 업무 알림에서 원문을 열어 승인·수정 요청을 합니다. 선택 수신자 전원이 승인해야 완료됩니다. 금요일 17:10 당주, 월요일 09:00 전주 토·일 업무의 추가 보고를 한국시간 기준으로 자동 상신합니다. 기본 수신자는 기존 대표·부사장 계정이고 정기보고 설정에서 범위·수신자·사용 여부를 바꿀 수 있습니다. 전달은 앱 내 알림이며 승인 이메일 발송 기능과는 별개입니다. 모바일 입력 배치와 미저장 이동·재열기 취소도 보완했습니다.'},
   {title:'10월 21일 · 일일·주간 업무일지',text:'프로젝트 워크의 업무일지를 접고 펼쳐 일일·주간으로 이동합니다. 기술본부의 작성 방식에 맞춰 목표·세부 계획·수행 업무·진행률·상태·미완료·지연 사유·장애요인·내일 계획을 기록합니다. 일일 저장본과 실제 작업은 개인별 월~일 주간표로 자동 취합되며 Excel로 내려받을 수 있습니다. 월요일에는 전주를 먼저 보여 줍니다. 기존 작성본과 이력은 유지됩니다.'},
   {title:'10월 21일 · 개인별 프로젝트 업무일지 자동 작성',text:'이경훈 센터장·최영배 본부장·장범선 실장이 클레임센터에서 저장한 보고서·착수회의·현장조사 등의 작업을 본인·프로젝트·날짜별 일지로 자동 작성합니다. 직원은 본인 일지만 확인하며 대표·부사장·관리자 계정의 작업은 작성 대상에서 제외합니다. 기존 직접 기록을 보존하며 업무시간과 다음 계획을 자동 추정하지 않습니다. 클레임센터 일지는 클레임센터에서 작성합니다.'},
   { title: '10월 20일 · 보고서 작업 화면·임시복구', text: '큰 상단 소개 영역을 정리하고, 담당자 검수의 목차 제목 수정·챕터별 분담·판례 인용 검수를 나란한 선택 도구로 모았습니다. 이전 자료는 ‘이전 작업 복구’를 눌러 선택합니다. 임시 복구본은 마지막 보관 후 7일간 유지하며, 만료본은 사이트 사용 중 정리합니다. 서버 저장본과 직접 보관한 파일은 이 정책으로 삭제하지 않습니다.' },

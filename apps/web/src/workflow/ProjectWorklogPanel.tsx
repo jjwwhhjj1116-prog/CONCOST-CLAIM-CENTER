@@ -1,4 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
+import {Button,Dialog} from '@claim-studio/ui';
 import './ProjectWorklogPanel.css';
 type Project={id:string;caseNumber:string;title:string};
 type Writer={id:string;name:string;position:string};
@@ -19,6 +20,7 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
   const [context,setContext]=useState<Context|null>(null),[caseId,setCaseId]=useState(''),[day,setDay]=useState(params.get('date')||today()),[author,setAuthor]=useState('');
   const [logs,setLogs]=useState<Log[]>([]),[form,setForm]=useState<Form>(emptyForm),[original,setOriginal]=useState<Form>(emptyForm);
   const [automatic,setAutomatic]=useState<AutomaticEntry[]>([]);
+  const [pendingDiscard,setPendingDiscard]=useState<(()=>void)|null>(null);
   const [loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[failure,setFailure]=useState(''),[notice,setNotice]=useState(''),[refresh,setRefresh]=useState(0),[loadedKey,setLoadedKey]=useState('');
   const generation=useRef(0),saveBusy=useRef(false),mounted=useRef(true),keyRef=useRef('');
   const key=[actorKey,context?.actor.id,caseId,day,author].join('|');keyRef.current=key;
@@ -43,9 +45,9 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
     return()=>controller.abort();
   },[basePath,actorKey,context,caseId,day,refresh]);
   useEffect(()=>{const next=formFromLog(logs.find(entry=>entry.authorId===author));setForm(next);setOriginal(next);},[author,logs]);
-  const discard=()=>!dirty||window.confirm('저장하지 않은 입력이 있습니다. 입력을 버리고 이동할까요?');
+  const discard=(proceed:()=>void)=>{if(dirty)setPendingDiscard(()=>proceed);else proceed();};
   const change=(field:keyof Form,value:string|number|null)=>setForm(current=>({...current,[field]:value}));
-  const chooseContext=(nextCase:string,nextDay:string)=>{if(onNavigate){onNavigate('/projects/worklogs?'+new URLSearchParams({...(nextCase?{caseId:nextCase}:{}),date:nextDay,authorId:author}));}else if(discard()){setCaseId(nextCase);setDay(nextDay);}};
+  const chooseContext=(nextCase:string,nextDay:string)=>{if(onNavigate){onNavigate('/projects/worklogs?'+new URLSearchParams({...(nextCase?{caseId:nextCase}:{}),date:nextDay,authorId:author}));}else discard(()=>{setCaseId(nextCase);setDay(nextDay);});};
   const save=async()=>{
     if(!canEdit||saveBusy.current||loading)return;saveBusy.current=true;setSaving(true);setFailure('');setNotice('');const savedKey=keyRef.current;
     try{const result=await request<{log:Log}>(`${basePath}/${encodeURIComponent(caseId)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...form,date:day,expectedVersion:selected?.version||0})});
@@ -56,15 +58,15 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
   const project=context?.projects.find(p=>p.id===caseId);
   const entries=automatic.filter(entry=>entry.authorId===author);
   const summary=entries.reduce<Record<string,{title:string;count:number}>>((groups,entry)=>{const group=groups[entry.eventType]||(groups[entry.eventType]={title:entry.title.replace(/ · v\d+$/,''),count:0});group.count++;return groups;},{});
-  return <section className="project-worklog" aria-label="프로젝트 업무일지">
+  return <><section className="project-worklog" aria-label="프로젝트 업무일지">
     <header><div><h2>일일 업무일지</h2><p>실제 저장한 업무는 자동 기록하고, 오늘의 계획·수행 내용·내일 계획은 본인이 작성합니다.</p></div>{onNavigate&&<button type="button" onClick={()=>onNavigate('/projects/worklogs/weekly?'+new URLSearchParams({...(caseId?{caseId}:{}),week:day,authorId:author}))}>주간 업무일지 보기</button>}</header>
     <p className="project-worklog__policy">작성 대상: 이경훈 센터장 · 최영배 본부장 · 장범선 실장. 대표·부사장·관리자 계정의 작업은 일지로 작성하지 않으며 기존 조회·결재 권한은 유지합니다.</p>
-    {failure&&<div role="alert" className="project-worklog__error">{failure} <button type="button" onClick={()=>{if(!context)window.location.reload();else if(discard())setRefresh(n=>n+1);}} disabled={saving}>다시 불러오기</button></div>}
+    {failure&&<div role="alert" className="project-worklog__error">{failure} <button type="button" onClick={()=>discard(()=>{if(!context)window.location.reload();else setRefresh(n=>n+1);})} disabled={saving}>다시 불러오기</button></div>}
     {notice&&<p role="status">{notice}</p>}
     <div className="project-worklog__filters">
       <label>프로젝트<select value={caseId} disabled={saving||loading} onChange={e=>chooseContext(e.target.value,day)}><option value="">프로젝트 선택</option>{context?.projects.map(p=><option key={p.id} value={p.id}>{p.caseNumber} · {p.title}</option>)}</select></label>
       <label>작성일<input type="date" value={day} disabled={saving||loading} onChange={e=>{if(e.target.value)chooseContext(caseId,e.target.value);}}/></label>
-      <label>작성자{context?.actor.canWrite?<output>{context.writers.find(p=>p.id===author)?.name} {context.writers.find(p=>p.id===author)?.position} · 본인</output>:<select value={author} disabled={saving||loading} onChange={e=>{if(discard())setAuthor(e.target.value);}}>{!context?.writers.length&&<option value="">작성 대상 직원 없음</option>}{context?.writers.map(p=><option key={p.id} value={p.id}>{p.name} {p.position}</option>)}</select>}</label>
+      <label>작성자{context?.actor.canWrite?<output>{context.writers.find(p=>p.id===author)?.name} {context.writers.find(p=>p.id===author)?.position} · 본인</output>:<select value={author} disabled={saving||loading} onChange={e=>{const value=e.target.value;discard(()=>setAuthor(value));}}>{!context?.writers.length&&<option value="">작성 대상 직원 없음</option>}{context?.writers.map(p=><option key={p.id} value={p.id}>{p.name} {p.position}</option>)}</select>}</label>
     </div>
     {loading?<p role="status">서버 업무일지를 불러오는 중입니다.</p>:!caseId?<p>배정된 프로젝트를 선택하세요. 프로젝트가 없으면 기존 프로젝트 배정 상태를 확인해야 합니다.</p>:<>
       <div className="project-worklog__record"><strong>{project?.caseNumber} · {project?.title}</strong><span>{loadedKey!==caseId+'|'+day?'서버 저장본을 확인하지 못했습니다. 다시 불러오세요.':`자동 작성 ${entries.length}건${selected?' · 직접 기록 저장본 v'+selected.version:''}`}</span>{!canEdit&&<span>조회 전용 화면입니다.</span>}</div>
@@ -80,7 +82,7 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
       </fieldset>
       {canEdit&&<button type="button" className="project-worklog__save" disabled={saving||!form.todayTask.trim()} onClick={()=>void save()}>{saving?'저장 중…':'일일 업무일지 저장'}</button>}
       </section>
-      <footer><span>{dirty?'저장하지 않은 직접 기록이 있습니다.':loadedKey!==caseId+'|'+day?'저장본 확인이 필요합니다.':entries.length?'자동 작성된 업무는 서버 작업 이력에 보관되어 있습니다.':selected?'현재 서버 직접 기록입니다.':'저장된 작업이 있으면 자동 반영됩니다.'}</span><button type="button" disabled={loading||saving} onClick={()=>{if(discard())setRefresh(n=>n+1);}}>서버 저장본 다시 열기</button></footer>
+      <footer><span>{dirty?'저장하지 않은 직접 기록이 있습니다.':loadedKey!==caseId+'|'+day?'저장본 확인이 필요합니다.':entries.length?'자동 작성된 업무는 서버 작업 이력에 보관되어 있습니다.':selected?'현재 서버 직접 기록입니다.':'저장된 작업이 있으면 자동 반영됩니다.'}</span><button type="button" disabled={loading||saving} onClick={()=>discard(()=>setRefresh(n=>n+1))}>서버 저장본 다시 열기</button></footer>
     </>}
-  </section>;
+  </section><Dialog isOpen={!!pendingDiscard} title="저장하지 않은 업무일지" onClose={()=>setPendingDiscard(null)} hideDefaultAction trapFocus><p>서버 저장본을 열면 현재 입력을 바꿉니다. 취소하면 작성 중인 내용을 유지합니다.</p><div className="dialog-actions worklog-discard-actions"><Button onClick={()=>setPendingDiscard(null)}>취소 · 계속 작성</Button><Button variant="secondary" onClick={()=>{const proceed=pendingDiscard;setPendingDiscard(null);proceed?.();}}>입력 버리고 계속</Button></div></Dialog></>;
 }

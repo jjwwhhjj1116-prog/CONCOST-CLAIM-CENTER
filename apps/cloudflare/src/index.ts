@@ -55,6 +55,7 @@ import { fetchEsPairSources } from './es-pair-sources';
 import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../packages/document-engine/src/es-ecos';
 
 import {handleProjectWorklogs,techWorklogIdentity} from './project-worklogs';
+import {handleWeeklyWorklogReviews,weeklyWorklogAlerts} from './project-worklog-reviews';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -7548,7 +7549,7 @@ async function handlePreviewMemberAlerts(request:Request,env:CloudflareEnv):Prom
       ORDER BY COALESCE(v.reviewed_at,v.requested_at) DESC LIMIT 30`).bind(PREVIEW_ORGANIZATION_ID,...(incoming?[user.id]:[]),user.id,user.id).all<Record<string,unknown>>();
     reports=reportRows.results.map(row=>({...row,path:row.status==='PENDING'?`/approval?reviewId=${row.reviewId}`:`/reports/studio?caseId=${row.caseId}&step=5`,message:row.status==='PENDING'?`${row.requestedByName}님이 최종 결재를 요청했습니다.`:row.status==='APPROVED'?'최종 결재가 승인되었습니다. 5단계에서 승인본을 확정하고 출력하세요.':'수정 요청을 확인하고 새 버전을 저장해 다시 상신하세요.'}));
   }
-  return json({awards:awardRows.results.map((row)=>({eventKey:row.eventKey,caseId:row.caseId,caseNumber:row.caseNumber,projectTitle:row.title,awardedAt:row.awardedAt,projectStartOn:row.projectStartOn,projectEndOn:row.projectEndOn,message:`${row.caseNumber} · ${row.title} 프로젝트가 수주 확정되었습니다.`})),todos:todoRows.results.map((row)=>({...row,stageLabel:stageLabels[String(row.stageCode)]??String(row.stageCode),message:`${row.caseNumber} · ${stageLabels[String(row.stageCode)]??row.stageCode} 투입 일정 (${row.startDate} ~ ${row.endDate})`})),reports,today,available:true,phase:'CF221_REPORT_APPROVAL_ALERTS'});
+  return json({awards:awardRows.results.map((row)=>({eventKey:row.eventKey,caseId:row.caseId,caseNumber:row.caseNumber,projectTitle:row.title,awardedAt:row.awardedAt,projectStartOn:row.projectStartOn,projectEndOn:row.projectEndOn,message:`${row.caseNumber} · ${row.title} 프로젝트가 수주 확정되었습니다.`})),todos:todoRows.results.map((row)=>({...row,stageLabel:stageLabels[String(row.stageCode)]??String(row.stageCode),message:`${row.caseNumber} · ${stageLabels[String(row.stageCode)]??row.stageCode} 투입 일정 (${row.startDate} ~ ${row.endDate})`})),reports,worklogs:await weeklyWorklogAlerts(env.DB,user),today,available:true,phase:'CF245_WEEKLY_WORKLOG_ALERTS'});
 }
 
 async function previewApprovalNotificationSchema(env: CloudflareEnv): Promise<boolean> {
@@ -8982,6 +8983,7 @@ const worker = {
       const user=await previewSessionUser(request,env);
       if(!user)return json({error:'로그인이 필요합니다.'},401);
       if(!env.DB)return json({error:'업무일지 저장소가 준비되지 않았습니다.'},503);
+      if(url.pathname.startsWith('/api/project-worklogs/weekly/'))return handleWeeklyWorklogReviews(request,env.DB,user);
       return handleProjectWorklogs(request,env.DB,user);
     }
 
