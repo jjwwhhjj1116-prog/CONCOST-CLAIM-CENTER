@@ -1,5 +1,15 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF243 클레임센터 전용·개인별 업무일지 자동 작성 — 2026-10-21
+
+- **요구 정정·구현:** 종전 CF241/242의 수기 공동 일지가 사용자 의도와 달랐음을 확인했다. 제품 a430404는 클레임센터에서 실제 성공 저장된 활동 30종·착수회의/현장조사 이력 5종을 본인·프로젝트·한국시간 날짜별 자동 업무일지로 구성한다. 원천 서버 이력을 재사용하므로 일지 사본/cron/추가 DDL 없이 재열기 결과가 유지되며, 조회로 자료나 일지가 늘지 않는다. 미저장 편집·단순 조회·타인 작업·배정·보관/실패 이력은 수행 업무로 만들지 않는다. 시간·다음 계획을 임의 생성하지 않는다.
+- **개인·제외 대상:** 기존 이경훈·최영배·장범선 ID/login만 작성 대상이며 직원 API/화면은 본인만 반환·고정한다. 실제 두 서버 정상 로그인 GET에서 이경훈/최영배는 director, 장범선은 pm이므로 director를 통째로 차단하지 않았다. 대표·부사장·관리자 및 admin/ceo 역할 중첩 계정은 작성 대상에서 제외하고 기존 프로젝트 조회·결재 권한은 보존한다. Tech bridge는 GET 조회만 허용하고 PUT405/context.canWrite=false, Claim의 Tech 작성 링크를 제거했다. Tech 사이트 자체의 원본 소스/배포는 변경하지 않았다. 기존 직접 기록은 별도 선택 영역으로 보존하고 기존 CAS 버전 저장을 유지한다. 안내·사용 매뉴얼도 정정했다.
+- **로컬 검수:** 관련16/16 PASS(개인일지 신규4+기존6+경로/로그인6). 111개 원천, KST 경계, 프로젝트/작성자 분리, DB export/reopen 동일·GET쓰기0, 제외계정·역할 중첩, 동시 저장·기존409, Tech 읽기전용을 검사했다. 구 HEAD 업무일지 모듈 대체 음성3FAIL/1PASS로 개인범위/자동기록 누락을 실제 검출했다(Tech handler는 최신 유지한 부분 음성). web/Worker 타입·실제 Vite/Worker 빌드 PASS. 최초 Worker 타입 명령의 DOM.Iterable/asset declaration 누락은 올바른 환경 인자로 재실행해 통과했다. 세 전문 검토에서 Critical/High 없음; 브라우저 실제 조작은 root가 수행하고 캡처를 별도 대조했다.
+- **실제 서버·화면:** 개발/가오픈 각각 기존 세 직원 정상 로그인→기존 CF241 합성 프로젝트/2026-10-20의 CASE_CREATED 자동1건·본인 writer1개→재열기 exact·기존 직접 기록 exact를 확인했다. 양쪽 대표/부사장/관리자 정상 로그인 GET도 canWrite=false/작성자3명에서 본인제외 PASS. 개발 세 직원 실제 UI의 본인 고정·자동1건·서버 재열기, 가오픈 이경훈의 자동1건+직접기록v1 원문·재열기를 실제 IAB에서 확인했다. 사용자 원본 Chrome 세션·고객 자료는 보존했다. 신규 원격 합성자료 쓰기는 자동 승인 검토가 거절하여 경로를 완전히 제거했고, 이후 정상 로그인과 GET만 수행했다. 새 업무 자료를 생성/수정한 증거로 확대하지 않는다.
+- **배포·설정:** 동일46파일 canonical c25f40c20526d26819f8f2b8273f533eb27bde95902e466fef2d7d70d3ece187, entry /assets/index-C88yHADV.js, native29파일(런타임28+manifest)/WASM bcc40a79 불변. 최종 개발 7f7af773-beb3-4a69-8f8b-ad7bac43cc25, 가오픈 8ceb3c9e-c1ca-4c8f-bab1-1c4720383dab; 실제46GET해시/health/readiness/비인증401 PASS. 첫 keep-vars 배포에서 기존 RELEASE_MAINTENANCE가 빠진 것을 검출했고, 이전 활성 버전의 비밀이 아닌 원래 값0을 확인해 명시 복구 배포했다. 최종 두 서버9bindings 전후 exact, 메일 Worker/14bindings 및 Tech Pages/환경설정 불변. 계정·암호·역할·키 변경 경로0; 비밀값 원문 동일성 검사가 아니다.
+- **증거·다음 시작:** tmp/cf243-qa/{final-proof,live-*-before,live-*-after,viewers-*,before,after,reviewed-release,live-*-final,maintenance-original}.json, browser/*.{txt,jpg}, regression/{head-negative,current-combined,related-final}.log. 신규 실제 서버 쓰기·HWP/DOCX/PDF·전체 A-Z 검수로 확대하지 않는다. 이후 자동 일지는 클레임센터에서만 작성하며, 새 성공 활동 종류를 추가할 때 이 허용목록과 회귀를 함께 갱신한다. 기존22삭제/package.json M/apps/web/tmp 및 아래 CF242 이하 본문은 보존한다.
+
+
 ## CF242 승인 이메일 실제 받은함·메일 버튼·로그인 복귀 검수 — 2026-10-20
 
 - **실제 수신 PASS:** 기존 그룹웨어의 정상 회사 계정으로 원래 가오픈 v9 메일(DocID 257099562, 수신 yjw@con-cost.com)까지 직접 확인했다. CF241 아래의 '받은함 미확인'은 당시 이력이다. 기존 메일은 재발송하지 않았다. 원래 텍스트의 URL은 DB에서 정상인데 받은 화면의 결재 URL에는 중복 점이 있었고 링크 anchor가 없었다. 그 중복 점의 정확한 전송/표시 원인은 확정하지 않는다.
