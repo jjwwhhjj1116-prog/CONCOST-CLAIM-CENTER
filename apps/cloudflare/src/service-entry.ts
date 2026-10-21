@@ -1,11 +1,13 @@
 import {WorkerEntrypoint} from 'cloudflare:workers';
 import worker,{handleTechWorklogs,type CloudflareEnv} from './index';
-import {dispatchScheduledWorklogs} from './project-worklog-reviews';
+import {dispatchLocalWorklogs,dispatchWorklogEnvironments} from './worklog-scheduler';
 export default {...worker,async scheduled(controller:{scheduledTime:number},env:CloudflareEnv){
-  if(!env.DB||env.RELEASE_MAINTENANCE==='1')return;
-  const result=await dispatchScheduledWorklogs(env.DB,new Date(controller.scheduledTime));
-  if(result.failed)throw new Error(`Weekly worklog dispatch failed for ${result.failed} writers`);
+  await dispatchWorklogEnvironments(env,new Date(controller.scheduledTime));
 }};
+// Service binding only: no public HTTP handler and no caller-supplied time.
+export class WorklogScheduler extends WorkerEntrypoint<CloudflareEnv>{
+  runDue(){return dispatchLocalWorklogs(this.env,new Date());}
+}
 export class ClaimWorklogs extends WorkerEntrypoint<CloudflareEnv>{
   fetch(request:Request){return handleTechWorklogs(request,this.env);}
 }

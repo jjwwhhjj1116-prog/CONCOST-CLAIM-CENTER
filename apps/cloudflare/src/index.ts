@@ -97,6 +97,7 @@ export interface CloudflareEnv {
   PM_NOTIFICATION_WEBHOOK_URL?: string;
   PM_NOTIFICATION_WEBHOOK_SECRET?: string;
   APPROVAL_MAILER?: AssetsLike;
+  WORKLOG_SCHEDULER?: {runDue():Promise<{created:number;existing:number;skipped:number;failed:number}>};
   GEMINI_DATA_GOVERNANCE_MODE?: string;
   HERMES_TEST_FETCH?: MemoryBridgeFetch;
   ERP_PROJECT_WEBHOOK_URL?: string;

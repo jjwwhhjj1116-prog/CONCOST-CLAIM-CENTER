@@ -157,3 +157,25 @@ test('CF245 scheduled empty work, absent assignment and manual pending are skipp
  }finally{f.close();}}
 });
 
+import {dispatchLocalWorklogs,dispatchWorklogEnvironments} from '../apps/cloudflare/src/worklog-scheduler.js';
+test('CF245 environment scheduler still calls remote after local DB failure, then reports failure',async()=>{
+ let remote=0;
+ const env={DB:{prepare(){throw Error('Synthetic local failure');}},WORKLOG_SCHEDULER:{async runDue(...args:unknown[]){assert.equal(args.length,0);remote++;return {failed:0};}}};
+ await assert.rejects(dispatchWorklogEnvironments(env as any,new Date('2026-10-23T08:10:00Z')),/failed in 1 environments/);assert.equal(remote,1);
+});
+test('CF245 maintenance only skips local work and still calls remote scheduler without parameters',async()=>{
+ let remote=0;const env={RELEASE_MAINTENANCE:'1',DB:{prepare(){throw Error('Maintenance must not access DB');}},WORKLOG_SCHEDULER:{async runDue(...args:unknown[]){assert.equal(args.length,0);remote++;}}};
+ await assert.doesNotReject(dispatchWorklogEnvironments(env as any,new Date('2026-10-23T08:10:00Z')));assert.equal(remote,1);
+});
+test('CF245 remote failure is reported after actual local SQLite submission completes',async()=>{
+ const f=await fixture();try{
+ await save(f);const before=count(f);let remote=0;
+ const env={DB:f.db,WORKLOG_SCHEDULER:{async runDue(){remote++;throw Error('Synthetic remote failure');}}};
+ await assert.rejects(dispatchWorklogEnvironments(env as any,new Date('2026-10-23T08:10:00Z')),/failed in 1 environments/);
+ assert.equal(remote,1);assert.equal(count(f),before+1);const rows=await success(await call(f,0,'/reviews?week='+day));assert.equal(rows.submissions.length,1);
+ }finally{f.close();}
+});
+test('CF245 scheduler without DB is harmless and does not require a remote binding',async()=>{
+ assert.deepEqual(await dispatchLocalWorklogs({} as any,new Date('2026-10-23T08:10:00Z')),{created:0,existing:0,skipped:0,failed:0});
+ await assert.doesNotReject(dispatchWorklogEnvironments({} as any,new Date('2026-10-23T08:10:00Z')));
+});

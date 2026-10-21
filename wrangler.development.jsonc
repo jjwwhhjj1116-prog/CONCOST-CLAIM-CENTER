@@ -3,7 +3,7 @@
   "name": "concost-claim-center-development",
   "main": "apps/cloudflare/src/service-entry.ts",
   "triggers": {"crons":["*/5 0-14 * * *"]},
-  "services": [{"binding":"APPROVAL_MAILER","service":"concost-migration-trial","entrypoint":"ClaimApprovalMailer"}],
+  "services": [{"binding":"APPROVAL_MAILER","service":"concost-migration-trial","entrypoint":"ClaimApprovalMailer"},{"binding":"WORKLOG_SCHEDULER","service":"concost-claim-center-preview","entrypoint":"WorklogScheduler"}],
   "d1_databases": [
     {
       "binding": "DB",

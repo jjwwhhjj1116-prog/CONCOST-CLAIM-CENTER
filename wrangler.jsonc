@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "concost-claim-center-preview",
   "main": "apps/cloudflare/src/service-entry.ts",
-  "triggers": {"crons":["*/5 0-14 * * *"]},
+  "triggers": {"crons":[]},
   "services": [{"binding":"APPROVAL_MAILER","service":"concost-migration-trial","entrypoint":"ClaimApprovalMailer"}],
   "d1_databases": [
     {
