@@ -1,5 +1,21 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF248 가오픈 실제 새로고침 경고 취소 3경로 PASS — 2026-10-22
+
+- **공식 대체 검수:** 사용자가 공식 지원되는 다른 방법을 요청하여 제공된 Playwright 스킬의 CLI 0.1.22로 별도 headful Google Chrome 155.0.8059.85를 열었다. 사용자 Chrome 프로필·기존 탭·계정 설정은 변경하지 않았다. 기존 직원·대표 원장으로 정상 UI 로그인했으며 인증정보를 코드·출력에 남기거나 저장 상태를 복사하지 않았다. 기존 Windows helper의 URL 판별 오류는 별도 제약으로 남고, 그 helper가 복구됐다고 주장하지 않는다.
+- **실제 3경로 통과:** 배포된 가오픈의 장범선 CC25/10/21 일일 원고, 주간 정기보고 사용 설정, 지정 대표 계정의 미결 상신본 의견에서 각각 실제 입력 후 page.reload()가 생성한 beforeunload 1회를 관측하고 dialog.dismiss() 완료를 확인했다. 세 경우 모두 미저장 입력 직후와 취소 후의 전체 input/select/textarea·URL·performance.timeOrigin이 동일하며 문서 탐색과 검수 구간 POST/PUT/PATCH/DELETE는 각각 0이다. 자체 beforeunload 주입·앱 경고 모의는 없다. 취소로 reload 대기가 7초 timeout 된 사실만으로 판정하지 않고 실제 경고·취소·문서·입력·서버 불변 증거를 모두 요구했다. 기존 사용자 Chrome의 F5/툴바 직접 조작을 검수한 것으로 확대하지 않는다.
+- **원본·설정 보존:** 일일 전체 GET SHA 84f37bb7e8b86d4297bec8bedd4b71dce3f644afd116cc44a3e45bae1640b673은 CF246 기존 baseline과 exact 일치한다. 직원 본인으로 다시 정상 로그인한 최종 GET 설정도 baseline과 enabled=true/recipientIds 순서/caseId=''/version2 전체 deepEqual 통과다. baseline 파일 SHA 8da7bd447f3b60af5d15ac75c2f2b32cf2d185cf0cadfaabb2dd1ebb5052e97a 불변. 의견 취소 전후 상신 원문 SHA 40961df5583c1b0780cb4c98a3d0b91c785a08b84ac7db2b6e0b6c3bb443bee6·PENDING·수신자 결정/의견/시각 전체가 동일하다. 기존 업무자료·계정·비밀번호·권한·키 변경은 없다.
+- **검수 자료·정리:** 기존 승인 완료 상신본에는 의견 입력란이 없어, 최초 검수에서 기존 CF244 합성 CC25 범위에 MANUAL 상신 1건(606d319f-3965-4c61-8779-a40dcf7a1ddd, 생성2026-10-22T00:35:16.100Z)만 추가했다. 기록을 보강한 반복에서는 같은 미결 건을 재사용했다(created=false). 두 지정 수신자는 PENDING이며 승인·수정 요청은 하지 않았다. 개별 QA 범위는 기존 정기설정의 전체 범위 caseId=''와 달라 금요일 정기상신을 막지 않는다. 검수용 미저장 원고·설정·의견은 UI에서 원래 값으로 돌렸고 이 작업의 검수 브라우저만 닫았다. 수동 작업 요청0, 금/월 실제 검수 예약 변경0.
+- **증거·판정:** output/playwright/cf248-native-cancel/{final-proof,staff-proof,review-proof,settings-final,qa-submission-record}.json 및 3개 after-cancel.png. CLI는 모달 상태를 먼저 반환하므로 진행 중 응답을 완료로 보지 않았고, 검수 완료 후 저장된 결과를 별도 조회해 대조했다. 세 전문 읽기 검토와 총괄의 원본/그림 대조도 통과했다. 제품 소스·DDL·배포 변경 없이 기존 가오픈 기능에서 통과했으므로 새 제품 빌드·재배포는 하지 않았다. CF246/247의 미검증 이력은 유지하며 이번 가오픈 3경로의 실제 경고 취소 미검증을 해소한다. 남은 후속은 예약된 실제 금요일/월요일 정기 실행·알림 관측이다.
+
+## CF247 브라우저 주소 판별 실패 조사·미검증 유지 — 2026-10-22
+
+- **현재 기준:** feat/CF123-es-v2 HEAD 021af41. 기존 22개 삭제/package.json M/apps/web/tmp를 보존했다. 제품 코드·배포·업무자료·계정·권한·키 변경은 없다. 이 절은 진단 기록이며 기능 완료나 새 배포 기록이 아니다.
+- **진단으로 확인한 범위:** 확장 Chrome4의 정상 사이트 DOM·기존 계정 로그인·업무일지 조회는 동작했다. 공식 Windows list_windows도 현재 창 제목을 반환했다. 읽기 전용 프로세스 진단상 Chrome 주 프로세스는 1개/세션1이고, 버전은 155.0.8059.85이며 --disable-renderer-accessibility 옵션은 없었다. 다른 PC 접속이나 접근성 비활성 옵션을 원인으로 확정할 근거는 없다. Windows 제어 도구의 내부 URL 판별 실패 원인은 여전히 미확정이며 같은 native capture/키 입력을 반복하지 않았다.
+- **허용된 별도 검수:** 정상 메뉴의 실제 경로는 /projects/worklogs다. 가오픈 장범선의 기존 CF244 QA CC25/2026-10-21 저장본 v3를 조회하고 pressSequentially로 합성 문구를 추가해 화면의 미저장 표시를 확인했다. 지원 reload()는 getJsDialog()에 beforeunload를 노출하지 않고 원래 v3를 재조회했다. 전후 DOM 입력·선택값 전체가 원래 값과 같음을 확인했고 업무 저장 버튼 클릭은 0이다. 이는 저장본 보존 및 제어 기능의 관찰 한계이며, 새로고침 경고 취소 합격이 아니다. 일일·주간 설정·결재 의견의 실제 native 취소는 모두 미검증이다.
+- **정책·보존:** 공식 Chrome 접근성 진단 페이지 chrome://accessibility/는 브라우저 URL 정책이 http/https만 허용한다는 이유로 차단했다. 다른 표면·CDP·명령으로 접근하거나 보안 설정을 바꾸지 않았다. 기존 원장으로 정상 로그인했으며 비밀번호·쿠키를 출력하지 않았다. 종료 전 원래 유종욱 PM/ADMIN 로그인 상태를 복원했다. 수동 작업 요청은 없다. 승인 완료된 기존 CF245 상신본을 미결재 의견 검수 자료로 오인하지 않는다.
+- **증거·다음 시작:** continuation outputs/browser-recovery-20261022/diagnosis.json 및 daily-reopened.png. 세 전문 검토 결과를 대조했다. 다음 native 재시도는 주소 판별을 정상 제공하는 공식 제어 수단 또는 실제 새 복구 조건이 확보된 뒤에만 한다. 새로고침 API/페이지 키 입력이나 소스 가드를 근거로 native 취소를 완료 처리하지 않는다. 금/월 실제 검수 예약과 기존 baseline은 변경하지 않았다.
+
 ## CF246 기본 새로고침 취소 미검증·금/월 실제 검수 예약 — 2026-10-21
 
 - **현재 범위·원본:** 기존 cf166-recovery/feat/CF123-es-v2 HEAD 7b34c01, 제품 d9b0a5e와 두 서버는 CF245 상태 그대로다. 제품 소스·배포·DDL·기존 업무자료·정기설정·계정·권한·키 변경0. 기존22삭제/package.json M/apps/web/tmp는 미스테이징 보존한다. 기존 세 직원 정상 로그인 GET으로 개발/가오픈 총6개 본인 QA 일일 기록 hash·현재 설정을 tmp/cf246-qa/baseline.json에 보관했다. 비밀번호/키/쿠키/원문을 출력하거나 전체 DB를 추출하지 않았다.
