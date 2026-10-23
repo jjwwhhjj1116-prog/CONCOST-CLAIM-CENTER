@@ -30,7 +30,8 @@ class SqlD1 {
   prepare(sql: string): SqlStatement { return new SqlStatement(this.database, sql); }
   async batch(statements: SqlStatement[]): Promise<unknown[]> { this.database.run('BEGIN IMMEDIATE'); try { const results = []; for (const statement of statements) results.push(await statement.run()); this.database.run('COMMIT'); return results; } catch (error) { this.database.run('ROLLBACK'); throw error; } }
 }
-const migration = (name: string): string => readFileSync(join(process.cwd(), 'apps', 'cloudflare', 'migrations', name), 'utf8');
+// Provider fixtures keep the complete schema but omit the unrelated synthetic meeting seed.
+const migration = (name: string): string => { const sql=readFileSync(join(process.cwd(), 'apps', 'cloudflare', 'migrations', name), 'utf8'); return name==='0011_cf11_project_workflow.sql' ? sql.split('-- Synthetic demo records only.')[0] : sql; };
 
 async function setup(): Promise<{ sql: Database; env: CloudflareEnv; providerRequests: Array<Record<string, unknown>> }> {
   const SQL = await initSqlJs(); const sql = new SQL.Database(); sql.run('PRAGMA foreign_keys = ON');

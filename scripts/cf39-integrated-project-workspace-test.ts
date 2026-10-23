@@ -122,6 +122,75 @@ async function approveWorkflowAi(env: CloudflareEnv) {
   assert.equal(response.status, 200, await response.text());
 }
 
+async function cf251Case(env: CloudflareEnv, sql: Database): Promise<string> {
+  sql.exec(migration('0049_cf75_ai_model_catalog.sql'));
+  // TYPE-06 has a consistent six-chapter active tree in this legacy fixture.
+  const response = await worker.fetch(request('/api/cases',ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({title:'CF251 합성 원문 연동',claimType:'TYPE-06',description:'합성 데이터',clientLegalPosition:'VICTIM',clientPositionDetail:'합성',clientName:'합성 고객',category:{major:'검수',middle:'연동',minor:'합성'}})}),env);
+  assert.equal(response.status,201,await response.clone().text());
+  return (await response.json() as any).case.id;
+}
+async function cf251Authoring(env: CloudflareEnv, caseId: string) {
+  for (const taskKind of ['OUTLINE_PLANNING','CHAPTER_WRITING']) {
+    const route = await worker.fetch(request('/api/admin/report-prompts/settings',ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({taskKind,providerKind:'GEMINI',modelCode:'gemini-3.7-flash',reasoningEffort:'medium',expectedVersion:1})}),env);
+    assert.equal(route.status,200,await route.text());
+  }
+  const config = await (await worker.fetch(request(`/api/report-authoring/config?caseId=${caseId}`, ADMIN_TOKEN), env)).json() as any;
+  const items = config.chapters.map((c: any) => ({ chapterId:c.id, chapterCode:c.chapterCode, chapterTitle:c.title, promptVersion:c.promptVersion, planningNote:'' }));
+  const saved = await worker.fetch(request('/api/report-authoring/outline', ADMIN_TOKEN, { method:'PUT', body:JSON.stringify({caseId:caseId,items,status:'CONFIRMED',expectedVersion:0}) }), env);
+  assert.equal(saved.status, 200, await saved.text());
+  return { config, generate: (outline: boolean) => worker.fetch(request(outline ? '/api/report-authoring/outline/generate' : '/api/report-authoring/generate', ADMIN_TOKEN, { method:'POST', body:JSON.stringify(outline ? {caseId:caseId} : {caseId:caseId,chapterId:config.chapters[0].id,expectedDraftVersion:0}) }), env) };
+}
+
+test('CF251 workflow-only sources require company-data consent before outline and chapter AI', async () => {
+  const {sql,env} = await setup();
+  const caseId = await cf251Case(env,sql);
+  let providerCalls = 0;
+  env.GEMINI_TEST_FETCH = async () => { providerCalls++; return geminiResult(); };
+  const current = await (await worker.fetch(request(`/api/cases/${caseId}/workflow`, ADMIN_TOKEN), env)).json() as any;
+  const saved = await worker.fetch(request(`/api/cases/${caseId}/workflow/kickoff`, ADMIN_TOKEN, {method:'PUT',body:JSON.stringify({meetingAt:'2026-10-23T01:00:00.000Z',location:'합성',agenda:'CF251 회의',participantUnits:[],rawNotes:'CF251-CONSENT-ONLY-KICKOFF',status:'COMPLETED',expectedVersion:current.kickoff?.version??0})}),env);
+  assert.equal(saved.status,200,await saved.text());
+  const {generate} = await cf251Authoring(env,caseId);
+  const before = sql.exec('SELECT raw_notes,summary_text,version FROM preview_workflow_kickoffs WHERE case_id=?',[caseId]);
+  for (const outline of [true,false]) {
+    const response = await generate(outline);
+    assert.equal(response.status,403,await response.clone().text());
+    assert.equal((await response.json() as any).code,'REPORT_SOURCE_CONSENT_REQUIRED');
+  }
+  assert.equal(providerCalls,0,'a workflow source must never bypass the company-data policy');
+  assert.deepEqual(sql.exec('SELECT raw_notes,summary_text,version FROM preview_workflow_kickoffs WHERE case_id=?',[caseId]),before);
+  assert.equal(sql.exec('SELECT COUNT(*) FROM preview_report_ai_generations')[0].values[0][0],0);
+  sql.close();
+});
+
+test('CF251 saved survey source, result, timeline and confirmation reach both report AI prompts', async () => {
+  const {sql,env} = await setup();
+  const caseId = await cf251Case(env,sql);
+  await approveWorkflowAi(env);
+  const rawNotes='CF251-SURVEY-RAW-2719',summaryText='CF251-SURVEY-SUMMARY-4183',detail='CF251-SURVEY-TIMELINE-6317';
+  const save = await worker.fetch(request(`/api/cases/${caseId}/workflow/site-survey`,ADMIN_TOKEN,{method:'PUT',body:JSON.stringify({surveyDate:'2026-10-23',location:'합성 현장',scopeText:'위치 대조',leadUnit:'합성 조사팀',rawNotes,summaryText,timeline:[{title:'합성 후속',detail}],status:'COMPLETED',expectedVersion:0,outputExpectedVersion:0})}),env);
+  assert.equal(save.status,200,await save.text());
+  const confirmed = await worker.fetch(request(`/api/cases/${caseId}/workflow/site-survey-confirm`,ADMIN_TOKEN,{method:'POST',headers:{'Idempotency-Key':'CF251-survey-confirm'},body:JSON.stringify({surveyDate:'2026-10-23',expectedVersion:1})}),env);
+  assert.equal(confirmed.status,200,await confirmed.text());
+  const {config,generate} = await cf251Authoring(env,caseId);
+  const providerBodies: string[]=[];
+  env.GEMINI_TEST_FETCH=async (_input,init) => {
+    const body=String(init?.body);providerBodies.push(body);
+    const content=body.includes('"chapters"')||body.includes('\\"chapters\\"') ? JSON.stringify({chapters:config.chapters.map((c:any)=>({chapterCode:c.chapterCode,chapterTitle:c.title,planningNote:'합성 현장 원문 대조'}))}) : '## 합성 검토\n\n원문을 대조할 검수 초안입니다. [확인 필요]';
+    return new Response(JSON.stringify({candidates:[{content:{parts:[{text:content}]}}]}),{headers:{'Content-Type':'application/json'}});
+  };
+  for(const outline of [true,false]) {
+    const response=await generate(outline);
+    assert.equal(response.status,200,await response.clone().text());
+    const body=providerBodies.at(-1)!;
+    for(const marker of [rawNotes,summaryText,detail,'CONFIRMED','outputVersion']) assert.ok(body.includes(marker),'AI input omitted '+marker);
+  }
+  assert.equal(providerBodies.length,2);
+  const reopened=await (await worker.fetch(request(`/api/cases/${caseId}/workflow`,ADMIN_TOKEN),env)).json() as any;
+  const record=reopened.siteSurveys.find((s:any)=>s.surveyDate==='2026-10-23');
+  assert.equal(record.rawNotes,rawNotes);assert.equal(record.summaryText,summaryText);assert.equal(record.outputStatus,'CONFIRMED');
+  sql.close();
+});
+
 test('CF43 PM choices are exactly the requested five members while the workspace Admin is excluded', async () => {
   const { sql, env } = await setup();
   const seededCase = sql.exec('SELECT version,updated_at FROM preview_cases WHERE id=?', [CASE_ID])[0].values[0];
