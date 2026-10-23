@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-10-23';
 export const RELEASE_DATE_LABEL = '2026년 10월 23일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v6:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v7:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 23일 · HWP 글자 위치·잘림 보완',text:'웹에서 작성한 보고서를 HWP로 출력할 때 본문·목록·표 셀의 글자 위치와 줄바꿈을 더 가깝게 유지하도록 보완했습니다. 표지·목차와 본문 경계에서 글자가 잘리던 문제도 수정했습니다. 내려받을 실제 파일을 다시 열어 문장·줄바꿈·위치를 검사하며, 검증을 통과하지 못하면 오류를 표시하고 기존 원고를 유지합니다.'},
   {title:'10월 23일 · 긴 보고서의 HWP 출력',text:'여러 쪽 목차의 행 간격과 목록의 줄 배치를 보존해, 긴 승인본의 HWP 출력이 페이지 증가로 중단되던 문제를 보완했습니다. 고정폭 글꼴은 실제 설치·문자 폭을 확인해 전달하며, 겹친 표 테두리의 셀 폭 중복 계산도 수정했습니다. 승인된 원고·기존 파일은 유지하며, 내용·쪽수 검증에 실패하면 다운로드를 중단합니다.'},
   {title:'10월 23일 · 현장조사·회의 근거의 보고서 연결',text:'저장한 현장조사 원문·요약·후속 일정과 결과 확정 버전을 보고서 AI 작성에 함께 연결합니다. 회의·조사·산출 근거를 사용하는 목차·장 작성은 회사 원문 전송 승인을 확인하고 승인된 회사 Gemini 연결을 사용합니다. 조사 계획 완료와 결과 확정은 별도이며, 저장·확정한 요약만으로 사실·수량·금액이 검증된 것으로 판단하지 않습니다.'},
   {title:'10월 23일 · 제안서 저장 중 장 열람',text:'제안서 저장을 기다리는 동안 갑지·목차·다른 장을 확인한 경우에도 저장 완료 후 전체 미리보기로 이어집니다. 화면에서 보는 장을 바꾼 것과 원고를 고친 것을 구분하며, 저장 요청 뒤 실제로 추가된 편집은 계속 미저장본으로 보존합니다.'},

@@ -1,5 +1,17 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF252 HWP 글자 위치·잉크 잘림 수정 및 실제 출력 검수 — 2026-10-23
+
+- **기준·보존:** feat/CF123-es-v2, 시작 066b04b410fc4ada4c4f819dcc9cb28eea164a5a. 기존 22개 삭제/package.json M/apps/web/tmp/.playwright-cli는 보존·미스테이징. 기존 승인 가오픈 CC-2026-00028 v11 고정 문서를 읽어 검수했으며 원고·결재·메일·DB·계정·권한·키 변경은 없다. 원본 파일은 보존하고 실제 출력 사본만 생성했다.
+- **원인과 수정:** 웹 Range·실제 글꼴 기준선과 저장 후 native 글자 위치를 대조했다. HWP의 글자 run별 정수 반올림, 목록 들여쓰기 intent/프레임 폭의 4HU 양자화, 표 셀 가운데·오른쪽 줄 시작점, 접힌 끝 공백이 누적·줄별 오차를 만들었다. 표준 자간·셀 좌우 여백·문단/줄 간격으로 보정하며 셀 재보정은 실제 저장한 줄 시작점과 끝 글자의 후행 폭을 사용한다. 임의 사진 평탄화·원문 대체·원형 문서 재주입은 없다. 글꼴 잉크가 첫 줄·좌우 clip을 넘는 경우 글자 위치를 유지한 채 경계 상자만 보정한다. 일반 셀은 저장된 가로 줄 캐시를 사용하지 않는다는 반증 후 해당 방식은 채택하지 않았다.
+- **최종 실제 HWP:** tmp/cf252-root/run-Us96xf/final.hwp, 64쪽, SHA9e046e1c3e6762f7953bc7aba467c98fd9d086b6dfd50f0010c7c5c3a80b1e0d. 실제 binary 재열기 XML에서 본문459·셀721문단은 공백·BR 포함 exact. 본문23,094글자 X최대0.5px, 셀729개 X최대0.512708px, Y최대0.006667px, 줄수 차이0. 표지·목차·바닥글·도형 위치 보존, 64쪽 모든 ancestor clip 기준 상하좌우 잉크 초과0. 표30개의 격자와 DOM 바깥 테두리 측정 정의 차이(W최대1.013/H1.02825px)는 기존대로이며 완전0이라 주장하지 않는다.
+- **실제 PDF·그림 확인:** 실제 HWP→고정 SDK print SVG→Chromium A4 PDF64쪽→Poppler PNG64쪽. PDF SHA3a0edfbb4877aadb9412f9be261e2af15016d30794e7d0f14f4517065b60e401. 비공백 문자 inventory 누락·추가0, 전체 contact 직접 열람에서 빈쪽/전면 배치 붕괴0. 세부 글자 잘림은 별도 실측으로 검사했다. 이 보고서는 사진0개이므로 사진 보존은 별도 사진 포함 HWP의 3회 왕복(글자XYWH0/nativeSVG exact) 및 CF208 사진 회귀로 검증했다. 한컴·다뷰·Word 앱에서 이번 파일을 독립 렌더한 검수는 아니다.
+- **회귀와 실패 기록:** 최종39 PASS/0 FAIL/0 SKIP. 본문/목록/혼합 글꼴/BR/여러 공백/중첩 목록/인용문/좁은 셀·좌중우 정렬/제안서/사진을 실제 다운로드·재열기로 검사했다. 새 CF252 fixture X최대0.484375/Y0.006458px, NaN 원고 좌표 거부·실패 시 DOM 불변 통과. 앞선36PASS/3FAIL은 TOC 잉크 clip 보정 후 테스트의 예전 paper margin 기대계약 때문으로 보존했다. 원고 fontSize·잉크 ascent에서 extraHU를 독립 계산하고 baseline 증가와 paper.top 감소를 함께 검사하도록 수정했으며 기존 semantic/DOT/SQUEEZE/행간/캐시 변조 음성검사는 유지했다. 실제 원고를 바꿔 테스트를 맞추지 않았다.
+- **최종 방어·빌드:** 반환 직전 실제 HWP에서 문장·공백·줄바꿈·좌표를 재검사한다. 본문X .51px, 셀X .52px(정수 반올림 .5px+HU 단위), Y .12px 초과·NaN·누락·중복/미지원 구조는 오류로 종료한다. 표지 첫 문단은 보정 전후 글자 수·XY·폭 .02px 검사를 추가했다. 웹 타입·Vite build·Worker dry-run·고정 native snapshot staging 통과, WASM bcc40a79... 불변. 사용 안내 v7 및 보고서 매뉴얼을 갱신했다.
+- **배포 상태:** 코드 검증 완료, push·개발·가오픈 배포는 이 기록 작성 시점 진행 전. 배포 전 현재 Wrangler OAuth는 user/account 읽기·D1/Pages 권한만 있고 Workers가 없어 실제 deployments API403이다. 기존 default.toml은17:08:45 수정 상태로 관측했다. 원인 확인 없이 키를 변경하거나 설정을 덮어쓰지 않았다. 이후 확정 커밋·활성 버전·served asset/환경 보존 결과는 아래 후속 기록으로 갱신한다.
+- **증거:** tmp/cf252-native-qa/proto56-independent-final-verdict.json, proto56-final-pdf/native-print.pdf; output/playwright/cf252-native-output/proto56-regression-final.log, proto56-final-hashes.json, imported-roundtrip-koeqLe; tmp/cf252-root/final-web-types.log, final-web-build.log, final-worker-dry-run.log, final-native-stage.log. 세 전문 검토 모두 수신했고 확인된 P0/P1 없음. 수동 작업 요청0.
+
+
 
 ## CF251 미검수 근거 연동·실제 AI·승인 메일 수신 추가 검수 — 2026-10-23
 

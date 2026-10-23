@@ -223,7 +223,17 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
           const source=document.querySelector<HTMLElement>('#native-source')!,before=source.innerHTML,pages=await collectNativeHwpPages(source,'portrait'),Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
           try{
             if(!pages[0].tableGeometry!.every(table=>table.reflowCellLines))throw Error('TOC cell geometry must discard the importer line cache');
-            const archive=doc.exportHwpx();verifyNativeHwpContent(archive,pages);
+            const archive=doc.exportHwpx();
+            // The native first-line box now includes the title's ink above
+            // its old clip. Its baseline grows by the same HU as paper top
+            // shrinks; derive that change from the reviewed DOM, not output.
+            const heading=source.querySelector<HTMLElement>('h2')!,base=Math.round(parseFloat(getComputedStyle(heading).fontSize)*75*.85);
+            const extra=Math.max(0,Math.ceil((pages[0].firstLineInkAscent!+.04)*75)-base);
+            pages[0].margins.top=(Math.round(pages[0].margins.top*75)-extra)/75;
+            const checkXml=new DOMParser().parseFromString(strFromU8(unzipSync(archive)['Contents/section0.xml']),'application/xml');
+            const firstP=[...checkXml.documentElement.children].find(e=>e.localName==='p')!,firstCache=[...firstP.children].find(e=>e.localName==='linesegarray')?.firstElementChild;
+            if(extra&&!firstCache||extra&&Number(firstCache!.getAttribute('baseline'))!==base+extra)throw Error('Heading ink compensation moved the baseline');
+            verifyNativeHwpContent(archive,pages);
             const zip=unzipSync(archive),xml=strFromU8(zip['Contents/section0.xml']);
             let singleLineModeBlocked=false;
             try{verifyNativeHwpContent(zipSync({...zip,'Contents/section0.xml':strToU8(xml.replace('lineWrap="SQUEEZE"','lineWrap="BREAK"'))}),pages);}catch(error){if(!String(error).includes('한 줄 셀 속성'))throw error;singleLineModeBlocked=true;}

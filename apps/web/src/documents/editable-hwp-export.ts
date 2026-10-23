@@ -2,6 +2,8 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 import {positionNativeHwp} from './positioned-hwp-export';
 import {restoreNativeFlowLines} from './native-hwp-flow-lines';
+import {verifyNativePaintPositions} from './native-hwp-paragraph-advances';
+import {preserveNativeHeadingInk} from './native-hwp-heading-ink';
 
 /** The audited engine is injected so the exact same conversion runs in browser and regression tests. */
 export interface NativeHwpDocument {
@@ -18,7 +20,7 @@ export interface NativeHwpDocument {
   free(): void;
 }
 export interface NativeHwpEngine { new(bytes: Uint8Array): NativeHwpDocument }
-export interface NativeHwpLines {text:string;starts:number[];lineHeight:number;fontSize?:number;empty?:boolean;unmarkedInput?:boolean;align?:string;widths?:number[];lefts?:number[];firstXs?:number[];inputs?:Array<{from:number;widths:number[]}>;glyphs?:Array<{at:number;x:number}>;anchor?:{x:number;baseline:number}}
+export interface NativeHwpLines {text:string;starts:number[];lineHeight:number;fontSize?:number;empty?:boolean;unmarkedInput?:boolean;align?:string;widths?:number[];lefts?:number[];firstXs?:number[];markerLength?:number;inputs?:Array<{from:number;widths:number[]}>;glyphs?:Array<{at:number;x:number}>;anchor?:{x:number;baseline:number};paint?:{origins:Array<{at:number;x:number;y?:number;width:number;inkTop?:number;inkLeft?:number;inkRight?:number}>;baseline:number}}
 export interface NativeHwpContent {
   html: string;
   /** Visible source text, in reading order, independent of the HTML converter. */
@@ -29,9 +31,13 @@ export interface NativeHwpContent {
   pictures?: Array<{ bytes: Uint8Array; width: number; height: number; floating?:boolean; anchor?:{x:number;y:number} }>;
   tableGeometry?: Array<{width:number;advance?:number;objectAdvance?:boolean;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number};borders?:Record<string,{type:string;width:number;color:string}>;lines?:NativeHwpLines[]}>}>;
   tabs?:number[];
+  flowAnchors?:Array<{paragraphIndex:number;text:string;baseline:number;lineHeight:number;width:number}>;
+  flowObjects?:Array<{paragraphIndex:number;top:number}>;
   flowLines?:Array<NativeHwpLines&{top:number;width:number;paragraphIndex:number}>;
 }
 export interface NativeHwpPage extends NativeHwpContent {
+  firstLineInkAscent?:number;
+  firstParagraphPaint?:Array<{at:number;x:number;y:number;width:number}>;
   width: number;
   height: number;
   margins: { top: number; right: number; bottom: number; left: number };
@@ -405,6 +411,7 @@ function imageParagraphs(html: string): string {
 /** No screenshot fallback: loss of text, tables, images or pages is a hard error. */
 export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine): Uint8Array {
   if (!pages.length) throw new Error('HWP로 내보낼 페이지가 없습니다.');
+  pages=pages.map(page=>({...page,margins:{...page.margins},tableGeometry:page.tableGeometry?.map(table=>({...table,cells:table.cells.map(cell=>({...cell,padding:{...cell.padding}}))}))}));
   const document = new Engine(blankSections(pages));
   try {
     const marker = 'CF148_NATIVE_IMPORT_ANCHOR';
@@ -463,7 +470,8 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
       }
       native[path] = strToU8(restoreParagraphInsets(restoreTableAdvances(clearImportedTableIndent(restoreTableGeometry(restoreTableBorders(restorePictureGeometry(withoutMarker.replace(/(<hp:p\b[^>]*>)/u, `$1${controls}`),combinedContent(page).pictures),combinedContent(page).tableGeometry,native),combinedContent(page).tableGeometry),native),native,combinedContent(page).tableGeometry),native,page.paragraphInsets));
     });
-    restoreNativeFlowLines(native,pages);
+    restoreNativeFlowLines(native,pages,Engine);
+    preserveNativeHeadingInk(native,pages,Engine);
     const normalized = pages.some(page=>page.positioned)?positionNativeHwp(native,pages,Engine):zipSync(native);
     verifyNativeHwpContent(normalized, pages, false);
     const prepared = new Engine(normalized);
@@ -502,8 +510,10 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
       try{bytes=finished.exportHwp();}finally{finished.free();}
       const reopened = new Engine(bytes);
       try {
-        verifyNativeHwpContent(reopened.exportHwpx(), pages);
+        const reopenedXml=reopened.exportHwpx();
+        verifyNativeHwpContent(reopenedXml, pages);
         if (reopened.pageCount() !== pages.length) throw new Error('HWP 저장 후 페이지 수가 달라졌습니다.');
+        verifyNativePaintPositions(reopened,pages,unzipSync(reopenedXml));
       } finally { reopened.free(); }
       return bytes;
     } finally { prepared.free(); }

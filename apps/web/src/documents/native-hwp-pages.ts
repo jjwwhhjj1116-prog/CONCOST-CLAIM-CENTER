@@ -12,9 +12,14 @@ const color=(v:string)=>{
 const ignored=(e:Element)=>e.matches('script,style,button,input,select,textarea,[hidden],[aria-hidden="true"],[data-export-ignore],[data-html2canvas-ignore],.document-tool-menus,.structured-editor__toolbar')||['none'].includes(style(e).display)||['hidden','collapse'].includes(style(e).visibility);
 const empty=():NativeHwpContent=>({html:'',text:'',tables:0,images:0,tableCells:[],pictures:[],tableGeometry:[],tabs:[]});
 const measured=(element:HTMLElement)=>{const page=element.closest<HTMLElement>('[data-hwp-import-page]'),scale=page?(page.getBoundingClientRect().width/Number(page.getAttribute('data-hwp-width'))||1):1,rect=element.getBoundingClientRect();return{width:rect.width/scale,height:rect.height/scale};};
+function measuredCharacters(node:Node):Array<{text:string;start:number;end:number}>{
+  const text=node.textContent??'',parent=node.parentElement!,collapse=!!parent.closest('[data-export-page]')&&!parent.closest('[data-hwp-import-page]')&&!style(parent).whiteSpace.startsWith('pre');
+  if(collapse)return [...text.matchAll(/\s+|[^\s]/gu)].map(match=>({text:/\s/u.test(match[0])?' ':match[0],start:match.index!,end:match.index!+match[0].length}));
+  let offset=0;return Array.from(text).map(char=>{const start=offset;offset+=char.length;return{text:char,start,end:offset};});
+}
 function textAnchor(element:HTMLElement):NativeHwpLines['anchor']{
-  const page=element.closest<HTMLElement>('[data-hwp-import-page]');if(!page)return;
-  const paper=page.getBoundingClientRect(),scale=paper.width/Number(page.getAttribute('data-hwp-width'));
+  const page=element.closest<HTMLElement>('[data-hwp-import-page],[data-export-page]');if(!page)return;
+  const paper=page.getBoundingClientRect(),scale=paper.width/(Number(page.getAttribute('data-hwp-width'))||page.offsetWidth);
   const walker=element.ownerDocument.createTreeWalker(element,NodeFilter.SHOW_TEXT);
   while(walker.nextNode()){
     const text=walker.currentNode as Text,index=text.data.search(/[^\s\u200b]/u);if(index<0)continue;
@@ -33,27 +38,27 @@ function textAnchor(element:HTMLElement):NativeHwpLines['anchor']{
     return anchor;
   }
 }
-function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
+function paragraphLines(paragraph:HTMLElement,nodes:readonly Node[]=[...paragraph.childNodes]):NativeHwpLines{
   const css=style(paragraph),page=paragraph.closest<HTMLElement>('[data-hwp-import-page]'),paper=page??paragraph.closest<HTMLElement>('[data-export-page]');
   const scale=paper?(paper.getBoundingClientRect().width/(Number(paper.getAttribute('data-hwp-width'))||paper.offsetWidth)||1):1;
   const lineHeight=px(css.lineHeight)||px(css.fontSize),starts=[0],bounds=[{left:Infinity,right:-Infinity}],firstXs:number[]=[],inputs:NonNullable<NativeHwpLines['inputs']>=[],glyphs:NonNullable<NativeHwpLines['glyphs']>=[];let text='',position=0,lineY:number|undefined;
   const addBounds=(rect:DOMRect)=>{const current=bounds[bounds.length-1];current.left=Math.min(current.left,rect.left);current.right=Math.max(current.right,rect.right);};
   const visit=(node:Node)=>{
-    if(node.nodeType===Node.TEXT_NODE){let offset=0;const input={from:position,widths:[] as number[]},parent=node.parentElement;
-      for(const char of Array.from(node.textContent||'')){
-        const range=paragraph.ownerDocument.createRange();range.setStart(node,offset);range.setEnd(node,offset+char.length);const rect=range.getClientRects()[0];
+    if(node.nodeType===Node.TEXT_NODE){const input={from:position,widths:[] as number[]},parent=node.parentElement,tokens=measuredCharacters(node);
+      for(const token of tokens){const char=token.text;
+        const range=paragraph.ownerDocument.createRange();range.setStart(node,token.start);range.setEnd(node,token.end);const rect=range.getClientRects()[0];
         if(rect?.height&&rect.width){if(lineY!==undefined&&rect.top-lineY>lineHeight*scale/2&&starts.at(-1)!==position){starts.push(position);bounds.push({left:Infinity,right:-Infinity});}if(lineY===undefined||rect.top-lineY>lineHeight*scale/2)lineY=rect.top;addBounds(rect);}
         if(rect?.width){if(!/\s|\u200b/u.test(char)){if(firstXs[bounds.length-1]===undefined)firstXs[bounds.length-1]=rect.left;if(page)glyphs.push({at:position,x:(rect.left-page.getBoundingClientRect().left)/scale});}input.widths.push(rect.width/scale);}
-        text+=char;position++;offset+=char.length;
+        text+=char;position++;
       }
-      if(paper&&parent&&!parent.closest('[data-hwp-advance]')&&input.widths.length===Array.from(node.textContent||'').length)inputs.push(input);
+      if(paper&&parent&&!parent.closest('[data-hwp-advance]')&&input.widths.length===tokens.length)inputs.push(input);
     }else if(node instanceof Element){
       if(node.hasAttribute('data-hwp-tab')){text+='\t';position++;addBounds(node.getBoundingClientRect());return;}
       if(node.tagName==='BR'){if(node.classList.contains('ProseMirror-trailingBreak'))return;if(!node.hasAttribute('data-hwp-soft-break')){text+='\n';position++;}if(starts.at(-1)!==position){starts.push(position);bounds.push({left:Infinity,right:-Infinity});}lineY=undefined;return;}
       if(node instanceof HTMLImageElement||ignored(node))return;
       node.childNodes.forEach(visit);
     }
-  };paragraph.childNodes.forEach(visit);
+  };nodes.forEach(visit);
   let anchor=textAnchor(paragraph);const empty=/^[\s\u200b]*$/u.test(text)&& !paragraph.querySelector('img,table');
   if(empty&&page){
     // A zero-height probe changes tiny blank line boxes. Match the native
@@ -64,8 +69,27 @@ function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
     if(typeof native.nativeX==='number'&&Math.abs(anchor.x-native.nativeX)<=.05)anchor.x=native.nativeX;
     if(typeof native.nativeBaseline==='number'&&Math.abs(anchor.baseline-native.nativeBaseline)<=.05)anchor.baseline=native.nativeBaseline;
   }
-  const paperLeft=page?.getBoundingClientRect().left??0;
+  const paperLeft=paper?.getBoundingClientRect().left??0;
   return{text,starts,lineHeight,fontSize:px(css.fontSize),...(empty?{empty:true}:{}),...(inputs.length&&!paragraph.querySelector('[data-hwp-text-style],[data-hwp-advance]')?{unmarkedInput:true}:{}),align:css.textAlign,widths:bounds.map(b=>Number.isFinite(b.left)?(b.right-b.left)/scale:0),lefts:bounds.map(b=>Number.isFinite(b.left)?(b.left-paperLeft)/scale:0),firstXs:firstXs.map(x=>(x-paperLeft)/scale),...(inputs.length?{inputs}:{}),...(glyphs.length&&(inputs.length||paragraph.querySelector('[data-hwp-advance]'))?{glyphs}:{}),anchor};
+}
+function paragraphPaint(element:HTMLElement,nodes:readonly Node[]=[...element.childNodes]):NativeHwpLines['paint']{
+  const paper=element.closest<HTMLElement>('[data-export-page]');
+  if(!paper||style(element).direction!=='ltr'||element.querySelector('sup,sub,[data-hwp-tab]')||element.textContent?.includes('\t'))return;
+  const rect=paper.getBoundingClientRect(),scale=rect.width/paper.offsetWidth,origins:NonNullable<NativeHwpLines['paint']>['origins']=[],context=element.ownerDocument.createElement('canvas').getContext('2d')!;let at=0,baseline:number|undefined;
+  const visit=(node:Node)=>{
+    if(node.nodeType===Node.TEXT_NODE){
+    const css=style(node.parentElement!);context.font=`${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;
+    for(const token of measuredCharacters(node)){const char=token.text;
+      const range=element.ownerDocument.createRange();range.setStart(node,token.start);range.setEnd(node,token.end);const rect=range.getBoundingClientRect();
+      if(rect.width){const metrics=context.measureText(char),y=(rect.top-paper.getBoundingClientRect().top)/scale+metrics.fontBoundingBoxAscent,x=(rect.left-paper.getBoundingClientRect().left)/scale;origins.push({at,x,y,width:rect.width/scale,inkTop:y-metrics.actualBoundingBoxAscent,inkLeft:x-metrics.actualBoundingBoxLeft,inkRight:x+metrics.actualBoundingBoxRight});if(baseline===undefined&&char.trim())baseline=y;}
+      at++;
+    }
+    }else if(node instanceof Element){
+      if(node.tagName==='BR'){if(!node.classList.contains('ProseMirror-trailingBreak')&&!node.hasAttribute('data-hwp-soft-break'))at++;return;}
+      if(ignored(node))return;node.childNodes.forEach(visit);
+    }
+  };nodes.forEach(visit);
+  return baseline===undefined?undefined:{origins,baseline};
 }
 function singleTextLine(element:Element):boolean{
   if(!element.textContent?.trim()||element.querySelector('br,img,table'))return false;
@@ -73,10 +97,24 @@ function singleTextLine(element:Element):boolean{
   const boxes=[...range.getClientRects()].filter(box=>box.width>0&&box.height>0);
   return boxes.length>0&&boxes.every(box=>Math.abs(box.top-boxes[0].top)<.5);
 }
+function visibleInkRight(element:Element,scale:number):number{
+  const context=element.ownerDocument.createElement('canvas').getContext('2d')!,walker=element.ownerDocument.createTreeWalker(element,NodeFilter.SHOW_TEXT);
+  let right=element.getBoundingClientRect().right;
+  while(walker.nextNode()){
+    const node=walker.currentNode,css=style(node.parentElement!);context.font=`${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${css.fontFamily}`;let offset=0;
+    for(const char of Array.from(node.textContent||'')){
+      const range=element.ownerDocument.createRange();range.setStart(node,offset);range.setEnd(node,offset+char.length);const rect=range.getBoundingClientRect();offset+=char.length;
+      if(rect.width&&char.trim())right=Math.max(right,rect.left+context.measureText(char).actualBoundingBoxRight*scale);
+    }
+  }
+  return right;
+}
 function append(target:NativeHwpContent,source:NativeHwpContent){
-  if(source.flowLines?.length){
+  if(source.flowLines?.length||source.flowAnchors?.length||source.flowObjects?.length){
     const offset=new DOMParser().parseFromString(target.html,'text/html').body.children.length;
     if(source.flowLines?.length)(target.flowLines??=[]).push(...source.flowLines.map(line=>({...line,paragraphIndex:line.paragraphIndex+offset})));
+    if(source.flowAnchors?.length)(target.flowAnchors??=[]).push(...source.flowAnchors.map(anchor=>({...anchor,paragraphIndex:anchor.paragraphIndex+offset})));
+    if(source.flowObjects?.length)(target.flowObjects??=[]).push(...source.flowObjects.map(anchor=>({...anchor,paragraphIndex:anchor.paragraphIndex+offset})));
   }
   target.html+=source.html;target.text+=source.text;target.tables+=source.tables;target.images+=source.images;
   target.tableCells!.push(...source.tableCells!);target.pictures!.push(...source.pictures!);target.tableGeometry!.push(...source.tableGeometry!);
@@ -90,7 +128,7 @@ async function fontStyle(css:CSSStyleDeclaration,document:Document,text=''):Prom
     // only when every current character and the whole run have equal advances.
     const context=document.createElement('canvas').getContext('2d')!;
     const width=(value:string,font:string)=>{context.font=`${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${font}`;return context.measureText(value).width;};
-    for(const candidate of ['Consolas','Courier New'])try{
+    for(const candidate of ['GulimChe','Consolas','Courier New'])try{
       await new document.defaultView!.FontFace('hwp-monospace-probe',`local(${JSON.stringify(candidate)})`).load();
       if([text,...Array.from(text)].every(value=>Math.abs(width(value,family)-width(value,JSON.stringify(candidate)))<.01)){resolved=candidate;break;}
     }catch{/* Keep the existing native validation when no equivalent face exists. */}
@@ -192,14 +230,22 @@ async function paragraph(element:Element,nodes:readonly Node[]=[...element.child
   const leading=Math.max(0,(px(lineHeight)-px(css.fontSize))/2);
   const uniform=[element,...element.querySelectorAll('*')].every(e=>px(style(e).fontSize)===px(css.fontSize));
   if(before===undefined&&after===undefined&&!element.closest('td,th')&&!result.images&&result.text&&leading>0&&uniform&&px(css.marginBottom)>=leading){before=px(css.marginTop)+leading;after=px(css.marginBottom)-leading;}
-  if(marker){result.html=escape(marker)+result.html;result.text=marker+result.text;}
-  if(element instanceof HTMLElement&&element.tagName==='LI'&&!element.hasAttribute('data-hwp-layout')&&!element.closest('td,th,[data-hwp-import-page],.report-final-cover,.proposal-final-cover,.report-final-toc,.proposal-final-toc')&&!result.images&&!result.tables&&result.text.trim()){
-    const current=paragraphLines(element);
-    if(marker){current.text=marker+current.text;current.starts=current.starts.map((start,index)=>index?start+Array.from(marker).length:0);}
+  if(marker){result.html=`<span style="${escape(await fontStyle(css,element.ownerDocument,marker))}">${escape(marker)}</span>`+result.html;result.text=marker+result.text;}
+  if(element instanceof HTMLElement&&element.closest('.report-final-document')&&!element.closest('td,th,[data-hwp-import-page],.report-final-cover,.proposal-final-cover,.report-final-toc,.proposal-final-toc')&&!result.images&&!result.tables&&result.text.trim()){
+    const anchor=textAnchor(element),paper=element.closest<HTMLElement>('[data-export-page]'),scale=paper?paper.getBoundingClientRect().width/paper.offsetWidth:1;if(anchor)result.flowAnchors=[{paragraphIndex:0,text:result.text,baseline:anchor.baseline,lineHeight:px(lineHeight),width:element.getBoundingClientRect().width/scale}];
+  }
+  if(element instanceof HTMLElement&&(element.tagName==='LI'||/^(P|H[1-6])$/u.test(element.tagName)&&element.closest('.report-final-document')&&['left','start','justify'].includes(css.textAlign)&&!element.querySelector('sup,sub'))&&!element.hasAttribute('data-hwp-layout')&&!element.closest('td,th,[data-hwp-import-page],.report-final-cover,.proposal-final-cover,.report-final-toc,.proposal-final-toc')&&!result.images&&!result.tables&&result.text.trim()){
+    const current=paragraphLines(element,nodes);
+    if(marker){current.markerLength=Array.from(marker).length;current.text=marker+current.text;current.starts=current.starts.map((start,index)=>index?start+current.markerLength!:0);}
     const paper=element.closest<HTMLElement>('[data-export-page]');
     if(current.text===result.text&&paper){
       const scale=paper.getBoundingClientRect().width/paper.offsetWidth||1;
       result.flowLines=[{...current,top:(element.getBoundingClientRect().top-paper.getBoundingClientRect().top)/scale,width:element.getBoundingClientRect().width/scale,paragraphIndex:0}];
+      if(element.closest('.report-final-document')&&!element.querySelector('sup,sub')&&current.anchor){
+        const paint=paragraphPaint(element,nodes);
+        if(paint&&marker)paint.origins=paint.origins.map(origin=>({...origin,at:origin.at+current.markerLength!}));
+        result.flowLines[0].paint=paint;
+      }
     }
   }
   // Keep photos as individual blocks. Inline mixed text/photos require a richer
@@ -255,7 +301,10 @@ async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
       const height=typeof native.nativeWidth==='number'&&typeof native.height==='number'&&!cell.parentElement?.hasAttribute('data-row-height-mm')?preciseHeight:size.height;
       const cellWidth=precise?columns.slice(column,column+colSpan).reduce((sum,w)=>sum+w,0):size.width;
       if(!(cellWidth>0))throw Error('HWP 현재 표 열 너비가 없습니다.');
-      geometry.cells.push({width:cellWidth,height,singleLine,padding,borders:nativeBorders,lines:typeof native.nativeWidth==='number'?[...cell.querySelectorAll<HTMLElement>('p')].map(paragraphLines):undefined});
+      const authoredParagraphs=cell.closest('.report-final-document')&&!body.images&&!body.tables&&[...cell.childNodes].every(n=>n.nodeType===3?!n.textContent?.trim():n instanceof HTMLElement&&n.tagName==='P')?[...cell.children] as HTMLElement[]:[];
+      const authoredLines=authoredParagraphs.map(p=>({...paragraphLines(p),paint:paragraphPaint(p)}));
+      const measurable=authoredLines.length&&authoredLines.every(line=>!line.text.trim()||line.paint&&['left','start','center','right','end'].includes(line.align??''));
+      geometry.cells.push({width:cellWidth,height,singleLine,padding,borders:nativeBorders,lines:typeof native.nativeWidth==='number'?[...cell.querySelectorAll<HTMLElement>('p')].map(p=>paragraphLines(p)):measurable?authoredLines:undefined});
       const borders=['top','right','bottom','left'].map(side=>`border-${side}:${css.getPropertyValue(`border-${side}-width`)} ${css.getPropertyValue(`border-${side}-style`)} ${color(css.getPropertyValue(`border-${side}-color`))}`).join(';');
       rowHtml+=`<td rowspan="${rowSpan}" colspan="${colSpan}" style="width:${cellWidth}px;height:${height}px;padding:0;vertical-align:${css.verticalAlign};background-color:${color(css.backgroundColor)};${borders}">${body.html}</td>`;
       result.text+=body.text;result.images+=body.images;result.tables+=body.tables;result.pictures!.push(...body.pictures!);result.tableCells!.push(...body.tableCells!);result.tableGeometry!.push(...body.tableGeometry!);
@@ -263,7 +312,10 @@ async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
       column+=colSpan;
     }rows+=`<tr>${rowHtml}</tr>`;
   }
-  result.html=`<table style="width:${geometry.width}px;border-collapse:collapse">${rows}</table>`;return result;
+  result.html=`<table style="width:${geometry.width}px;border-collapse:collapse">${rows}</table>`;
+  const paper=source.closest<HTMLElement>('[data-export-page]');
+  if(paper&&source.closest('.report-final-document')&&!source.closest('td,th,[data-hwp-import-page]'))result.flowObjects=[{paragraphIndex:0,top:(source.getBoundingClientRect().top-paper.getBoundingClientRect().top)/(paper.getBoundingClientRect().width/paper.offsetWidth)}];
+  return result;
 }
 
 async function positionedPage(page:HTMLElement):Promise<NativeHwpPage>{
@@ -288,7 +340,7 @@ async function positionedPage(page:HTMLElement):Promise<NativeHwpPage>{
     else if(element instanceof HTMLImageElement){kind='image';content=await image(element);}
     else throw Error('HWP 고정 페이지에서 보존하지 못하는 개체가 있습니다.');
     body.html+=`<p>${marker}</p>`;append(body,content);
-    positioned.push({marker,kind,left:(rect.left-paper.left)/scale,top:(rect.top-paper.top)/scale,width:outer.width/scale,height:outer.height/scale,anchor,...(kind==='text'?{lines:(element.tagName==='P'?[element]:[...element.children] as HTMLElement[]).map(paragraphLines)}:{}),...(kind==='rule'?{stroke:Number(element.getAttribute('data-hwp-rule-stroke')),color:element.getAttribute('data-hwp-rule-color')||'#000000',lineStyle:element.getAttribute('data-hwp-rule-style')||'solid'}:{})});
+    positioned.push({marker,kind,left:(rect.left-paper.left)/scale,top:(rect.top-paper.top)/scale,width:outer.width/scale,height:outer.height/scale,anchor,...(kind==='text'?{lines:(element.tagName==='P'?[element]:[...element.children] as HTMLElement[]).map(p=>paragraphLines(p))}:{}),...(kind==='rule'?{stroke:Number(element.getAttribute('data-hwp-rule-stroke')),color:element.getAttribute('data-hwp-rule-color')||'#000000',lineStyle:element.getAttribute('data-hwp-rule-style')||'solid'}:{})});
   }
   return{...body,width,height,margins:{top:0,right:0,bottom:0,left:0},positioned};
 }
@@ -321,6 +373,14 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
       const ends=boxes.map((_,i)=>i+1<boxes.length?starts[i+1]:rect.width/scale);
       const widths=starts.map((start,i)=>ends[i]-start);
       const padding=boxes.map((box,i)=>reportToc&&i===1?{left:0,right:0,top:0,bottom:0}:{left:(box.left-rect.left)/scale-starts[i],right:ends[i]-(box.right-rect.left)/scale,top:(box.top-rect.top)/scale,bottom:(rect.bottom-box.bottom)/scale});
+      if(reportToc&&style(children[2]!).overflowX==='visible'){
+        // This borderless native table represents a CSS TOC row, not an edited
+        // user table. Reserve only the measured visible glyph overhang; matching
+        // right padding keeps the number's content width and position unchanged.
+        const measuredOverhang=Math.max(0,(visibleInkRight(children[2]!,scale)-rect.right)/scale);
+        const overhang=measuredOverhang?Math.ceil((measuredOverhang+.04)*75)/75:0;
+        widths[2]+=overhang;padding[2].right+=overhang;
+      }
       if(widths.some(width=>width<=0)||padding.some(p=>Object.values(p).some(value=>value<-.1)))throw Error('HWP 목차 열 배치를 확인하지 못했습니다.');
       const page=node.closest<HTMLElement>('[data-export-page]'),pageScale=page?(page.getBoundingClientRect().width/page.offsetWidth||1):scale;
       const next=node.nextElementSibling?.matches(reportToc?'.report-toc-entry':'.proposal-final-toc li')?node.nextElementSibling:null;
@@ -406,7 +466,11 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
       if(computed.getPropertyValue(`border-${side}-style`)!=='solid')throw Error('HWP 장식선 형식의 추가 검증이 필요합니다.');
       rules.push({left:(rect.left-pageRect.left)/scale,top:(rect[side==='top'?'top':'bottom']-pageRect.top)/scale-(side==='bottom'?height:0),width:rect.width/scale,height,colors:[fill]});
     };
-    const body=empty();let footer:NativeHwpPage['footer'],paragraphInsets:NativeHwpPage['paragraphInsets'];
+    const body=empty();let footer:NativeHwpPage['footer'],paragraphInsets:NativeHwpPage['paragraphInsets'],firstLineInkAscent:number|undefined;
+    if(page.closest('.report-final-document')&&page.matches('.report-final-cover,.report-final-toc')){
+      const heading=page.querySelector<HTMLElement>('.report-cover-heading > :first-child,:scope > h2');
+      if(heading){const lines=paragraphLines(heading),paint=paragraphPaint(heading),ascent=paint?.origins.filter(g=>g.at<(lines.starts[1]??Infinity)&&g.inkTop!==undefined&&g.y!==undefined).map(g=>g.y!-g.inkTop!);if(ascent?.length)firstLineInkAscent=Math.max(...ascent);}
+    }
     const proposalCover=page.matches('.proposal-final-cover')&&page.querySelector(':scope > .proposal-cover-heading');
     const reportCover=page.matches('.report-final-cover')&&page.querySelector(':scope > .report-cover-heading');
     if(proposalCover||reportCover){
@@ -456,6 +520,6 @@ export async function collectNativeHwpPages(root:HTMLElement,orientation:'portra
       margins.top+=Number(before[1]);
       return `<${kind}${attributes}${properties.replace(/margin-top:[\d.]+px/u,'margin-top:0px')}"`;
     });
-    results.push({...body,width:orientation==='portrait'?794:1123,height:orientation==='portrait'?1123:794,margins,footer,rules,paragraphInsets,frame:frameCss?{left:px(frameCss.left),top:px(frameCss.top),width:page.offsetWidth-px(frameCss.left)-px(frameCss.right),height:page.offsetHeight-px(frameCss.top)-px(frameCss.bottom),color:color(frameCss.borderTopColor),stroke:px(frameCss.borderTopWidth)}:undefined});
+    results.push({...body,width:orientation==='portrait'?794:1123,height:orientation==='portrait'?1123:794,margins,footer,rules,paragraphInsets,firstLineInkAscent,frame:frameCss?{left:px(frameCss.left),top:px(frameCss.top),width:page.offsetWidth-px(frameCss.left)-px(frameCss.right),height:page.offsetHeight-px(frameCss.top)-px(frameCss.bottom),color:color(frameCss.borderTopColor),stroke:px(frameCss.borderTopWidth)}:undefined});
   }return results;
 }
