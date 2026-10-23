@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-10-21';
-export const RELEASE_DATE_LABEL = '2026년 10월 21일';
+export const RELEASE_DATE = '2026-10-23';
+export const RELEASE_DATE_LABEL = '2026년 10월 23일';
 const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v4:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
@@ -13,6 +13,8 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 23일 · 제안서 저장 중 장 열람',text:'제안서 저장을 기다리는 동안 갑지·목차·다른 장을 확인한 경우에도 저장 완료 후 전체 미리보기로 이어집니다. 화면에서 보는 장을 바꾼 것과 원고를 고친 것을 구분하며, 저장 요청 뒤 실제로 추가된 편집은 계속 미저장본으로 보존합니다.'},
+  {title:'10월 23일 · 프로젝트·제안서 제목 검색',text:'의뢰·제안서·접수 목록에서 긴 한글 프로젝트 제목을 그대로 검색할 수 있도록 보완했습니다. 영문은 대소문자를 구분하지 않으며 %와 _도 입력한 문자 그대로 찾습니다. 확정 제안서를 접수한 뒤 같은 프로젝트의 PM 일정·보고서 작성으로 이어가세요. 보고서 승인 후 수정한 새 버전은 다시 상신해야 최종 확정할 수 있습니다.'},
   {title:'10월 21일 · 주간 결재·정기보고',text:'주간 업무일지에서 접힌 수신자 선택을 열어 결재자를 지정하고 상신합니다. 상신 당시 날짜별 업무 표는 고정되며 수신자는 업무 알림에서 원문을 열어 승인·수정 요청을 합니다. 선택 수신자 전원이 승인해야 완료됩니다. 금요일 17:10 당주, 월요일 09:00 전주 토·일 업무의 추가 보고를 한국시간 기준으로 자동 상신합니다. 기본 수신자는 기존 대표·부사장 계정이고 정기보고 설정에서 범위·수신자·사용 여부를 바꿀 수 있습니다. 전달은 앱 내 알림이며 승인 이메일 발송 기능과는 별개입니다. 모바일 입력 배치와 미저장 이동·재열기 취소도 보완했습니다.'},
   {title:'10월 21일 · 일일·주간 업무일지',text:'프로젝트 워크의 업무일지를 접고 펼쳐 일일·주간으로 이동합니다. 기술본부의 작성 방식에 맞춰 목표·세부 계획·수행 업무·진행률·상태·미완료·지연 사유·장애요인·내일 계획을 기록합니다. 일일 저장본과 실제 작업은 개인별 월~일 주간표로 자동 취합되며 Excel로 내려받을 수 있습니다. 월요일에는 전주를 먼저 보여 줍니다. 기존 작성본과 이력은 유지됩니다.'},
   {title:'10월 21일 · 개인별 프로젝트 업무일지 자동 작성',text:'이경훈 센터장·최영배 본부장·장범선 실장이 클레임센터에서 저장한 보고서·착수회의·현장조사 등의 작업을 본인·프로젝트·날짜별 일지로 자동 작성합니다. 직원은 본인 일지만 확인하며 대표·부사장·관리자 계정의 작업은 작성 대상에서 제외합니다. 기존 직접 기록을 보존하며 업무시간과 다음 계획을 자동 추정하지 않습니다. 클레임센터 일지는 클레임센터에서 작성합니다.'},
@@ -59,7 +61,7 @@ export function ReleaseNotice({ open, onClose }: { open: boolean; onClose: () =>
   return <dialog ref={dialogRef} className="release-notice" aria-labelledby="release-notice-title" aria-describedby="release-notice-description" onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <header><div><time dateTime={RELEASE_DATE}>{RELEASE_DATE_LABEL}</time><h2 id="release-notice-title">업데이트 안내</h2></div><button type="button" autoFocus aria-label="업데이트 안내 닫기" onClick={onClose}>×</button></header>
     <div className="release-notice__body">
-      <p id="release-notice-description">10월 20일 테스트서버와 가오픈서버에 동일 소스를 반영했습니다. 보고서 복구·편집·최종 결재·출력과 승인 이메일 사용법을 갱신했습니다.<br/>아래에는 이번 변경과 이전 개선 이력을 함께 표시합니다. 전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다.</p>
+      <p id="release-notice-description">10월 23일 테스트서버와 가오픈서버에 동일 소스를 반영했습니다. 프로젝트·제안서의 긴 제목 검색을 보완하고 업무 안내를 갱신했습니다.<br/>아래에는 이번 변경과 이전 개선 이력을 함께 표시합니다. 전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다.</p>
       <div className="release-notice__updates">{RELEASE_UPDATES.map((update) => <section key={update.title}><h3>{update.title}</h3><p>{update.text}</p></section>)}</div>
       <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 제안서의 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 보고서 승인 이메일은 별도 실제 발송 기능이며, 메일 서버 접수와 받은함 도착은 구분합니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
     </div>

@@ -1669,13 +1669,13 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
 
   if (url.pathname === '/api/proposal-workflow/receptions' && request.method === 'GET') {
     const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
-    const like = `%${q}%`;
     const rows = await env.DB.prepare(
       proposalReceptionSelect +
       'WHERE p.organization_id=? AND p.status=\'APPROVED\' AND c.deleted_at IS NULL AND COALESCE(catalog.db_deleted,0)=0 ' +
-      'AND (?=\'\' OR p.title LIKE ? OR c.case_number LIKE ? OR c.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ?) ' +
+      // Literal substring search avoids D1's 50-byte LIKE/GLOB pattern limit.
+      'AND (?=\'\' OR instr(lower(p.title),lower(?))>0 OR instr(lower(c.case_number),lower(?))>0 OR instr(lower(c.title),lower(?))>0 OR instr(lower(COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\')),lower(?))>0) ' +
       'ORDER BY CASE COALESCE(effective.effective_status,link.award_status,\'READY\') WHEN \'READY\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.updated_at DESC LIMIT 200'
-    ).bind(PREVIEW_ORGANIZATION_ID, q, like, like, like, like).all<ProposalReceptionCandidateRow>();
+    ).bind(PREVIEW_ORGANIZATION_ID, q, q, q, q, q).all<ProposalReceptionCandidateRow>();
     return json({ receptions: rows.results.map(proposalReceptionProjection), phase: 'CF56_ONE_CLICK_PROJECT_RECEPTION' });
   }
 
@@ -1786,14 +1786,13 @@ async function handlePreviewProposalWorkflow(request: Request, env: CloudflareEn
     const q = (url.searchParams.get('q') ?? '').trim().slice(0, 120);
     const requestedLimit = Number(url.searchParams.get('limit') ?? 100);
     const limit = Number.isInteger(requestedLimit) ? Math.min(200, Math.max(1, requestedLimit)) : 100;
-    const like = `%${q}%`;
     const rows = await env.DB.prepare(
       previewProposalSelect +
       'WHERE p.organization_id=? AND c.deleted_at IS NULL ' +
       'AND (?=\'\' OR p.award_status=?) AND (?=\'\' OR p.case_id=?) ' +
-      'AND (?=\'\' OR p.proposal_number LIKE ? OR p.proposal_title LIKE ? OR p.client_name LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ' +
+      'AND (?=\'\' OR instr(lower(p.proposal_number),lower(?))>0 OR instr(lower(p.proposal_title),lower(?))>0 OR instr(lower(p.client_name),lower(?))>0 OR instr(lower(c.case_number),lower(?))>0 OR instr(lower(c.title),lower(?))>0) ' +
       'ORDER BY CASE p.award_status WHEN \'PENDING\' THEN 0 WHEN \'WON\' THEN 1 ELSE 2 END,p.response_due_on,p.sent_at DESC LIMIT ?'
-    ).bind(PREVIEW_ORGANIZATION_ID, awardStatus, awardStatus, caseId, caseId, q, like, like, like, like, like, limit).all<PreviewProposalRow>();
+    ).bind(PREVIEW_ORGANIZATION_ID, awardStatus, awardStatus, caseId, caseId, q, q, q, q, q, q, limit).all<PreviewProposalRow>();
     return json({ proposals: rows.results.map(proposalProjection), phase: 'CF14_PROPOSAL_AWARD_WORKFLOW' });
   }
 
@@ -1917,7 +1916,7 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
   if(url.pathname==='/api/proposal-catalog'&&request.method==='GET'){
     const mode=url.searchParams.get('mode')==='database'?'database':'projects';
     if(mode==='database'&&!user.roles.includes('admin'))return json({error:'관리자만 제안서 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN'},403);
-    const q=(url.searchParams.get('q')??'').trim().slice(0,120);const award=url.searchParams.get('awardStatus')??'';const like=`%${q}%`;
+    const q=(url.searchParams.get('q')??'').trim().slice(0,120);const award=url.searchParams.get('awardStatus')??'';
     const rows=await env.DB.prepare(
       'SELECT p.id,p.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,c.status AS caseStatus,c.version AS caseVersion,'+
       '(\'PROP-\'||upper(substr(replace(p.id,\'-\',\'\'),1,8))) AS proposalNumber,p.title AS proposalTitle,'+
@@ -1934,8 +1933,8 @@ async function handlePreviewProposalCatalog(request: Request, env: CloudflareEnv
       'LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'PROPOSAL\' AND cr.record_id=p.id '+
       'WHERE p.organization_id=? AND c.deleted_at IS NULL AND COALESCE(cr.db_deleted,0)=0 '+
       `${mode==='projects'?'AND COALESCE(cr.list_hidden,0)=0 ':''}`+
-      'AND (?=\'\' OR COALESCE(link.award_status,\'PENDING\')=?) AND (?=\'\' OR p.title LIKE ? OR COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\') LIKE ? OR c.case_number LIKE ? OR c.title LIKE ?) ORDER BY p.updated_at DESC LIMIT 200'
-    ).bind(PREVIEW_ORGANIZATION_ID,award,award,q,like,like,like,like).all<Record<string,unknown>>();
+      'AND (?=\'\' OR COALESCE(link.award_status,\'PENDING\')=?) AND (?=\'\' OR instr(lower(p.title),lower(?))>0 OR instr(lower(COALESCE(json_extract(v.structured_inputs_json,\'$.clientName\'),\'\')),lower(?))>0 OR instr(lower(c.case_number),lower(?))>0 OR instr(lower(c.title),lower(?))>0) ORDER BY p.updated_at DESC LIMIT 200'
+    ).bind(PREVIEW_ORGANIZATION_ID,award,award,q,q,q,q,q).all<Record<string,unknown>>();
     return json({proposals:rows.results.map((row)=>proposalProjection(row as unknown as PreviewProposalRow)).map((row,index)=>({...row,listHidden:Boolean(rows.results[index].listHidden),dbDeleted:Boolean(rows.results[index].dbDeleted),catalogVersion:Number(rows.results[index].catalogVersion??0),driveArchiveUrl:rows.results[index].driveArchiveUrl??null,driveArchivedAt:rows.results[index].driveArchivedAt??null})),mode,source:'preview_proposals',phase:'CF55_PROPOSAL_STUDIO_CATALOG'});
   }
   if(!actionMatch||request.method!=='POST')return json({error:'Proposal catalog route was not found',code:'PROPOSAL_CATALOG_NOT_FOUND'},404);
@@ -3808,7 +3807,6 @@ async function handlePreviewIntakeCatalog(request: Request, env: CloudflareEnv, 
   const mode = url.searchParams.get('mode') === 'database' ? 'database' : 'projects';
   if (mode === 'database' && !user.roles.includes('admin')) return json({ error:'관리자만 프로젝트 의뢰 DB관리 원장을 볼 수 있습니다.',code:'FORBIDDEN' },403);
   const q = (url.searchParams.get('q') ?? '').trim().slice(0,120);
-  const like = `%${q.replaceAll('%','\\%').replaceAll('_','\\_')}%`;
   const rows = await env.DB.prepare(
     'SELECT c.id,c.case_number AS caseNumber,c.title,c.description,c.claim_type AS claimType,c.status,c.version,c.client_legal_position AS clientLegalPosition,c.client_position_detail AS clientPositionDetail,'+
     'c.created_at AS createdAt,c.updated_at AS updatedAt,u.display_name AS createdByName,COALESCE(cr.list_hidden,0) AS listHidden,COALESCE(cr.db_deleted,0) AS dbDeleted,COALESCE(cr.version,0) AS catalogVersion,'+
@@ -3816,8 +3814,8 @@ async function handlePreviewIntakeCatalog(request: Request, env: CloudflareEnv, 
     'FROM preview_cases c JOIN preview_users u ON u.id=c.created_by LEFT JOIN preview_catalog_records cr ON cr.record_kind=\'INTAKE\' AND cr.record_id=c.id LEFT JOIN preview_users archiver ON archiver.id=cr.drive_archived_by '+
     'WHERE c.organization_id=? AND c.deleted_at IS NULL '+
     `AND COALESCE(cr.db_deleted,0)=0 ${mode === 'projects' ? 'AND COALESCE(cr.list_hidden,0)=0 ' : ''}`+
-    'AND (?=\'\' OR c.case_number LIKE ? ESCAPE \'\\\' OR c.title LIKE ? ESCAPE \'\\\' OR COALESCE(c.description,\'\') LIKE ? ESCAPE \'\\\') ORDER BY c.updated_at DESC LIMIT 200'
-  ).bind(PREVIEW_ORGANIZATION_ID,q,like,like,like).all<Record<string,unknown>>();
+    'AND (?=\'\' OR instr(lower(c.case_number),lower(?))>0 OR instr(lower(c.title),lower(?))>0 OR instr(lower(COALESCE(c.description,\'\')),lower(?))>0) ORDER BY c.updated_at DESC LIMIT 200'
+  ).bind(PREVIEW_ORGANIZATION_ID,q,q,q,q).all<Record<string,unknown>>();
   return json({ intakes:rows.results.map(previewCatalogProjection), mode, phase:'CF52_INTAKE_CATALOG' });
 }
 
@@ -3892,7 +3890,6 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
     if (!Number.isSafeInteger(offset) || offset < 0) return json({ error: 'offset must be a non-negative integer', code: 'INVALID_PAGINATION' }, 400);
     const admin = user.roles.includes('admin') ? 1 : 0;
     const assignedOnly = url.searchParams.get('assignedOnly') === 'true';
-    const like = `%${query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
     const visibility = assignedOnly
       ? '(? = 1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id = c.id AND a.user_id = ?))'
       : '1 = 1';
@@ -3903,15 +3900,15 @@ async function handlePreviewCases(request: Request, env: CloudflareEnv, url: URL
         ? ` AND ${PROPOSAL_AUTHORING_CASE_FILTER}`
         : '';
     const scopeBindings = requestedStage ? [requestedStage] : [];
-    const where = `c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} AND (? = '' OR c.title LIKE ? ESCAPE '\\' OR c.case_number LIKE ? ESCAPE '\\')${scopeFilter}`;
+    const where = `c.organization_id = ? AND c.deleted_at IS NULL AND ${visibility} AND (? = '' OR instr(lower(c.title),lower(?))>0 OR instr(lower(c.case_number),lower(?))>0)${scopeFilter}`;
     const perspectiveColumns = await previewCasePerspectiveSchemaAvailable(env)
       ? 'c.client_legal_position AS clientLegalPosition, c.client_position_detail AS clientPositionDetail,'
       : "'UNSPECIFIED' AS clientLegalPosition, NULL AS clientPositionDetail,";
     const clientNameColumn = await previewCaseClientNameSchemaAvailable(env) ? 'c.client_name AS clientName,' : 'NULL AS clientName,';
     const rows = await env.DB.prepare(
       `SELECT c.id, c.case_number AS caseNumber, c.title, c.description, c.claim_type AS claimType, c.status, c.version, c.category_major AS categoryMajor, c.category_middle AS categoryMiddle, c.category_minor AS categoryMinor, ${perspectiveColumns} ${clientNameColumn} c.created_at AS createdAt, c.updated_at AS updatedAt FROM preview_cases c WHERE ${where} ORDER BY c.updated_at DESC, c.id DESC LIMIT ? OFFSET ?`
-    ).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like, ...scopeBindings, limitRaw, offset).all<PreviewCaseRow>();
-    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, like, like, ...scopeBindings).first<{ total: number }>();
+    ).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, query, query, ...scopeBindings, limitRaw, offset).all<PreviewCaseRow>();
+    const count = await env.DB.prepare(`SELECT COUNT(*) AS total FROM preview_cases c WHERE ${where}`).bind(PREVIEW_ORGANIZATION_ID, ...visibilityBindings, query, query, query, ...scopeBindings).first<{ total: number }>();
     const total = Number(count?.total ?? 0);
     return json({ cases: rows.results.map(previewCaseProjection), total, nextOffset: offset + rows.results.length < total ? offset + rows.results.length : null, phase: 'CF06_D1_CASE_OPERATIONS' });
   }

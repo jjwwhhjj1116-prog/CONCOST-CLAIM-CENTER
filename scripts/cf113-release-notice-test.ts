@@ -5,7 +5,8 @@ const read = (path:string) => readFileSync(new URL('../'+path,import.meta.url),'
 const release = read('apps/web/src/layout/ReleaseNotice.tsx');
 const shell = read('apps/web/src/layout/AppShell.tsx');
 test('CF113 dated cumulative notice describes actual feature updates and connection limitations', () => {
-  assert.match(release,/RELEASE_DATE = '2026-10-20'/);
+  assert.match(release,/RELEASE_DATE = '2026-10-23'/);
+  for(const label of ['긴 한글 프로젝트 제목','입력한 문자 그대로','수정한 새 버전은 다시 상신'])assert.ok(release.includes(label),label);
   assert.match(release,/테스트서버와 가오픈서버에 동일 소스를 반영했습니다/);
   assert.doesNotMatch(release,/가오픈 서버는 이번 배포 대상이 아닙니다/);
   for (const label of ['보고서 AI 초안 작성','보고서 편집·A4 페이지','제안서 작성·편집','프로젝트 일정·업무 화면','회의록 양식·Excel 출력','Drive 자료실·명함 관리','전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다','실제 메일 발송 기능이 아닙니다']) assert.ok(release.includes(label),label);
