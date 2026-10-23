@@ -34,7 +34,8 @@ function textAnchor(element:HTMLElement):NativeHwpLines['anchor']{
   }
 }
 function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
-  const css=style(paragraph),page=paragraph.closest<HTMLElement>('[data-hwp-import-page]'),scale=page?(page.getBoundingClientRect().width/Number(page.getAttribute('data-hwp-width'))||1):1;
+  const css=style(paragraph),page=paragraph.closest<HTMLElement>('[data-hwp-import-page]'),paper=page??paragraph.closest<HTMLElement>('[data-export-page]');
+  const scale=paper?(paper.getBoundingClientRect().width/(Number(paper.getAttribute('data-hwp-width'))||paper.offsetWidth)||1):1;
   const lineHeight=px(css.lineHeight)||px(css.fontSize),starts=[0],bounds=[{left:Infinity,right:-Infinity}],firstXs:number[]=[],inputs:NonNullable<NativeHwpLines['inputs']>=[],glyphs:NonNullable<NativeHwpLines['glyphs']>=[];let text='',position=0,lineY:number|undefined;
   const addBounds=(rect:DOMRect)=>{const current=bounds[bounds.length-1];current.left=Math.min(current.left,rect.left);current.right=Math.max(current.right,rect.right);};
   const visit=(node:Node)=>{
@@ -45,7 +46,7 @@ function paragraphLines(paragraph:HTMLElement):NativeHwpLines{
         if(rect?.width){if(!/\s|\u200b/u.test(char)){if(firstXs[bounds.length-1]===undefined)firstXs[bounds.length-1]=rect.left;if(page)glyphs.push({at:position,x:(rect.left-page.getBoundingClientRect().left)/scale});}input.widths.push(rect.width/scale);}
         text+=char;position++;offset+=char.length;
       }
-      if(page&&parent&&!parent.closest('[data-hwp-advance]')&&input.widths.length===Array.from(node.textContent||'').length)inputs.push(input);
+      if(paper&&parent&&!parent.closest('[data-hwp-advance]')&&input.widths.length===Array.from(node.textContent||'').length)inputs.push(input);
     }else if(node instanceof Element){
       if(node.hasAttribute('data-hwp-tab')){text+='\t';position++;addBounds(node.getBoundingClientRect());return;}
       if(node.tagName==='BR'){if(node.classList.contains('ProseMirror-trailingBreak'))return;if(!node.hasAttribute('data-hwp-soft-break')){text+='\n';position++;}if(starts.at(-1)!==position){starts.push(position);bounds.push({left:Infinity,right:-Infinity});}lineY=undefined;return;}
@@ -73,13 +74,27 @@ function singleTextLine(element:Element):boolean{
   return boxes.length>0&&boxes.every(box=>Math.abs(box.top-boxes[0].top)<.5);
 }
 function append(target:NativeHwpContent,source:NativeHwpContent){
+  if(source.flowLines?.length){
+    const offset=new DOMParser().parseFromString(target.html,'text/html').body.children.length;
+    if(source.flowLines?.length)(target.flowLines??=[]).push(...source.flowLines.map(line=>({...line,paragraphIndex:line.paragraphIndex+offset})));
+  }
   target.html+=source.html;target.text+=source.text;target.tables+=source.tables;target.images+=source.images;
   target.tableCells!.push(...source.tableCells!);target.pictures!.push(...source.pictures!);target.tableGeometry!.push(...source.tableGeometry!);
   target.tabs!.push(...source.tabs??[]);
 }
-async function fontStyle(css:CSSStyleDeclaration,document:Document):Promise<string>{
+async function fontStyle(css:CSSStyleDeclaration,document:Document,text=''):Promise<string>{
   const family=css.fontFamily,properties=`font-size:${css.fontSize};font-weight:${px(css.fontWeight)>=600?'bold':css.fontWeight};font-style:${css.fontStyle};letter-spacing:${css.letterSpacing};color:${color(css.color)};text-decoration:${css.textDecorationLine}`;
-  const resolved=await resolveDocumentExportFontFamily(family,document);
+  let resolved=await resolveDocumentExportFontFamily(family,document);
+  if(resolved==='monospace'&&text){
+    // A generic CSS family is not a native HWP face. Use a local named face
+    // only when every current character and the whole run have equal advances.
+    const context=document.createElement('canvas').getContext('2d')!;
+    const width=(value:string,font:string)=>{context.font=`${css.fontStyle} ${css.fontWeight} ${css.fontSize} ${font}`;return context.measureText(value).width;};
+    for(const candidate of ['Consolas','Courier New'])try{
+      await new document.defaultView!.FontFace('hwp-monospace-probe',`local(${JSON.stringify(candidate)})`).load();
+      if([text,...Array.from(text)].every(value=>Math.abs(width(value,family)-width(value,JSON.stringify(candidate)))<.01)){resolved=candidate;break;}
+    }catch{/* Keep the existing native validation when no equivalent face exists. */}
+  }
   // Make the script-specific font slots explicit in the native importer.
   return `font-family:${resolved};${properties};mso-fareast-font-family:${resolved}`;
 }
@@ -115,7 +130,7 @@ async function inline(nodes:readonly Node[],parent:Element):Promise<NativeHwpCon
   for(const node of nodes){
     if(node.nodeType===Node.TEXT_NODE){
       const css=style(parent),text=css.whiteSpace.startsWith('pre')?node.textContent||'':(node.textContent||'').replace(/\s+/gu,' ');
-      let properties=await fontStyle(css,parent.ownerDocument);
+      let properties=await fontStyle(css,parent.ownerDocument,text);
       const original=parent.closest<HTMLElement>('[data-hwp-text-style]')?.getAttribute('data-hwp-text-style');
       if(original){
         const value=JSON.parse(original),family=Array.isArray(value)?value[0]:value.fontFamily;
@@ -178,6 +193,15 @@ async function paragraph(element:Element,nodes:readonly Node[]=[...element.child
   const uniform=[element,...element.querySelectorAll('*')].every(e=>px(style(e).fontSize)===px(css.fontSize));
   if(before===undefined&&after===undefined&&!element.closest('td,th')&&!result.images&&result.text&&leading>0&&uniform&&px(css.marginBottom)>=leading){before=px(css.marginTop)+leading;after=px(css.marginBottom)-leading;}
   if(marker){result.html=escape(marker)+result.html;result.text=marker+result.text;}
+  if(element instanceof HTMLElement&&element.tagName==='LI'&&!element.hasAttribute('data-hwp-layout')&&!element.closest('td,th,[data-hwp-import-page],.report-final-cover,.proposal-final-cover,.report-final-toc,.proposal-final-toc')&&!result.images&&!result.tables&&result.text.trim()){
+    const current=paragraphLines(element);
+    if(marker){current.text=marker+current.text;current.starts=current.starts.map((start,index)=>index?start+Array.from(marker).length:0);}
+    const paper=element.closest<HTMLElement>('[data-export-page]');
+    if(current.text===result.text&&paper){
+      const scale=paper.getBoundingClientRect().width/paper.offsetWidth||1;
+      result.flowLines=[{...current,top:(element.getBoundingClientRect().top-paper.getBoundingClientRect().top)/scale,width:element.getBoundingClientRect().width/scale,paragraphIndex:0}];
+    }
+  }
   // Keep photos as individual blocks. Inline mixed text/photos require a richer
   // character-object mapping; the semantic gate blocks loss rather than flattening.
   let properties=paragraphStyle(css,before,after).replace(/line-height:[^;]+/u,`line-height:${lineHeight}`);
@@ -194,7 +218,10 @@ async function table(source:HTMLTableElement):Promise<NativeHwpContent>{
   const authored=cols.map(col=>/^\d+(?:\.\d+)?px$/u.test(col.style.width)?px(col.style.width):NaN);
   const precise=source.hasAttribute('data-hwp-layout')&&authored.length>0&&authored.every((w,i)=>w>0&&Math.abs(w-painted[i])<=.5);
   const columns=precise?authored:painted;
-  const gridWidth=source.hasAttribute('data-hwp-layout')&&columns.length&&columns.every(w=>w>0)?columns.reduce((sum,w)=>sum+w,0):measured(source).width;
+  const firstRowCells=[...source.rows[0]?.cells??[]].filter(cell=>!ignored(cell)),cellGrid=firstRowCells.length?Math.max(...firstRowCells.map(cell=>cell.getBoundingClientRect().right))-Math.min(...firstRowCells.map(cell=>cell.getBoundingClientRect().left)):0;
+  // A collapsed CSS border extends half its width beyond the cell grid.
+  // Counting that paint as column width makes native layout widen the last cell.
+  const gridWidth=source.hasAttribute('data-hwp-layout')?columns.length&&columns.every(w=>w>0)?columns.reduce((sum,w)=>sum+w,0):measured(source).width:style(source).borderCollapse==='collapse'&&cellGrid>0?cellGrid:measured(source).width;
   const result=empty(),cells:NonNullable<NativeHwpContent['tableCells']>[number]=[],geometry:NonNullable<NativeHwpContent['tableGeometry']>[number]={width:gridWidth,reflowCellLines:true,cells:[]};
   result.tables=1;result.tableCells!.push(cells);result.tableGeometry!.push(geometry);
   let rows='';const occupied:boolean[][]=[];
@@ -299,6 +326,7 @@ async function blocks(parent:Element):Promise<NativeHwpContent>{
       const next=node.nextElementSibling?.matches(reportToc?'.report-toc-entry':'.proposal-final-toc li')?node.nextElementSibling:null;
       const advance=next?(next.getBoundingClientRect().top-rect.top)/pageScale:rect.height/pageScale+px(style(node).marginBottom);
       const row=layoutRow(contents,widths,(node as HTMLElement).offsetHeight,padding,advance);
+      if(reportToc)row.tableGeometry![0].objectAdvance=true;
       row.tableGeometry![0].reflowCellLines=true;
       if(reportToc&&singleTextLine(children[0]!))row.tableGeometry![0].cells[0].singleLine=true;
       append(result,row);continue;

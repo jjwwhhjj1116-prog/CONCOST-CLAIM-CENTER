@@ -1,6 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 import {positionNativeHwp} from './positioned-hwp-export';
+import {restoreNativeFlowLines} from './native-hwp-flow-lines';
 
 /** The audited engine is injected so the exact same conversion runs in browser and regression tests. */
 export interface NativeHwpDocument {
@@ -26,8 +27,9 @@ export interface NativeHwpContent {
   images: number;
   tableCells?: Array<Array<{ row: number; col: number; rowSpan: number; colSpan: number; text: string }>>;
   pictures?: Array<{ bytes: Uint8Array; width: number; height: number; floating?:boolean; anchor?:{x:number;y:number} }>;
-  tableGeometry?: Array<{width:number;advance?:number;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number};borders?:Record<string,{type:string;width:number;color:string}>;lines?:NativeHwpLines[]}>}>;
+  tableGeometry?: Array<{width:number;advance?:number;objectAdvance?:boolean;reflowCellLines?:boolean;cells:Array<{width:number;height:number;singleLine?:boolean;padding:{top:number;right:number;bottom:number;left:number};borders?:Record<string,{type:string;width:number;color:string}>;lines?:NativeHwpLines[]}>}>;
   tabs?:number[];
+  flowLines?:Array<NativeHwpLines&{top:number;width:number;paragraphIndex:number}>;
 }
 export interface NativeHwpPage extends NativeHwpContent {
   width: number;
@@ -137,12 +139,14 @@ export function verifyNativeHwpContent(hwpx: Uint8Array, pages: NativeHwpPage[],
           const cases=[...definition.matchAll(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu)].map(match=>match[0]);
           const defaults=definition.replace(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu,'');
           const after=geometry.advance-Math.max(...geometry.cells.map(cell=>cell.height));
-          const exact=(part:string,factor:number)=>/<hh:lineSpacing\b/u.test(part)&&/<hc:prev\b/u.test(part)&&/<hc:next\b/u.test(part)&&[...part.matchAll(/<hh:lineSpacing\b[^>]*\/>/gu)].every(match=>attribute(match[0],'type')==='PERCENT'&&Number(attribute(match[0],'value'))===100)&&[...part.matchAll(/<hc:(prev|next)\b[^>]*\/>/gu)].every(match=>Number(attribute(match[0],'value'))===(match[1]==='prev'?0:paragraphInsetValue(after,factor)));
-          if(after<0||!/<hh:lineSpacing\b/u.test(defaults)||!/<hc:next\b/u.test(defaults)||!exact(defaults,150)||cases.some(part=>!exact(part,75)))throw new Error('HWP 목차 행 간격이 원문과 다릅니다.');
+          const exact=(part:string,factor:number)=>/<hh:lineSpacing\b/u.test(part)&&/<hc:prev\b/u.test(part)&&/<hc:next\b/u.test(part)&&[...part.matchAll(/<hh:lineSpacing\b[^>]*\/>/gu)].every(match=>attribute(match[0],'type')==='PERCENT'&&Number(attribute(match[0],'value'))===100)&&[...part.matchAll(/<hc:(prev|next)\b[^>]*\/>/gu)].every(match=>Number(attribute(match[0],'value'))===(match[1]==='prev'||geometry.objectAdvance?0:paragraphInsetValue(after,factor)));
+          const outer=table.match(/<hp:outMargin\b[^>]*\/>/u)?.[0]||'';
+          if(after<0||!/<hh:lineSpacing\b/u.test(defaults)||!/<hc:next\b/u.test(defaults)||!exact(defaults,150)||cases.some(part=>!exact(part,75))||geometry.objectAdvance&&Number(attribute(outer,'bottom'))!==Math.round(after*75))throw new Error('HWP 목차 행 간격이 원문과 다릅니다.');
         }
         const size=table.match(/<hp:sz\b[^>]*\/>/u)?.[0]||'';
         const outer=table.match(/<hp:outMargin\b[^>]*\/>/u)?.[0]||'';
-        if(Number(attribute(size,'width'))!==Math.round(geometry.width*75)||['left','right','top','bottom'].some(side=>Number(attribute(outer,side))!==0))throw new Error('HWP 표 너비·바깥 여백이 원문과 다릅니다.');
+        const after=geometry.objectAdvance&&geometry.advance!==undefined?geometry.advance-Math.max(...geometry.cells.map(cell=>cell.height)):0;
+        if(Number(attribute(size,'width'))!==Math.round(geometry.width*75)||['left','right','top','bottom'].some(side=>Number(attribute(outer,side))!==(side==='bottom'?Math.round(after*75):0)))throw new Error('HWP 표 너비·바깥 여백이 원문과 다릅니다.');
         elements(own,'tc',true).forEach((cell,cellIndex)=>{
           const expected=geometry.cells[cellIndex],size=cell.match(/<hp:cellSz\b[^>]*\/>/u)?.[0]||'',padding=cell.match(/<hp:cellMargin\b[^>]*\/>/u)?.[0]||'';
           if(!expected||Number(attribute(size,'width'))!==Math.round(expected.width*75)||Number(attribute(size,'height'))!==Math.round(expected.height*75)||Object.entries(expected.padding).some(([side,value])=>Number(attribute(padding,side))!==Math.round(value*75)))throw new Error('HWP 표 셀 크기·여백이 원문과 다릅니다.');
@@ -310,10 +314,14 @@ function restoreTableAdvances(xml:string,files:Record<string,Uint8Array>,geometr
     if(!carrier||!definition||!/<hh:lineSpacing\b/u.test(definition))throw Error('HWP 목차 표의 문단 속성이 없습니다.');
     const after=geometry.advance-Math.max(...geometry.cells.map(cell=>cell.height));
     if(after<0)throw Error('HWP 목차 행의 겹친 배치를 보존하지 못했습니다.');
-    const set=(part:string,factor:number)=>part.replace(/<hc:(prev|next)\b[^>]*\/>/gu,(tag,side:string)=>tag.replace(/value="[^"]*"/u,`value="${side==='prev'?0:paragraphInsetValue(after,factor)}"`));
+    // The pinned engine includes paragraph-after spacing differently when it
+    // checks an inline table against the next page. Store the measured gap on
+    // the table itself; glyph positions stay unchanged without early overflow.
+    const set=(part:string,factor:number)=>part.replace(/<hc:(prev|next)\b[^>]*\/>/gu,(tag,side:string)=>tag.replace(/value="[^"]*"/u,`value="${side==='prev'||geometry.objectAdvance?0:paragraphInsetValue(after,factor)}"`));
     const updated=set(definition.replace(/\bid="[^"]*"/u,`id="${id}"`).replace(/<hh:lineSpacing\b[^>]*\/>/gu,tag=>tag.replace(/type="[^"]*"/u,'type="PERCENT"').replace(/value="[^"]*"/u,'value="100"')),150).replace(/<hp:case\b[^>]*>[\s\S]*?<\/hp:case>/gu,part=>set(part,75));
     header=header.replace('</hh:paraProperties>',`${updated}</hh:paraProperties>`);
     let next=carrier.replace(/(<hp:p\b[^>]*paraPrIDRef=")[^"]*/u,`$1${id++}`);
+    if(geometry.objectAdvance)next=next.replace(tables[index],tables[index].replace(/<hp:outMargin\b[^>]*\/>/u,`<hp:outMargin left="0" right="0" top="0" bottom="${Math.round(after*75)}"/>`));
     // The carrier's own cache follows its runs; earlier arrays belong to cells.
     // Invalidate only the changed carrier so the engine measures its new advance.
     const cached=[...next.matchAll(/<hp:linesegarray\b[^>]*>[\s\S]*?<\/hp:linesegarray>/gu)].at(-1)?.[0];
@@ -455,6 +463,7 @@ export function createNativeHwp(pages: NativeHwpPage[], Engine: NativeHwpEngine)
       }
       native[path] = strToU8(restoreParagraphInsets(restoreTableAdvances(clearImportedTableIndent(restoreTableGeometry(restoreTableBorders(restorePictureGeometry(withoutMarker.replace(/(<hp:p\b[^>]*>)/u, `$1${controls}`),combinedContent(page).pictures),combinedContent(page).tableGeometry,native),combinedContent(page).tableGeometry),native),native,combinedContent(page).tableGeometry),native,page.paragraphInsets));
     });
+    restoreNativeFlowLines(native,pages);
     const normalized = pages.some(page=>page.positioned)?positionNativeHwp(native,pages,Engine):zipSync(native);
     verifyNativeHwpContent(normalized, pages, false);
     const prepared = new Engine(normalized);

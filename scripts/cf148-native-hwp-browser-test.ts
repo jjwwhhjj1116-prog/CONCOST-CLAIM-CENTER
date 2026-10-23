@@ -34,7 +34,7 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
     });
     await page.goto(origin+'/native-qa.html');await page.waitForFunction(()=>document.styleSheets.length>0);
     await page.evaluate('globalThis.__name = value => value');
-    for(const name of ['fontFamilyFallback','letterSpacing','normalLine','inlineBreaks','photoWhitespace','photoCellSingleLine','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows','reportTocFractionalRows'])await t.test(name,async()=>{
+    for(const name of ['listFlow','codeMixedWidth','fontFamilyFallback','letterSpacing','normalLine','inlineBreaks','photoWhitespace','photoCellSingleLine','sourcePage','collapsedPhotoMargins','mergedFooter','cover','toc','denseH2ParagraphMargins','collapsedBlankParagraphs','reportToc10Rows','reportTocFractionalRows'])await t.test(name,async()=>{
       await page.evaluate(()=>document.querySelectorAll('#native-source').forEach(node=>node.remove()));
       const download=page.waitForEvent('download');
       const result=await page.evaluate(async name=>{
@@ -45,6 +45,8 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
 <img src="${src}" width="120" height="72">
 </p>`;
         const contents:Record<string,string>={
+          codeMixedWidth:'<section data-export-page style="position:relative;width:794px;height:1123px;padding:81px;font:16px/29.6px Arial"><article style="display:flow-root"><p style="margin:0;text-align:justify">제출된 수량산출 원문 <code style="font-family:monospace">CF251-TAKEOFF_SOURCE.txt</code>에 기재된 수량은 <strong>검수 전용 합성 자료</strong>입니다. 실제 계약 자료와 혼동하지 않고 문장·글자 폭·바닥글을 보존합니다.</p></article><footer class="report-page-number" style="position:absolute;bottom:20px">CF251 footer</footer></section>',
+          listFlow:'<section data-export-page style="width:794px;height:1123px;padding:40px;font:16px/24px Arial;zoom:.75"><article style="display:flow-root"><p style="margin:0 0 24px">• CF251 repeat</p><ul style="margin:0;padding-left:20px"><li style="margin:0 0 12px">CF251 repeat</li><li style="margin:0;max-width:300px">CF251 reviewed editable list words preserve the current browser line breaks and final paragraph order.</li></ul></article></section>',
           fontFamilyFallback:`<style>#native-source .cf224-fallback::after{content:"- 1 -";font-family:"CF224 Missing Font",Arial,serif;font-size:16px;line-height:20px;height:20px;bottom:20px}</style><section lang="ko" class="proposal-final-chapter cf224-fallback" data-export-page style="width:794px;height:1123px;padding:40px"><p style="font-family:'CF224 Missing Font',Arial,serif;font-size:20px;font-weight:700;font-style:italic;letter-spacing:2px">CF224 fallback 123.45</p><p lang="en-US" style="font-family:Arial,'CF224 Missing Font',serif">Existing family retained</p></section>`,
           letterSpacing:'<section data-export-page style="width:794px;height:1123px;padding:40px"><p><span style="font-size:20px;letter-spacing:2px">양수 자간</span><span style="font-size:20px;letter-spacing:-2px">음수 자간</span></p></section>',
           normalLine:'<section data-export-page style="width:794px;height:1123px;padding:40px"><p style="font-size:20px;line-height:normal;min-height:0">단일 줄 검수</p></section>',
@@ -145,6 +147,34 @@ test('reviewed browser DOM downloads native HWP using the pinned same-origin run
       const artifact=await download;
       assert.equal(result.pageCount,1);assert.ok(result.byteSize>512);assert.equal(artifact.suggestedFilename(),'native-'+name+'.hwp');
       const path=await artifact.path();assert.ok(path);assert.equal(sha(readFileSync(path)),result.sha256);
+      if(name==='codeMixedWidth'){
+        const proof=await page.evaluate(async bytes=>{
+          const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string),{loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string);
+          const root=document.querySelector<HTMLElement>('#native-source')!,before=root.innerHTML,[source]=await collectNativeHwpPages(root,'portrait'),Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
+          try{
+            const runs=JSON.parse(doc.getPageTextLayout(0)).runs.filter((run:{paraIdx:number;cellPath?:unknown})=>run.paraIdx===0&&!run.cellPath),code='CF251-TAKEOFF_SOURCE.txt',start=Array.from(source.text.slice(0,source.text.indexOf(code))).length,node=root.querySelector('code')!.firstChild!;
+            const errors=Array.from(code).map((_,i)=>{const range=document.createRange();range.setStart(node,i);range.setEnd(node,i+1);const width=range.getBoundingClientRect().width,at=start+i,run=runs.find((r:{charStart:number;text:string})=>at>=r.charStart&&at<r.charStart+Array.from(r.text).length);if(!run)throw Error('Reopened code glyph missing');const offset=at-run.charStart;return Math.abs(run.charX[offset+1]-run.charX[offset]-width);});
+            return{errors,pages:doc.pageCount(),text:runs.map((r:{text:string})=>r.text).join(''),expected:source.text,footer:doc.getPageTextLayout(0).includes('CF251 footer'),unchanged:root.innerHTML===before};
+          }finally{doc.free();}
+        },[...readFileSync(path)]);
+        console.log('CF251 reopened mixed code measurement',JSON.stringify({errors:proof.errors,pages:proof.pages,footer:proof.footer,unchanged:proof.unchanged}));
+        assert.ok(proof.errors.every(error=>error<=.3),'Reopened mixed-font code must retain measured web advances within native spacing quantization: '+JSON.stringify(proof.errors));
+        assert.equal(proof.text,proof.expected);assert.equal(proof.footer,true);assert.equal(proof.unchanged,true);assert.equal(proof.pages,1);
+      }
+      if(name==='listFlow'){
+        const proof=await page.evaluate(async bytes=>{
+          const {collectNativeHwpPages}=await import('/src/documents/native-hwp-pages.ts' as string),{loadNativeHwpEngine}=await import('/src/documents/native-hwp-runtime.ts' as string);
+          const root=document.querySelector<HTMLElement>('#native-source')!,before=root.innerHTML,[source]=await collectNativeHwpPages(root,'portrait'),Engine=await loadNativeHwpEngine(),doc=new Engine(Uint8Array.from(bytes));
+          try{
+            const layout=JSON.parse(doc.getPageTextLayout(0)),lines=source.flowLines!;
+            const counts=lines.map(line=>new Set(layout.runs.filter((run:{paraIdx:number})=>run.paraIdx===line.paragraphIndex).map((run:{y:number})=>run.y)).size);
+            return{indices:lines.map(line=>line.paragraphIndex),expected:lines.map(line=>line.starts.length),counts,unchanged:root.innerHTML===before,pages:doc.pageCount()};
+          }finally{doc.free();}
+        },[...readFileSync(path)]);
+        assert.deepEqual(proof.indices,[1,2],'An earlier identical paragraph must not steal the list layout');
+        assert.deepEqual(proof.counts,proof.expected,'Reopened native list lines must match the zoomed reviewed DOM');
+        assert.equal(proof.unchanged,true);assert.equal(proof.pages,1);
+      }
       if(name==='fontFamilyFallback'){
         assert.equal(result.sourceUnchanged,true);
         const reopened=await page.evaluate(async bytes=>{

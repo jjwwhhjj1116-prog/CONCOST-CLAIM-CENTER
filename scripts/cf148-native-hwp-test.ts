@@ -21,6 +21,24 @@ const engine = import(pathToFileURL(resolve(pkg, 'rhwp.js')).href).then(async mo
 const { unzipSync, strFromU8, strToU8, zipSync } = createRequire(new URL('../apps/web/package.json', import.meta.url))('fflate');
 const page = (html: string, text: string, tables = 0, images = 0): NativeHwpPage => ({ html, text, tables, images, width: 794, height: 1123, margins: { top: 40, right: 40, bottom: 40, left: 40 } });
 
+test('CF251 dense editable TOC keeps every reviewed row on one physical page',async()=>{
+  const Engine=await engine,count=22,advance=42.8,height=29;
+  const rows=Array.from({length:count},(_,i)=>`목차 ${i+1}`);
+  const source={...page(rows.map(text=>`<table><tr><td style="height:${height}px"><p style="margin:0;font-size:16px;line-height:28.8px">${text}</p></td></tr></table>`).join(''),rows.join(''),count),
+    tableCells:rows.map(text=>[{row:0,col:0,rowSpan:1,colSpan:1,text}]),
+    tableGeometry:rows.map(()=>({width:632,advance,objectAdvance:true,reflowCellLines:true,cells:[{width:632,height,padding:{top:0,right:0,bottom:0,left:0}}]}))};
+  const doc=new Engine(createNativeHwp([source],Engine));
+  try{
+    assert.equal(doc.pageCount(),1);
+    const grouped=new Map<number,{text:string;y:number}>();
+    for(const run of JSON.parse(doc.getPageTextLayout(0)).runs)if(run.cellIdx===0){const row=grouped.get(run.parentParaIdx);if(row)row.text+=run.text;else grouped.set(run.parentParaIdx,{text:run.text,y:run.y});}
+    const runs=[...grouped.values()];
+    assert.deepEqual(runs.map(run=>run.text),rows);
+    for(let i=1;i<runs.length;i++)assert.ok(Math.abs(runs[i].y-runs[i-1].y-advance)<.15);
+    verifyNativeHwpContent(doc.exportHwpx(),[source]);
+  }finally{doc.free();}
+});
+
 test('CF229 fractional photo dimensions round once in native units and a changed dimension is rejected',async()=>{
   const Engine=await engine,bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5V8AAAAASUVORK5CYII=','base64');
   const source={...page(`<p>치수 검수</p><img src="data:image/png;base64,${bytes.toString('base64')}" width="10.01" height="12.01">`,'치수 검수',0,1),pictures:[{bytes,width:10.01,height:12.01}]};
