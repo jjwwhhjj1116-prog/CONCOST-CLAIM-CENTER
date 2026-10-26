@@ -1,5 +1,17 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## CF246 알림·튜토리얼 PUT 원인 조사와 검수 보호 — 2026-10-26
+
+- **확인된 영향 / 남은 한계:** 정상 Cloudflare D1 콘솔에서 개발 대표 계정과 해당25초 범위만 SELECT했다. 알림12건(AWARD8·TODO1·기존 금요일 WORKLOG3)이08:59:53.742 KST에 읽음 처리됐고, 튜토리얼 CF79_V1/state1은08:59:59.498 KST에 SKIPPED로 저장됐다. HTTP 기록 시각은 각각08:59:54.790/08:59:59.646 KST이며 DB 저장시각과 구분한다. 실제 영향은 확인됐지만 클릭 주체는 UNKNOWN이다. 상태 복원·알림 재생성·결재 대행은 하지 않았다.
+- 소스에서 알림 PUT은 명시적 확인완료, 튜토리얼 PUT은 건너뛰기/완료 동작에서만 호출된다. mount/focus/주기 조회는 GET이다. 서버 원장에는 user/time은 있으나 request/session/click 식별 정보가 없고 옛 monitor는 method/path만 기록했다. 최초 로딩 snapshot에는 로그인 ref가 없고 별도 로그인 snapshot에는 e40/e45/e50이 정상 필드/로그인으로 확인된다. e50이 다른 버튼으로 바뀐 증거는 없다. 후속 동일 CEO 로그인은 옛 helper의 같은 파일명을 덮어썼으므로09:05:48 로그로08:59 클릭을 특정할 수 없다. 자동 제품쓰기 오류는 확정하지 않는다.
+- 검수 장치를 보강했다. 새 단일 blank 격리 Chrome에 context guard를 먼저 설치하고 정확한 정상 auth/login POST1회와 읽기만 허용한다. 다른 쓰기·redirect·ServiceWorker·WebSocket을 전송 전에 차단하며 실패를 유지한다. 로그인 전 정확 GET/auth/session401 및 고정 Google Fonts 읽기만 좁게 허용한다. 요청객체와 응답·UTC·동작ID·CF-Ray를 연결하며 본문/키/쿠키/비밀번호는 관측로그에 남기지 않는다.
+- 새 normal-login.mjs는 환경/세션/고유 실행폴더를 분리하고 자격증명 조회 전 및 각 입력·클릭 전후 guard/정확 origin/실패상태를 검사한다. 기존 실행 원로그는 보존한다. CLI exit0의 오류출력도 실패로 처리한다. 비밀값 제거 후 확정된 이전 로그 보존만 검증했으며, 강제종료 전 임시CLI파일에 비밀값이 남을 수 있어 '처음부터 디스크에 안 남음'이라고 주장하지 않는다.
+- **실제 검증:** 최종 guard의 localhost 실제 headful Chrome7/7 통과(일반 로그인·읽기, PUT, iframe, popup, ServiceWorker, redirect, WebSocket). 금지 요청의 합성 서버 도달0. 순수 guard계약21/21, 새 로그인 음성/양성계약7종 및 반복로그·비밀값 제거검사 통과. 최초 샌드박스 Chrome crashpad 실패도 원본 보존했다. 이는 실제 정기상신 검수가 아니다.
+- **개발 실제 정상로그인 재검수:**10:08:56.325 KST 요청→10:08:56.690 KST 200, 요청객체와 actionId 일치. 총33요청 중 쓰기는 auth/login1회뿐, guard실패0, 알림/튜토리얼/승인/저장 버튼 클릭0. 업데이트 안내는 닫지 않고 그대로 캡처했고 자체 세션만 종료했다. 정상로그인만 PASS이며 새로운 상신·수신 화면 검수로 확대하지 않는다.
+- 증거: continuation/output/playwright/cf246-put-investigation/cause-and-impact-proof.json 및 alert-read-ui.json/png·tutorial-history-ui.json/png, 최종 local-browser-3ab6ce0e-f48e-4d8f-96eb-be389a027e45/receipt.json. 새 helper 폴더 cf246-recheck-20261102의 development-claim-native-guard-dev-ceo-final-8db27d64-af22-475f-9cc3-98c58530305b/actual-login-proof.json·guard-final.log·login-page.png·home.png·close.log. 모든 절대경로와 SHA는 같은 조사 폴더의 root-verification.json에 연결한다.
+- 기존 baseline/friday/friday-clock 파일SHA3개 불변. 기존 업무자료·계정·권한·키를 변경하지 않았고 정상 로그인 세션 생성만 구분한다. 이번 제품수정·개발/가오픈 배포0. 현재 e1784d7 이후 이 감사문서만 기록하며 기존22삭제/package.json수정/untracked자료와 CF252 별도 OAuth승인 대기는 보존한다.
+- 후속 첫 작업: 기존 automation-5의 주말 준비 및11/2 실제09:00/09:05 계획은 유지하고 새 guard·로그인 helper·확인된12건/SKIPPED 영향·주체UNKNOWN을 공식 prompt에 반영했다. 실제 날짜 보호·최대6개·양일 중복방지·원본보존을 유지한다. 두 실제 tick과 신규12수신자 알림 클릭→같은 고정본을 확인하기 전 전체 완료로 쓰지 않는다. 차단 장치가 개입하면 보호 성공과 업무검수 실패를 분리한다. 사용자 수동작업·예약확인 보고 없이 금요일/재검수 월요일 증거를 묶는다.
+
 ## CF246 주말 준비 재시도 보호 보강 — 2026-10-26
 
 - 최신 사용자 지시에 따라 기존 automation-5만 공식 갱신했다. 10/31 토요일·11/1 일요일 각각10:00/14:00/18:00/20:00 KST 총8회는 준비 미완료 시 재시도 기회다. 최초 성공 후 남은 주말 재시도 대신 같은 예약을11/2 월요일08:50 KST 1회로 전환한다. 08:50에는 정상 관측 연결을 준비하고, 실제08:57 이후 관측기를 시작해09:00·09:05 두 정규실행을 확보한다. 이전 인계의 토·일10시만/월요일08:58 계획은 이 항목으로 갱신한다.
