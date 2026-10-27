@@ -2,7 +2,7 @@
 // No customer rows, OAuth values, or SQL are printed. Never opens a remote database.
 import { createHash, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { DatabaseSync, constants } from 'node:sqlite';
 import path from 'node:path';
 
@@ -100,10 +100,33 @@ const runWrangler=(config,persist,args)=>{
   const output=execFileSync(process.execPath,[path.join(root,'node_modules/wrangler/bin/wrangler.js'),'d1',...args,'DB','--local','--config',config,'--persist-to',persist],{cwd:root,encoding:'utf8',env:runnerEnv(),timeout:50000,maxBuffer:4*1024*1024,stdio:['ignore','pipe','pipe']});
   return {durationMs:Date.now()-started,outputSha256:hash(output)};
 };
+// Reject links at every existing path component, including Windows junctions.
+const noLinks=target=>{
+  const parsed=path.parse(target);let part=parsed.root;
+  for(const name of target.slice(parsed.root.length).split(path.sep).filter(Boolean)){
+    part=path.join(part,name);check(!lstatSync(part).isSymbolicLink(),'PATH_LINK_REJECTED');
+  }
+};
+const privateRoot=()=>{
+  const configured=process.env.CF_CARD_PRIVATE_ROOT;
+  if(configured!==undefined){
+    check(configured.length>0&&path.isAbsolute(configured)&&!configured.split(/[\\/]+/).includes('..'),'PRIVATE_ROOT_INVALID');
+    check(existsSync(configured)&&statSync(configured).isDirectory(),'PRIVATE_ROOT_REQUIRED');
+    noLinks(path.resolve(configured));
+    const resolved=realpathSync(configured);
+    check(readdirSync(resolved).length===0,'PRIVATE_ROOT_NOT_EMPTY');
+    return resolved;
+  }
+  const tmpPath=path.join(root,'tmp');check(existsSync(tmpPath)&&statSync(tmpPath).isDirectory(),'TEMP_ROOT_REQUIRED');
+  const temporaryRoot=realpathSync(tmpPath),repositoryRoot=realpathSync(root),relativeTemp=path.relative(repositoryRoot,temporaryRoot);
+  check(relativeTemp&&!relativeTemp.startsWith('..')&&!path.isAbsolute(relativeTemp),'TEMP_ROOT_OUTSIDE_REPOSITORY');
+  return temporaryRoot;
+};
 const findLocalDb=persist=>{
   const dir=path.join(persist,'v3/d1/miniflare-D1DatabaseObject');
   const files=readdirSync(dir).filter(name=>name.endsWith('.sqlite')&&name!=='metadata.sqlite');
   check(files.length===1,'ISOLATED_SQLITE_AMBIGUOUS');
+  noLinks(path.resolve(path.join(dir,files[0])));
   const file=realpathSync(path.join(dir,files[0])),rootPath=realpathSync(persist),relative=path.relative(rootPath,file);
   check(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative),'ISOLATED_SQLITE_OUTSIDE_ROOT');return file;
 };
@@ -138,10 +161,10 @@ try{
           const after=loadActual(actual);try{compare(before,after,expected);}finally{after.close();}
           console.log(JSON.stringify({valid:true,mode,database,signatureVerified:true,restoreVerified:false,runnerVerified:false,existingRowsPreserved:true,existingSchemaPreserved:true,exactMigrationLedger:true,memory:memory(),customerRowsPrinted:false}));
         }else{
-          const tmpPath=path.join(root,'tmp');check(existsSync(tmpPath)&&statSync(tmpPath).isDirectory(),'TEMP_ROOT_REQUIRED');
-          const temporaryRoot=realpathSync(tmpPath),repositoryRoot=realpathSync(root),relativeTemp=path.relative(repositoryRoot,temporaryRoot);
-          check(relativeTemp&&!relativeTemp.startsWith('..')&&!path.isAbsolute(relativeTemp),'TEMP_ROOT_OUTSIDE_REPOSITORY');
+          const temporaryRoot=privateRoot();
           const persist=mkdtempSync(path.join(temporaryRoot,'cf-card-isolated-'));
+          noLinks(path.resolve(persist));
+          check(path.dirname(realpathSync(persist))===temporaryRoot,'ISOLATED_DIRECTORY_OUTSIDE_ROOT');
           const init=runWrangler(environments[database],persist,['execute','--command','SELECT 1 AS ok','--json']);
           const sqlite=findLocalDb(persist);const restored=protect(new DatabaseSync(sqlite));
           try{

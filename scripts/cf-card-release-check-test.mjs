@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
+import os from 'node:os';
 
 const root=process.cwd(),dir=mkdtempSync(path.join(root,'tmp/cf-card-check-test-'));
 const checker=path.join(root,'scripts/cf-card-release-check.mjs');
@@ -25,7 +26,8 @@ INSERT INTO qa_counter(id,marker) VALUES (100,'synthetic'); DELETE FROM qa_count
 ${migrations.map(name=>`INSERT INTO d1_migrations(name,applied_at) VALUES ('${name}','2026-10-26T00:00:00Z');`).join('\n')}`;
 const backup=path.join(dir,'fixture.sql'),manifest=path.join(dir,'signed.json');writeFileSync(backup,sql,{flag:'wx'});
 let independentPin='';
-const run=(...args)=>spawnSync(process.execPath,[checker,...args],{cwd:root,encoding:'utf8',timeout:110000,maxBuffer:1024*1024,env:{...process.env,NODE_NO_WARNINGS:'1'}});
+const runWith=(overrides,...args)=>{const env={...process.env,NODE_NO_WARNINGS:'1',...overrides};if(overrides.CF_CARD_PRIVATE_ROOT===undefined)delete env.CF_CARD_PRIVATE_ROOT;return spawnSync(process.execPath,[checker,...args],{cwd:root,encoding:'utf8',timeout:110000,maxBuffer:1024*1024,env});};
+const run=(...args)=>runWith({},...args);
 const parse=result=>JSON.parse((result.status===0?result.stdout:result.stderr).trim());
 
 test('signed local D1 backup requires an independent pin, scope, and unmodified content',()=>{
@@ -52,6 +54,23 @@ test('real local Wrangler runner applies reviewed migrations once while preservi
   const altered=run('compare',dev,backup,manifest,digest,sqlite);assert.notEqual(altered.status,0);assert.equal(parse(altered).code,'EXISTING_ROWS_CHANGED');
 });
 
+test('private root uses an existing empty non-link absolute directory and rejects path escape',()=>{
+  const base=mkdtempSync(path.join(os.tmpdir(),'cf-private-')),outside=path.join(dir,'outside'),link=path.join(dir,'root-link');
+  mkdirSync(outside);mkdirSync(path.join(outside,'nested'));symlinkSync(outside,link,'junction');
+  const attempt=custom=>runWith({CF_CARD_PRIVATE_ROOT:custom},'rehearse',dev,backup,manifest,independentPin);
+  const relative=attempt('relative');assert.notEqual(relative.status,0);assert.equal(parse(relative).code,'PRIVATE_ROOT_INVALID');
+  const escape=attempt(base+path.sep+'..'+path.sep+'outside');assert.notEqual(escape.status,0);assert.equal(parse(escape).code,'PRIVATE_ROOT_INVALID');
+  const linked=attempt(link);assert.notEqual(linked.status,0);assert.equal(parse(linked).code,'PATH_LINK_REJECTED');
+  const nested=attempt(path.join(link,'nested'));assert.notEqual(nested.status,0);assert.equal(parse(nested).code,'PATH_LINK_REJECTED');
+  writeFileSync(path.join(base,'existing'),'synthetic');
+  const nonempty=attempt(base);assert.notEqual(nonempty.status,0);assert.equal(parse(nonempty).code,'PRIVATE_ROOT_NOT_EMPTY');
+  unlinkSync(path.join(base,'existing'));
+  const result=attempt(base);assert.equal(result.status,0,result.stderr);const proof=parse(result);
+  assert.equal(proof.runnerVerified,true);assert.equal(path.dirname(realpathSync(proof.persist)),realpathSync(base));
+  assert.ok(path.relative(realpathSync(base),realpathSync(proof.sqlite)).split(path.sep).length>1);
+  assert.equal(readdirSync(base).length,1);
+});
+
 test('untrusted SQL cannot attach a filesystem database during isolated verification',()=>{
   const target=path.join(dir,'must-not-exist.sqlite');const malicious=path.join(dir,'malicious.sql');
   writeFileSync(malicious,`ATTACH DATABASE '${target.replaceAll("'","''")}' AS stolen;`,{flag:'wx'});
@@ -72,12 +91,13 @@ test('130 MiB synthetic export survives signed local runner rehearsal without co
   try {
     const signed=run('sign',dev,large,signedFile);assert.equal(signed.status,0,signed.stderr);const signing=parse(signed),pin=signing.publicKeySha256;
     const verified=run('verify',dev,large,signedFile,pin);assert.equal(verified.status,0,verified.stderr);
-    const rehearsed=run('rehearse',dev,large,signedFile,pin);assert.equal(rehearsed.status,0,rehearsed.stderr);const proof=parse(rehearsed);persist=proof.persist;
+    const privateScaleRoot=process.env.CF_CARD_SCALE_PRIVATE_ROOT;
+    const rehearsed=privateScaleRoot?runWith({CF_CARD_PRIVATE_ROOT:privateScaleRoot},'rehearse',dev,large,signedFile,pin):run('rehearse',dev,large,signedFile,pin);assert.equal(rehearsed.status,0,rehearsed.stderr);const proof=parse(rehearsed);persist=proof.persist;
     assert.equal(proof.runnerVerified,true);assert.equal(proof.secondRunNoOp,true);assert.equal(proof.existingRowsPreserved,true);
     console.log(JSON.stringify({scope:'SYNTHETIC_130_MIB',bytes,durationMs:Date.now()-started,signMemory:signing.memory,verifyMemory:parse(verified).memory,rehearseMemory:proof.memory,wranglerChildMemoryMeasured:false,customerRowsPrinted:false}));
   } finally {
     // Only synthetic files created by this test are cleaned; never touch user backups.
     if(existsSync(large))unlinkSync(large);if(existsSync(signedFile))unlinkSync(signedFile);
-    if(persist){const parent=realpathSync(path.join(root,'tmp')),target=realpathSync(persist),relative=path.relative(parent,target);assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative)&&path.basename(target).startsWith('cf-card-isolated-'));rmSync(target,{recursive:true});}
+    if(persist){const parent=realpathSync(process.env.CF_CARD_SCALE_PRIVATE_ROOT||path.join(root,'tmp')),target=realpathSync(persist),relative=path.relative(parent,target);assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative)&&path.basename(target).startsWith('cf-card-isolated-'));rmSync(target,{recursive:true});}
   }
 });
