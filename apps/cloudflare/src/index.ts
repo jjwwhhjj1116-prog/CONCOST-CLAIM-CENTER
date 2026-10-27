@@ -56,6 +56,7 @@ import { ES_ECOS_KEY, fetchEsEcosSources } from '../../../packages/document-engi
 
 import {handleProjectWorklogs,techWorklogIdentity} from './project-worklogs';
 import {handleWeeklyWorklogReviews,weeklyWorklogAlerts} from './project-worklog-reviews';
+import {handleBusinessCardTransfer} from './business-card-transfer';
 
 interface D1StatementLike {
   first<T>(): Promise<T | null>;
@@ -8787,8 +8788,9 @@ async function validateBusinessCardImage(file: File): Promise<{ bytes: Uint8Arra
   return validated;
 }
 
-async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, file: File): Promise<Response> {
+async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, file: File, backFile: File | null): Promise<Response> {
   const validated = await validateBusinessCardImage(file);
+  const back = backFile ? await validateBusinessCardImage(backFile) : null;
   const credential = await resolveOrganizationAiCredential(env, 'GEMINI');
   if (!credential) return json({ error: '관리자 설정에서 조직 공용 Gemini API 키를 연결해 주세요.', code: 'ORGANIZATION_GEMINI_NOT_CONFIGURED' }, 503);
   const route = await previewOrganizationGeminiAutomationRoute(env);
@@ -8796,8 +8798,9 @@ async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, f
     modelCode: route.modelCode, apiKey: credential.apiKey,
     system: '당신은 한국어와 영문 명함을 정확하게 구조화하는 회사 인맥관리 보조자입니다. 이미지에서 실제로 보이는 정보만 추출하고 추측하지 마세요. 값이 없거나 불확실하면 빈 문자열로 반환하세요. 전화번호 종류와 이름·회사·부서·직함을 문맥으로 구분하세요.',
     parts: [
-      { text: '이 명함을 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 짧게 정리하고, 개인정보를 새로 추측하지 마세요.' },
-      { inline_data: { mime_type: validated.mimeType, data: bytesToBase64(validated.bytes) } }
+      { text: '명함 앞면과 제공된 뒷면의 정보를 함께 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 짧게 정리하고, 개인정보를 새로 추측하지 마세요.' },
+      { inline_data: { mime_type: validated.mimeType, data: bytesToBase64(validated.bytes) } },
+      ...(back ? [{ text: '명함 뒷면' }, { inline_data: { mime_type: back.mimeType, data: bytesToBase64(back.bytes) } }] : [])
     ],
     reasoningEffort: 'low', maxOutputTokens: 2048, timeoutMs: 45_000,
     responseMimeType: 'application/json',
@@ -8819,9 +8822,13 @@ async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, f
   const analysisId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const expiresAt = new Date(Date.now() + 30 * 60_000).toISOString();
-  await env.DB!.prepare('INSERT INTO preview_business_card_analyses (id,organization_id,original_name,mime_type,byte_size,source_sha256,gemini_model_code,gemini_credential_source,extracted_json,created_by,created_at,expires_at,consumed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL)')
-    .bind(analysisId, PREVIEW_ORGANIZATION_ID, file.name.slice(0,240), validated.mimeType, file.size, validated.sha256, route.modelCode, credential.source, JSON.stringify(fields), user.id, createdAt, expiresAt).run();
-  return json({ analysis: { id: analysisId, fields, sourceSha256: validated.sha256, modelCode: route.modelCode, credentialSource: credential.source, expiresAt }, reviewRequired: true, rawImageStoredInD1: false, phase: 'CF78_GEMINI_BUSINESS_CARD' });
+  const frontStatement = env.DB!.prepare('INSERT INTO preview_business_card_analyses (id,organization_id,original_name,mime_type,byte_size,source_sha256,gemini_model_code,gemini_credential_source,extracted_json,created_by,created_at,expires_at,consumed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL)')
+    .bind(analysisId, PREVIEW_ORGANIZATION_ID, file.name.slice(0,240), validated.mimeType, file.size, validated.sha256, route.modelCode, credential.source, JSON.stringify(fields), user.id, createdAt, expiresAt);
+  if (back && backFile) {
+    if (!env.DB!.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
+    await env.DB!.batch([frontStatement, env.DB!.prepare('INSERT INTO preview_business_card_analysis_backs (analysis_id,original_name,mime_type,byte_size,source_sha256) VALUES (?,?,?,?,?)').bind(analysisId, backFile.name.slice(0,240), back.mimeType, backFile.size, back.sha256)]);
+  } else await frontStatement.run();
+  return json({ analysis: { id: analysisId, fields, sourceSha256: validated.sha256, backSourceSha256: back?.sha256 ?? null, modelCode: route.modelCode, credentialSource: credential.source, expiresAt }, reviewRequired: true, rawImageStoredInD1: false, phase: 'CF78_GEMINI_BUSINESS_CARD' });
 }
 
 async function handleBusinessCards(request: Request, env: CloudflareEnv, url: URL): Promise<Response> {
@@ -8830,11 +8837,15 @@ async function handleBusinessCards(request: Request, env: CloudflareEnv, url: UR
   if (!user) return json({ error: 'Login is required', code: 'AUTH_REQUIRED' }, 401);
   const isAdmin = user.roles.includes('admin');
 
+  if (url.pathname === '/api/business-cards/transfers' || url.pathname.startsWith('/api/business-cards/transfers/')) return handleBusinessCardTransfer(request, env, user);
+
   if (url.pathname === '/api/business-cards/analyze' && request.method === 'POST') {
     const form = await request.formData().catch(() => null);
     const file = form?.get('file');
+    const backFile = form?.get('backFile') ?? null;
     if (!(file instanceof File)) return json({ error: '명함 이미지 파일을 선택해 주세요.', code: 'BUSINESS_CARD_FILE_REQUIRED' }, 400);
-    try { return await analyzeBusinessCardImage(env, user, file); }
+    if (backFile !== null && !(backFile instanceof File)) return json({ error: '명함 뒷면 파일을 확인해 주세요.', code: 'BUSINESS_CARD_BACK_INVALID' }, 400);
+    try { return await analyzeBusinessCardImage(env, user, file, backFile); }
     catch (reason) { return reason instanceof GoogleDriveError ? json({ error: reason.message, code: reason.code }, reason.status) : json({ error: '명함을 분석하지 못했습니다.', code: 'BUSINESS_CARD_ANALYSIS_FAILED' }, 500); }
   }
 
@@ -8843,8 +8854,8 @@ async function handleBusinessCards(request: Request, env: CloudflareEnv, url: UR
     const includeArchived = isAdmin && url.searchParams.get('includeArchived') === 'true';
     const like = `%${query.replace(/[\\%_]/gu, '\\$&')}%`;
     const rows = await env.DB.prepare(
-      `SELECT c.id,c.name,c.company,c.department,c.title,c.mobile,c.phone,c.fax,c.email,c.address,c.website,c.notes,c.tags_text AS tags,c.original_name AS originalName,c.google_drive_url AS googleDriveUrl,c.gemini_model_code AS geminiModelCode,c.version,c.created_at AS createdAt,c.updated_at AS updatedAt,c.deleted_at AS deletedAt,u.display_name AS createdByName ` +
-      `FROM preview_business_cards c JOIN preview_users u ON u.id=c.created_by WHERE c.organization_id=? AND (?=1 OR c.deleted_at IS NULL) AND (?='' OR c.name LIKE ? ESCAPE '\\' OR coalesce(c.company,'') LIKE ? ESCAPE '\\' OR coalesce(c.department,'') LIKE ? ESCAPE '\\' OR coalesce(c.title,'') LIKE ? ESCAPE '\\' OR coalesce(c.mobile,'') LIKE ? ESCAPE '\\' OR coalesce(c.phone,'') LIKE ? ESCAPE '\\' OR coalesce(c.email,'') LIKE ? ESCAPE '\\' OR coalesce(c.tags_text,'') LIKE ? ESCAPE '\\') ORDER BY c.deleted_at IS NOT NULL,c.name COLLATE NOCASE,c.created_at DESC LIMIT 300`
+      `SELECT c.id,c.name,c.company,c.department,c.title,c.mobile,c.phone,c.fax,c.email,c.address,c.website,c.notes,c.tags_text AS tags,c.original_name AS originalName,c.google_drive_url AS googleDriveUrl,b.google_drive_url AS backGoogleDriveUrl,c.gemini_model_code AS geminiModelCode,c.version,c.created_at AS createdAt,c.updated_at AS updatedAt,c.deleted_at AS deletedAt,u.display_name AS createdByName ` +
+      `FROM preview_business_cards c JOIN preview_users u ON u.id=c.created_by LEFT JOIN preview_business_card_backs b ON b.card_id=c.id WHERE c.organization_id=? AND (?=1 OR c.deleted_at IS NULL) AND (?='' OR c.name LIKE ? ESCAPE '\\' OR coalesce(c.company,'') LIKE ? ESCAPE '\\' OR coalesce(c.department,'') LIKE ? ESCAPE '\\' OR coalesce(c.title,'') LIKE ? ESCAPE '\\' OR coalesce(c.mobile,'') LIKE ? ESCAPE '\\' OR coalesce(c.phone,'') LIKE ? ESCAPE '\\' OR coalesce(c.email,'') LIKE ? ESCAPE '\\' OR coalesce(c.tags_text,'') LIKE ? ESCAPE '\\') ORDER BY c.deleted_at IS NOT NULL,c.name COLLATE NOCASE,c.created_at DESC LIMIT 300`
     ).bind(PREVIEW_ORGANIZATION_ID, includeArchived ? 1 : 0, query, like, like, like, like, like, like, like, like).all<Record<string, unknown>>();
     return json({ cards: rows.results, canManage: isAdmin, includeArchived, phase: 'CF78_GEMINI_BUSINESS_CARD' });
   }
@@ -8875,23 +8886,27 @@ async function handleBusinessCards(request: Request, env: CloudflareEnv, url: UR
   const idempotencyKey = request.headers.get('Idempotency-Key');
   if (!idempotencyKey || !GOOGLE_IDEMPOTENCY_KEY.test(idempotencyKey)) return json({ error: '안전한 등록 키가 필요합니다.', code: 'INVALID_IDEMPOTENCY_KEY' }, 400);
   const form = await request.formData().catch(() => null);
-  const file = form?.get('file'); const analysisId = form?.get('analysisId'); const fieldsText = form?.get('fields');
-  if (!(file instanceof File) || typeof analysisId !== 'string' || !PREVIEW_DRAFT_KEY.test(analysisId) || typeof fieldsText !== 'string') return json({ error: '분석한 명함과 확인한 입력값이 필요합니다.', code: 'INVALID_BUSINESS_CARD_REGISTRATION' }, 400);
+  const file = form?.get('file'); const backFile = form?.get('backFile') ?? null; const analysisId = form?.get('analysisId'); const fieldsText = form?.get('fields');
+  if (!(file instanceof File) || (backFile !== null && !(backFile instanceof File)) || typeof analysisId !== 'string' || !PREVIEW_DRAFT_KEY.test(analysisId) || typeof fieldsText !== 'string') return json({ error: '분석한 명함과 확인한 입력값이 필요합니다.', code: 'INVALID_BUSINESS_CARD_REGISTRATION' }, 400);
   let fields: BusinessCardFields | null = null;
   try { fields = parseBusinessCardFields(JSON.parse(fieldsText) as unknown); } catch { fields = null; }
   if (!fields) return json({ error: '이름과 이메일 등 명함 입력값을 다시 확인해 주세요.', code: 'INVALID_BUSINESS_CARD_FIELDS' }, 400);
   try {
     const validated = await validateBusinessCardImage(file);
+    const back = backFile ? await validateBusinessCardImage(backFile) : null;
     const analysis = await env.DB.prepare('SELECT id,source_sha256 AS sourceSha256,gemini_model_code AS modelCode,gemini_credential_source AS credentialSource,extracted_json AS extractedJson,expires_at AS expiresAt,consumed_at AS consumedAt FROM preview_business_card_analyses WHERE id=? AND organization_id=? AND created_by=?')
       .bind(analysisId, PREVIEW_ORGANIZATION_ID, user.id).first<{id:string;sourceSha256:string;modelCode:string;credentialSource:string;extractedJson:string;expiresAt:string;consumedAt:string|null}>();
-    if (!analysis || analysis.consumedAt || analysis.expiresAt <= new Date().toISOString() || analysis.sourceSha256 !== validated.sha256) return json({ error: '분석 세션이 만료되었거나 다른 이미지입니다. 다시 인식해 주세요.', code: 'BUSINESS_CARD_ANALYSIS_EXPIRED' }, 409);
-    const fingerprint = await sha256Hex(`${analysisId}:${validated.sha256}:${JSON.stringify(fields)}`);
+    if (!analysis || analysis.sourceSha256 !== validated.sha256) return json({ error: '분석 세션이 만료되었거나 다른 이미지입니다. 다시 인식해 주세요.', code: 'BUSINESS_CARD_ANALYSIS_EXPIRED' }, 409);
+    const analysisBack = await env.DB.prepare('SELECT source_sha256 AS sourceSha256,original_name AS originalName,mime_type AS mimeType,byte_size AS byteSize FROM preview_business_card_analysis_backs WHERE analysis_id=?').bind(analysisId).first<{sourceSha256:string;originalName:string;mimeType:string;byteSize:number}>();
+    if ((analysisBack?.sourceSha256 ?? null) !== (back?.sha256 ?? null) || (analysisBack && backFile && (analysisBack.originalName !== backFile.name.slice(0,240) || analysisBack.mimeType !== back?.mimeType || analysisBack.byteSize !== backFile.size))) return json({ error: '분석한 뒷면 이미지가 다릅니다. 다시 인식해 주세요.', code: 'BUSINESS_CARD_ANALYSIS_EXPIRED' }, 409);
+    const fingerprint = await sha256Hex(`${analysisId}:${validated.sha256}:${back ? `${back.sha256}:` : ''}${JSON.stringify(fields)}`);
     const existingOperation = await env.DB.prepare('SELECT status,request_fingerprint AS requestFingerprint,card_id AS cardId FROM preview_business_card_operations WHERE organization_id=? AND idempotency_key=?').bind(PREVIEW_ORGANIZATION_ID,idempotencyKey).first<{status:string;requestFingerprint:string;cardId:string|null}>();
     if (existingOperation) {
       if (existingOperation.requestFingerprint !== fingerprint) return json({ error:'등록 키가 다른 명함에 사용되었습니다.',code:'IDEMPOTENCY_MISMATCH' },409);
       if (existingOperation.status === 'SUCCEEDED' && existingOperation.cardId) return json({ cardId:existingOperation.cardId,replay:true,phase:'CF78_GEMINI_BUSINESS_CARD' });
       return json({ error:'동일 명함 등록이 진행 중이거나 확인 대기 중입니다.',code:'BUSINESS_CARD_OPERATION_PENDING' },409);
     }
+    if (analysis.consumedAt || analysis.expiresAt <= new Date().toISOString()) return json({ error: '분석 세션이 만료되었거나 이미 등록되었습니다. 다시 인식해 주세요.', code: 'BUSINESS_CARD_ANALYSIS_EXPIRED' }, 409);
     const duplicate = await env.DB.prepare('SELECT id,name,company FROM preview_business_cards WHERE organization_id=? AND source_sha256=? AND deleted_at IS NULL LIMIT 1').bind(PREVIEW_ORGANIZATION_ID,validated.sha256).first<Record<string,unknown>>();
     if (duplicate) return json({ error:'같은 명함 이미지가 이미 등록되어 있습니다.',code:'BUSINESS_CARD_DUPLICATE',existing:duplicate },409);
     if (!env.DB.batch) return json({ error:'D1 batch is unavailable',code:'D1_BATCH_REQUIRED' },503);
@@ -8899,23 +8914,57 @@ async function handleBusinessCards(request: Request, env: CloudflareEnv, url: UR
     const reserved=await env.DB.prepare("INSERT OR IGNORE INTO preview_business_card_operations (id,organization_id,idempotency_key,request_fingerprint,status,card_id,google_file_id,error_code,created_by,created_at,updated_at) VALUES (?,?,?,?, 'PENDING',?,NULL,NULL,?,?,?)")
       .bind(operationId,PREVIEW_ORGANIZATION_ID,idempotencyKey,fingerprint,cardId,user.id,reservedAt,reservedAt).run();
     if(reserved.meta?.changes!==1)return json({error:'동일 명함 등록 요청이 이미 있습니다.',code:'BUSINESS_CARD_OPERATION_CONFLICT'},409);
+    const uploadedFiles: Array<{side:'front'|'back';fileId:string}> = [];
     try {
+    const locked=await env.DB.prepare('INSERT OR IGNORE INTO preview_business_card_analysis_locks (analysis_id,operation_id) VALUES (?,?)').bind(analysisId,operationId).run();
+    if(locked.meta?.changes!==1){
+      await env.DB.prepare("UPDATE preview_business_card_operations SET status='FAILED',error_code='ANALYSIS_LOCKED',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date().toISOString(),operationId).run();
+      return json({error:'이 명함의 등록이 진행 중이거나 저장 상태 확인을 기다리고 있습니다.',code:'BUSINESS_CARD_OPERATION_PENDING'},409);
+    }
+    const sourceLocked=await env.DB.prepare('INSERT OR IGNORE INTO preview_business_card_source_locks (organization_id,source_sha256,operation_id) VALUES (?,?,?)').bind(PREVIEW_ORGANIZATION_ID,validated.sha256,operationId).run();
+    if(sourceLocked.meta?.changes!==1){
+      await env.DB.prepare('DELETE FROM preview_business_card_analysis_locks WHERE analysis_id=? AND operation_id=?').bind(analysisId,operationId).run();
+      await env.DB.prepare("UPDATE preview_business_card_operations SET status='FAILED',error_code='SOURCE_LOCKED',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date().toISOString(),operationId).run();
+      return json({error:'같은 명함의 등록이 진행 중이거나 저장 상태 확인을 기다리고 있습니다.',code:'BUSINESS_CARD_OPERATION_PENDING'},409);
+    }
+    const duplicateAfterLock=await env.DB.prepare('SELECT id,name,company FROM preview_business_cards WHERE organization_id=? AND source_sha256=? AND deleted_at IS NULL LIMIT 1').bind(PREVIEW_ORGANIZATION_ID,validated.sha256).first<Record<string,unknown>>();
+    if(duplicateAfterLock){
+      await env.DB.batch([env.DB.prepare('DELETE FROM preview_business_card_source_locks WHERE organization_id=? AND source_sha256=? AND operation_id=?').bind(PREVIEW_ORGANIZATION_ID,validated.sha256,operationId),env.DB.prepare('DELETE FROM preview_business_card_analysis_locks WHERE analysis_id=? AND operation_id=?').bind(analysisId,operationId),env.DB.prepare("UPDATE preview_business_card_operations SET status='FAILED',error_code='DUPLICATE',updated_at=? WHERE id=? AND status='PENDING'").bind(new Date().toISOString(),operationId)]);
+      return json({error:'같은 명함 이미지가 이미 등록되어 있습니다.',code:'BUSINESS_CARD_DUPLICATE',existing:duplicateAfterLock},409);
+    }
       const token=await accessToken(env);
       const folder=await ensureClaimCenterFolder(googleFetch(env),{accessToken:token,caseId:BUSINESS_CARD_LIBRARY_ID,kind:'BUSINESS_CARD_LIBRARY',period:'',name:'인맥관리·명함'});
-      const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:folder.id,evidenceId:cardId,fileName:file.name,mimeType:validated.mimeType,sha256:validated.sha256,bytes:validated.bytes,caseId:BUSINESS_CARD_LIBRARY_ID,category:'BUSINESS_CARD',uploadedById:user.id,uploadedAt:reservedAt});
+      const uploaded=await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:folder.id,evidenceId:cardId,fileName:file.name,mimeType:validated.mimeType,sha256:validated.sha256,bytes:validated.bytes,caseId:BUSINESS_CARD_LIBRARY_ID,category:'BUSINESS_CARD',uploadedById:user.id,uploadedAt:reservedAt,operationId});
+      uploadedFiles.push({side:'front',fileId:uploaded.fileId});
+      await env.DB.prepare('INSERT INTO preview_business_card_operation_files (operation_id,side,google_file_id) VALUES (?,?,?)').bind(operationId,'front',uploaded.fileId).run();
+      const backUploaded = back && backFile ? await uploadEvidenceToDrive(googleFetch(env),{accessToken:token,folderId:folder.id,evidenceId:crypto.randomUUID(),fileName:backFile.name,mimeType:back.mimeType,sha256:back.sha256,bytes:back.bytes,caseId:BUSINESS_CARD_LIBRARY_ID,category:'BUSINESS_CARD',uploadedById:user.id,uploadedAt:reservedAt,operationId}) : null;
+      if (backUploaded) {
+        uploadedFiles.push({side:'back',fileId:backUploaded.fileId});
+        await env.DB.prepare('INSERT INTO preview_business_card_operation_files (operation_id,side,google_file_id) VALUES (?,?,?)').bind(operationId,'back',backUploaded.fileId).run();
+      }
+      const frontDriveUrl=uploaded.webViewLink ?? `https://drive.google.com/file/d/${encodeURIComponent(uploaded.fileId)}/view`;
+      const backDriveUrl=backUploaded ? (backUploaded.webViewLink ?? `https://drive.google.com/file/d/${encodeURIComponent(backUploaded.fileId)}/view`) : null;
       const completedAt=new Date(Math.max(Date.now(),Date.parse(reservedAt)+1)).toISOString();
       const results=await env.DB.batch([
         env.DB.prepare('INSERT INTO preview_business_cards (id,organization_id,analysis_id,name,company,department,title,mobile,phone,fax,email,address,website,notes,tags_text,original_name,mime_type,byte_size,source_sha256,google_file_id,google_folder_id,google_drive_url,gemini_model_code,gemini_credential_source,extracted_json,review_confirmed,version,created_by,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1,?,?,?,?)')
-          .bind(cardId,PREVIEW_ORGANIZATION_ID,analysisId,fields.name,fields.company||null,fields.department||null,fields.title||null,fields.mobile||null,fields.phone||null,fields.fax||null,fields.email||null,fields.address||null,fields.website||null,fields.notes||null,fields.tags||null,file.name.slice(0,240),validated.mimeType,file.size,validated.sha256,uploaded.fileId,folder.id,uploaded.webViewLink,analysis.modelCode,analysis.credentialSource,analysis.extractedJson,user.id,user.id,completedAt,completedAt),
+          .bind(cardId,PREVIEW_ORGANIZATION_ID,analysisId,fields.name,fields.company||null,fields.department||null,fields.title||null,fields.mobile||null,fields.phone||null,fields.fax||null,fields.email||null,fields.address||null,fields.website||null,fields.notes||null,fields.tags||null,file.name.slice(0,240),validated.mimeType,file.size,validated.sha256,uploaded.fileId,folder.id,frontDriveUrl,analysis.modelCode,analysis.credentialSource,analysis.extractedJson,user.id,user.id,completedAt,completedAt),
+        ...(back && backFile && backUploaded ? [env.DB.prepare('INSERT INTO preview_business_card_backs (card_id,original_name,mime_type,byte_size,source_sha256,google_file_id,google_drive_url) VALUES (?,?,?,?,?,?,?)').bind(cardId,backFile.name.slice(0,240),back.mimeType,backFile.size,back.sha256,backUploaded.fileId,backDriveUrl)] : []),
         env.DB.prepare('UPDATE preview_business_card_analyses SET consumed_at=? WHERE id=? AND consumed_at IS NULL').bind(completedAt,analysisId),
         env.DB.prepare("UPDATE preview_business_card_operations SET status='SUCCEEDED',google_file_id=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uploaded.fileId,completedAt,operationId),
-        env.DB.prepare("INSERT INTO preview_business_card_events (id,organization_id,card_id,event_type,detail_json,actor_id,created_at) VALUES (?,?,?,'REGISTERED',?,?,?)").bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,cardId,JSON.stringify({modelCode:analysis.modelCode,sourceSha256:validated.sha256,driveFolder:'02_클레임센터/인맥관리·명함'}),user.id,completedAt)
+        env.DB.prepare("INSERT INTO preview_business_card_events (id,organization_id,card_id,event_type,detail_json,actor_id,created_at) VALUES (?,?,?,'REGISTERED',?,?,?)").bind(crypto.randomUUID(),PREVIEW_ORGANIZATION_ID,cardId,JSON.stringify({modelCode:analysis.modelCode,sourceSha256:validated.sha256,backSourceSha256:back?.sha256 ?? null,driveFolder:'02_클레임센터/인맥관리·명함'}),user.id,completedAt),
+        env.DB.prepare('DELETE FROM preview_business_card_source_locks WHERE organization_id=? AND source_sha256=? AND operation_id=?').bind(PREVIEW_ORGANIZATION_ID,validated.sha256,operationId)
       ]) as Array<{meta?:{changes?:number}}>;
       if(results.some((entry)=>entry.meta?.changes!==1))throw new GoogleDriveError('BUSINESS_CARD_METADATA_COMMIT_FAILED',503,'명함 원본은 Drive에 저장됐지만 DB 확인이 필요합니다.',true);
-      return json({card:{id:cardId,...fields,googleDriveUrl:uploaded.webViewLink,createdAt:completedAt},replay:false,driveStored:true,phase:'CF78_GEMINI_BUSINESS_CARD'},201);
+      return json({card:{id:cardId,...fields,googleDriveUrl:frontDriveUrl,backGoogleDriveUrl:backDriveUrl,createdAt:completedAt},replay:false,driveStored:true,phase:'CF78_GEMINI_BUSINESS_CARD'},201);
     } catch(reason) {
-      const uncertain=reason instanceof GoogleDriveError&&reason.uncertain;
-      await env.DB.prepare("UPDATE preview_business_card_operations SET status=?,error_code=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED',new Date().toISOString(),operationId).run().catch(()=>undefined);
+      const uncertain=uploadedFiles.length>0 || (reason instanceof GoogleDriveError&&reason.uncertain);
+      for (const uploaded of uploadedFiles) await env.DB.prepare('INSERT OR IGNORE INTO preview_business_card_operation_files (operation_id,side,google_file_id) VALUES (?,?,?)').bind(operationId,uploaded.side,uploaded.fileId).run().catch(()=>undefined);
+      await env.DB.prepare("UPDATE preview_business_card_operations SET status=?,google_file_id=?,error_code=?,updated_at=? WHERE id=? AND status='PENDING'").bind(uncertain?'RECONCILIATION_REQUIRED':'FAILED',uploadedFiles.find(item=>item.side==='front')?.fileId ?? null,reason instanceof GoogleDriveError?reason.code:'GOOGLE_OPERATION_FAILED',new Date().toISOString(),operationId).run().catch(()=>undefined);
+      if (!uncertain) {
+        await env.DB.prepare('DELETE FROM preview_business_card_source_locks WHERE organization_id=? AND source_sha256=? AND operation_id=?').bind(PREVIEW_ORGANIZATION_ID,validated.sha256,operationId).run().catch(()=>undefined);
+        await env.DB.prepare('DELETE FROM preview_business_card_analysis_locks WHERE analysis_id=? AND operation_id=?').bind(analysisId,operationId).run().catch(()=>undefined);
+      }
+      if (uncertain) return json({error:'Drive에 사진이 일부 저장되었을 수 있어 중복 등록을 막았습니다. 관리자에게 저장 상태 확인을 요청해 주세요.',code:'BUSINESS_CARD_RECONCILIATION_REQUIRED'},503);
       return googleFailure(reason);
     }
   } catch(reason) {

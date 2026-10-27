@@ -7,6 +7,7 @@ import { resolveLoginReturnTo } from './login-return';
 import { isSafeReturnTo, RouterView, type UserRole } from './routes/Router';
 import { ProjectSchedulePrint } from './workflow/ProjectSchedulePrint';
 import { PublicOAuthPages } from './routes/PublicOAuthPages';
+import { BusinessCardCapture } from './routes/BusinessCardTransfer';
 
 interface SessionUser {
   id: string;
@@ -29,8 +30,12 @@ const isSessionUser = (value: unknown): value is SessionUser => {
 
 
 const currentBrowserLocation = () => `${window.location.pathname}${window.location.search}`;
+const hasPendingCardCapture = () => { try { return window.sessionStorage.getItem('claimCardCapturePending') === '1'; } catch { return false; } };
+const markCardCapture = (pending: boolean) => { try { if (pending) window.sessionStorage.setItem('claimCardCapturePending', '1'); else window.sessionStorage.removeItem('claimCardCapturePending'); } catch { /* Storage can be disabled; the current capture still works. */ } };
 
 export const App: React.FC = () => {
+  const [cardCaptureToken, setCardCaptureToken] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get('cardCapture'));
+  const [lostCardCapture, setLostCardCapture] = useState(() => !new URLSearchParams(window.location.hash.slice(1)).get('cardCapture') && hasPendingCardCapture());
   const [currentLocation, setCurrentLocation] = useState(currentBrowserLocation);
   const currentLocationRef = useRef(currentLocation);
   const currentUrl = new URL(currentLocation, window.location.origin);
@@ -49,6 +54,12 @@ export const App: React.FC = () => {
   const [signupNotice, setSignupNotice] = useState('');
   const [signupError, setSignupError] = useState('');
   const [signupForm, setSignupForm] = useState({ loginId:'',displayName:'',email:'',password:'',confirmPassword:'',requestedRole:'staff',requestNote:'' });
+
+  useEffect(() => {
+    if (!cardCaptureToken) return;
+    markCardCapture(true);
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`);
+  }, [cardCaptureToken]);
 
   const navigate = useCallback((path: string, replace = false) => {
     const url = new URL(path, window.location.origin);
@@ -217,6 +228,9 @@ export const App: React.FC = () => {
       </main>
     );
   }
+
+  if (cardCaptureToken) return <BusinessCardCapture token={cardCaptureToken} actorName={session.name} onExit={() => { markCardCapture(false); setCardCaptureToken(null); setLostCardCapture(false); }} />;
+  if (lostCardCapture) return <main className="business-card-capture"><section><h1>명함 촬영 연결이 종료되었습니다</h1><p>새로고침 등으로 연결이 사라졌습니다. PC에서 새 QR을 만들어 다시 스캔해 주세요.</p><Button type="button" onClick={() => { markCardCapture(false); setLostCardCapture(false); }}>클레임센터로 돌아가기</Button></section></main>;
 
   (globalThis as typeof globalThis & { __CLAIM_CENTER_SESSION_USER__?: { id: string; name: string; email: string; organizationId: string; roles: UserRole[] } }).__CLAIM_CENTER_SESSION_USER__ = {
     id: session.id,

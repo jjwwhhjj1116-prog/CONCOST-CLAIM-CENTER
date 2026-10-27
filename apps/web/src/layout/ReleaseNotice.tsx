@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-10-23';
-export const RELEASE_DATE_LABEL = '2026년 10월 23일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v7:${userId}`;
+export const RELEASE_DATE = '2026-10-27';
+export const RELEASE_DATE_LABEL = '2026년 10월 27일';
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v8:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 27일 · 휴대폰 QR 명함 등록',text:'PC에서 QR을 만들고 휴대폰에서 같은 계정으로 로그인해 명함 앞면과 뒷면을 촬영·전송합니다. PC에서 두 면의 Gemini 인식값을 확인하고 수정한 뒤 각각 Drive에 보관합니다. 사진은 전송을 위해 최적화되며 QR 연결은 10분 동안 유효합니다.'},
   {title:'10월 23일 · HWP 글자 위치·잘림 보완',text:'웹에서 작성한 보고서를 HWP로 출력할 때 본문·목록·표 셀의 글자 위치와 줄바꿈을 더 가깝게 유지하도록 보완했습니다. 표지·목차와 본문 경계에서 글자가 잘리던 문제도 수정했습니다. 내려받을 실제 파일을 다시 열어 문장·줄바꿈·위치를 검사하며, 검증을 통과하지 못하면 오류를 표시하고 기존 원고를 유지합니다.'},
   {title:'10월 23일 · 긴 보고서의 HWP 출력',text:'여러 쪽 목차의 행 간격과 목록의 줄 배치를 보존해, 긴 승인본의 HWP 출력이 페이지 증가로 중단되던 문제를 보완했습니다. 고정폭 글꼴은 실제 설치·문자 폭을 확인해 전달하며, 겹친 표 테두리의 셀 폭 중복 계산도 수정했습니다. 승인된 원고·기존 파일은 유지하며, 내용·쪽수 검증에 실패하면 다운로드를 중단합니다.'},
   {title:'10월 23일 · 현장조사·회의 근거의 보고서 연결',text:'저장한 현장조사 원문·요약·후속 일정과 결과 확정 버전을 보고서 AI 작성에 함께 연결합니다. 회의·조사·산출 근거를 사용하는 목차·장 작성은 회사 원문 전송 승인을 확인하고 승인된 회사 Gemini 연결을 사용합니다. 조사 계획 완료와 결과 확정은 별도이며, 저장·확정한 요약만으로 사실·수량·금액이 검증된 것으로 판단하지 않습니다.'},
@@ -64,7 +65,7 @@ export function ReleaseNotice({ open, onClose }: { open: boolean; onClose: () =>
   return <dialog ref={dialogRef} className="release-notice" aria-labelledby="release-notice-title" aria-describedby="release-notice-description" onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <header><div><time dateTime={RELEASE_DATE}>{RELEASE_DATE_LABEL}</time><h2 id="release-notice-title">업데이트 안내</h2></div><button type="button" autoFocus aria-label="업데이트 안내 닫기" onClick={onClose}>×</button></header>
     <div className="release-notice__body">
-      <p id="release-notice-description">10월 23일 테스트서버와 가오픈서버에 동일 소스를 반영했습니다. 프로젝트·제안서의 긴 제목 검색을 보완하고 업무 안내를 갱신했습니다.<br/>아래에는 이번 변경과 이전 개선 이력을 함께 표시합니다. 전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다.</p>
+      <p id="release-notice-description">이번 변경과 이전 개선 이력을 함께 표시합니다. 전체 업무·출력 검수가 모두 완료됐다는 의미는 아닙니다.</p>
       <div className="release-notice__updates">{RELEASE_UPDATES.map((update) => <section key={update.title}><h3>{update.title}</h3><p>{update.text}</p></section>)}</div>
       <aside><strong>사용 전 확인해 주세요</strong><p>AI·Drive는 관리자 연결 설정과 접근 권한에 따라 사용할 수 있습니다. 제안서의 메일 발송 준비 화면은 실제 메일 발송 기능이 아닙니다. 보고서 승인 이메일은 별도 실제 발송 기능이며, 메일 서버 접수와 받은함 도착은 구분합니다. 외부 제출 전 내려받은 문서를 확인해 주세요.</p></aside>
     </div>

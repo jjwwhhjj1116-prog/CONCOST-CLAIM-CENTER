@@ -65,8 +65,8 @@ export async function apiRequest<T>(pathname: string, init: RequestInit & { time
   }
 }
 
-export async function apiDownload(pathname: string): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(`${API_ORIGIN}${pathname}`, { credentials: 'include', headers: requestHeaders({}) });
+export async function apiDownload(pathname: string, headers?: HeadersInit): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch(`${API_ORIGIN}${pathname}`, { credentials: 'include', headers: requestHeaders({ headers }) });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({})) as { error?: string };
     throw new ApiError(response.status, payload.error ?? `HTTP ${response.status}`, payload);

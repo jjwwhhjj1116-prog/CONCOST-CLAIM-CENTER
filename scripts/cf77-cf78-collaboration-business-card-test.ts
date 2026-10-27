@@ -26,16 +26,18 @@ async function setup():Promise<{sql:Database;env:CloudflareEnv}> {
   const now='2026-08-31T00:00:00.000Z';
   sql.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at) VALUES (?,?,?,?,?,?,?,?,1,?)',[ADMIN_ID,'admin@example.invalid','1'.repeat(32),'2'.repeat(64),100000,'관리자','admin@example.invalid','["admin"]',now]);
   for(const name of MIGRATIONS.slice(4))sql.exec(migration(name));
+  sql.exec(migration('0070_business_card_transfers.sql'));
+  sql.exec(migration('0071_business_card_back_images.sql'));
   sql.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at,version) VALUES (?,?,?,?,?,?,?,?,1,?,1)',[STAFF_ID,'staff@example.invalid','3'.repeat(32),'4'.repeat(64),100000,'회원','staff@example.invalid','["staff"]',now]);
   sql.run('INSERT INTO preview_users (id,login_id,password_salt,password_hash,password_iterations,display_name,email,roles_json,is_active,created_at,version) VALUES (?,?,?,?,?,?,?,?,1,?,1)',[PM_ID,'pm@example.invalid','5'.repeat(32),'6'.repeat(64),100000,'현동명','pm@example.invalid','["pm"]',now]);
   for(const [token,id] of [[ADMIN_TOKEN,ADMIN_ID],[STAFF_TOKEN,STAFF_ID]] as const)sql.run('INSERT INTO preview_sessions (id_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)',[await tokenHash(token),id,now,'2099-01-01T00:00:00.000Z']);
   const encrypted=await encryptSecret('refresh-token-cf78',MASTER_KEY,'concost:google-refresh');
   sql.run('INSERT INTO preview_google_credentials (organization_id,encrypted_refresh_token,iv,scope,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)',['concost',encrypted.ciphertextHex,encrypted.ivHex,GOOGLE_DRIVE_SCOPE,ADMIN_ID,now,now]);
-  let uploadedSize=0;let uploadedName='';
+  let uploadedSize=0;let uploadedName='';let uploadCount=0;
   const googleFetch:typeof fetch=async(input,init)=>{
     const target=String(input);const method=init?.method??'GET';
     if(target.includes('/token'))return Response.json({access_token:'access-token-cf78-valid',token_type:'Bearer'});
-    if(target.startsWith(GOOGLE_DRIVE_UPLOAD_API)){const body=init?.body as Blob;const text=await body.text();uploadedName=(text.match(/"name":"([^"]+)"/u)?.[1]??'card.jpg');uploadedSize=100;return Response.json({id:'business_card_file_12345',name:uploadedName,mimeType:'image/jpeg',size:String(uploadedSize),webViewLink:'https://drive.google.com/file/d/business_card_file_12345/view'});}
+    if(target.startsWith(GOOGLE_DRIVE_UPLOAD_API)){const body=init?.body as Blob;const text=await body.text();uploadedName=(text.match(/"name":"([^"]+)"/u)?.[1]??'card.jpg');uploadedSize=100;const id='business_card_file_12345'+(++uploadCount===1?'':`_${uploadCount}`);return Response.json({id,name:uploadedName,mimeType:'image/jpeg',size:String(uploadedSize),webViewLink:`https://drive.google.com/file/d/${id}/view`});}
     const url=new URL(target);if(method==='GET'&&url.pathname.endsWith('/files'))return Response.json({files:[]});
     if(method==='POST'&&url.pathname.endsWith('/files')){const body=JSON.parse(String(init?.body)) as {name:string;mimeType:string};const id=body.name==='CONCOST ERP 그룹웨어'?'concost_root_cf78':body.name==='02_클레임센터'?'claim_center_cf78':'business_cards_cf78';return Response.json({id,name:body.name,mimeType:body.mimeType,trashed:false,parents:[]});}
     return new Response('unexpected google request',{status:500});
@@ -214,6 +216,9 @@ test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the ori
   const listed=await worker.fetch(req('/api/business-cards?q=%ED%99%8D%EA%B8%B8%EB%8F%99',STAFF_TOKEN),env);const cards=(await listed.json() as {cards:Array<{id:string;name:string;version:number;deletedAt:string|null}>}).cards;assert.equal(cards.length,1);assert.equal(cards[0].name,'홍길동');
   const forbidden=await worker.fetch(req(`/api/business-cards/${cards[0].id}`,STAFF_TOKEN,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'ARCHIVE',expectedVersion:cards[0].version})}),env);assert.equal(forbidden.status,403);
   const beforeOriginal=sql.exec('SELECT google_file_id,google_folder_id,google_drive_url,source_sha256,byte_size FROM preview_business_cards WHERE id=?',[cards[0].id])[0].values;
+  sql.exec(migration('0071_business_card_back_images.sql'));sql.exec(migration('0071_business_card_back_images.sql'));
+  assert.deepEqual(sql.exec('SELECT google_file_id,google_folder_id,google_drive_url,source_sha256,byte_size FROM preview_business_cards WHERE id=?',[cards[0].id])[0].values,beforeOriginal);
+  assert.deepEqual(sql.exec('PRAGMA foreign_key_check'),[]);assert.equal(sql.exec('PRAGMA integrity_check')[0].values[0][0],'ok');
   const archived=await worker.fetch(req(`/api/business-cards/${cards[0].id}`,ADMIN_TOKEN,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'ARCHIVE',expectedVersion:cards[0].version})}),env);assert.equal(archived.status,200);
   assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards WHERE deleted_at IS NOT NULL')[0].values[0][0]),1);
   const visible=await worker.fetch(req('/api/business-cards',STAFF_TOKEN),env);
@@ -230,6 +235,130 @@ test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the ori
   assert.deepEqual(sql.exec('SELECT google_file_id,google_folder_id,google_drive_url,source_sha256,byte_size FROM preview_business_cards WHERE id=?',[cards[0].id])[0].values,beforeOriginal);
   assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards WHERE deleted_at IS NULL')[0].values[0][0]),1);
   assert.throws(()=>sql.run('DELETE FROM preview_business_cards'),/PHYSICAL_DELETE_FORBIDDEN/u);sql.close();
+});
+
+test('two-sided business cards analyze both images, reject replacement, and save each Drive original',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const originalGemini=env.GEMINI_TEST_FETCH!; let imageCount=0;
+    env.GEMINI_TEST_FETCH=async(input,init)=>{const payload=JSON.parse(String(init?.body)) as {contents:Array<{parts:Array<{inline_data?:unknown;inlineData?:unknown}>}>};imageCount=payload.contents.flatMap(item=>item.parts).filter(part=>part.inline_data||part.inlineData).length;return originalGemini(input,init);};
+    const frontBytes=new Uint8Array(100);frontBytes.set([0xff,0xd8,0xff,0xe0]);frontBytes.set([0xff,0xd9],98);
+    const backBytes=frontBytes.slice();backBytes[50]=42;
+    const wrongBytes=frontBytes.slice();wrongBytes[50]=77;
+    const originalFront=new File([frontBytes],'front.jpg',{type:'image/jpeg'}),originalBack=new File([backBytes],'back.jpg',{type:'image/jpeg'}),wrong=new File([wrongBytes],'wrong.jpg',{type:'image/jpeg'});
+    const created=await worker.fetch(req('/api/business-cards/transfers',STAFF_TOKEN,{method:'POST'}),env);assert.equal(created.status,201,await created.clone().text());
+    const {token}=await created.json() as {token:string};const transferPath='/api/business-cards/transfers/session';const transferHeaders={'X-Card-Transfer-Token':token};
+    assert.equal((await worker.fetch(req(transferPath,ADMIN_TOKEN,{headers:transferHeaders}),env)).status,404,'another account cannot use QR');
+    const upload=new FormData();upload.set('file',originalFront);upload.set('backFile',originalBack);
+    assert.equal((await worker.fetch(req(`${transferPath}/upload`,STAFF_TOKEN,{method:'POST',headers:transferHeaders,body:upload}),env)).status,200);
+    const frontResponse=await worker.fetch(req(`${transferPath}/photo?side=front`,STAFF_TOKEN,{headers:transferHeaders}),env),backResponse=await worker.fetch(req(`${transferPath}/photo?side=back`,STAFF_TOKEN,{headers:transferHeaders}),env);
+    assert.equal(frontResponse.status,200);assert.equal(backResponse.status,200);
+    const receivedFront=new Uint8Array(await frontResponse.arrayBuffer()),receivedBack=new Uint8Array(await backResponse.arrayBuffer());
+    assert.deepEqual(receivedFront,frontBytes);assert.deepEqual(receivedBack,backBytes);
+    const front=new File([receivedFront],'front.jpg',{type:'image/jpeg'}),back=new File([receivedBack],'back.jpg',{type:'image/jpeg'});
+    assert.equal((await worker.fetch(req(transferPath,STAFF_TOKEN,{method:'DELETE',headers:transferHeaders}),env)).status,200);
+    assert.equal((await worker.fetch(req(transferPath,STAFF_TOKEN,{headers:transferHeaders}),env)).status,404);
+    const google=env.GOOGLE_TEST_FETCH!;const driveBodies:Buffer[]=[];
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{if(String(input).startsWith(GOOGLE_DRIVE_UPLOAD_API)){driveBodies.push(Buffer.from(await (init?.body as Blob).arrayBuffer()));const response=await google(input,init);const data=await response.json() as Record<string,unknown>;delete data.webViewLink;return Response.json(data);}return google(input,init);};
+    const analyzedForm=new FormData();analyzedForm.set('file',front);analyzedForm.set('backFile',back);
+    const analyzed=await worker.fetch(req('/api/business-cards/analyze',STAFF_TOKEN,{method:'POST',body:analyzedForm}),env);
+    assert.equal(analyzed.status,200,await analyzed.clone().text());assert.equal(imageCount,2);
+    const {analysis}=await analyzed.json() as {analysis:{id:string;fields:Record<string,string>;backSourceSha256:string}};
+    assert.equal(analysis.backSourceSha256.length,64);
+    const form=(selected:File|null)=>{const data=new FormData();data.set('file',front);if(selected)data.set('backFile',selected);data.set('analysisId',analysis.id);data.set('fields',JSON.stringify(analysis.fields));return data;};
+    const renamed=new File([backBytes],'renamed.jpg',{type:'image/jpeg'});
+    for(const selected of [wrong,null,renamed]) {const response=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:back-invalid'},body:form(selected)}),env);assert.equal(response.status,409);}
+    assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards')[0].values[0][0]),0);
+    const registered=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:back-valid'},body:form(back)}),env);
+    assert.equal(registered.status,201,await registered.clone().text());
+    assert.equal(driveBodies.length,2);assert.ok(driveBodies[0].includes(Buffer.from(frontBytes)));assert.ok(driveBodies[1].includes(Buffer.from(backBytes)));
+    const {card}=await registered.json() as {card:{id:string;googleDriveUrl:string;backGoogleDriveUrl:string}};
+    const replay=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:back-valid'},body:form(back)}),env);
+    assert.equal(replay.status,200);assert.equal((await replay.json() as {replay:boolean}).replay,true);
+    assert.notEqual(card.googleDriveUrl,card.backGoogleDriveUrl);
+    const row=sql.exec('SELECT source_sha256,google_file_id,google_drive_url FROM preview_business_card_backs WHERE card_id=?',[card.id])[0].values[0];
+    assert.equal(row[0],analysis.backSourceSha256);assert.match(String(row[2]),/business_card_file_12345_2/);
+    assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_card_operation_files')[0].values[0][0]),2);
+    const listed=await (await worker.fetch(req('/api/business-cards',STAFF_TOKEN),env)).json() as {cards:Array<{backGoogleDriveUrl:string}>};
+    assert.equal(listed.cards[0].backGoogleDriveUrl,card.backGoogleDriveUrl);
+    assert.throws(()=>sql.run('DELETE FROM preview_business_card_backs WHERE card_id=?',[card.id]),/BUSINESS_CARD_BACK_IMMUTABLE/);
+  } finally {sql.close();}
+});
+
+test('partial Drive upload is recorded for reconciliation and cannot be retried as a new upload with the same key',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const frontBytes=new Uint8Array(100);frontBytes.set([0xff,0xd8,0xff,0xe0]);const backBytes=frontBytes.slice();backBytes[50]=5;
+    const front=new File([frontBytes],'front.jpg',{type:'image/jpeg'}),back=new File([backBytes],'back.jpg',{type:'image/jpeg'});
+    const input=new FormData();input.set('file',front);input.set('backFile',back);
+    const response=await worker.fetch(req('/api/business-cards/analyze',STAFF_TOKEN,{method:'POST',body:input}),env);assert.equal(response.status,200);
+    const {analysis}=await response.json() as {analysis:{id:string;fields:Record<string,string>}};
+    const previous=env.GOOGLE_TEST_FETCH!;let uploads=0;
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{if(String(input).startsWith(GOOGLE_DRIVE_UPLOAD_API)&&++uploads===2)return new Response('failure',{status:500});return previous(input,init);};
+    const form=()=>{const data=new FormData();data.set('file',front);data.set('backFile',back);data.set('analysisId',analysis.id);data.set('fields',JSON.stringify(analysis.fields));return data;};
+    const request=()=>worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:partial-retry'},body:form()}),env);
+    const first=await request();assert.equal(first.status,503);assert.equal((await first.json() as {code:string}).code,'BUSINESS_CARD_RECONCILIATION_REQUIRED');
+    assert.equal(sql.exec('SELECT status FROM preview_business_card_operations')[0].values[0][0],'RECONCILIATION_REQUIRED');
+    assert.deepEqual(sql.exec('SELECT side,google_file_id FROM preview_business_card_operation_files')[0].values,[['front','business_card_file_12345']]);
+    assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards')[0].values[0][0]),0);
+    assert.equal((await request()).status,409);
+    const anotherKey=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:new-key'},body:form()}),env);
+    assert.equal(anotherKey.status,409);
+    const reanalyzeForm=new FormData();reanalyzeForm.set('file',front);reanalyzeForm.set('backFile',back);
+    const reanalyzed=await worker.fetch(req('/api/business-cards/analyze',STAFF_TOKEN,{method:'POST',body:reanalyzeForm}),env);assert.equal(reanalyzed.status,200);
+    const next=(await reanalyzed.json() as {analysis:{id:string;fields:Record<string,string>}}).analysis;
+    const retryForm=new FormData();retryForm.set('file',front);retryForm.set('backFile',back);retryForm.set('analysisId',next.id);retryForm.set('fields',JSON.stringify(next.fields));
+    const reanalyzedRetry=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:new-analysis'},body:retryForm}),env);
+    assert.equal(reanalyzedRetry.status,409);assert.equal(uploads,2,'neither a new key nor a new analysis may repeat a partially completed upload');
+  } finally {sql.close();}
+});
+
+test('two-sided SQLite migration is repeatable and preserves existing cards and enforces the analyzed back hash',async()=>{
+  const SQL=await initSqlJs();const sql=new SQL.Database();
+  try {
+    sql.exec('PRAGMA foreign_keys=ON; CREATE TABLE BusinessCardAnalysis(id TEXT PRIMARY KEY); CREATE TABLE BusinessCard(id TEXT PRIMARY KEY,analysisId TEXT NOT NULL); CREATE TABLE BusinessCardOperation(id TEXT PRIMARY KEY); INSERT INTO BusinessCardAnalysis VALUES (\'analysis-existing\'); INSERT INTO BusinessCard VALUES (\'card-existing\',\'analysis-existing\');');
+    const script=readFileSync('packages/database/prisma/migrations/20261027100000_business_card_back_images/migration.sql','utf8');sql.exec(script);sql.exec(script);
+    assert.deepEqual(sql.exec('SELECT id,analysisId FROM BusinessCard')[0].values,[['card-existing','analysis-existing']]);
+    sql.run('INSERT INTO BusinessCardAnalysisBack VALUES (?,?,?,?,?)',['analysis-existing','back.jpg','image/jpeg',100,'a'.repeat(64)]);
+    assert.throws(()=>sql.run('INSERT INTO BusinessCardBack VALUES (?,?,?,?,?,?,?)',['card-existing','back.jpg','image/jpeg',100,'b'.repeat(64),'drive_file_12345','https://drive.example']),/BUSINESS_CARD_BACK_MISMATCH/);
+    sql.run('INSERT INTO BusinessCardBack VALUES (?,?,?,?,?,?,?)',['card-existing','back.jpg','image/jpeg',100,'a'.repeat(64),'drive_file_12345','https://drive.example']);
+    assert.throws(()=>sql.run('DELETE FROM BusinessCardBack'),/BUSINESS_CARD_BACK_IMMUTABLE/);
+    assert.deepEqual(sql.exec('PRAGMA foreign_key_check'),[]);assert.equal(sql.exec('PRAGMA integrity_check')[0].values[0][0],'ok');
+  } finally {sql.close();}
+});
+
+test('pre-upload database failure releases only this operation locks and permits safe retry',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const frontBytes=new Uint8Array(100);frontBytes.set([0xff,0xd8,0xff,0xe0]);const backBytes=frontBytes.slice();backBytes[50]=7;
+    const front=new File([frontBytes],'front.jpg',{type:'image/jpeg'}),back=new File([backBytes],'back.jpg',{type:'image/jpeg'});
+    const input=new FormData();input.set('file',front);input.set('backFile',back);
+    const analyzed=await worker.fetch(req('/api/business-cards/analyze',STAFF_TOKEN,{method:'POST',body:input}),env);assert.equal(analyzed.status,200);
+    const {analysis}=await analyzed.json() as {analysis:{id:string;fields:Record<string,string>}};
+    const form=()=>{const data=new FormData();data.set('file',front);data.set('backFile',back);data.set('analysisId',analysis.id);data.set('fields',JSON.stringify(analysis.fields));return data;};
+    const d1=env.DB as unknown as SqlD1, originalPrepare=d1.prepare.bind(d1);let injected=false,uploads=0;
+    d1.prepare=(query:string)=>{if(!injected&&query.startsWith('INSERT OR IGNORE INTO preview_business_card_source_locks')){injected=true;throw new Error('synthetic D1 failure');}return originalPrepare(query);};
+    const google=env.GOOGLE_TEST_FETCH!;env.GOOGLE_TEST_FETCH=async(input,init)=>{if(String(input).startsWith(GOOGLE_DRIVE_UPLOAD_API))uploads++;return google(input,init);};
+    const failed=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:d1-failure'},body:form()}),env);
+    assert.ok(failed.status>=500);assert.equal(uploads,0);assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_card_analysis_locks')[0].values[0][0]),0);assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_card_source_locks')[0].values[0][0]),0);
+    assert.equal(sql.exec('SELECT status FROM preview_business_card_operations')[0].values[0][0],'FAILED');
+    const retried=await worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':'business-card:d1-retry'},body:form()}),env);assert.equal(retried.status,201,await retried.clone().text());assert.equal(uploads,2);
+  } finally {sql.close();}
+});
+
+test('concurrent analyses of the same front image permit only one Drive registration',async()=>{
+  const {sql,env}=await setup();
+  try {
+    const frontBytes=new Uint8Array(100);frontBytes.set([0xff,0xd8,0xff,0xe0]);const backBytes=frontBytes.slice();backBytes[50]=9;
+    const front=new File([frontBytes],'front.jpg',{type:'image/jpeg'}),back=new File([backBytes],'back.jpg',{type:'image/jpeg'});
+    const fresh=()=>{const data=new FormData();data.set('file',front);data.set('backFile',back);return data;};
+    const analyze=async()=>{const r=await worker.fetch(req('/api/business-cards/analyze',STAFF_TOKEN,{method:'POST',body:fresh()}),env);assert.equal(r.status,200);return (await r.json() as {analysis:{id:string;fields:Record<string,string>}}).analysis;};
+    const [one,two]=await Promise.all([analyze(),analyze()]);const original=env.GOOGLE_TEST_FETCH!;let uploads=0;
+    env.GOOGLE_TEST_FETCH=async(input,init)=>{if(String(input).startsWith(GOOGLE_DRIVE_UPLOAD_API)){uploads++;await new Promise(resolve=>setTimeout(resolve,20));}return original(input,init);};
+    const register=(analysis:typeof one,key:string)=>{const body=fresh();body.set('analysisId',analysis.id);body.set('fields',JSON.stringify(analysis.fields));return worker.fetch(req('/api/business-cards',STAFF_TOKEN,{method:'POST',headers:{'Idempotency-Key':key},body}),env);};
+    const results=await Promise.all([register(one,'business-card:concurrent-one'),register(two,'business-card:concurrent-two')]);
+    assert.deepEqual(results.map(result=>result.status).sort(),[201,409]);assert.equal(uploads,2);assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_cards')[0].values[0][0]),1);
+  } finally {sql.close();}
 });
 
 test('CF78 routes and responsive UI expose contacts to members and DB management only to admins',()=>{

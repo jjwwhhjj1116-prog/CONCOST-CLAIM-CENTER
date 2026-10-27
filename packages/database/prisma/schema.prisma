@@ -108,6 +108,7 @@ model Organization {
   businessCardAnalyses       BusinessCardAnalysis[]
   businessCardOperations     BusinessCardOperation[]
   businessCardEvents         BusinessCardEvent[]
+  businessCardTransfers      BusinessCardTransfer[]
 }
 
 model User {
@@ -170,6 +171,7 @@ model User {
   archivedBusinessCards           BusinessCard[]                @relation("BusinessCardDeletedBy")
   createdBusinessCardOperations   BusinessCardOperation[]       @relation("BusinessCardOperationCreatedBy")
   businessCardEvents              BusinessCardEvent[]           @relation("BusinessCardEventActor")
+  businessCardTransfers           BusinessCardTransfer[]
 }
 
 model UserRegistrationRequest {
@@ -595,6 +597,9 @@ model BusinessCardOperation {
   updatedAt          DateTime     @updatedAt
   organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   createdBy          User         @relation("BusinessCardOperationCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  files              BusinessCardOperationFile[]
+  analysisLock       BusinessCardAnalysisLock?
+  sourceLock         BusinessCardSourceLock?
 
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, status, updatedAt])
@@ -617,6 +622,8 @@ model BusinessCardAnalysis {
   organization           Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   createdBy              User          @relation("BusinessCardAnalysisCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   card                   BusinessCard?
+  back                   BusinessCardAnalysisBack?
+  lock                   BusinessCardAnalysisLock?
 
   @@index([createdById, expiresAt, consumedAt])
 }
@@ -661,6 +668,7 @@ model BusinessCard {
   updatedBy              User                 @relation("BusinessCardUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   deletedBy              User?                @relation("BusinessCardDeletedBy", fields: [deletedById], references: [id], onDelete: Restrict)
   events                 BusinessCardEvent[]
+  back                   BusinessCardBack?
 
   @@index([organizationId, deletedAt, name, company, department])
   @@index([createdById, createdAt])
@@ -680,6 +688,79 @@ model BusinessCardEvent {
   actor          User         @relation("BusinessCardEventActor", fields: [actorId], references: [id], onDelete: Restrict)
 
   @@index([cardId, createdAt])
+}
+
+model BusinessCardAnalysisBack {
+  analysisId   String @id
+  originalName String
+  mimeType     String
+  byteSize     Int
+  sourceSha256 String
+  analysis     BusinessCardAnalysis @relation(fields: [analysisId], references: [id], onDelete: Restrict)
+}
+
+model BusinessCardBack {
+  cardId         String @id
+  originalName   String
+  mimeType       String
+  byteSize       Int
+  sourceSha256   String
+  googleFileId   String
+  googleDriveUrl String
+  card           BusinessCard @relation(fields: [cardId], references: [id], onDelete: Restrict)
+}
+
+model BusinessCardOperationFile {
+  operationId  String
+  side         String
+  googleFileId String
+  operation    BusinessCardOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+
+  @@id([operationId, side])
+}
+
+model BusinessCardAnalysisLock {
+  analysisId  String @id
+  operationId String @unique
+  analysis    BusinessCardAnalysis @relation(fields: [analysisId], references: [id], onDelete: Restrict)
+  operation   BusinessCardOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+}
+
+model BusinessCardSourceLock {
+  organizationId String
+  sourceSha256   String
+  operationId    String @unique
+  operation      BusinessCardOperation @relation(fields: [operationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, sourceSha256])
+}
+
+model BusinessCardTransfer {
+  tokenHash      String @id
+  organizationId String
+  actorId        String
+  status         String
+  createdAt      DateTime
+  expiresAt      DateTime
+  uploadedAt     DateTime?
+  uploadNonce    String?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  actor          User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  images         BusinessCardTransferImage[]
+
+  @@index([actorId, expiresAt])
+}
+
+model BusinessCardTransferImage {
+  tokenHash   String
+  side        String
+  ciphertext  String
+  iv          String
+  originalName String
+  mimeType    String
+  transfer    BusinessCardTransfer @relation(fields: [tokenHash], references: [tokenHash], onDelete: Cascade)
+
+  @@id([tokenHash, side])
 }
 
 model ProposalTemplate {
