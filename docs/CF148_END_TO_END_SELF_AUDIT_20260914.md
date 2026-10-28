@@ -1,5 +1,18 @@
 # 의뢰부터 검토 납품까지 자가검수
 
+## 명함 QR 기술본부 대조·실제 연동과 가오픈 검수 오판 수정 — 2026-10-28
+
+- 기술본부 실제 소스 `E:/■ 개발_TF팀/프로젝트일정표(마감)`는 읽기 전용으로 비교했다. 사용자 확인 및 기술본부 209차 실사용 기록의 휴대폰 QR·앞뒤 촬영 성공을 참조했다. 양 제품의 기본 카메라 입력은 `capture=environment`이며 PC USB 연결은 기능의 전제 조건이 아니다. Claim의 fragment/헤더 토큰 및 양면 별도 Drive 저장은 유지했다.
+- 제품 커밋 `19e3f4f647405484590681c59e35daf2288dd263`은 국가번호·괄호·내선 숫자와 뒷면 업무 문구를 원문대로 추출하도록 보강하고 업데이트·도움말을 갱신했다. 기존 지시의 국가번호 누락을 잡는 변경 전 실패 및 관련 23/23 통과, 웹/Worker 타입 검사·빌드·양 환경 dry-run을 확인했다. 승인된 HWP 런타임 28개·manifest SHA를 보존했다. 기존 사용자 22개 삭제·package.json 수정·미추적 자료는 커밋에서 제외했다.
+- 앞선 실제 배포: 개발 Worker `77f19914-ea32-497d-984b-5cba3a647624`, 가오픈 `432ee472-b8f9-4f7f-b628-d57e11eadb76`. 양 서버 각각 실제 46개 자산 SHA, health/readiness 200 및 비인증 명함 API 401을 확인했다. `--keep-vars`, 기존 public vars·DB·서비스·secret 이름 메타데이터를 보존했고 migration·키 갱신은 없었다. secret 원문 일치 검사를 했다는 뜻은 아니다.
+- 실제 개발/가오픈 각각 합성 명함 1건의 정상 로그인→QR 독립 디코딩→모바일 화면 양면 파일 입력→PC 수신→실제 Gemini→이름/메모 수정→Drive 양면 저장→목록 재열기가 통과했다. 실제 휴대폰의 광학 스캔·카메라 촬영은 직접 검수하지 않았으며 `realCamera:false`다. 근거는 continuation의 `output/playwright/tech-card-parity-20261028` 및 `cqa-20261027/card-development-50ff0bff-8dd7-426e-9213-616b3b02670b`, `card-gaopen-bec8224c-30ea-42bc-8828-36562e6bc11d` receipt다.
+- 가오픈 최초 `GEMINI_PRINTED_DETAILS_NOT_PRESERVED`는 검수 조건의 오판으로 확인했다. 정확한 실패 시간창의 유일 합성 미등록 분석 `f14cc39b-076a-4f20-b4fb-bc54812be415`를 D1 SELECT로 읽었고 `rows_written:0`, `changed_db:false`다. 전화·팩스·이름·이메일은 기대 조건과 같고 `개산견적`은 notes, `A동 203호`는 address에 보존됐다. 기존 helper가 notes/tags 안에만 방 번호를 요구해 주소의 올바른 분류를 누락으로 판단했다. raw 공급자 텍스트는 없으며 실제 API 반환과 같은 정규화 필드 객체를 조사했다. 최초 실패 receipt와 원 Wrangler 로그를 보존했고 DB 시각·클라이언트 RUN 시각 차이는 원인 미확정으로 유지했다.
+- QA helper만 주소 필드와 문구 경계를 검사하도록 수정했다. 실제 저장 응답·메모 주소 양성, 주소/업무문구/내선 누락, 팩스·방 번호 변조와 `203호0`·`0A동`·`203호실`·`개산견적서` 음성 등 12개 오프라인 검사를 통과했다. 새 AI 호출·브라우저·등록은 없었고 제품 오류로 과장해 제품 소스나 서버를 다시 배포하지 않았다. 이전 7개 결과와 최초 오판은 별도 보존했다.
+- 이번 새 Drive 4개는 이전에 다운로드 검수한 원본과 다른 파일이다. 개발 앞 `1yWuv8S3g_vBneuMF-8HHFnk4x0d7AQ9x`, 뒤 `1AKiBtRRfikse2OHQ1mTUcB-tW5DLJpi_`; 가오픈 앞 `1tqROC_eGNOEJGvaKRPVfKCfDHkTAFnly`, 뒤 `15YEPiIp8kKMQenQoTWbhkV97leAFqZTx`. 업로드 SHA는 각각 receipt로 연결됐으나 이번 회사 계정 재열기·다운로드 bytes/SHA·일치 여부는 모두 UNKNOWN이다. 기존 원본의 PASS를 이 4개에 대입하지 않는다.
+- 공식 앱 updater는 `26.1023.50603/build22391/prod/up_to_date`였다. 공식 Chrome 확장/Computer Use 안내를 다시 읽었으나 정확한 URL-confidence 안전 종료의 확인된 수정이라고 판단할 근거는 확보하지 못했다. 공식 브라우저 커넥터의 연결 목록 조회도 자동 승인 검토에서 이전 안전 종료를 다른 연결로 우회할 수 있다는 이유로 거절됐다. 재호출·정책 수정·프로필/쿠키 복사·임의 재시작을 하지 않았다. 독립 Drive 커넥터도 회사 계정과 달라 원본 접근을 대체하지 않았다. 수동 작업 요청·계정/암호/권한/키 변경은 없다.
+- 최신 결합 증거: `C:/Users/user-owner/Documents/Codex/2026-10-13/claim-center-continuation/output/playwright/card-readback-recovery-20261028/investigation-proof-v2.json`; 실제 정규화 응답 `first-gaopen-analysis.json`, `recognition-revalidation-v2.json`. 전체 완료가 아니라 QA 오판 수정 완료 / Drive 재열기 검수 차단 상태다. 다음 시작은 공식적으로 허용된 복구를 확보한 뒤 위 4개 exact ID를 회사 계정으로 열어 원본을 내려받고 전체 SHA-256을 대조하는 것이다. 공식 참고: https://learn.chatgpt.com/docs/chrome-extension , https://learn.chatgpt.com/docs/computer-use .
+
+
 ## 명함 QR 휴대폰 전송·양면 등록 — 2026-10-27
 
 - 기술본부 스튜디오의 동일 계정 QR 촬영·PC 수신 흐름을 클레임센터에 적용했다. QR은 10분간 유효하고 토큰은 URL fragment 및 전용 요청 헤더로 전달해 서버 요청 URL에는 넣지 않는다. 암호화된 임시 사진은 계정·토큰·면에 묶이며 전송 후 PC 수신 확인 또는 명시적 닫기에서 삭제한다. 만료 후에는 접근할 수 없고 다음 QR 생성 시 만료 데이터를 정리한다. 기존 키는 변경하지 않는다.
