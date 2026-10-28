@@ -8796,9 +8796,9 @@ async function analyzeBusinessCardImage(env: CloudflareEnv, user: SessionUser, f
   const route = await previewOrganizationGeminiAutomationRoute(env);
   const generated = await generateGeminiContent(env, {
     modelCode: route.modelCode, apiKey: credential.apiKey,
-    system: '당신은 한국어와 영문 명함을 정확하게 구조화하는 회사 인맥관리 보조자입니다. 이미지에서 실제로 보이는 정보만 추출하고 추측하지 마세요. 값이 없거나 불확실하면 빈 문자열로 반환하세요. 전화번호 종류와 이름·회사·부서·직함을 문맥으로 구분하세요.',
+    system: '당신은 한국어와 영문 명함을 정확하게 구조화하는 회사 인맥관리 보조자입니다. 이미지에서 실제로 보이는 정보만 추출하고 추측하지 마세요. 값이 없거나 불확실하면 빈 문자열로 반환하세요. 전화번호 종류와 이름·회사·부서·직함을 문맥으로 구분하세요. 전화·휴대전화·팩스 번호에 붙은 국가번호와 괄호 또는 내선 표기 및 그 숫자는 해당 번호 필드에 보이는 그대로 포함하세요. 뒷면 업무 문구와 숫자도 비슷한 표현으로 바꾸지 말고 실제 보이는 글자만 그대로 옮기세요.',
     parts: [
-      { text: '명함 앞면과 제공된 뒷면의 정보를 함께 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 짧게 정리하고, 개인정보를 새로 추측하지 마세요.' },
+      { text: '명함 앞면과 제공된 뒷면의 정보를 함께 분석해 지정된 JSON 스키마로 반환하세요. notes와 tags는 명함에 명시된 정보만 추출하되 뒷면 업무 문구와 숫자를 그대로 보존하고, 개인정보를 새로 추측하지 마세요.' },
       { inline_data: { mime_type: validated.mimeType, data: bytesToBase64(validated.bytes) } },
       ...(back ? [{ text: '명함 뒷면' }, { inline_data: { mime_type: back.mimeType, data: bytesToBase64(back.bytes) } }] : [])
     ],

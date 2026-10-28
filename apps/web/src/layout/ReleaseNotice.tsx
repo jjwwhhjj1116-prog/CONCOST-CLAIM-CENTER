@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-10-27';
-export const RELEASE_DATE_LABEL = '2026년 10월 27일';
+export const RELEASE_DATE = '2026-10-28';
+export const RELEASE_DATE_LABEL = '2026년 10월 28일';
 const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v8:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 28일 · 명함 번호·뒷면 인식 보강',text:'국가번호·괄호·내선번호와 뒷면 업무 문구·숫자를 보이는 그대로 추출하도록 명함 인식 지시를 보강했습니다. 인식값은 앞면과 뒷면 원본에 대조해 확인·수정한 뒤 등록하세요. 양면 사진은 기존처럼 각각 Drive에 보관됩니다.'},
   {title:'10월 27일 · 휴대폰 QR 명함 등록',text:'PC에서 QR을 만들고 휴대폰에서 같은 계정으로 로그인해 명함 앞면과 뒷면을 촬영·전송합니다. PC에서 두 면의 Gemini 인식값을 확인하고 수정한 뒤 각각 Drive에 보관합니다. 사진은 전송을 위해 최적화되며 QR 연결은 10분 동안 유효합니다.'},
   {title:'10월 23일 · HWP 글자 위치·잘림 보완',text:'웹에서 작성한 보고서를 HWP로 출력할 때 본문·목록·표 셀의 글자 위치와 줄바꿈을 더 가깝게 유지하도록 보완했습니다. 표지·목차와 본문 경계에서 글자가 잘리던 문제도 수정했습니다. 내려받을 실제 파일을 다시 열어 문장·줄바꿈·위치를 검사하며, 검증을 통과하지 못하면 오류를 표시하고 기존 원고를 유지합니다.'},
   {title:'10월 23일 · 긴 보고서의 HWP 출력',text:'여러 쪽 목차의 행 간격과 목록의 줄 배치를 보존해, 긴 승인본의 HWP 출력이 페이지 증가로 중단되던 문제를 보완했습니다. 고정폭 글꼴은 실제 설치·문자 폭을 확인해 전달하며, 겹친 표 테두리의 셀 폭 중복 계산도 수정했습니다. 승인된 원고·기존 파일은 유지하며, 내용·쪽수 검증에 실패하면 다운로드를 중단합니다.'},

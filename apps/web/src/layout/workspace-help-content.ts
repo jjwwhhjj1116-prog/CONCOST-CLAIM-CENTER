@@ -91,7 +91,7 @@ export const WORKSPACE_TUTORIAL_STEPS: readonly TutorialStep[] = [
   },
   {
     eyebrow: 'CONTACTS · 인맥관리', title: '명함 사진을 확인 가능한 인맥 데이터로 바꿉니다.',
-    explanation: 'PC의 QR을 휴대폰으로 스캔하고 같은 계정으로 로그인해 명함 앞면과 뒷면을 촬영해 보내세요. 두 사진은 전송을 위해 최적화되며 Gemini 인식 후 사람이 확인한 뒤 각각 회사 Google Drive에 저장됩니다.',
+    explanation: 'PC의 QR을 휴대폰으로 스캔하고 같은 계정으로 로그인해 명함 앞면과 뒷면을 촬영해 보내세요. 두 사진은 전송을 위해 최적화되며 Gemini 인식 후 국가번호·내선번호와 뒷면 업무 문구도 원본에 대조해 확인·수정한 뒤 각각 회사 Google Drive에 저장됩니다.',
     tasks: ['PC에서 휴대폰 촬영 QR 생성', '같은 계정으로 로그인해 앞면·뒷면 촬영 후 전송', 'PC에서 Gemini 인식값을 양면과 대조·수정', '확인 후 Drive 저장·인맥 등록'],
     completion: '인맥관리 검색에서 앞면과 뒷면의 Drive 링크가 보이면 완료입니다.', path: '/contacts/cards/new', pathLabel: '명함등록 열기',
     targetSelectors: ['.business-card-drop', '.business-card-register-grid button', '.business-card-form', '.business-card-register-actions']

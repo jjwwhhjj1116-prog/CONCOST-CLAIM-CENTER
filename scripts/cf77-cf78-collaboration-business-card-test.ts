@@ -240,8 +240,17 @@ test('CF78 analyzes with Gemini, requires human-confirmed fields, stores the ori
 test('two-sided business cards analyze both images, reject replacement, and save each Drive original',async()=>{
   const {sql,env}=await setup();
   try {
-    const originalGemini=env.GEMINI_TEST_FETCH!; let imageCount=0;
-    env.GEMINI_TEST_FETCH=async(input,init)=>{const payload=JSON.parse(String(init?.body)) as {contents:Array<{parts:Array<{inline_data?:unknown;inlineData?:unknown}>}>};imageCount=payload.contents.flatMap(item=>item.parts).filter(part=>part.inline_data||part.inlineData).length;return originalGemini(input,init);};
+    const originalGemini=env.GEMINI_TEST_FETCH!; let imageCount=0, requestedInstructions='';
+    const printedContact={mobile:'+82 (0)10-0000-0000',phone:'+82 (0)2-0000-0000 (내선 123)',fax:'+82 (0)2-0000-0001',notes:'개산견적 · A동 203호'};
+    env.GEMINI_TEST_FETCH=async(input,init)=>{
+      const payload=JSON.parse(String(init?.body)) as {system_instruction:{parts:Array<{text:string}>};contents:Array<{parts:Array<{text?:string;inline_data?:unknown;inlineData?:unknown}>}>};
+      imageCount=payload.contents.flatMap(item=>item.parts).filter(part=>part.inline_data||part.inlineData).length;
+      requestedInstructions=payload.system_instruction.parts.map(part=>part.text).join('\n')+'\n'+payload.contents.flatMap(item=>item.parts).map(part=>part.text??'').join('\n');
+      const result=await originalGemini(input,init);const data=await result.json() as {candidates:Array<{content:{parts:Array<{text:string}>}}>};
+      const fields=JSON.parse(data.candidates[0].content.parts[0].text) as Record<string,string>;
+      data.candidates[0].content.parts[0].text=JSON.stringify({...fields,...printedContact});
+      return Response.json(data);
+    };
     const frontBytes=new Uint8Array(100);frontBytes.set([0xff,0xd8,0xff,0xe0]);frontBytes.set([0xff,0xd9],98);
     const backBytes=frontBytes.slice();backBytes[50]=42;
     const wrongBytes=frontBytes.slice();wrongBytes[50]=77;
@@ -264,6 +273,8 @@ test('two-sided business cards analyze both images, reject replacement, and save
     const analyzed=await worker.fetch(req('/api/business-cards/analyze',STAFF_TOKEN,{method:'POST',body:analyzedForm}),env);
     assert.equal(analyzed.status,200,await analyzed.clone().text());assert.equal(imageCount,2);
     const {analysis}=await analyzed.json() as {analysis:{id:string;fields:Record<string,string>;backSourceSha256:string}};
+    for(const instruction of ['국가번호','괄호','내선','뒷면 업무 문구','그대로'])assert.ok(requestedInstructions.includes(instruction),`recognition must preserve printed ${instruction}`);
+    for(const [field,value] of Object.entries(printedContact))assert.equal(analysis.fields[field],value);
     assert.equal(analysis.backSourceSha256.length,64);
     const form=(selected:File|null)=>{const data=new FormData();data.set('file',front);if(selected)data.set('backFile',selected);data.set('analysisId',analysis.id);data.set('fields',JSON.stringify(analysis.fields));return data;};
     const renamed=new File([backBytes],'renamed.jpg',{type:'image/jpeg'});
@@ -279,6 +290,7 @@ test('two-sided business cards analyze both images, reject replacement, and save
     const row=sql.exec('SELECT source_sha256,google_file_id,google_drive_url FROM preview_business_card_backs WHERE card_id=?',[card.id])[0].values[0];
     assert.equal(row[0],analysis.backSourceSha256);assert.match(String(row[2]),/business_card_file_12345_2/);
     assert.equal(Number(sql.exec('SELECT COUNT(*) FROM preview_business_card_operation_files')[0].values[0][0]),2);
+    assert.deepEqual(sql.exec('SELECT mobile,phone,fax,notes FROM preview_business_cards WHERE id=?',[card.id])[0].values[0],Object.values(printedContact));
     const listed=await (await worker.fetch(req('/api/business-cards',STAFF_TOKEN),env)).json() as {cards:Array<{backGoogleDriveUrl:string}>};
     assert.equal(listed.cards[0].backGoogleDriveUrl,card.backGoogleDriveUrl);
     assert.throws(()=>sql.run('DELETE FROM preview_business_card_backs WHERE card_id=?',[card.id]),/BUSINESS_CARD_BACK_IMMUTABLE/);
