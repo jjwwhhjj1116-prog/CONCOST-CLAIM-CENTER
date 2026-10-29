@@ -111,11 +111,11 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
   if (suspended) return null;
   const localSources = assistantGuides(pendingRequest?.question ?? (question || '처음 작업 순서'), pendingRequest?.routeId ?? routeId);
   return <>
-    <button ref={launcher} className="workspace-assistant-launcher" type="button" aria-label="AI 업무 도우미" title="AI 업무 도우미 열기" aria-haspopup="dialog" aria-expanded={open} aria-controls="workspace-assistant-panel" onClick={() => setOpen(!open)}>
-      <ChatIcon /><span aria-hidden="true">AI</span>
+    <button ref={launcher} className="workspace-assistant-launcher" type="button" aria-label="업무 도우미" title="업무 도우미 열기" aria-haspopup="dialog" aria-expanded={open} aria-controls="workspace-assistant-panel" onClick={() => setOpen(!open)}>
+      <ChatIcon /><span aria-hidden="true">?</span>
     </button>
-    {open && <aside ref={panel} id="workspace-assistant-panel" className="workspace-assistant-panel" role="dialog" aria-modal={mobile ? true : undefined} aria-label="AI 업무 도우미">
-      <header><div className="workspace-assistant-heading"><ChatIcon /><div><h2>AI 업무 도우미</h2><p>클레임 업무, 무엇이 궁금하세요?</p></div></div><button type="button" aria-label="AI 업무 도우미 닫기" onClick={close}>×</button></header>
+    {open && <aside ref={panel} id="workspace-assistant-panel" className="workspace-assistant-panel" role="dialog" aria-modal={mobile ? true : undefined} aria-label="업무 도우미">
+      <header><div className="workspace-assistant-heading"><ChatIcon /><div><h2>업무 도우미</h2><p>매뉴얼·프로젝트 상태 자동 안내</p></div></div><button type="button" aria-label="업무 도우미 닫기" onClick={close}>×</button></header>
       <details className="workspace-assistant-context">
         <summary>프로젝트 연결 <span>{projects.find(project => project.id === caseId)?.caseNumber ?? '선택 사항'}</span></summary>
         <div className="workspace-assistant-context-fields">
@@ -127,10 +127,10 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
         </div>
       </details>
       <div className="workspace-assistant-conversation" role="log" aria-label="질문과 답변" aria-live="polite" aria-busy={busy}>
-        {!messages.length && !pendingRequest && <div className="workspace-assistant-welcome"><div className="workspace-assistant-bubble"><strong>AI 업무 도우미</strong><p>안녕하세요. 의뢰부터 결재·출력까지, 현재 매뉴얼을 찾아 안내해 드릴게요.</p><p>궁금한 업무를 질문하거나 아래 질문을 선택해 보세요.</p></div><div className="workspace-assistant-suggestions">{suggestions.map(value => <button type="button" key={value} disabled={busy} onClick={() => { setQuestion(value); void send(value); }}>{value}</button>)}</div></div>}
+        {!messages.length && !pendingRequest && <div className="workspace-assistant-welcome"><div className="workspace-assistant-bubble"><strong>업무 도우미</strong><p>안녕하세요. 외부 AI 호출 없이 의뢰부터 결재·출력까지 정해진 매뉴얼로 안내해 드릴게요.</p><p>궁금한 업무를 질문하거나 아래 질문을 선택해 보세요.</p></div><div className="workspace-assistant-suggestions">{suggestions.map(value => <button type="button" key={value} disabled={busy} onClick={() => { setQuestion(value); void send(value); }}>{value}</button>)}</div></div>}
         {messages.map(message => <article className="workspace-assistant-answer" key={message.id}>
           <div className="workspace-assistant-user"><small>나</small><p>{message.question}</p></div>
-          <div className="workspace-assistant-bubble"><strong>AI 업무 도우미</strong><small>{message.reply.mode === 'AI' ? 'AI 매뉴얼 안내' : '매뉴얼·저장 상태 안내'} · {message.reply.manualVersion}</small>
+          <div className="workspace-assistant-bubble"><strong>업무 도우미</strong><small>매뉴얼 자동 안내 · {message.reply.manualVersion}</small>
           <p className="workspace-assistant-answer-text">{message.reply.answer}</p>
           {message.reply.notice && <p className="workspace-assistant-notice" role="status">{message.reply.notice}</p>}
           {message.reply.snapshot && <details className="workspace-assistant-facts" aria-label="실제 서버 저장 상태"><summary>내 프로젝트 저장 상태 · {message.reply.snapshot.caseNumber}</summary><strong>{message.reply.snapshot.title}</strong><ul>{assistantFacts(message.reply.snapshot).map(fact => <li key={fact}>{fact}</li>)}</ul><small>조회 {new Date(message.reply.observedAt).toLocaleString('ko-KR')} · 화면 미저장 입력 제외</small></details>}
@@ -147,7 +147,7 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
         <label htmlFor="workspace-assistant-question"><span>업무 질문</span><textarea id="workspace-assistant-question" ref={input} value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} maxLength={600} rows={2} placeholder="궁금한 업무를 물어보세요…" /></label>
         <div><small>{question.length}/600</small><button type="submit" disabled={busy || !question.trim()}>{busy ? '답변 확인 중…' : '질문 보내기'}</button></div>
         <p>비밀번호·키·고객 원문은 입력하지 마세요.</p>
-        <details className="workspace-assistant-privacy"><summary>질문 전송·업무 처리 안내</summary><p>질문과 관련 매뉴얼을 회사 AI로 전송합니다. 프로젝트 본문은 자동 전송하지 않으며, 저장·상신·승인은 기존 화면에서 진행합니다.</p></details>
+        <details className="workspace-assistant-privacy"><summary>질문 전송·업무 처리 안내</summary><p>질문은 클레임센터 서버에서 매뉴얼 규칙으로 처리하며 외부 AI에 전송하지 않습니다. 도우미는 Gemini 키 없이 사용할 수 있고 AI API 사용료가 발생하지 않습니다. 프로젝트 상태는 본인 배정 자료의 서버 저장본만 조회합니다. 저장·상신·승인은 기존 화면에서 진행합니다.</p></details>
       </form>
     </aside>}
     {hint && !open && <div className="workspace-assistant-location" role="status"><p>{hint}</p><button type="button" onClick={() => { setHint(''); setPendingGuide(null); }}>위치 안내 닫기</button></div>}

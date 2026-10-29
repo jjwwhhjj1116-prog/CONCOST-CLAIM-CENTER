@@ -1,7 +1,7 @@
 .workspace-assistant-launcher { position: fixed; right: 20px; bottom: 18px; z-index: 800; display: flex; align-items: center; justify-content: center; width: 58px; height: 58px; padding: 0; border: 1px solid #315b83; border-radius: 50%; background: #204b74; color: #fff; font: inherit; font-weight: 700; cursor: pointer; box-shadow: 0 5px 18px #152f4533; }
 .workspace-assistant-launcher svg { width: 29px; height: 29px; }
 .workspace-assistant-launcher > span { position: absolute; right: 7px; bottom: 7px; padding: 1px 3px; border-radius: 4px; background: #fff; color: #204b74; font-size: 10px; line-height: 1.2; }
-.workspace-tutorial-coach__bar button[aria-label='AI 업무 도우미 열기'] { min-height: 44px; min-width: 64px; }
+.workspace-tutorial-coach__bar button[aria-label='업무 도우미 열기'] { min-height: 44px; min-width: 64px; }
 .workspace-assistant-launcher[aria-expanded='true'] { visibility: hidden; }
 .workspace-assistant-panel { position: fixed; z-index: 810; right: 20px; bottom: 20px; width: min(420px, calc(100vw - 40px)); height: min(720px, calc(100dvh - 40px)); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color, #b9cddd); border-radius: 16px; background: var(--surface-raised, #fff); color: var(--text-primary, #19334d); box-shadow: 0 10px 40px #152f4533; font-size: 14px; }
 .workspace-assistant-panel > header { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 16px; background: #204b74; color: #fff; }

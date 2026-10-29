@@ -4,7 +4,7 @@ import { CATEGORY_HELP, ROUTE_HELP, WORKSPACE_TUTORIAL_STEPS } from './workspace
 export const ASSISTANT_MANUAL_VERSION = '2026-10-29';
 export const ASSISTANT_ROUTES = [
   ['DASH-01', '/dashboard', 'home', '시작 처음 순서 사용법 작업 업무'],
-  ['CASE-02', '/cases/new', 'proposal', '의뢰 등록 클라이언트'],
+  ['CASE-02', '/cases/new', 'proposal', '의뢰 의뢰등록 프로젝트등록 사건등록 새프로젝트 클라이언트'],
   ['PROP-02', '/proposals/editor', 'proposal', '제안서 견적'],
   ['WF-02', '/workflow/award', 'proposal', '접수 수주 계약'],
   ['PROJ-01', '/projects/schedule', 'work', '일정 기간 담당 PM'],
@@ -14,22 +14,23 @@ export const ASSISTANT_ROUTES = [
   ['REPO-02', '/reports/studio', 'work', '보고서 HWP DOCX PDF 한글 워드 가져오기 불러오기 출력 저장 복구 목차 챕터'],
   ['APPR-01', '/approval', 'quality', '결재 승인 상신 검토 반려'],
   ['WL-01', '/projects/worklogs', 'work', '일일 업무일지 일지'],
-  ['WL-02', '/projects/worklogs/weekly', 'work', '주간 정기 금요일 월요일'],
+  ['WL-02', '/projects/worklogs/weekly', 'work', '주간 주간업무일지 주간일지 정기 금요일 월요일'],
   ['CASE-06', '/cases/files', 'library', '드라이브 Drive 자료 파일'],
   ['CONTACT-02', '/contacts/cards/new', 'library', '명함 QR 촬영 앞면 뒷면 인식'],
-  ['MY-01', '/settings', 'settings', '설정 연결 API 키']
+  ['MY-01', '/settings', 'settings', '설정 연결 API 개인키 회사키 Gemini 제미나이']
 ] as const;
 export interface AssistantGuide { id: string; path: string; title: string; steps: readonly string[]; next: string }
 export function assistantGuides(question: string, routeId: string): AssistantGuide[] {
   const normalized = question.toLocaleLowerCase().replace(/\s+/gu, '');
-  return ASSISTANT_ROUTES.map(([id, path, category, keywords]) => {
+  const ranked = ASSISTANT_ROUTES.map(([id, path, category, keywords]) => {
     const guide = ROUTE_HELP[id];
     const tutorial = WORKSPACE_TUTORIAL_STEPS.find(step => step.path === path);
     return { id, path, title: guide?.title ?? CATEGORY_HELP[category].title,
       steps: id === 'DASH-01' ? WORKSPACE_TUTORIAL_STEPS.map(step => `${step.title} ${step.tasks.join(' → ')} ${step.completion}`) : guide?.steps ?? (tutorial ? [tutorial.explanation, ...tutorial.tasks] : CATEGORY_HELP[category].actions),
       next: guide?.next ?? tutorial?.completion ?? '',
-      score: keywords.split(' ').reduce((sum, word) => sum + (normalized.includes(word.toLocaleLowerCase()) ? 2 : 0), 0) + (id === routeId ? 1 : 0) };
-  }).sort((a, b) => b.score - a.score).slice(0, 3).map(({ score: _score, ...guide }) => guide);
+      score: Math.max(0, ...keywords.split(' ').map(word => normalized.includes(word.toLocaleLowerCase()) ? word.length * 2 : 0)) + (id === routeId ? 1 : 0) };
+  }).sort((a, b) => b.score - a.score);
+  return ranked.filter(guide => !normalized || guide.score > (guide.id === routeId ? 1 : 0)).slice(0, 3).map(({ score: _score, ...guide }) => guide);
 }
 export function assistantPath(guide: AssistantGuide, caseId: string | null): string {
   if (!caseId || ['DASH-01', 'CASE-02', 'CONTACT-02', 'MY-01', 'APPR-01'].includes(guide.id)) return guide.path;
@@ -72,6 +73,6 @@ export function assistantFacts(snapshot: AssistantSnapshot): string[] {
   return facts;
 }
 export interface AssistantReply {
-  answer: string; mode: 'AI' | 'MANUAL'; notice?: string; observedAt: string; manualVersion: string;
+  answer: string; mode: 'MANUAL'; notice?: string; observedAt: string; manualVersion: string;
   sources: AssistantGuide[]; snapshot: AssistantSnapshot | null;
 }

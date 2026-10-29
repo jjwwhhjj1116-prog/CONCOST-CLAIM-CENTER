@@ -9009,16 +9009,8 @@ const worker = {
       if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
       if (!env.DB) return json({ error: '프로젝트 조회를 준비하고 있습니다.' }, 503);
       return handleWorkspaceAssistant(request, {
-        db: env.DB, organizationId: PREVIEW_ORGANIZATION_ID, userId: user.id,
-        generate: async (system, input) => {
-          const governance = await workflowAiGovernance(env);
-          if (!governance.confidentialEnabled || !['PAID_NO_PRODUCT_IMPROVEMENT', 'VERTEX_AI_ENTERPRISE'].includes(governance.serviceTier)) return { notice: '회사 AI 전송 정책이 확인되지 않아 매뉴얼 원문으로 안내합니다. 프로젝트 상태 조회는 계속 사용할 수 있습니다.' };
-          const credential = await resolveOrganizationAiCredential(env, 'GEMINI');
-          if (!credential) return { notice: '회사 AI 연결이 없어 매뉴얼 원문으로 안내합니다.' };
-          const route = await previewOrganizationGeminiAutomationRoute(env);
-          const generated = await generateGeminiContent(env, { modelCode: route.modelCode, apiKey: credential.apiKey, system, parts: [{ text: redactExternalAiText(input).text }], reasoningEffort: 'low', maxOutputTokens: 600, timeoutMs: 20_000, responseMimeType: 'application/json', responseSchema: { type: 'OBJECT', required: ['sourceId', 'stepIndexes'], properties: { sourceId: { type: 'STRING' }, stepIndexes: { type: 'ARRAY', items: { type: 'INTEGER' } } } }, unavailableCode: 'WORKSPACE_ASSISTANT_UNAVAILABLE', unavailableLabel: 'AI 업무 도우미' });
-          return generated.response ? { notice: '회사 AI 연결 응답을 확인하지 못해 매뉴얼 원문으로 안내합니다. 잠시 후 다시 질문하세요.' } : { content: generated.content };
-        }
+        db: env.DB, organizationId: PREVIEW_ORGANIZATION_ID, userId: user.id
+
       }).catch(() => json({ error: '도우미 조회에 실패했습니다. 기존 작업은 유지됩니다. 잠시 후 다시 시도하세요.' }, 503));
     }
 

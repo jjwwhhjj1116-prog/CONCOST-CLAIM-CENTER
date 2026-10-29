@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-10-29';
 export const RELEASE_DATE_LABEL = '2026년 10월 29일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v10:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v11:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -15,7 +15,7 @@ export function markReleaseSeen(userId: string): void {
 export const RELEASE_UPDATES = [
   {title:'10월 29일 · 챗봇 팝업 대화창',text:'오른쪽 아래 원형 챗봇 아이콘을 누르면 팝업 채팅창이 열립니다. 질문과 답변을 말풍선으로 보고, 프로젝트 연결·서버 저장 상태·참고 매뉴얼은 필요할 때 펼쳐 확인하세요. Enter로 질문을 보내고 Shift+Enter로 줄을 바꿉니다. 저장·상신·승인은 기존 업무 화면에서 직접 진행합니다.'},
   {title:'10월 29일 · 개인 Gemini 연결 복구',text:'일반 직원의 개인 설정에서 모델 목록이 비어 키 저장을 누를 수 없던 문제를 수정했습니다. 개인 키를 암호화 저장한 뒤 연결 확인 모델을 선택해 확인하세요. 모델 선택은 연결 시험에만 적용되며 글쓰기 모델은 회사 설정을 따릅니다. 회사 원문 전송 승인·관리자 전용 설정·개인키 소유자 보호는 유지합니다.'},
-  {title:'10월 29일 · AI 업무 도우미',text:'오른쪽 아래 AI 업무 도우미에서 최신 매뉴얼에 근거한 사용법을 묻고 본인 배정 프로젝트의 서버 저장·결재·확정 상태를 조회합니다. 참고 매뉴얼을 펼쳐 해당 화면으로 이동하거나 버튼 위치를 확인하세요. 프로젝트 본문은 자동으로 AI에 보내지 않으며 저장·상신·승인은 기존 절차를 유지합니다. AI 연결·전송 정책을 확인하지 못하면 매뉴얼 원문을 표시합니다. 모바일에서도 같은 기능을 이용할 수 있습니다.'},
+  {title:'10월 29일 · 업무 도우미 자동 안내',text:'사용법·본인 프로젝트 상태·화면 이동은 외부 AI 호출 없이 등록된 매뉴얼과 서버 조회로 안내합니다. 도우미에는 Gemini 키나 AI API 사용료가 필요하지 않습니다. 매뉴얼에 없는 질문은 확인되지 않았다고 표시하고, 저장·상신·승인은 기존 절차를 유지합니다. 보고서 작성 등 다른 AI 기능의 연결과 사용 기준은 그대로입니다.'},
   {title:'10월 28일 · 명함 번호·뒷면 인식 보강',text:'국가번호·괄호·내선번호와 뒷면 업무 문구·숫자를 보이는 그대로 추출하도록 명함 인식 지시를 보강했습니다. 인식값은 앞면과 뒷면 원본에 대조해 확인·수정한 뒤 등록하세요. 양면 사진은 기존처럼 각각 Drive에 보관됩니다.'},
   {title:'10월 27일 · 휴대폰 QR 명함 등록',text:'PC에서 QR을 만들고 휴대폰에서 같은 계정으로 로그인해 명함 앞면과 뒷면을 촬영·전송합니다. PC에서 두 면의 Gemini 인식값을 확인하고 수정한 뒤 각각 Drive에 보관합니다. 사진은 전송을 위해 최적화되며 QR 연결은 10분 동안 유효합니다.'},
   {title:'10월 23일 · HWP 글자 위치·잘림 보완',text:'웹에서 작성한 보고서를 HWP로 출력할 때 본문·목록·표 셀의 글자 위치와 줄바꿈을 더 가깝게 유지하도록 보완했습니다. 표지·목차와 본문 경계에서 글자가 잘리던 문제도 수정했습니다. 내려받을 실제 파일을 다시 열어 문장·줄바꿈·위치를 검사하며, 검증을 통과하지 못하면 오류를 표시하고 기존 원고를 유지합니다.'},
