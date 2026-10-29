@@ -1879,3 +1879,8 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 예행수집기의Node SQLite row prototype 비교오류는remote SQL전에검출되어실데이터쓰기0/기존Worker복원. Cloudflare export10001은실제서비스내부오류로원본로그보존후bounded재시도. D1 execute --file의progress+JSON수집오류에서는실제단일SQL의성공을서명백업예행대비전체row/schema로검증하고SQL재전송0. D1 meta.changes의내부import bookkeeping을QA건수로세지않고실제application행12/10으로확정. 이수집실패는제품/업무원문손상으로분류하지않는다.
 - 기존QA고정상신26개·생성원문11개·Drive원본은보존되어별도원본검수증거를지우지않음. 삭제QA를향후준비helper로재생성하지말것. 주말/Monday양성검수는삭제된QA대상으로성립하지않으므로미완료로보존하고성공으로보고하지않는다. 실제생산정기설정·계정·키·다른예약은변경하지않았다.
 - 최종증거: `continuation/output/playwright/qa-cleanup-20261029/verification-summary.json`, 양서버full-preservation.json, actualUI조회로그/이미지, signed private backups. source회귀65 PASS와선행CF29fixture실패를구분한다. 실물phone/native키보드/독립Word·한컴전체/월요일실예약을이번정리로완료처리하지않는다.
+
+
+### Drive 원본 감시 조용한 재확인 — 2026-10-29 17:17 KST 트리거
+
+- 최신 QA 정리 후에도 대상 명함의 Drive ID·업로드 SHA·receipt 해시는 보존되어 감시 목표는 유효하다. 공식 설정/driver 문서를 실제 열었으나 이 PC의 URL 판별 안전 중단을 해소했다는 구체 근거는 확보하지 못했다. changelog 수집은 크기/형식/404 제한이 있어 공식 수정이 없다고 단정하지 않는다. 앱 업데이트 반복조회·브라우저/native 초기화·다른 도구 우회·다운로드·키/권한 변경·제품 재배포0. 회사 계정 재열기/실다운로드 해시4개 모두 UNKNOWN 유지. 증거: continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261029-0817.json. 사용자 중간 보고·수동 요청 없이 기존 감시를 유지한다.
