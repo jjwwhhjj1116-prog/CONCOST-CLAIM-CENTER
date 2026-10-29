@@ -1810,3 +1810,15 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 실제 격리 Chrome 1440x1000/390x844 + 동일 Worker + 인메모리 SQL + 모의 Gemini에서 개인 저장2/연결2, 409 입력 유지, 재열기 키 원문 비표시, 직원 admin API0 PASS. 관리자 개인 시험 모델 변경 전후 조직 선택·기존 dirty 상태 불변, 개인 시험만 선택 모델 사용, 관리자 모델 쓰기0 PASS. 첫 admin QA의 dirty 버튼0 가정은 오래된 합성 route가 이미 dirty였기 때문이며 원본 실패를 보존하고 전후 동일성으로 고쳤다. 실물 휴대폰/실제 개인 API키 공급자 응답으로 확대하지 않는다.
 - 배포 전 기존 이경훈 정상 UI 로그인으로 양 서버 개인 모델0/저장 disabled를 재현했다. 합성 입력은 전송 없이 원복했고 자격증명 상태 해시를 확보했다. 최종 배포·배포 후 화면과 동일 hash 보존 결과는 후속 기록으로 남긴다. 제품/키 원문은 evidence에 노출하지 않는다.
 - 증거: continuation/output/playwright/personal-key-20261029. 보호된 HWP runtime28/WASM/binding을 검증해 동일 바이트로 승계했고 엔진은 재빌드하지 않았다. 기존 22개 삭제·package.json·미추적 자료를 유지한다. 별도 베트남 Node API는 이번 두 Cloudflare 배포 범위에 포함하지 않는다.
+- 개인키 범위 배포·재검수 완료: 정상 push 622d9992ce1c68c1de8909cd1a100d1f504bd9b8. 개발346b47ff-86ce-42c8-af13-ce95ad971357 / 가오픈4557643a-074f-4e66-adfc-88565284160e, 각각 검수 파일46/46 SHA 일치·기존바인딩보존·health/readiness200. 기존 이경훈 정상로그인 director(비관리자)에서 PC1440/390 모델2개·합성 임시 입력시 저장 활성·입력원복·재열기 빈키·admin403 확인. 기존 자격증명상태해시는 개발3715406292f2ab3f521d9231baaafb57891189ea4cbf004ec64ea2e037de23a9/가오픈0cdc8d2be332eb14fbfc25ce93aa51dce00465592ad440d115c56929a2ae05d3으로 전후 동일. 실제 키 저장·연결 시험·업무 쓰기0. 종합원장 continuation/output/playwright/personal-key-20261029/verification-summary.json. 사용자 후속 요청의 챗봇 팝업 UI는 별도 변경·검수로 이어간다.
+
+## 우측 하단 챗봇 팝업·대화 UI — 2026-10-29
+
+- 사용자 요청: 우측 하단 원형 아이콘 클릭→팝업 대화창, 질문·답변 말풍선, 프로젝트 연결·저장 상태·매뉴얼 기본 접힘. 기존 자료·계정·권한·키·저장·상신·승인 절차를 유지한다. 공개 모델 목록을 보완한 개인키 수정 622d999는 앞 절의 별도 검수 결과로 보존한다.
+- UI만 최소 수정했다. PC420x720 우측 하단 팝업, 모바일 여백 있는 dialog, 대기 질문과 답변 말풍선, 기본 접힌 context/facts/sources, 성공 후 제출 당시와 같은 입력만 비움, 실패 질문 유지, Enter/Shift+Enter/한글IME 보호, 원형 버튼의 접근성 이름·닫기 초점·모바일 Tab/Escape/inert 복원을 유지한다. 대화는 DB·로컬 저장소에 새로 저장하지 않는다.
+- message별 stable id와 route/case contextKey를 고정해 다른 프로젝트의 이전 질문을 자동 전달하지 않는다. 실패 안내도 pendingRequest(question/routeId/caseId)에 묶어 A 요청 중 B로 바꿔도 A 안내를 유지한다. 기존 reply.snapshot·출처·역할 검사·미저장 이동 guard는 그대로다. 서버 저장·상신·승인이나 AI 전송 정책·회사키 선택은 수정하지 않았다.
+- 실제 Chrome 최종 PC1440x1000/모바일390x844/짧은360x400 PASS: 아이콘58x58, PC팝업420x720, 모바일 x8/w359(스크롤바 있는 clientWidth375), 질문·대기/답변 말풍선, 접힘, 실제 SQL v4/v3 구분, Enter3POST·IME/229/Shift0POST, 성공clear/지연중새입력유지, 같은context이전질문·다른project빈질문·옛snapshot보존, Tab18·Escape초점복귀·inert원복. 짧은 화면에서 프로젝트와 전송안내를 펼쳐도 입력·전송·닫기 접근 PASS.
+- 최초 모바일 x=-7 실패는100vw가 배경 스크롤바를 포함한 폭 계산 문제로 확인해100%기준으로 수정, 첫 artifact와 mobile-first-overflow.png를 보존했다. 짧은 높이는 펼친context/compose 높이 제한·내부scroll로 보호했다. rAF초점복귀 직후 동기 검사, 같은브라우저 동시QA 타임아웃은 관측 오류로 원본로그를 분리 보존하고 순차검수했다. 재시도 중복 답변은 닫기 전1개를 보조실행으로 확인했으며 닫힌DOM0개 값으로 합격 처리하지 않는다.
+- 합성503 검수: A질문 중B선택→질문·입력 유지→대체매뉴얼 버튼을 실제로 눌러 reports/studio?caseId=A 이동 PASS. 같은질문 재시도 성공·답변1개 확인. 합성 SQL와 모의 공급자 환경이며 실서버 AI·물리적 휴대폰으로 확대하지 않는다.
+- 관련42검사(skip0)·web tsc·Worker strict·프로덕션 build·양dryrun PASS. 수정 후 빌드는 첫단계에서 CSS 폭만 보정한 최종 revision2이며 HWP runtime28/WASM/binding 동일·엔진재빌드0. Impeccable advisory는 ES전용 DESIGN.md와 기존 전역 챗봇 색/서체/모서리 범위 차이이며 전역 브랜드를 바꾸지 않았다. 세 전문 읽기 검토 최종 PASS.
+- 증거: continuation/output/playwright/chat-popup-20261029 및 revision2. 배포·정상로그인·실제회사AI·자료/키해시·이동·버튼 위치 재검수 결과는 후속 기록으로 남긴다. 별도 베트남 Node API와 기존 Drive 안전종료/다운로드 미검증·다른 예약은 이번 범위에서 바꾸지 않는다.
