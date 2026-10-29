@@ -4,10 +4,9 @@ import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { assistantGuides, assistantPath, assistantFacts, ASSISTANT_MANUAL_VERSION, ASSISTANT_ROUTES, ASSISTANT_TARGETS, type AssistantGuide, type AssistantProject, type AssistantReply } from './workspace-assistant-guide';
 import './WorkspaceAssistant.css';
 
-interface Props { currentPath: string; currentSearch: string; roles: UserRole[]; suspended: boolean; onNavigate(path: string): void }
+interface Props { currentPath: string; currentSearch: string; roles: UserRole[]; suspended: boolean; open: boolean; onOpenChange(open: boolean): void; onNavigate(path: string): void }
 const suggestions = ['처음인데 어떤 순서로 작업해야 해?', 'HWP 보고서는 어떻게 불러와?', '왜 보고서 출력이 안 돼?', '주간 업무일지는 어떻게 보내?'];
-export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspended, onNavigate }: Props) {
-  const [open, setOpen] = useState(false);
+export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspended, open, onOpenChange: setOpen, onNavigate }: Props) {
   const [question, setQuestion] = useState('');
   const [query, setQuery] = useState('');
   const [projects, setProjects] = useState<AssistantProject[]>([]);
@@ -108,7 +107,7 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
   if (suspended) return null;
   const localSources = assistantGuides(question || '처음 작업 순서', routeId);
   return <>
-    <button ref={launcher} className="workspace-assistant-launcher" type="button" aria-expanded={open} aria-controls="workspace-assistant-panel" onClick={() => setOpen(value => !value)}>
+    <button ref={launcher} className="workspace-assistant-launcher" type="button" aria-expanded={open} aria-controls="workspace-assistant-panel" onClick={() => setOpen(!open)}>
       <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8l-6 4v-4H3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>AI 업무 도우미
     </button>
     {open && <aside ref={panel} id="workspace-assistant-panel" className="workspace-assistant-panel" role={mobile ? 'dialog' : 'complementary'} aria-modal={mobile ? true : undefined} aria-label="AI 업무 도우미">

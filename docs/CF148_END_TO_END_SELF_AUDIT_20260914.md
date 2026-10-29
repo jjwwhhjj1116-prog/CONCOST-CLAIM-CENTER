@@ -1792,3 +1792,6 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 관련 신규7+인접19=26 PASS, web tsc·Worker strict 타입·프로덕션 build PASS, 기존 bundle/dynamic-import 경고 유지. CF26 별도 3개 중 1개 403≠200는 HEAD 3fd7eb0 모듈에서도 동일 재현하여 기존 실패로 보존했고 권한 기준을 완화하지 않았다. Impeccable 검사는 ES 전용 DESIGN.md 범위 밖 색/글꼴/모서리 advisory이며 글로벌 디자인을 바꾸지 않았다.
 - 기존22개 삭제·package.json 사용자 변경·미추적 폴더 보존. HWP runtime28/WASM/binding 바이트 그대로이며 엔진 재빌드 없음. 두 서버 기존 활성 버전/바인딩 해시를 확보했고 --keep-vars·동일 검수 artifact로 배포 후 정상 계정의 실제 AI·본인 상태·이동·미저장 취소를 확인한다. 실서버 결과는 후속 기록으로 남긴다.
 - 증거 기준: continuation/output/playwright/workspace-assistant-20261029. Drive 원본4개의 기존 URL 안전 중단과 이 별도 앱 검수를 혼동하지 않으며 Drive 재열기·해시 검수는 아직 UNKNOWN이다.
+
+- 실서버 1차 development70ed942e에서 정상 직원 로그인→실제 회사 Gemini 매뉴얼 선택→본인 CC13 상태→1440/390 화면 PASS, 공개46파일 SHA 일치·기존 바인딩 보존 PASS. 후속 미저장 취소 중 기존 최초 튜토리얼이 도우미 진입을 가리는 UI 충돌을 발견했다. 원고·일지 hash 불변 및 PUT0을 확인하고 화면의 합성 미저장 표식은 저장 없이 원복했다. 이를 제품 UI 충돌로 분리 보존한다.
+- 보완: AppShell이 도우미 열림을 관리하고 튜토리얼과 동시 표시하지 않는다. 최초 가이드에 AI 질문 진입을 제공한다. 안내 닫기는 로컬뿐이며 서버 튜토리얼 완료를 쓰지 않는다. 자동 열기 억제와 상태 조회 완료 ref를 분리하여 초기 지연 응답의 기존 version도 보존한다. 별도 revision2 실제 Chrome에서 최초 안내 전환·겹침0·800ms 지연/기존 version7 재조회·PUT0, PC/390 질문·범위·키보드·QR위치 회귀 PASS. 같은 보완을 개발 재배포·재검수 후 가오픈으로 승격한다.

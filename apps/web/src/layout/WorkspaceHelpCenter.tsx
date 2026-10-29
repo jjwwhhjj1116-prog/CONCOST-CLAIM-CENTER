@@ -26,7 +26,7 @@ function samePath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
-export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended = false, onNavigate, hideTrigger = false, openRequest = 0 }: {
+export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended = false, onNavigate, hideTrigger = false, openRequest = 0, dismissRequest = 0, onOpenAssistant }: {
   category: string;
   routeId?: string;
   previewMode: boolean;
@@ -34,6 +34,8 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended 
   onNavigate: (path: string) => void;
   hideTrigger?: boolean;
   openRequest?: number;
+  dismissRequest?: number;
+  onOpenAssistant?: () => void;
 }): React.ReactElement {
   const [tutorialOpen, setTutorialOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -49,6 +51,8 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended 
   const [coachCollapsed, setCoachCollapsed] = useState(false);
   const targetElementRef = useRef<HTMLElement | null>(null);
   const tutorialLoadedRef = useRef(false);
+  const suppressAutoTutorialRef = useRef(false);
+  useEffect(() => { if (dismissRequest > 0) { suppressAutoTutorialRef.current = true; setTutorialOpen(false); setHelpOpen(false); } }, [dismissRequest]);
   const categoryHelp = CATEGORY_HELP[category] ?? CATEGORY_HELP.home;
   const routeHelp = routeId ? ROUTE_HELP[routeId] : undefined;
   const step = WORKSPACE_TUTORIAL_STEPS[tutorialStep] ?? WORKSPACE_TUTORIAL_STEPS[0];
@@ -63,11 +67,11 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended 
         if (!active) return;
         tutorialLoadedRef.current = true;
         setTutorialState(result.tutorial);
-        if (result.tutorial.completedTutorialVersion !== CURRENT_TUTORIAL_VERSION) setTutorialOpen(true);
+        if (!suppressAutoTutorialRef.current && result.tutorial.completedTutorialVersion !== CURRENT_TUTORIAL_VERSION) setTutorialOpen(true);
       })
       .catch(() => {
         if (active) tutorialLoadedRef.current = true;
-        if (active && window.localStorage.getItem('claim-center-tutorial-fallback') !== CURRENT_TUTORIAL_VERSION) setTutorialOpen(true);
+        if (active && !suppressAutoTutorialRef.current && window.localStorage.getItem('claim-center-tutorial-fallback') !== CURRENT_TUTORIAL_VERSION) setTutorialOpen(true);
       });
     return () => { active = false; };
   }, [previewMode, suspended]);
@@ -198,7 +202,7 @@ export function WorkspaceHelpCenter({ category, routeId, previewMode, suspended 
         <div className="workspace-tutorial-target" aria-hidden="true" style={{ left: targetRect.left, top: targetRect.top, width: targetRect.width, height: targetRect.height }}><span>{pointIndex + 1}</span><b>여기를 직접 눌러보세요</b></div>
       </>}
       <aside className={`workspace-tutorial-coach${coachCollapsed ? ' is-collapsed' : ''}${currentScreenOpen ? ' is-live' : ' is-launcher'}`} style={coachStyle} role="complementary" aria-label="처음 사용하는 분을 위한 클레임센터 업무 순서" data-step={tutorialStep + 1}>
-        <div className="workspace-tutorial-coach__bar"><span>{currentScreenOpen ? '실제 화면 안내 중' : '처음 사용 가이드'}</span><div><button type="button" onClick={() => setCoachCollapsed((value) => !value)}>{coachCollapsed ? '안내 펼치기' : '안내 접기'}</button><button type="button" aria-label="튜토리얼 닫기" onClick={() => setTutorialOpen(false)}>×</button></div></div>
+        <div className="workspace-tutorial-coach__bar"><span>{currentScreenOpen ? '실제 화면 안내 중' : '처음 사용 가이드'}</span><div>{onOpenAssistant && <button type="button" aria-label="AI 업무 도우미 열기" onClick={() => { setTutorialOpen(false); onOpenAssistant(); }}>AI 질문</button>}<button type="button" onClick={() => setCoachCollapsed((value) => !value)}>{coachCollapsed ? '안내 펼치기' : '안내 접기'}</button><button type="button" aria-label="튜토리얼 닫기" onClick={() => setTutorialOpen(false)}>×</button></div></div>
         {!coachCollapsed && <div className="workspace-tutorial">
         <header><span>{step.eyebrow}</span><strong>{tutorialStep + 1} / {WORKSPACE_TUTORIAL_STEPS.length}</strong></header>
         <div className="workspace-tutorial__progress" aria-label={`튜토리얼 ${progress}% 완료`}><i style={{ width: `${progress}%` }} /></div>

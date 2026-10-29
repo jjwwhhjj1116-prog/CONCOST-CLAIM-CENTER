@@ -123,12 +123,14 @@ export const AppShell: React.FC<AppShellProps> = ({
   const [alertsOpen,setAlertsOpen]=useState(false);
   const [utilitiesOpen, setUtilitiesOpen] = useState(false);
   const [helpRequest, setHelpRequest] = useState(0);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [noticeRequest, setNoticeRequest] = useState(0);
   const [alertsBusy,setAlertsBusy]=useState(false);
   const [releaseOpen, setReleaseOpen] = useState(() => !hasSeenRelease(userId));
   const closeRelease = () => { markReleaseSeen(userId); setReleaseOpen(false); };
   const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
   const openUtility = (open: () => void) => {
+    setAssistantOpen(false);
     closeDrawer();
     if (isTablet) window.requestAnimationFrame(() => {
       mobileMenuElement.current?.querySelector('button')?.focus();
@@ -340,8 +342,8 @@ export const AppShell: React.FC<AppShellProps> = ({
       </Dialog>
 
       <SoftLaunchNotice hideBanner openRequest={noticeRequest} />
-      <WorkspaceHelpCenter hideTrigger openRequest={helpRequest} category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} suspended={releaseOpen || alertsOpen || isDrawerOpen} onNavigate={go} />
-      <WorkspaceAssistant key={userId} currentPath={currentPath} currentSearch={currentSearch} roles={roles} suspended={releaseOpen || alertsOpen || isDrawerOpen} onNavigate={go} />
+      <WorkspaceHelpCenter hideTrigger openRequest={helpRequest} dismissRequest={assistantOpen ? 1 : 0} onOpenAssistant={() => setAssistantOpen(true)} category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} suspended={releaseOpen || alertsOpen || isDrawerOpen || assistantOpen} onNavigate={go} />
+      <WorkspaceAssistant key={userId} open={assistantOpen} onOpenChange={setAssistantOpen} currentPath={currentPath} currentSearch={currentSearch} roles={roles} suspended={releaseOpen || alertsOpen || isDrawerOpen} onNavigate={go} />
 
       <div className="shell-body">
         {!isTablet && <aside ref={sidebarElement} className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>
