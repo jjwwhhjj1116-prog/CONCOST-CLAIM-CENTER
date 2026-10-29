@@ -1897,3 +1897,8 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 공식 최신 RSS·정확 오류 검색·현재 제공 API를 세 전문 읽기 검토와 대조했지만 CreateProcessSecurityEnvironment 0x80070020에 적용할 새 지원 복구 근거는 미확보다. 충돌 파일/프로세스 UNKNOWN, 정상 runtime 시작과 기존 실제 폰 연결도 미확인. 상태 변화 없이 초기화/reset·ETW/PSS·updater·기기 조회를 반복하지 않았고 양 서버 실물 아이콘/팝업/질문답변/이동/실제 한글 키보드/터치 닫기·회전은 NOT_RUN 유지.
 - 같은 감시 automation의 옛 전체 무AI 전제만 최신 사용자 계약인 기본 MANUAL 무제한 + AI 기본OFF/선택형 회사Gemini/계정당20회/KST자정으로 공식 automation_update 갱신했다. prompt·updated_at만 바뀌었고 6시간 주기·상태·대화·생성시각은 동일하다. 삭제·보관한 QA를 재생성하지 않는 경계도 반영했다. 다른 예약·제품·자료·계정·권한·키·사용량 변경과 AI호출/배포0, 수동 요청0.
 - 증거: continuation/output/playwright/physical-phone-20261029/heartbeat-20261029-1148.json, heartbeat-20261029-1148-automation-update.json. 최신 PC/mobile viewport 합격과 실물 미검증을 구분하며 사용자 중간 보고 없이 기존 감시를 유지한다.
+
+
+### Drive 원본 감시 변화 없음 — 2026-10-29 23:12 KST 트리거
+
+- 최신 공식 RSS 상위3개 릴리스 본문은 20:13 검토본과 정확히 같고, 새 공식 검색·동일 설치 API 문서에서도 기존 Chrome URL-confidence 안전 중단에 적용 가능한 새 복구 근거를 확보하지 못했다. 전체 과거 릴리스 부재를 단정하지 않는다. updater/native/browser/Drive 호출·다운로드·자료/계정/권한/키 변경·제품 수정/배포·다른 예약 변경0. 정확4개 회사 계정 재열기·실다운로드 SHA는 UNKNOWN 유지. 세 전문 읽기 검토와 원래dirty25 보존. 증거: continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261029-1412.json. 수동 요청·사용자 중간 보고 없이 기존 감시를 유지한다.
