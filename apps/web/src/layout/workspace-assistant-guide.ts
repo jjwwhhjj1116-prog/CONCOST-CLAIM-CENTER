@@ -73,6 +73,8 @@ export function assistantFacts(snapshot: AssistantSnapshot): string[] {
   return facts;
 }
 export interface AssistantReply {
-  answer: string; mode: 'MANUAL'; notice?: string; observedAt: string; manualVersion: string;
+  answer: string; mode: 'MANUAL' | 'AI'; quota?: AssistantQuota; notice?: string; observedAt: string; manualVersion: string;
   sources: AssistantGuide[]; snapshot: AssistantSnapshot | null;
 }
+
+export interface AssistantQuota { limit: number; used: number; remaining: number; resetsAt: string; timezone: 'Asia/Seoul' }

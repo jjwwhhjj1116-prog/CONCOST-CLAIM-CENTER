@@ -1732,3 +1732,13 @@ model GoogleImportSnapshot {
   @@index([externalResourceId, sha256])
   @@index([createdById])
 }
+
+// Daily helper attempts only. Business content and AI credentials are never copied here.
+model WorkspaceAssistantUsage {
+  organizationId String
+  userId String
+  quotaDay String
+  used Int
+  updatedAt String
+  @@id([organizationId, userId, quotaDay])
+}

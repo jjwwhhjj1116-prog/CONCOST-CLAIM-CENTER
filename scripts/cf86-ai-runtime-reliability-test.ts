@@ -11,7 +11,7 @@ test('CF86 uses one bounded Gemini runtime and provider-specific reasoning contr
   assert.doesNotMatch(source, /v1beta\/interactions/u);
   assert.match(source, /thinkingConfig: \{ thinkingLevel: request\.reasoningEffort \}/u);
   assert.match(source, /const retryableStatuses = new Set\(\[429, 500, 502, 503, 504\]\)/u);
-  assert.match(source, /for \(let attempt = 0; attempt < 3; attempt \+= 1\)/u);
+  assert.match(source, /for \(let attempt = 0; attempt < \(request\.singleAttempt \? 1 : 3\); attempt \+= 1\)/u);
   assert.match(source, /const failoverStatuses = new Set\(\[500, 502, 503, 504\]\)/u);
   assert.match(source, /request\.modelCode === 'gemini-3\.7-flash'/u);
   assert.match(source, /resolvedModelCode = 'gemini-3\.6-flash'/u);

@@ -281,7 +281,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
 
   const renderCredentials = (scope: CredentialScope, title: string, detail: string) => <Card title={title} className="credential-settings-card">
     <header className="credential-settings-card__intro">
-      <div><p>{detail}</p><small>{scope === 'USER' ? '개인 Gemini 키는 제안서·보고서 글쓰기 도우미의 문장 개선에 사용합니다. 업무 도우미는 Gemini 키 없이 매뉴얼 규칙으로 안내합니다.' : '개인 Gemini 키가 없는 사용자에게 필요한 작업은 공용키가 사용됩니다.'}</small></div>
+      <div><p>{detail}</p><small>{scope === 'USER' ? '개인 Gemini 키는 제안서·보고서 글쓰기 도우미의 문장 개선에 사용합니다. 업무 도우미의 기본 안내는 키 없이 무료로 이용합니다. AI 질문을 선택하면 회사 Gemini 연결과 계정당 하루 20회 한도를 사용하며 개인 키는 사용하지 않습니다.' : '개인 Gemini 키가 없는 사용자에게 필요한 작업은 공용키가 사용됩니다.'}</small></div>
       <StatusBadge status={scope === 'USER' ? 'review' : 'approved'} />
     </header>
     <div className="credential-provider-grid" data-scope={scope}>

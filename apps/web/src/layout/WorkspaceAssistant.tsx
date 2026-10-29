@@ -1,18 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { apiRequest } from '../api';
+import { apiRequest, ApiError } from '../api';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
-import { assistantGuides, assistantPath, assistantFacts, ASSISTANT_MANUAL_VERSION, ASSISTANT_ROUTES, ASSISTANT_TARGETS, type AssistantGuide, type AssistantProject, type AssistantReply } from './workspace-assistant-guide';
+import { assistantGuides, assistantPath, assistantFacts, ASSISTANT_MANUAL_VERSION, ASSISTANT_ROUTES, ASSISTANT_TARGETS, type AssistantGuide, type AssistantProject, type AssistantReply, type AssistantQuota } from './workspace-assistant-guide';
 import './WorkspaceAssistant.css';
 
 interface Props { currentPath: string; currentSearch: string; roles: UserRole[]; suspended: boolean; open: boolean; onOpenChange(open: boolean): void; onNavigate(path: string): void }
 const suggestions = ['처음인데 어떤 순서로 작업해야 해?', 'HWP 보고서는 어떻게 불러와?', '왜 보고서 출력이 안 돼?', '주간 업무일지는 어떻게 보내?'];
 export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspended, open, onOpenChange: setOpen, onNavigate }: Props) {
   const [question, setQuestion] = useState('');
+  const [useAi, setUseAi] = useState(false);
+  const [quota, setQuota] = useState<AssistantQuota | null>(null);
+  const [quotaError, setQuotaError] = useState('');
   const [query, setQuery] = useState('');
   const [projects, setProjects] = useState<AssistantProject[]>([]);
   const [caseId, setCaseId] = useState('');
   const [messages, setMessages] = useState<{ id: number; contextKey: string; question: string; reply: AssistantReply }[]>([]);
-  const [pendingRequest, setPendingRequest] = useState<{ question: string; routeId: string; caseId: string | null } | null>(null);
+  const [pendingRequest, setPendingRequest] = useState<{ question: string; routeId: string; caseId: string | null; useAi: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(false);
   const [error, setError] = useState('');
@@ -46,6 +49,23 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
     }, 250);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, suspended, query, currentSearch]);
+  const applyQuota = (next: AssistantQuota) => setQuota(current => {
+    if (!current || Date.parse(next.resetsAt)>Date.parse(current.resetsAt)) return next;
+    if (next.resetsAt!==current.resetsAt || next.used<current.used) return current;
+    return next;
+  });
+  const refreshQuota = async () => {
+    try { const result = await apiRequest<{quota:AssistantQuota}>('/api/workspace-assistant?quota=1'); applyQuota(result.quota); setQuotaError(''); }
+    catch { setQuota(null); setQuotaError('AI 남은 횟수를 불러오지 못했습니다. 기본 안내는 계속 이용할 수 있습니다.'); }
+  };
+  useEffect(() => {
+    if (!open || suspended) return;
+    void refreshQuota();
+    const focus = () => void refreshQuota();
+    window.addEventListener('focus',focus);
+    const timer = quota ? window.setTimeout(focus,Math.max(1000,Date.parse(quota.resetsAt)-Date.now()+100)) : undefined;
+    return () => {window.removeEventListener('focus',focus);window.clearTimeout(timer);};
+  },[open,suspended,quota?.resetsAt]);
   useEffect(() => { if (open && !suspended) input.current?.focus(); }, [open, suspended]);
   useEffect(() => {
     if (!open || suspended) return;
@@ -87,18 +107,23 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
   useEffect(() => { if (!pendingGuide) return; const timer = window.setTimeout(() => setPendingGuide(null), 12_000); return () => window.clearTimeout(timer); }, [pendingGuide]);
   const close = () => { setOpen(false); window.requestAnimationFrame(() => launcher.current?.focus()); };
   const send = async (value = question) => {
-    if (!value.trim() || busy) return;
+    if (!value.trim() || busy || useAi && (!quota || quota.remaining <= 0)) return;
     const controller = new AbortController(); request.current = controller; const current = ++sequence.current;
     const contextKey = JSON.stringify([routeId, caseId || null]);
-    setBusy(true); setError(''); setPendingRequest({ question: value, routeId, caseId: caseId || null });
+    setBusy(true); setError(''); setPendingRequest({ question: value, routeId, caseId: caseId || null, useAi });
     try {
-      const reply = await apiRequest<AssistantReply>('/api/workspace-assistant', { method: 'POST', body: JSON.stringify({ question: value.trim(), routeId, caseId: caseId || null, previousQuestion: messages.filter(message => message.contextKey === contextKey).at(-1)?.question ?? '' }), signal: controller.signal, timeoutMs: 30_000 });
+      const reply = await apiRequest<AssistantReply>('/api/workspace-assistant', { method: 'POST', body: JSON.stringify({ question: value.trim(), useAi, routeId, caseId: caseId || null, previousQuestion: messages.filter(message => message.contextKey === contextKey).at(-1)?.question ?? '' }), signal: controller.signal, timeoutMs: 30_000 });
       if (current !== sequence.current) return;
+      if (reply.quota) applyQuota(reply.quota);
       setMessages(previous => [...previous.slice(-5), { id: current, contextKey, question: value, reply }]);
       setPendingRequest(null);
       setQuestion(currentQuestion => currentQuestion === value ? '' : currentQuestion);
     } catch (reason) {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '답변을 불러오지 못했습니다. 질문을 유지했으니 다시 보내세요.');
+      if (!controller.signal.aborted) {
+        if (reason instanceof ApiError && reason.payload.quota) applyQuota(reason.payload.quota as unknown as AssistantQuota);
+        else if (useAi) void refreshQuota();
+        setError(reason instanceof Error ? reason.message : '답변을 불러오지 못했습니다. 질문을 유지했으니 다시 보내세요.');
+      }
     } finally { if (current === sequence.current) setBusy(false); }
   };
   const navigate = (guide: AssistantGuide, project: string | null, locate: boolean) => {
@@ -115,7 +140,7 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
       <ChatIcon /><span aria-hidden="true">?</span>
     </button>
     {open && <aside ref={panel} id="workspace-assistant-panel" className="workspace-assistant-panel" role="dialog" aria-modal={mobile ? true : undefined} aria-label="업무 도우미">
-      <header><div className="workspace-assistant-heading"><ChatIcon /><div><h2>업무 도우미</h2><p>매뉴얼·프로젝트 상태 자동 안내</p></div></div><button type="button" aria-label="업무 도우미 닫기" onClick={close}>×</button></header>
+      <header><div className="workspace-assistant-heading"><ChatIcon /><div><h2>업무 도우미</h2><p>기본 안내 · 선택형 Gemini 질문</p></div></div><button type="button" aria-label="업무 도우미 닫기" onClick={close}>×</button></header>
       <details className="workspace-assistant-context">
         <summary>프로젝트 연결 <span>{projects.find(project => project.id === caseId)?.caseNumber ?? '선택 사항'}</span></summary>
         <div className="workspace-assistant-context-fields">
@@ -127,10 +152,10 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
         </div>
       </details>
       <div className="workspace-assistant-conversation" role="log" aria-label="질문과 답변" aria-live="polite" aria-busy={busy}>
-        {!messages.length && !pendingRequest && <div className="workspace-assistant-welcome"><div className="workspace-assistant-bubble"><strong>업무 도우미</strong><p>안녕하세요. 외부 AI 호출 없이 의뢰부터 결재·출력까지 정해진 매뉴얼로 안내해 드릴게요.</p><p>궁금한 업무를 질문하거나 아래 질문을 선택해 보세요.</p></div><div className="workspace-assistant-suggestions">{suggestions.map(value => <button type="button" key={value} disabled={busy} onClick={() => { setQuestion(value); void send(value); }}>{value}</button>)}</div></div>}
+        {!messages.length && !pendingRequest && <div className="workspace-assistant-welcome"><div className="workspace-assistant-bubble"><strong>업무 도우미</strong><p>안녕하세요. 기본 안내는 무료 매뉴얼 답변입니다. 더 풀어서 설명이 필요하면 아래 ‘AI로 질문하기’를 켜세요.</p><p>궁금한 업무를 질문하거나 아래 질문을 선택해 보세요.</p></div><div className="workspace-assistant-suggestions">{suggestions.map(value => <button type="button" key={value} disabled={busy} onClick={() => { setQuestion(value); void send(value); }}>{value}</button>)}</div></div>}
         {messages.map(message => <article className="workspace-assistant-answer" key={message.id}>
           <div className="workspace-assistant-user"><small>나</small><p>{message.question}</p></div>
-          <div className="workspace-assistant-bubble"><strong>업무 도우미</strong><small>매뉴얼 자동 안내 · {message.reply.manualVersion}</small>
+          <div className="workspace-assistant-bubble"><strong>업무 도우미</strong><small>{message.reply.mode === 'AI' ? 'Gemini 답변' : '매뉴얼 자동 안내'} · {message.reply.manualVersion}</small>
           <p className="workspace-assistant-answer-text">{message.reply.answer}</p>
           {message.reply.notice && <p className="workspace-assistant-notice" role="status">{message.reply.notice}</p>}
           {message.reply.snapshot && <details className="workspace-assistant-facts" aria-label="실제 서버 저장 상태"><summary>내 프로젝트 저장 상태 · {message.reply.snapshot.caseNumber}</summary><strong>{message.reply.snapshot.title}</strong><ul>{assistantFacts(message.reply.snapshot).map(fact => <li key={fact}>{fact}</li>)}</ul><small>조회 {new Date(message.reply.observedAt).toLocaleString('ko-KR')} · 화면 미저장 입력 제외</small></details>}
@@ -138,16 +163,20 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
           </div>
         </article>)}
         {pendingRequest && <div className="workspace-assistant-user"><small>나</small><p>{pendingRequest.question}</p></div>}
-        {busy && <p className="workspace-assistant-bubble workspace-assistant-typing" role="status">매뉴얼을 찾아 답변을 준비하고 있어요…</p>}
+        {busy && <p className="workspace-assistant-bubble workspace-assistant-typing" role="status">{pendingRequest?.useAi ? 'Gemini 답변을 기다리고 있어요…' : '매뉴얼을 찾아 답변을 준비하고 있어요…'}</p>}
         {error && <p className="workspace-assistant-error" role="alert">{error}</p>}
         {error && <Sources guides={localSources} roles={roles} onNavigate={(guide, locate) => navigate(guide, pendingRequest ? pendingRequest.caseId : caseId || null, locate)} />}
         <div ref={answerEnd} />
       </div>
       <form className="workspace-assistant-compose" onSubmit={event => { event.preventDefault(); void send(); }}>
+        <div className="workspace-assistant-mode"><label><input type="checkbox" role="switch" aria-label="AI로 질문하기" checked={useAi} disabled={busy} onChange={event => {setUseAi(event.target.checked);setError('');if(event.target.checked)void refreshQuota();}}/>AI로 질문하기</label><small role="status">{quota ? `오늘 ${quota.remaining}/${quota.limit}회 남음` : 'AI 횟수 확인 중'}</small></div>
+        {quotaError && <p role="status">{quotaError}</p>}
+        {useAi && <p className="workspace-assistant-ai-consent">현재 질문과 참고 매뉴얼이 Gemini로 전송됩니다. 저장된 프로젝트 본문·상태는 자동 전송하지 않습니다.</p>}
+        {useAi && quota?.remaining === 0 && <p role="status">오늘 AI 질문을 모두 사용했습니다. 토글을 끄면 기본 안내를 계속 이용할 수 있습니다.</p>}
         <label htmlFor="workspace-assistant-question"><span>업무 질문</span><textarea id="workspace-assistant-question" ref={input} value={question} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) { event.preventDefault(); void send(); } }} maxLength={600} rows={2} placeholder="궁금한 업무를 물어보세요…" /></label>
-        <div><small>{question.length}/600</small><button type="submit" disabled={busy || !question.trim()}>{busy ? '답변 확인 중…' : '질문 보내기'}</button></div>
+        <div><small>{question.length}/600</small><button type="submit" disabled={busy || !question.trim() || useAi && (!quota || quota.remaining <= 0)}>{busy ? '답변 확인 중…' : '질문 보내기'}</button></div>
         <p>비밀번호·키·고객 원문은 입력하지 마세요.</p>
-        <details className="workspace-assistant-privacy"><summary>질문 전송·업무 처리 안내</summary><p>질문은 클레임센터 서버에서 매뉴얼 규칙으로 처리하며 외부 AI에 전송하지 않습니다. 도우미는 Gemini 키 없이 사용할 수 있고 AI API 사용료가 발생하지 않습니다. 프로젝트 상태는 본인 배정 자료의 서버 저장본만 조회합니다. 저장·상신·승인은 기존 화면에서 진행합니다.</p></details>
+        <details className="workspace-assistant-privacy"><summary>사용 방법·AI 한도 안내</summary><ol><li>아이콘을 열고 질문을 입력하세요. 기본 안내는 횟수 제한 없이 무료로 제공합니다.</li><li>‘AI로 질문하기’를 켜고 전송하면 Gemini가 최신 매뉴얼을 바탕으로 설명합니다. 계정당 하루 20회, 한국시간 자정에 초기화됩니다. 전송 후 실패한 시도도 1회입니다. 자동 재시도·다른 모델 전환은 하지 않습니다.</li><li>프로젝트 상태·업무 실행 요청은 기본 안내로 답하고 AI 횟수를 차감하지 않습니다. 참고 매뉴얼을 펼쳐 해당 화면·버튼 위치로 이동하세요.</li></ol><p>AI는 회사 Gemini 연결을 사용합니다. Google 프로젝트 한도는 공유되며 회사 키의 요금제에 따라 비용이 발생할 수 있습니다. 앱의 20회는 Google 무료 할당량과 별개입니다. 저장된 프로젝트 원문·상태는 자동 전송하지 않습니다. 입력한 질문은 전송됩니다. 비밀번호·키·고객 원문을 질문에 입력하지 마세요. 저장·상신·승인은 기존 화면에서 진행합니다.</p></details>
       </form>
     </aside>}
     {hint && !open && <div className="workspace-assistant-location" role="status"><p>{hint}</p><button type="button" onClick={() => { setHint(''); setPendingGuide(null); }}>위치 안내 닫기</button></div>}

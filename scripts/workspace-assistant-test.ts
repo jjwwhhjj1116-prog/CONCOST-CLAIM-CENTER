@@ -112,3 +112,65 @@ test('business topic outranks generic registration words on every current screen
     assert.equal(assistantGuides('주간 업무일지 작성',routeId)[0].id,'WL-02');
   }
 });
+
+
+test('AI requires explicit selection and uses persistent account daily allocation',async()=>{
+ const f=await fixture();try{
+   f.sql.run(readFileSync('apps/cloudflare/migrations/0072_workspace_assistant_usage.sql','utf8'));
+   const original=f.context.db.prepare;
+   f.context.db.prepare=(query:string)=>{if(!query.includes('preview_workspace_assistant_usage'))return original(query);return {bind(...values:unknown[]){return {async first(){const statement=f.sql.prepare(query);try{statement.bind(values as any[]);return statement.step()?statement.getAsObject():null;}finally{statement.free();}}};}};};
+   let providerCalls=0;
+   (f.context as any).prepareAi=async()=>({generate:async()=>{providerCalls++;return {content:'매뉴얼에 따라 HWP 메뉴에서 가져오기를 선택하세요.'};}});
+   let clock=new Date('2026-10-29T14:59:59Z');(f.context as any).now=()=>clock;
+   assert.equal((await ok(await f.send())).mode,'MANUAL');assert.equal(providerCalls,0);
+   const results=await Promise.all(Array.from({length:24},()=>f.send(f.body({useAi:true}))));
+   assert.equal(results.filter(r=>r.status===200).length,20);assert.equal(results.filter(r=>r.status===429).length,4);assert.equal(providerCalls,20);
+   const used=await ok(await f.get('?quota=1'));assert.equal(used.quota.remaining,0);assert.equal(used.quota.limit,20);assert.equal(used.quota.resetsAt,'2026-10-29T15:00:00.000Z');
+   assert.equal((await ok(await f.send(f.body({question:'저장 상태는?',useAi:true})))).mode,'MANUAL');assert.equal(providerCalls,20);
+   clock=new Date('2026-10-29T15:00:00Z');assert.equal((await ok(await f.get('?quota=1'))).quota.remaining,20);
+   const ai=await ok(await f.send(f.body({useAi:true})));assert.equal(ai.mode,'AI');assert.equal(ai.quota.used,1);assert.equal(providerCalls,21);
+ }finally{f.sql.close();}
+});
+
+async function aiFixture() {
+ const f=await fixture();f.sql.run(readFileSync('apps/cloudflare/migrations/0072_workspace_assistant_usage.sql','utf8'));
+ const original=f.context.db.prepare;
+ f.context.db.prepare=(query:string)=>{if(!query.includes('preview_workspace_assistant_usage'))return original(query);return {bind(...values:unknown[]){return {async first(){const statement=f.sql.prepare(query);try{statement.bind(values as any[]);return statement.step()?statement.getAsObject():null;}finally{statement.free();}}};}};};
+ return f;
+}
+test('AI attempt accounting survives errors, new handler and account changes; invalid requests never reserve',async()=>{
+ const f=await aiFixture();try{let prepared=0,calls=0;
+  (f.context as any).prepareAi=async()=>{prepared++;return {generate:async()=>{calls++;throw Error('SYNTHETIC_TIMEOUT');}};};
+  for(const bad of [f.body({useAi:'true'}),f.body({useAi:true,userId:'other'}),f.body({useAi:true,limit:999})])assert.equal((await f.send(bad)).status,400);
+  assert.equal((await f.send(f.body({useAi:true,caseId:B}))).status,404);
+  assert.equal((await f.send(f.body({useAi:true}),{Origin:'https://other.invalid'})).status,403);
+  assert.equal(prepared,0);assert.equal((await ok(await f.get('?quota=1'))).quota.used,0);
+  for(const generate of [async()=>{calls++;throw Error('TIMEOUT');},async()=>{calls++;return {response:new Response('{}',{status:429})};},async()=>{calls++;return {content:''};},async()=>{calls++;return {content:'x'.repeat(6001)};}]){
+    (f.context as any).prepareAi=async()=>({generate});const response=await f.send(f.body({useAi:true}));assert.ok([429,502].includes(response.status));const payload=await response.json() as any;assert.equal(payload.quota.used,calls);
+  }
+  const recreated={...f.context};const q=await ok(await handleWorkspaceAssistant(new Request('https://qa.invalid/api/workspace-assistant?quota=1'),recreated));assert.equal(q.quota.used,4);
+  const other={...f.context,userId:randomUUID()};assert.equal((await ok(await handleWorkspaceAssistant(new Request('https://qa.invalid/api/workspace-assistant?quota=1'),other))).quota.used,0);
+  (f.context as any).prepareAi=async()=>({response:new Response('{}',{status:503})});assert.equal((await f.send(f.body({useAi:true}))).status,503);assert.equal((await ok(await f.get('?quota=1'))).quota.used,4);
+ }finally{f.sql.close();}
+});
+test('actual authenticated Worker opt-in is one bounded Gemini call without project source, fallback or key mutation',async()=>{
+ const f=await aiFixture();try{
+  f.sql.run('CREATE TABLE preview_users(id TEXT,login_id TEXT,display_name TEXT,email TEXT,roles_json TEXT,is_active INTEGER,department_code TEXT); CREATE TABLE preview_sessions(id_hash TEXT,user_id TEXT,expires_at TEXT)');
+  const token='synthetic-'+randomUUID();f.sql.run('INSERT INTO preview_users VALUES(?,?,?,?,?,1,?)',[f.context.userId,'synthetic','Synthetic QA','qa@invalid.test','["staff"]','CLAIM_CENTER']);
+  f.sql.run('INSERT INTO preview_sessions VALUES(?,?,?)',[createHash('sha256').update(token).digest('hex'),f.context.userId,new Date(Date.now()+3600000).toISOString()]);
+  let calls=0,status=200;const key='AIza'+'A'.repeat(35);
+  const send=()=>worker.fetch(new Request('https://qa.invalid/api/workspace-assistant',{method:'POST',headers:{Origin:'https://qa.invalid','Content-Type':'application/json',Cookie:'claim_center_session='+token},body:JSON.stringify(f.body({useAi:true,question:'HWP 가져오기 방법 test@example.invalid',previousQuestion:'PRIVATE_PREVIOUS'}))}),{DB:f.context.db,GEMINI_API_KEY:key,GEMINI_TEST_FETCH:async(url:string,init:RequestInit)=>{
+   calls++;assert.match(url,/gemini-3\.5-flash-lite:generateContent$/u);const payload=JSON.parse(String(init.body));const serialized=JSON.stringify(payload);assert.doesNotMatch(serialized,/PRIVATE_CUSTOMER_PROJECT|PRIVATE_PREVIOUS|10000000-0000|test@example\.invalid/u);assert.doesNotMatch(serialized,/snapshot|draftVersion/u);assert.equal(payload.generationConfig.maxOutputTokens,1200);assert.deepEqual(payload.generationConfig.thinkingConfig,{thinkingLevel:'low'});assert.equal(payload.tools,undefined);
+   return new Response(JSON.stringify(status===200?{candidates:[{content:{parts:[{text:'HWP 메뉴에서 가져오기를 선택하세요.'}]}}]}:{error:{code:status,message:'synthetic provider error'}}),{status,headers:{'Content-Type':'application/json'}});
+  }} as any);
+  const answer=await ok(await send());assert.equal(answer.mode,'AI');assert.equal(calls,1);assert.equal(answer.quota.used,1);assert.ok(!JSON.stringify(answer).includes(key));assert.equal(answer.snapshot.id,A);
+  status=429;assert.equal((await send()).status,429);assert.equal(calls,2);status=503;assert.equal((await send()).status,502);assert.equal(calls,3);
+  assert.equal((await ok(await f.get('?quota=1'))).quota.used,3);assert.equal(f.sql.exec('SELECT title FROM preview_cases WHERE id="'+A+'"')[0].values[0][0],'PRIVATE_CUSTOMER_PROJECT');
+ }finally{f.sql.close();}
+});
+test('both additive usage migrations are idempotent on populated databases without touching existing rows',async()=>{
+ const SQL=await initSqlJs();for(const file of ['apps/cloudflare/migrations/0072_workspace_assistant_usage.sql','packages/database/prisma/migrations/20261029090000_workspace_assistant_usage/migration.sql']){
+  const db=new SQL.Database();try{db.run("CREATE TABLE existing_business(id TEXT PRIMARY KEY,value TEXT); INSERT INTO existing_business VALUES('preserved','synthetic immutable business/key metadata')");const before=JSON.stringify(db.exec('SELECT * FROM existing_business'));const migration=readFileSync(file,'utf8');db.run(migration);db.run(migration);assert.equal(JSON.stringify(db.exec('SELECT * FROM existing_business')),before);assert.equal(db.exec('PRAGMA integrity_check')[0].values[0][0],'ok');assert.deepEqual(db.exec('PRAGMA foreign_key_check'),[]);
+  }finally{db.close();}
+ }
+});

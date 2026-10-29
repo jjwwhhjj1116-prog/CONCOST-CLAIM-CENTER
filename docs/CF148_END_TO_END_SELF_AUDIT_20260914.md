@@ -1838,3 +1838,14 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 양 서버 배포·실검수 완료: 제품 커밋3852ec4cb97f24fc0434325235a6e9a8a160310e 정상 push. 개발12bf6d87-1fc6-4e93-8b7f-7780d5d181cd / 가오픈32fcd748-4b7e-4429-a5aa-403fff5456ad 각각100%, --keep-vars·기존바인딩메타데이터불변·migration0. 실제 공개46/46파일 SHA가 검수 산출물과 양 서버 간 모두 동일, health/readiness200·익명명함API401.
 - 기존 이경훈 director 정상 UI 로그인에서 개발15:18:50 KST/가오픈15:21:01 KST에 PC1440/모바일390 질문 각2회가 모두 MANUAL. 보고서 질문은REPO-02, 명함 등록 질문은CONTACT-02를 먼저 안내하고 실제 명함 화면 이동·QR버튼 비실행 강조 PASS. 버블/접힘/입력clear와 원고·10/21일지·튜토리얼·자격증명상태4SHA가 각 서버 배포 전후 정확 일치. 도우미 POST 외 업무 쓰기0·차단된 예상밖 쓰기0, 권한/키/보고서 다른AI기능 변경0.
 - 종합원장 continuation/output/playwright/manual-assistant-20261029/revision2/verification-summary.json. 도우미 자체의 외부 AI 호출 제거를 코드·정상인증 Worker trap·실배포 MANUAL 응답으로 확인했으며 공급자 청구 포털을 감사한 것은 아니다. 보고서·제안서·명함 AI의 기존 사용 기준·비용은 별도다. 실물 휴대폰/실제 OS키보드는 미검증, 새 공식 복구 근거가 있을 때만 재개하는 heartbeat automation을 추가했다. 기존 Drive·주말/월요일 예약은 유지한다.
+
+
+## 선택형 Gemini 업무 질문·계정별 하루 한도 — 2026-10-29
+
+- 기본 매뉴얼 안내와 본인 프로젝트 상태 조회는 무료 규칙 응답을 유지한다. 팝업 기본 OFF인 ‘AI로 질문하기’를 켰을 때만 회사 Gemini 3.5 Flash-Lite 단일 요청을 사용한다. 입력 질문과 최신 제품 매뉴얼만 전송하며 서버 저장 원문·프로젝트 상태·이전 대화는 자동 전송하지 않는다. 저장·상신·승인과 기존 원문 동의/권한 보호는 그대로다.
+- 클레임센터 자체 계정당 일 20회, 한국시간 자정 초기화. DB 조직/사용자/날짜 PK의 조건부 UPSERT+RETURNING과 CHECK로 동시 요청을 제한한다. 전송 후 실패도 1회, 기본 안내·상태·실행 거절·키 미연결은 무차감. 자동 재시도·모델 대체 없음. Google 무료 한도는 프로젝트별이며 실제 요금제에 따라 과금될 수 있어 20회를 무료 보장으로 표현하지 않는다.
+- 업데이트 안내·HOME/설정 매뉴얼·팝업 사용법을 갱신했다. UI의 같은 날짜 사용량은 늦은 응답으로 역행하지 않는다. API에 질문/키/업무 원문을 저장하지 않고 사용 횟수만 기록한다.
+- 신규 additive migration: D1 0072_workspace_assistant_usage.sql, SQLite 20261029090000_workspace_assistant_usage/migration.sql 및 Prisma model. 기존 migration/원장은 수정하지 않는다. Vietnam 운영 DB 적용은 이번 Cloudflare 배포 범위에 포함하지 않는다.
+- 검증: 기존 관련 48/48 PASS, 실제 SQLite runner의 기존 행/이력 보존·2회 실행 무변경 1/1 PASS, web/Worker 타입·빌드·양 서버 dry-run PASS. Chrome 합성 PC1440×1000/모바일390×844/낮은360×400에서 토글·AI/기본 답변·20회 소진·질문 보존·IME/Shift Enter·닫기/재열기·화면 이동 PASS. 실물 휴대폰/실제 OS 키보드는 NOT_RUN.
+- 실제 양 서버 D1 export 서명·복원과 Wrangler local migrations apply 2회 통과(개발 기존132테이블/가오픈131테이블 보존). 실서버 적용·실제 Gemini 검수 결과는 후속 기록에 연결한다.
+- 증거: continuation/output/playwright/assistant-optin-20261029. 기본 무AI 완료 기록과 실패 원본은 보존한다.

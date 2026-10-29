@@ -74,3 +74,10 @@
   .workspace-assistant-context[open] { max-height: 25%; }
   .workspace-assistant-compose { max-height: 45%; overflow-y: auto; }
 }
+
+.workspace-assistant-compose .workspace-assistant-mode { margin: 0 0 6px; gap: 6px; flex-wrap: wrap; }
+.workspace-assistant-mode label { display: flex; align-items: center; min-height: 44px; gap: 8px; font-size: 13px; cursor: pointer; }
+.workspace-assistant-mode input[type='checkbox'] { width: 20px; min-height: 20px; height: 20px; accent-color: #204b74; }
+.workspace-assistant-privacy[open] { max-height: 140px; overflow-y: auto; }
+.workspace-assistant-privacy ol { padding-left: 20px; }
+.workspace-assistant-privacy p { max-height: none; overflow: visible; }

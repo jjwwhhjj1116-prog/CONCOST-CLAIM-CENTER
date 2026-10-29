@@ -5728,6 +5728,7 @@ interface GeminiContentRequest {
   responseSchema?: Record<string, unknown>;
   unavailableCode?: string;
   unavailableLabel?: string;
+  singleAttempt?: boolean;
 }
 
 function normalizedGeminiReasoningEffort(value: string): PreviewAiReasoningEffort {
@@ -5824,13 +5825,13 @@ async function generateGeminiContent(
     };
     const providerFetch = env.GEMINI_TEST_FETCH ?? fetch;
     const retryableStatuses = new Set([429, 500, 502, 503, 504]);
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < (request.singleAttempt ? 1 : 3); attempt += 1) {
       response = await providerFetch(endpointFor(request.modelCode), init);
-      if (response.ok || !retryableStatuses.has(response.status) || attempt === 2) break;
+      if (request.singleAttempt || response.ok || !retryableStatuses.has(response.status) || attempt === 2) break;
       await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 350 : 900));
     }
     const failoverStatuses = new Set([500, 502, 503, 504]);
-    if (request.modelCode === 'gemini-3.7-flash' && response && !response.ok && failoverStatuses.has(response.status)) {
+    if (!request.singleAttempt && request.modelCode === 'gemini-3.7-flash' && response && !response.ok && failoverStatuses.has(response.status)) {
       resolvedModelCode = 'gemini-3.6-flash';
       fallbackUsed = true;
       response = await providerFetch(endpointFor(resolvedModelCode), init);
@@ -9009,8 +9010,20 @@ const worker = {
       if (!user) return json({ error: '로그인이 필요합니다.' }, 401);
       if (!env.DB) return json({ error: '프로젝트 조회를 준비하고 있습니다.' }, 503);
       return handleWorkspaceAssistant(request, {
-        db: env.DB, organizationId: PREVIEW_ORGANIZATION_ID, userId: user.id
-
+        db: env.DB, organizationId: PREVIEW_ORGANIZATION_ID, userId: user.id,
+        prepareAi: async () => {
+          const credential = await resolveOrganizationAiCredential(env, 'GEMINI');
+          if (!credential) return {response:json({error:'회사 Gemini 연결이 없습니다. 기본 안내는 사용할 수 있습니다.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
+          return {generate: async (system: string, input: string) => {
+            const sanitized = redactExternalAiText(input);
+            const result = await generateGeminiContent(env,{apiKey:credential.apiKey,modelCode:'gemini-3.5-flash-lite',system,parts:[{text:sanitized.text}],reasoningEffort:'low',maxOutputTokens:1200,timeoutMs:20000,singleAttempt:true});
+            if(result.response && (result.response.status===502||result.response.status===503)) {
+              const payload = await result.response.clone().json().catch(()=>null) as {providerStatus?:number}|null;
+              if(payload?.providerStatus===429) return {response:json({error:'Gemini rate limit'},429)};
+            }
+            return result;
+          }};
+        }
       }).catch(() => json({ error: '도우미 조회에 실패했습니다. 기존 작업은 유지됩니다. 잠시 후 다시 시도하세요.' }, 503));
     }
 
