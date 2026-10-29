@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { ASSISTANT_MANUAL_VERSION } from '../apps/web/src/layout/workspace-assistant-guide';
 const read = (path:string) => readFileSync(new URL('../'+path,import.meta.url),'utf8');
 const release = read('apps/web/src/layout/ReleaseNotice.tsx');
 const shell = read('apps/web/src/layout/AppShell.tsx');
 test('CF113 dated cumulative notice describes actual feature updates and connection limitations', () => {
-  assert.match(release,/RELEASE_DATE = '2026-10-27'/);
+  assert.ok(release.includes(`RELEASE_DATE = '${ASSISTANT_MANUAL_VERSION}'`));
   for(const label of ['긴 한글 프로젝트 제목','입력한 문자 그대로','수정한 새 버전은 다시 상신'])assert.ok(release.includes(label),label);
   assert.match(release,/휴대폰 QR 명함 등록/);
   assert.match(release,/명함 앞면과 뒷면을 촬영·전송/);

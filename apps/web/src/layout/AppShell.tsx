@@ -5,6 +5,7 @@ import {requestNavigation} from '../navigation-guard';
 import { ROUTES, canAccessRoute, type UserRole } from '../routes/Router';
 import { WORKFLOW_PROJECTS, WORKFLOW_STAGES } from '../workflow/workflow-model';
 import { WorkspaceHelpCenter } from './WorkspaceHelpCenter';
+import { WorkspaceAssistant } from './WorkspaceAssistant';
 import { SoftLaunchNotice } from './SoftLaunchNotice';
 import { ReleaseNotice, RELEASE_DATE_LABEL, hasSeenRelease, markReleaseSeen } from './ReleaseNotice';
 
@@ -340,6 +341,7 @@ export const AppShell: React.FC<AppShellProps> = ({
 
       <SoftLaunchNotice hideBanner openRequest={noticeRequest} />
       <WorkspaceHelpCenter hideTrigger openRequest={helpRequest} category={activeGroup?.icon ?? 'home'} routeId={currentRouteId} previewMode={previewMode} suspended={releaseOpen || alertsOpen || isDrawerOpen} onNavigate={go} />
+      <WorkspaceAssistant key={userId} currentPath={currentPath} currentSearch={currentSearch} roles={roles} suspended={releaseOpen || alertsOpen || isDrawerOpen} onNavigate={go} />
 
       <div className="shell-body">
         {!isTablet && <aside ref={sidebarElement} className="sidebar" aria-label="주요 내비게이션 사이드바" style={{ width: sidebarWidth, flexBasis: sidebarWidth }}>

@@ -1780,3 +1780,15 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 최신 진행 안내 후보는 수정 후 직렬 CF182/CF69/CF162 **18 PASS**, 별도 독립 CF182 browser **1 PASS** 및 전체 모노레포 typecheck/web tsc/cf:build PASS다. build의 기존 큰 번들/Node deprecation 경고와 pinned runtime28/WASM 불변은 유지한다. 이 마지막 후보를 development에만 반영하며 원고·키·DB·가오픈은 변경하지 않는다.
 - 후속 `b01695a46120635d734f614ff1e207419bbb0991` 정상 commit/push → development `55ca68ca-36db-407a-8567-f623726adcc8` --keep-vars 반영 완료. main index-4rk0rfPk.js SHA `fdf1f575ab8085044ae94bd86ded22434a500b6aa2a8fa837fde221e7c7e2ac0`, CSS index-8yhsWmje.css. public health/readiness200·entry3/runtime28 exact byte PASS. 코드 읽기 최종 독립 검토에서 출력 내용·이미지 요청순서·서식·압축·보호조건 변경0과 생략인자 호환 확인. 운영/가오픈·ENV·migration·승인 변경0, 기존 삭제 로그21/PDF1 unstaged 보존.
 - 최종 지정 단신 Chrome 읽기 reload1회 PASS: 실제 main module index-4rk0rfPk.js, CC6/4단계/원래 제목/저장13:11:19/관리자QA Card·초기 저장본 조회 버튼/오류0. 로컬 QA panel은 reload로 초기화됐으며 GET·다운로드·원고입력·저장·HWP재열기·검토요청·승인·배정0. 진행 안내 문구를 live 변환으로 재실행하지 않았고 localhost 실제 함수의 순서 단언 PASS와 구분한다. 다음 시작은 기존 원본 템플릿별 PC 한컴·Word 대조와 나머지 A–Z 미체크 항목이며 기본 개발 검수를 다시 직원 최종승인 대기로 막지 않는다.
+
+
+## AI 업무 도우미 — 2026-10-29
+
+- 승인 범위: 최신 배포 매뉴얼 사용법, 본인 배정 프로젝트 상태 조회, 해당 화면 이동·실제 버튼 위치 안내. 저장·상신·승인·권한 변경은 기존 경로를 유지한다. DB migration·키 교체·기존 업무 원문 변경 없음.
+- 기존 workspace-help-content.ts를 UI·Worker가 함께 사용한다. Gemini는 관련 매뉴얼 ID와 절차 인덱스만 선택하며 서버가 검증된 원문을 조립한다. 자유 생성 문장·임의 메뉴·실행 완료 주장은 출력하지 않는다. 프로젝트명·본문·조회 스냅샷은 자동 AI 전송하지 않는다. 기존 회사 전송 정책과 조직 키를 유지하며 확인 불가·오류 시 MANUAL 원문 안내로 구분한다.
+- 새 API는 세션을 검사하고 관리자도 본인 assignment EXISTS로 한정한다. SELECT만 사용하며 draft/review/final 버전과 삭제 상태를 구분한다. 응답은 no-store, 질문/본문 크기 제한·동일 origin·사용자별 isolate burst 제한을 적용했다. burst 제한은 전역 비용 한도가 아니다. 새 저장·설정 테이블이나 대화 영구 저장은 없다.
+- PC 보조 패널과 모바일 전체 화면, 오류 시 질문 보존, 출처 매뉴얼, 기존 이동 guard, 실제 보이는 요소의 비실행 강조를 제공한다. 검색 후 선택 불일치·다른 프로젝트 취소 후 강조·낡은 제안서 selector를 수정했다. 실제 360px 검수에서 요청 버튼 비활성화 후 body 초점의 Escape 누락을 발견하여 전역 범위 복구 및 모바일 inert 원복을 추가했고 PC의 다른 대화상자 Escape를 존중하도록 제한했다.
+- 로컬 실제 최종 빌드 Chrome 1440x1000/390x844에서 AI 선택형 원문·합성 SQL v4/v3 구분·검색 선택 초기화·Tab18회 범위 유지·QR 버튼 위치 PASS. 360x640 공급자 실패/질문 유지/Escape/초점/배경 복원 PASS. 별도 PC native 합성 dialog Escape 존중 PASS. 이는 실제 휴대폰 하드웨어 또는 실서버 AI를 검증한 것으로 확대하지 않는다.
+- 관련 신규7+인접19=26 PASS, web tsc·Worker strict 타입·프로덕션 build PASS, 기존 bundle/dynamic-import 경고 유지. CF26 별도 3개 중 1개 403≠200는 HEAD 3fd7eb0 모듈에서도 동일 재현하여 기존 실패로 보존했고 권한 기준을 완화하지 않았다. Impeccable 검사는 ES 전용 DESIGN.md 범위 밖 색/글꼴/모서리 advisory이며 글로벌 디자인을 바꾸지 않았다.
+- 기존22개 삭제·package.json 사용자 변경·미추적 폴더 보존. HWP runtime28/WASM/binding 바이트 그대로이며 엔진 재빌드 없음. 두 서버 기존 활성 버전/바인딩 해시를 확보했고 --keep-vars·동일 검수 artifact로 배포 후 정상 계정의 실제 AI·본인 상태·이동·미저장 취소를 확인한다. 실서버 결과는 후속 기록으로 남긴다.
+- 증거 기준: continuation/output/playwright/workspace-assistant-20261029. Drive 원본4개의 기존 URL 안전 중단과 이 별도 앱 검수를 혼동하지 않으며 Drive 재열기·해시 검수는 아직 UNKNOWN이다.
