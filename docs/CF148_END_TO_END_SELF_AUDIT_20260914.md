@@ -1905,3 +1905,9 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 
 
 - Drive4 조용한 재확인(2026-10-30 02:20 KST): 공식 RSS 최신3개 본문·현 설치 API가 직전과 동일하고, 정확 오류 공식 검색에서도 새 적용 가능한 복구 근거 미확보. 4개ID/SHA·두receipt해시는 일치하지만 회사계정 재열기/실다운로드는 계속0/4 UNKNOWN이다. updater/native/browser/Drive·권한/키/자료/제품/배포/다른예약 변경0, original25dirty 보존. 증거 continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261029-1720.json. 전체과거릴리스 부재·과거원장전체바이트불변을 확인범위 밖에서 단정하지 않는다. 수동 요청·중간 보고0.
+
+
+### 새 공식 CLI 릴리스 적용성 검토 — 2026-10-30 05:22 KST 트리거
+
+- 공식 CLI0.166.0 새 발표와 전체 entry를 실제 읽었다. SystemRoot/MXC grants·volume probe·runtime shutdown 변경은 후보지만 정확MXC오류·Chrome URL-confidence·sharing violation 해결을 명시하지 않아 복구 증거로 쓰지 않았다. 새 릴리스 근거로 공식 updater 읽기1회: 설치26.1023.51421/build22530/prod/up_to_date. 이 실행의 다운로드·설치·재시작0이며 새 metadata만으로 복구 판정하지 않는다.
+- drive-4 공식 prompt만 마지막 조회/동일0.166재poll금지 기준으로 갱신(prompt·updated_at 외3시간주기·상태·대화·생성시각 보존). 다른예약0. 기존4원장/receipt해시와정확4target동일, 회사계정재열기·실다운로드0/4 UNKNOWN. native/browser/Drive입력·자료/계정/권한/키/제품수정/배포·수동요청0, original25dirty보존. 증거 continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261029-2022.json 및 official-cli-0166-details/app-updater/automation-update-20261029-2022.json. 사용자 중간보고 없이 감시유지.
