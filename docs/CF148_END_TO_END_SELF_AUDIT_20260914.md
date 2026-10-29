@@ -1869,3 +1869,13 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 발견한 실제 조회누락: 삭제case의 대시보드 프로젝트알림·보고서알림·확정본/출력·관리자학습후보가 남을 수 있었다. 5조회 SQL에 activecase 조건만 추가, outputs에는caseJOIN추가. 권한·자료원장 변경 없음. 새 actual Worker SELECT-only 회귀는 수정전삭제caseB노출FAIL→수정후adminA/C·staffA만/DB전체bytes불변PASS.
 - 관련65검사·web/Worker타입·build·양dry-run PASS. 확장검사에 포함한 CF29 구형 AI학습 fixture는 chapters 미준비 TypeError가 원본 HEAD에서도 동일 재현돼 선행fixture실패로 보존했다. 이번변경의memory목록은 새실제Worker 검사로 직접 검증, 기존보안/동의정책을 약화하지 않았다. CF29 AI학습전체가 이번검수로 완료된 것으로 보고하지 않는다.
 - 삭제전 서명백업/격리예행/정확ID CAS, 실제정리, 동일artifact재배포, 일반목록잔여0·비대상원장보존 비교는 다음 실제결과에 연결한다. 증거: continuation/output/playwright/qa-cleanup-20261029.
+
+### 검수 자료 정리 실제 완료·양 서버 동일 제품 반영
+
+- 제품 커밋 `d536f6cf13021c392b7dc8cb1bcbee2c5763d07c` 정상 push. 개발 Worker `3b1a6184-657e-4b01-8527-684ac2c326fd`, 가오픈 `c8170e7a-c5ad-42f7-a7ca-ac055faf9710`, 각각100%. 검증한 compiled Worker/이미지 bundle8개가 두 dry-run에서 동일, 실제publicasset46/46도양서버검증artifact와일치. 기존 nonasset binding metadata/원래점검변수상태복구, migration0.
+- 개발12/가오픈10 정확QA프로젝트만서명백업→격리복원→단일조건부UPDATE전체CAS/두번째no-op예행→deleted_at/version+1/updated_at변경. 프로젝트원문·승인·고정상신·활동원장은물리삭제0. 비대상case/모든다른테이블·schema가서명백업예행과일치. 정상계정사칭audit삽입없음;Cloudflare작업기록과서명manifest로사용자승인/대상/전후해시연결.
+- 기존yjw관리자계정정상로그인으로명함개발2/가오픈2를정상ARCHIVE API처리. 기존카드/Drive파일ID·sourceSHA·뒷면행정확보존,각ADMIN_ARCHIVED2이벤트만추가. 비대상카드전필드및모든다른테이블정확보존. 개발ES합성2건은이전DELETED revision2상태라추가쓰기0,미확정ES5/CC5/고객CC4·CC6보존. AI실사용량2회는운영횟수이므로초기화하지않음.
+- 정상Chrome관리자로그인에서서버별12조회(의뢰/제안목록/대시보드/도우미/일지/주간결재함/알림/보고서확정본/학습후보/명함/ES)모두200·선정QA참조0. PC/모바일일지프로젝트선택에서도잔여0/도우미아이콘유지. 개발확인2026-10-29 17:06:37 KST,가오픈17:06:43 KST. 이검수의추가업무쓰기0.
+- 예행수집기의Node SQLite row prototype 비교오류는remote SQL전에검출되어실데이터쓰기0/기존Worker복원. Cloudflare export10001은실제서비스내부오류로원본로그보존후bounded재시도. D1 execute --file의progress+JSON수집오류에서는실제단일SQL의성공을서명백업예행대비전체row/schema로검증하고SQL재전송0. D1 meta.changes의내부import bookkeeping을QA건수로세지않고실제application행12/10으로확정. 이수집실패는제품/업무원문손상으로분류하지않는다.
+- 기존QA고정상신26개·생성원문11개·Drive원본은보존되어별도원본검수증거를지우지않음. 삭제QA를향후준비helper로재생성하지말것. 주말/Monday양성검수는삭제된QA대상으로성립하지않으므로미완료로보존하고성공으로보고하지않는다. 실제생산정기설정·계정·키·다른예약은변경하지않았다.
+- 최종증거: `continuation/output/playwright/qa-cleanup-20261029/verification-summary.json`, 양서버full-preservation.json, actualUI조회로그/이미지, signed private backups. source회귀65 PASS와선행CF29fixture실패를구분한다. 실물phone/native키보드/독립Word·한컴전체/월요일실예약을이번정리로완료처리하지않는다.
