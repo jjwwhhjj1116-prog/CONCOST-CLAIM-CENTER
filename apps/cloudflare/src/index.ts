@@ -696,7 +696,7 @@ async function handlePreviewDashboard(request: Request, env: CloudflareEnv): Pro
       env.DB.prepare(
         `SELECT n.id,n.case_id AS caseId,c.case_number AS caseNumber,n.notification_type AS notificationType,n.title,n.message,n.created_at AS createdAt
          FROM preview_project_notifications n JOIN preview_cases c ON c.id=n.case_id
-         WHERE n.organization_id=? AND n.user_id=? AND n.read_at IS NULL ORDER BY n.created_at DESC LIMIT 20`
+         WHERE n.organization_id=? AND n.user_id=? AND c.deleted_at IS NULL AND n.read_at IS NULL ORDER BY n.created_at DESC LIMIT 20`
       ).bind(PREVIEW_ORGANIZATION_ID,user.id).all<Record<string,unknown>>()
     ]);
     projectScheduleReminders = stageRows.results.map((row) => ({ ...row,stageLabel:stageLabels[String(row.stageCode)] ?? row.stageCode,dDayInfo:previewDDay(`${String(row.startDate)}T00:00:00+09:00`),overdue:String(row.endDate)<today }));
@@ -6682,7 +6682,7 @@ async function previewMemoryCandidates(env: CloudflareEnv): Promise<Array<Record
     'm.analyzer_code AS analyzerCode,m.confidence,m.status,m.version,m.created_at AS createdAt,m.reviewed_at AS reviewedAt,m.review_note AS reviewNote,' +
     'f.chapter_code AS chapterCode,f.feedback_text AS feedbackText,c.case_number AS caseNumber,c.title AS caseTitle,u.display_name AS createdByName ' +
     'FROM preview_memory_candidates m JOIN preview_report_feedback f ON f.id=m.feedback_id JOIN preview_cases c ON c.id=f.case_id ' +
-    'JOIN preview_users u ON u.id=m.created_by WHERE m.organization_id=? ORDER BY CASE m.status WHEN \'PENDING\' THEN 0 ELSE 1 END,m.created_at DESC LIMIT 100'
+    'JOIN preview_users u ON u.id=m.created_by WHERE m.organization_id=? AND c.deleted_at IS NULL ORDER BY CASE m.status WHEN \'PENDING\' THEN 0 ELSE 1 END,m.created_at DESC LIMIT 100'
   ).bind(PREVIEW_ORGANIZATION_ID).all<Record<string, unknown>>();
   return rows.results.map((row) => ({ ...row, confidence: Number(row.confidence), version: Number(row.version), tags: JSON.parse(String(row.tagsJson)), tagsJson: undefined }));
 }
@@ -7517,7 +7517,7 @@ async function handlePreviewNotifications(request:Request,env:CloudflareEnv):Pro
     return describe();
   }
   if(request.method!=='GET')return json({error:'Method not allowed',code:'METHOD_NOT_ALLOWED'},405);
-  const rows=await env.DB.prepare('SELECT n.id,n.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,n.review_id AS reviewId,n.notification_type AS notificationType,n.title,n.message,n.read_at AS readAt,n.created_at AS createdAt,o.status AS emailStatus,o.recipient_email AS recipientEmail FROM preview_notifications n JOIN preview_cases c ON c.id=n.case_id LEFT JOIN preview_email_outbox o ON o.notification_id=n.id WHERE n.user_id=? ORDER BY n.created_at DESC LIMIT 100').bind(user.id).all<Record<string,unknown>>();
+  const rows=await env.DB.prepare('SELECT n.id,n.case_id AS caseId,c.case_number AS caseNumber,c.title AS caseTitle,n.review_id AS reviewId,n.notification_type AS notificationType,n.title,n.message,n.read_at AS readAt,n.created_at AS createdAt,o.status AS emailStatus,o.recipient_email AS recipientEmail FROM preview_notifications n JOIN preview_cases c ON c.id=n.case_id LEFT JOIN preview_email_outbox o ON o.notification_id=n.id WHERE n.user_id=? AND c.deleted_at IS NULL ORDER BY n.created_at DESC LIMIT 100').bind(user.id).all<Record<string,unknown>>();
   return json({notifications:rows.results,phase:'CF36_APPROVAL_DELIVERY_NOTIFICATION'});
 }
 
@@ -7794,13 +7794,13 @@ async function finalizationList(env: CloudflareEnv, user: SessionUser, caseId = 
     'reviewer.display_name AS approvedByName, v.reviewed_at AS approvedAt FROM preview_report_finalizations f ' +
     'JOIN preview_cases c ON c.id=f.case_id JOIN preview_report_revisions r ON r.id=f.report_revision_id JOIN preview_report_reviews v ON v.id=f.review_id ' +
     'JOIN preview_users finalizer ON finalizer.id=f.finalized_by JOIN preview_users reviewer ON reviewer.id=v.reviewed_by ' +
-    'WHERE f.organization_id=? AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ' +
+    'WHERE f.organization_id=? AND c.deleted_at IS NULL AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ' +
     'ORDER BY f.finalized_at DESC LIMIT 100'
   ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<PreviewFinalizationRow>();
   const outputs = await env.DB.prepare(
     'SELECT o.id,o.finalization_id AS finalizationId,o.format,o.file_name AS fileName,o.content_sha256 AS contentSha256,o.byte_size AS byteSize,o.created_at AS createdAt ' +
-    'FROM preview_report_outputs o JOIN preview_report_finalizations f ON f.id=o.finalization_id ' +
-    'WHERE f.organization_id=? AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ORDER BY o.format'
+    'FROM preview_report_outputs o JOIN preview_report_finalizations f ON f.id=o.finalization_id JOIN preview_cases c ON c.id=f.case_id ' +
+    'WHERE f.organization_id=? AND c.deleted_at IS NULL AND (?=\'\' OR f.case_id=?) AND (?=1 OR EXISTS (SELECT 1 FROM preview_case_assignments a WHERE a.case_id=f.case_id AND a.user_id=?)) ORDER BY o.format'
   ).bind(PREVIEW_ORGANIZATION_ID, caseId, caseId, user.roles.includes('admin') ? 1 : 0, user.id).all<Record<string, unknown> & { finalizationId: string }>();
   const projections = rows.results.map((row) => finalizationProjection(row, outputs.results.filter((output) => output.finalizationId === row.id)));
   return json({ finalizations: projections, phase: 'CF09_D1_FINAL_OUTPUT' });

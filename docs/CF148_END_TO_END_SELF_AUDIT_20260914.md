@@ -1859,3 +1859,13 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 현재 전체 검증49 PASS(관련48+실제SQLite runner1). 초기에 생성되지 않은 Prisma client로 runner 검사가 실패한 원본은 보존했고, 기존 설치된 Prisma generate 후 실제 runner2회 검사를 통과했다. 기존 CF86 정적 retry 검사는 새 opt-in1회/기존3회 계약으로 보강했다.
 - 가오픈 초기 탭의 기존 관리자 세션은 로그아웃하지 않았다. 공식 CLI의 새 전용 격리 profile에서 정상 직원 로그인을 사용했다. 사용자 Chrome/기존 관리자 세션은 변경하지 않았다. 실물 휴대폰과 OS 키보드는 여전히 미검증이며 해당 공식 복구 감시는 별도 보존한다.
 - 최종 증거: `continuation/output/playwright/assistant-optin-20261029/verification-summary.json`. Google 실제 무료 프로젝트 quota/청구 원장은 확인하지 않았으며 앱 20회 정책은 비용0 보장이 아니다.
+
+
+## 합성 검수 자료 정리·삭제 프로젝트 조회 보완 — 2026-10-29
+
+- 최신 사용자는 양 서버 동일 배포 확인 및 검수 작성 자료 정리·재배포를 승인했다. 내부 제안→접수→PM일정→보고서→독립결재·출력/세 직원 개인 일일·주간 자동취합은 CF250/251/243~245 실검수 기록과 현재 소스로 재대조했다. 월요일 실제 예약 양성 검수는 별도 미완료이며 전체 완료로 확대하지 않는다. 외부ERP/제안서고객메일은 내부흐름과 구분한다.
+- 생성 증거·정확ID·CASE_CREATED1·합성설명으로 개발 CC7~18 12건/가오픈CC19~28 10건, receipt 성공 명함4건, runbook 신규 생성 ID가 있는 개발 ES2건을 선별했다. 고객CC4/6 및 원격 업로드 UNKNOWN인 CC5, 미확정ES5건, 사용량실기록·키·계정·권한·설정·증거백업은 제외한다.
+- 삭제는 기존원문·상신·결재·Drive원본 물리삭제 없이 화면목록 제외 방식. 대상QA anchor의 주간상신 양서버각13개를 조사해 QA집합 밖 case참조0/unknown0 확인했다. 상신26개 원장은 보존한다. 대상관련학습후보/ACTIVE0, 미발송알림queue0. 기존 정기준비 helper는 대상프로젝트 부재 확인에서 PUT전에 중단하므로 삭제QA를 재생성하지 않는다.
+- 발견한 실제 조회누락: 삭제case의 대시보드 프로젝트알림·보고서알림·확정본/출력·관리자학습후보가 남을 수 있었다. 5조회 SQL에 activecase 조건만 추가, outputs에는caseJOIN추가. 권한·자료원장 변경 없음. 새 actual Worker SELECT-only 회귀는 수정전삭제caseB노출FAIL→수정후adminA/C·staffA만/DB전체bytes불변PASS.
+- 관련65검사·web/Worker타입·build·양dry-run PASS. 확장검사에 포함한 CF29 구형 AI학습 fixture는 chapters 미준비 TypeError가 원본 HEAD에서도 동일 재현돼 선행fixture실패로 보존했다. 이번변경의memory목록은 새실제Worker 검사로 직접 검증, 기존보안/동의정책을 약화하지 않았다. CF29 AI학습전체가 이번검수로 완료된 것으로 보고하지 않는다.
+- 삭제전 서명백업/격리예행/정확ID CAS, 실제정리, 동일artifact재배포, 일반목록잔여0·비대상원장보존 비교는 다음 실제결과에 연결한다. 증거: continuation/output/playwright/qa-cleanup-20261029.
