@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-10-29';
 export const RELEASE_DATE_LABEL = '2026년 10월 29일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v8:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v9:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 29일 · 개인 Gemini 연결 복구',text:'일반 직원의 개인 설정에서 모델 목록이 비어 키 저장을 누를 수 없던 문제를 수정했습니다. 개인 키를 암호화 저장한 뒤 연결 확인 모델을 선택해 확인하세요. 모델 선택은 연결 시험에만 적용되며 글쓰기 모델은 회사 설정을 따릅니다. 회사 원문 전송 승인·관리자 전용 설정·개인키 소유자 보호는 유지합니다.'},
   {title:'10월 29일 · AI 업무 도우미',text:'오른쪽 아래 AI 업무 도우미에서 최신 매뉴얼에 근거한 사용법을 묻고 본인 배정 프로젝트의 서버 저장·결재·확정 상태를 조회합니다. 참고 매뉴얼을 펼쳐 해당 화면으로 이동하거나 버튼 위치를 확인하세요. 프로젝트 본문은 자동으로 AI에 보내지 않으며 저장·상신·승인은 기존 절차를 유지합니다. AI 연결·전송 정책을 확인하지 못하면 매뉴얼 원문을 표시합니다. 모바일에서도 같은 기능을 이용할 수 있습니다.'},
   {title:'10월 28일 · 명함 번호·뒷면 인식 보강',text:'국가번호·괄호·내선번호와 뒷면 업무 문구·숫자를 보이는 그대로 추출하도록 명함 인식 지시를 보강했습니다. 인식값은 앞면과 뒷면 원본에 대조해 확인·수정한 뒤 등록하세요. 양면 사진은 기존처럼 각각 Drive에 보관됩니다.'},
   {title:'10월 27일 · 휴대폰 QR 명함 등록',text:'PC에서 QR을 만들고 휴대폰에서 같은 계정으로 로그인해 명함 앞면과 뒷면을 촬영·전송합니다. PC에서 두 면의 Gemini 인식값을 확인하고 수정한 뒤 각각 Drive에 보관합니다. 사진은 전송을 위해 최적화되며 QR 연결은 10분 동안 유효합니다.'},

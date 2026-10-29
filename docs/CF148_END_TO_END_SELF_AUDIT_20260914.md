@@ -1800,3 +1800,13 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 기존 이경훈 계정 정상 UI 로그인으로 개발CC13/가오픈CC23 본인 합성 프로젝트를 각각 검수했다. 실제 Gemini가 REPO-02 최신 원문을 선택한 mode AI, 서버 저장본 상태 표시, PC1440x1000/모바일390x844 넘침0·Escape, 최초 튜토리얼 겹침 해소, 미저장 화면이동 취소 후 입력 유지·저장 없이 원복, 명함 화면으로 실제 이동·QR 버튼 비실행 강조 PASS. 실제 생성 QR·사진등록·상신·승인 실행은 없었다. 각 계정에는 다른 합성 프로젝트가 배정되지 않아 실서버 취소 검수는 다른 화면 이동으로 했으며, cross-project 접근 거절/정확 query 강조 조건은 합성시험·소스 검토 범위다.
 - 검수 전후 원고·10/21 기존 업무일지·튜토리얼 원장 해시가 양 서버 모두 정확히 같고 검수 가드상 login1회와 도우미 POST 외 업무 쓰기0. 세 전문 읽기 검토의 지적을 수정하고 최종 PASS를 받았다. 현재 b70cf4b 코드 기준 관련26검사 PASS. CF26 기존 개인키 시험1건403은 원래3fd7eb0에서도 같은 실패로 분리 보존했으며 정상권한 규칙을 완화하지 않았다.
 - 최종 증거는 continuation/output/playwright/workspace-assistant-20261029/revision2/verification-summary.json과 연결된 정상 UI·해시·배포 원장이다. 실제 휴대폰 하드웨어는 미실행이며 360/390 크기의 실제 Chrome 검수와 구분한다. 별도 베트남 Node API는 이번 기능 범위에서 변경·배포하지 않았다. 기존 Drive 원본4개 재열기·다운로드 SHA는 계속 UNKNOWN이고 새 도우미 성공으로 대체하지 않는다.
+
+## 개인 Gemini 설정·CF26 원문 정책 분리 — 2026-10-29
+
+- 범위: 일반 직원의 본인 Gemini 키 저장·연결 확인 PC/모바일 복구. 기존 사용자·암호·역할·키·업무 원문·다른 예약 보존. 회사 원문 AI 전송 403, 조직키 관리자 전용, 소유자·모델 allowlist·버전 검사는 유지한다. DB 구조·운영 설정 변경 없음.
+- 최초 실패 원본: continuation/output/playwright/cf26-403-regression-20261029-24d168d4-c0cb-4b78-a802-5699f576b224. 기존 CF26은 개인키 등록 오류가 아니라 generate의 REPORT_SOURCE_CONSENT_REQUIRED 403/provider 0이다. 0011 migration의 합성 착수회의 원문이 현재 회사 원문 전송 승인 기준과 충돌했다. 키 우선순위 fixture만 무관 seed를 제외하고 원본 seed가 있는 별도 403·provider0·DB byte 불변 음성 검사를 추가했다. 운영 migration과 보호 guard는 변경하지 않았다.
+- 실제 UI 결함: aiConfig는 관리자에게만 로드돼 일반 직원의 개인 모델 목록이 0개, 키 입력 후 저장도 disabled였다. 기존 인증 metadata에 정적 code/label만 추가하고 UI에서 읽도록 수정했다. 관리자 API를 일반 사용자에게 공개하지 않는다. 개인 연결 시험 모델을 조직 모델 state와 분리했고, 연결 시험/회사 글쓰기 모델의 의미와 매뉴얼·업데이트 공지를 정확히 구분했다.
+- 최종 관련 회귀 42/42 PASS(skip0): CF26 5개, CF19/86/201/116, 챕터 권한, AI 업무 도우미, 업데이트. 개인->조직->환경 선택, 본인 연결 시험 PERSONAL·본인 health, 조직/소유자/공급자/모델/버전/세션 거부, 원문 동의 없음403 및 승인 원문 조직키 강제를 확인했다. web tsc·Worker strict·build·양 dry-run PASS. 첫 QA 명령의 Vite 경로/정적 jpg 타입 선언 누락은 명령 수정 후 통과했으며 제품 오류로 세지 않는다. 기존 bundle/dynamic-import 경고는 유지했다.
+- 실제 격리 Chrome 1440x1000/390x844 + 동일 Worker + 인메모리 SQL + 모의 Gemini에서 개인 저장2/연결2, 409 입력 유지, 재열기 키 원문 비표시, 직원 admin API0 PASS. 관리자 개인 시험 모델 변경 전후 조직 선택·기존 dirty 상태 불변, 개인 시험만 선택 모델 사용, 관리자 모델 쓰기0 PASS. 첫 admin QA의 dirty 버튼0 가정은 오래된 합성 route가 이미 dirty였기 때문이며 원본 실패를 보존하고 전후 동일성으로 고쳤다. 실물 휴대폰/실제 개인 API키 공급자 응답으로 확대하지 않는다.
+- 배포 전 기존 이경훈 정상 UI 로그인으로 양 서버 개인 모델0/저장 disabled를 재현했다. 합성 입력은 전송 없이 원복했고 자격증명 상태 해시를 확보했다. 최종 배포·배포 후 화면과 동일 hash 보존 결과는 후속 기록으로 남긴다. 제품/키 원문은 evidence에 노출하지 않는다.
+- 증거: continuation/output/playwright/personal-key-20261029. 보호된 HWP runtime28/WASM/binding을 검증해 동일 바이트로 승계했고 엔진은 재빌드하지 않았다. 기존 22개 삭제·package.json·미추적 자료를 유지한다. 별도 베트남 Node API는 이번 두 Cloudflare 배포 범위에 포함하지 않는다.

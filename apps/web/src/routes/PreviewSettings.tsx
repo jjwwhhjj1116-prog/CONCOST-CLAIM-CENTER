@@ -29,7 +29,7 @@ interface CredentialState {
     checkedAt: string | null;
   };
 }
-interface ProviderState { providerKind: ProviderKind; label: string; personal: CredentialState; organization: CredentialState }
+interface ProviderState { providerKind: ProviderKind; label: string; models?: AiModelOption[]; personal: CredentialState; organization: CredentialState }
 interface SettingsPayload { personalPriority: boolean; masterKeyReady: boolean; canManageOrganization: boolean; providers: ProviderState[] }
 interface AiModelOption { code: string; label: string }
 interface AiProvider { providerKind: ProviderKind; label: string; models: AiModelOption[] }
@@ -103,6 +103,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const [payload, setPayload] = useState<SettingsPayload | null>(null);
   const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
   const [selectedModels, setSelectedModels] = useState<Partial<Record<ProviderKind, string>>>({});
+  const [personalTestModel, setPersonalTestModel] = useState('');
   const [aiGovernance, setAiGovernance] = useState<AiGovernance | null>(null);
   const [proposalPromptProfiles, setProposalPromptProfiles] = useState<ProposalTemplatePromptProfile[]>([]);
   const [selectedProposalPromptSourceId, setSelectedProposalPromptSourceId] = useState('');
@@ -155,7 +156,8 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
   const stateFor = (provider: ProviderState, scope: CredentialScope) => scope === 'USER' ? provider.personal : provider.organization;
   const inputKey = (provider: ProviderKind, scope: CredentialScope) => `${scope}:${provider}`;
   const modelOptions = (provider: ProviderKind): AiModelOption[] => {
-    const configured = aiConfig?.providers.find((item) => item.providerKind === provider)?.models ?? [];
+    const configured = aiConfig?.providers.find((item) => item.providerKind === provider)?.models
+      ?? payload?.providers.find((item) => item.providerKind === provider)?.models ?? [];
     return configured.filter((model) => MODEL_CHOICES[provider].includes(model.code));
   };
 
@@ -213,7 +215,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
     setBusy(`test:${field}`); setError(''); setNotice('');
     try {
       const result = await apiRequest<{ source: string; checkedAt: string; latencyMs: number }>(`/api/settings/ai-credentials/${provider.providerKind}/test`, {
-        method: 'POST', timeoutMs: 40_000, body: JSON.stringify({ scope, modelCode: selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
+        method: 'POST', timeoutMs: 40_000, body: JSON.stringify({ scope, modelCode: scope === 'USER' ? personalTestModel || modelOptions(provider.providerKind)[0]?.code : selectedModels[provider.providerKind] ?? modelOptions(provider.providerKind)[0]?.code })
       });
       setPayload(await apiRequest<SettingsPayload>('/api/settings/ai-credentials'));
       setNotice(`${PROVIDER_COPY[provider.providerKind].short} 연결 정상 · ${result.latencyMs.toLocaleString('ko-KR')}ms · ${new Date(result.checkedAt).toLocaleString('ko-KR')}`);
@@ -279,7 +281,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
 
   const renderCredentials = (scope: CredentialScope, title: string, detail: string) => <Card title={title} className="credential-settings-card">
     <header className="credential-settings-card__intro">
-      <div><p>{detail}</p><small>{scope === 'USER' ? '개인 Gemini 키는 초안 개선과 AI 어시스턴트에만 사용합니다.' : '개인 Gemini 키가 없는 사용자에게 필요한 작업은 공용키가 사용됩니다.'}</small></div>
+      <div><p>{detail}</p><small>{scope === 'USER' ? '개인 Gemini 키는 제안서·보고서 글쓰기 도우미의 문장 개선에 사용합니다. AI 업무 도우미는 회사 연결을 사용합니다.' : '개인 Gemini 키가 없는 사용자에게 필요한 작업은 공용키가 사용됩니다.'}</small></div>
       <StatusBadge status={scope === 'USER' ? 'review' : 'approved'} />
     </header>
     <div className="credential-provider-grid" data-scope={scope}>
@@ -288,7 +290,7 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
         const field = inputKey(provider.providerKind, scope);
         const copy = PROVIDER_COPY[provider.providerKind];
         const options = modelOptions(provider.providerKind);
-        const selectedModel = selectedModels[provider.providerKind] ?? options[0]?.code ?? '';
+        const selectedModel = scope === 'USER' ? personalTestModel || options[0]?.code || '' : selectedModels[provider.providerKind] ?? options[0]?.code ?? '';
         const workspaceId = workspaceIds[field]?.trim() ?? '';
         const workspaceEditable = provider.providerKind === 'ANTHROPIC' && scope === 'ORGANIZATION';
         const hasCredentialChange = Boolean(keys[field]?.trim()) || (workspaceEditable && Boolean(workspaceId));
@@ -306,11 +308,11 @@ export function PreviewSettings({ roles, onNavigate }: { roles: UserRole[]; onNa
             {healthStatus === 'FAILED' && <small>최근 확인 실패 · {state.health?.failureCode ?? '원인 확인 필요'}{state.health?.providerStatus ? ` · HTTP ${state.health.providerStatus}` : ''}</small>}
             {state.fingerprint && <small>등록 키 확인값 · v{state.version}</small>}
           </div>
-          <label htmlFor={`${field}-model`}>사용 모델</label>
-          <select id={`${field}-model`} value={selectedModel} onChange={(event) => setSelectedModels((current) => ({ ...current, [provider.providerKind]: event.target.value }))}>
+          <label htmlFor={`${field}-model`}>{scope === 'USER' ? '연결 확인 모델' : '사용 모델'}</label>
+          <select id={`${field}-model`} value={selectedModel} onChange={(event) => scope === 'USER' ? setPersonalTestModel(event.target.value) : setSelectedModels((current) => ({ ...current, [provider.providerKind]: event.target.value }))}>
             {options.map((model) => <option key={model.code} value={model.code}>{model.label}</option>)}
           </select>
-          <small className="credential-model-help">{scope === 'ORGANIZATION' ? `저장하면 ${PRIMARY_TASK[provider.providerKind].label} 기본 모델로 함께 적용됩니다.` : '개인 Gemini 키 연결 확인과 글쓰기 도우미에 사용합니다.'}</small>
+          <small className="credential-model-help">{scope === 'ORGANIZATION' ? `저장하면 ${PRIMARY_TASK[provider.providerKind].label} 기본 모델로 함께 적용됩니다.` : '아래 연결 확인에만 적용됩니다. 글쓰기 도우미의 모델은 회사 설정을 따릅니다.'}</small>
           <label htmlFor={`${field}-key`}>{state.configured ? '새 키로 교체' : 'API Key 입력'}</label>
           <input id={`${field}-key`} type="password" value={keys[field] ?? ''} autoComplete="new-password" spellCheck={false} placeholder={copy.placeholder} onChange={(event) => setKeys((current) => ({ ...current, [field]: event.target.value }))} />
           {!keys[field]?.trim() && <small className="credential-input-help">키 원문은 저장 후 다시 표시되지 않습니다.</small>}

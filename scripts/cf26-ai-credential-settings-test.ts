@@ -34,13 +34,18 @@ class SqlD1 {
 const migration = (name: string): string => readFileSync(join(process.cwd(), 'apps', 'cloudflare', 'migrations', name), 'utf8');
 const request = (path: string, token: string, init: RequestInit = {}): Request => { const headers = new Headers(init.headers); headers.set('X-Session-Token', token); if (init.body) headers.set('Content-Type','application/json'); return new Request(`https://preview.example${path}`, { ...init, headers }); };
 
-async function setup(): Promise<{ sql: Database; env: CloudflareEnv; usedKeys: string[] }> {
+async function setup(includeWorkflowSources = false): Promise<{ sql: Database; env: CloudflareEnv; usedKeys: string[] }> {
   const SQL = await initSqlJs(); const sql = new SQL.Database(); sql.run('PRAGMA foreign_keys=ON');
   for (const name of ['0001_cf_foundation.sql','0001_cf02_preview_drafts.sql','0002_cf03_preview_evidence.sql','0003_cf04_preview_auth.sql','0004_cf05_google_drive.sql','0005_cf06_case_operations.sql']) sql.exec(migration(name));
   const now = new Date().toISOString();
   const insertUser = (id: string, login: string, roles: string) => sql.run('INSERT INTO preview_users VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [id, login, '1'.repeat(32), '2'.repeat(64), 100000, login, `${login}@example.invalid`, roles, now]);
   insertUser(ADMIN_ID,'admin','["admin"]'); sql.exec(migration('0010_cf10_product_experience.sql')); insertUser(STAFF_ID,'staff','["pm"]');
-  for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0056_cf86_ai_runtime_reliability.sql']) sql.exec(migration(name));
+  for (const name of ['0006_cf07_report_studio_drafts.sql','0007_cf08_report_review_approval.sql','0008_cf09_final_output.sql','0009_cf09_output_actor_scope.sql','0011_cf11_project_workflow.sql','0012_cf12_report_ai_prompts.sql','0017_cf19_multi_provider_ai.sql','0018_cf26_ai_credentials.sql','0056_cf86_ai_runtime_reliability.sql']) {
+    const source = migration(name);
+    // Credential priority is tested without unrelated company-source demo records.
+    // A separate test retains those records and requires the policy rejection.
+    sql.exec(name === '0011_cf11_project_workflow.sql' && !includeWorkflowSources ? source.split('-- Synthetic demo records only.')[0] : source);
+  }
   sql.exec(migration('0024_cf32_source_template_library.sql'));
   sql.run('INSERT INTO preview_case_assignments VALUES (?, ?, ?, ?)', [CASE_ID, STAFF_ID, ADMIN_ID, now]);
   for (const [token,id] of [[ADMIN_TOKEN,ADMIN_ID],[STAFF_TOKEN,STAFF_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token),id,now,new Date(Date.now()+3_600_000).toISOString()]);
@@ -69,6 +74,9 @@ test('CF26 stores personal and organization keys only as ciphertext and enforces
   for (const [token,id] of [[ADMIN_RELOGIN_TOKEN,ADMIN_ID],[STAFF_RELOGIN_TOKEN,STAFF_ID]] as const) sql.run('INSERT INTO preview_sessions VALUES (?, ?, ?, ?)', [await sha256(token),id,new Date().toISOString(),new Date(Date.now()+3_600_000).toISOString()]);
   const staffReload=await worker.fetch(request('/api/settings/ai-credentials',STAFF_RELOGIN_TOKEN),env); const staffPayload=await staffReload.json() as {providers:Array<{providerKind:string;personal:{configured:boolean;fingerprint:string|null};organization:{configured:boolean}}>}; const staffGemini=staffPayload.providers.find((provider)=>provider.providerKind==='GEMINI'); assert.equal(staffGemini?.personal.configured,true); assert.equal(staffGemini?.organization.configured,true); assert.equal(staffGemini?.personal.fingerprint,String(stored[2]).slice(0,12));
   const adminReload=await worker.fetch(request('/api/settings/ai-credentials',ADMIN_RELOGIN_TOKEN),env); const adminPayload=await adminReload.json() as {providers:Array<{providerKind:string;personal:{configured:boolean};organization:{configured:boolean}}>}; const adminGemini=adminPayload.providers.find((provider)=>provider.providerKind==='GEMINI'); assert.equal(adminGemini?.personal.configured,false); assert.equal(adminGemini?.organization.configured,true); assert.doesNotMatch(JSON.stringify({staffPayload,adminPayload}),new RegExp(`${PERSONAL_KEY}|${ORGANIZATION_KEY}`,'u'));
+  const catalogue = (staffPayload as unknown as {providers:Array<{providerKind:string;models:Array<{code:string;label:string}>}>}).providers.find(provider => provider.providerKind === 'GEMINI')!.models;
+  assert.ok(catalogue.some(model => model.code === 'gemini-3.7-flash'));
+  assert.ok(catalogue.every(model => Object.keys(model).sort().join(',') === 'code,label'));
   assert.equal(sql.exec('SELECT COUNT(*) FROM preview_ai_credential_history')[0].values[0][0],2);
   assert.throws(() => sql.run("UPDATE preview_ai_credentials SET owner_id='concost',owner_scope='ORGANIZATION',version=2,updated_at='2099-01-01T00:00:00Z' WHERE owner_scope='USER'"),/AI credential identity/u);
   sql.close();
@@ -89,6 +97,47 @@ test('CF26 uses personal key before organization and environment, then falls bac
   const tested=await worker.fetch(request('/api/settings/ai-credentials/GEMINI/test',ADMIN_TOKEN,{method:'POST',body:JSON.stringify({scope:'ORGANIZATION',modelCode:'gemini-3.7-flash'})}),env); assert.equal(tested.status,200); assert.equal(usedKeys.at(-1),ORGANIZATION_KEY);
   const health=sql.exec("SELECT status,model_code,provider_status,latency_ms FROM preview_ai_provider_health WHERE owner_scope='ORGANIZATION' AND provider_kind='GEMINI'")[0].values[0];assert.equal(health[0],'HEALTHY');assert.equal(health[1],'gemini-3.7-flash');assert.equal(health[2],200);assert.ok(Number(health[3])>=0);
   const responseText=await tested.text(); assert.doesNotMatch(responseText,new RegExp(`${PERSONAL_KEY}|${ORGANIZATION_KEY}|${ENVIRONMENT_KEY}`,'u'));
+  const disabledOrganization=await worker.fetch(request('/api/settings/ai-credentials/GEMINI',ADMIN_TOKEN,{method:'DELETE',body:JSON.stringify({scope:'ORGANIZATION',expectedVersion:1})}),env); assert.equal(disabledOrganization.status,200);
+  const environmentImprove=await worker.fetch(request('/api/report-authoring/improve',STAFF_TOKEN,{method:'POST',body:JSON.stringify({caseId:CASE_ID,content:'등록 키가 없으면 기존 환경 키로 개선합니다.',instruction:'문장을 명확하게 개선해 주세요.',expectedDraftVersion:0})}),env); assert.equal(environmentImprove.status,200); assert.equal((await environmentImprove.json() as {credentialSource:string}).credentialSource,'ENVIRONMENT'); assert.equal(usedKeys.at(-1),ENVIRONMENT_KEY);
+  sql.close();
+});
+
+test('CF26 keeps organization, owner, provider, model and session restrictions for staff', async () => {
+  const { sql, env, usedKeys } = await setup();
+  const saved=await worker.fetch(request('/api/settings/ai-credentials/GEMINI',STAFF_TOKEN,{method:'PUT',body:JSON.stringify({scope:'USER',apiKey:PERSONAL_KEY,expectedVersion:0})}),env); assert.equal(saved.status,200);
+  const before=Buffer.from(sql.export());
+  const denied: Array<[string,string,RequestInit,number,string]> = [
+    ['/api/admin/report-prompts',STAFF_TOKEN,{},403,'FORBIDDEN'],
+    ['/api/admin/report-prompts/settings',STAFF_TOKEN,{method:'PUT',body:JSON.stringify({})},403,'FORBIDDEN'],
+    ...(['PUT','DELETE'] as const).map(method => ['/api/settings/ai-credentials/GEMINI',STAFF_TOKEN,{method,body:JSON.stringify({scope:'ORGANIZATION',expectedVersion:0,apiKey:ORGANIZATION_KEY})},403,'FORBIDDEN'] as [string,string,RequestInit,number,string]),
+    ['/api/settings/ai-credentials/GEMINI/test',STAFF_TOKEN,{method:'POST',body:JSON.stringify({scope:'ORGANIZATION'})},403,'FORBIDDEN'],
+    ['/api/settings/ai-credentials/GEMINI',STAFF_TOKEN,{method:'PUT',body:JSON.stringify({scope:'USER',ownerId:ADMIN_ID,apiKey:PERSONAL_KEY,expectedVersion:1})},400,'INVALID_CREDENTIAL_PAYLOAD'],
+    ['/api/settings/ai-credentials/ANTHROPIC',STAFF_TOKEN,{method:'PUT',body:JSON.stringify({scope:'USER',apiKey:PERSONAL_KEY,expectedVersion:0})},400,'PERSONAL_PROVIDER_NOT_ALLOWED'],
+    ['/api/settings/ai-credentials/GEMINI/test',STAFF_TOKEN,{method:'POST',body:JSON.stringify({scope:'USER',modelCode:'unknown-model'})},400,'INVALID_CREDENTIAL_PAYLOAD'],
+    ['/api/settings/ai-credentials/GEMINI',STAFF_TOKEN,{method:'PUT',body:JSON.stringify({scope:'USER',apiKey:PERSONAL_KEY,expectedVersion:0})},409,'VERSION_CONFLICT'],
+    ['/api/settings/ai-credentials','invalid-session',{},401,'AUTH_REQUIRED']
+  ];
+  for(const [path,token,init,status,code] of denied){const response=await worker.fetch(request(path,token,init),env);assert.equal(response.status,status,`${path} ${init.method??'GET'}`);assert.equal((await response.json() as {code:string}).code,code);}
+  assert.equal(usedKeys.length,0);
+  assert.deepEqual(Buffer.from(sql.export()),before,'rejected requests must not change keys, roles or business records');
+  const connected=await worker.fetch(request('/api/settings/ai-credentials/GEMINI/test',STAFF_TOKEN,{method:'POST',body:JSON.stringify({scope:'USER',modelCode:'gemini-3.7-flash'})}),env);
+  assert.equal(connected.status,200);
+  assert.equal((await connected.json() as {source:string}).source,'PERSONAL');
+  assert.deepEqual(usedKeys,[PERSONAL_KEY]);
+  assert.deepEqual(sql.exec("SELECT owner_scope,owner_id,status FROM preview_ai_provider_health WHERE owner_scope='USER'")[0].values,[['USER',STAFF_ID,'HEALTHY']]);
+  sql.close();
+});
+
+test('CF26 retains company-source consent 403 before any personal or company provider call', async () => {
+  const { sql, env, usedKeys } = await setup(true);
+  for(const [scope,token,apiKey] of [['USER',STAFF_TOKEN,PERSONAL_KEY],['ORGANIZATION',ADMIN_TOKEN,ORGANIZATION_KEY]] as const){const response=await worker.fetch(request('/api/settings/ai-credentials/GEMINI',token,{method:'PUT',body:JSON.stringify({scope,apiKey,expectedVersion:0})}),env);assert.equal(response.status,200);}
+  const config=await (await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`,STAFF_TOKEN),env)).json() as {chapters:Array<{id:string}>};
+  const before=Buffer.from(sql.export());
+  const generated=await worker.fetch(request('/api/report-authoring/generate',STAFF_TOKEN,{method:'POST',body:JSON.stringify({caseId:CASE_ID,chapterId:config.chapters[0].id,expectedDraftVersion:0})}),env);
+  assert.equal(generated.status,403);
+  assert.equal((await generated.json() as {code:string}).code,'REPORT_SOURCE_CONSENT_REQUIRED');
+  assert.equal(usedKeys.length,0);
+  assert.deepEqual(Buffer.from(sql.export()),before,'blocked company-source generation must preserve the database');
   sql.close();
 });
 

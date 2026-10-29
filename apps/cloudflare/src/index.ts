@@ -5007,6 +5007,7 @@ async function previewAiCredentialMetadata(env: CloudflareEnv, user: SessionUser
     providers: providers.map((providerKind) => ({
       providerKind,
       label: providerKind === 'OPENAI' ? 'OpenAI · ChatGPT' : providerKind === 'ANTHROPIC' ? 'Anthropic · Claude' : 'Google · Gemini',
+      models: PREVIEW_AI_MODELS[providerKind].map(({ code, label }) => ({ code, label })),
       personal: state(providerKind, 'USER'),
       organization: state(providerKind, 'ORGANIZATION')
     }))
