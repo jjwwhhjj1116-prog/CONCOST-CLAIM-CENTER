@@ -1849,3 +1849,13 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 검증: 기존 관련 48/48 PASS, 실제 SQLite runner의 기존 행/이력 보존·2회 실행 무변경 1/1 PASS, web/Worker 타입·빌드·양 서버 dry-run PASS. Chrome 합성 PC1440×1000/모바일390×844/낮은360×400에서 토글·AI/기본 답변·20회 소진·질문 보존·IME/Shift Enter·닫기/재열기·화면 이동 PASS. 실물 휴대폰/실제 OS 키보드는 NOT_RUN.
 - 실제 양 서버 D1 export 서명·복원과 Wrangler local migrations apply 2회 통과(개발 기존132테이블/가오픈131테이블 보존). 실서버 적용·실제 Gemini 검수 결과는 후속 기록에 연결한다.
 - 증거: continuation/output/playwright/assistant-optin-20261029. 기본 무AI 완료 기록과 실패 원본은 보존한다.
+
+### 선택형 AI의 실서버 최종 검수·반영
+
+- 제품 커밋 `f2c1c7d916bec42e5f9699acdde1c96ff34e10c0`, 정상 push 완료. 개발 Worker `9760866c-2e2b-4dcf-84fe-10fe153536d0`, 가오픈 Worker `60ee90db-565b-4378-a1c5-aa09ecb62cbb`, 각각 100%. 원래 일반 변수 전체를 복원하고 공식 versions upload의 unchanged secret 상속 후 versions deploy를 사용했다. 기존 키 원문을 읽거나 바꾸지 않았으며 DB/서비스/secret 메타데이터가 전후 동일하다.
+- 서버별 점검 모드에서 백업·서명·격리 복원·실제 Wrangler local migration 2회(no-op)→0072 remote 적용→전체 기존 행/스키마/원장/시퀀스 대조를 완료하고 원래 점검 설정으로 복원했다. D1 백업 및 암호화 자격증명은 private-backup에만 보존하며 Git에 포함하지 않는다.
+- 실서버 정상 직원 로그인(director, 비관리자)에서 각 PC·모바일 기본 2질문 MANUAL, Gemini 2질문 AI 성공. 서버별 quota 0→2, 남은 18/20, 새로고침 후 사용2 유지. 개발 확인 2026-10-29 16:18:20 KST/07:18:20 UTC, 가오픈 16:19:02 KST/07:19:02 UTC. 실제 Gemini 응답은 총4개이며 단순 모의 응답과 구분한다.
+- 양 서버 각 46/46 public asset SHA가 검증 artifact와 일치, pinned HWP runtime28개 유지/engine 재빌드 없음. health/readiness200 및 비로그인 명함API401 유지. 기존 보고서·10/21 일지·튜토리얼·키 메타데이터 hash가 검수 전후 일치. 정상 로그인에 따른 세션 추가와 새 사용량 원장 외 업무 mutation0.
+- 현재 전체 검증49 PASS(관련48+실제SQLite runner1). 초기에 생성되지 않은 Prisma client로 runner 검사가 실패한 원본은 보존했고, 기존 설치된 Prisma generate 후 실제 runner2회 검사를 통과했다. 기존 CF86 정적 retry 검사는 새 opt-in1회/기존3회 계약으로 보강했다.
+- 가오픈 초기 탭의 기존 관리자 세션은 로그아웃하지 않았다. 공식 CLI의 새 전용 격리 profile에서 정상 직원 로그인을 사용했다. 사용자 Chrome/기존 관리자 세션은 변경하지 않았다. 실물 휴대폰과 OS 키보드는 여전히 미검증이며 해당 공식 복구 감시는 별도 보존한다.
+- 최종 증거: `continuation/output/playwright/assistant-optin-20261029/verification-summary.json`. Google 실제 무료 프로젝트 quota/청구 원장은 확인하지 않았으며 앱 20회 정책은 비용0 보장이 아니다.
