@@ -1834,3 +1834,7 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 변경 전 새 검사에서 AI/기대 MANUAL 실패를 보존했다. 관련44검사 PASS(skip0), web/Worker 타입·build·개발/가오픈 dry-run PASS. 정상 인증 Worker 합성 fixture에서 provider fetch0·AI설정/키 조회0·DB 전체 바이트 불변·본인 외404·교차출처403·익명401을 확인했다.
 - 실제 격리 Chrome1440x1000/390x844/360x400에서 보고서·명함·주간·무일치 답변, 서버v4/과거승인v3, 접힘·Enter/합성IME/Shift·늦은입력·닫기/재열기·Escape초점·화면이동 PASS. fixture provider0/업무쓰기0. 최초 업무일지 배경 fixture의 불완전 응답 실패는 보존하고 실제 cases/new 경로에서 UI를 분리 검수했다. 실물 휴대폰은 미검증이며 공식복구 감시로 남긴다.
 - 증거는 continuation/output/playwright/manual-assistant-20261029/revision2. HWP 런타임28파일·WASM bcc40a79/binding ad01e939 동일 바이트 승계, 엔진 재빌드0. 세 전문 읽기 최종 검토 PASS. 배포·실서버 재검수 결과는 후속 기록한다.
+
+- 양 서버 배포·실검수 완료: 제품 커밋3852ec4cb97f24fc0434325235a6e9a8a160310e 정상 push. 개발12bf6d87-1fc6-4e93-8b7f-7780d5d181cd / 가오픈32fcd748-4b7e-4429-a5aa-403fff5456ad 각각100%, --keep-vars·기존바인딩메타데이터불변·migration0. 실제 공개46/46파일 SHA가 검수 산출물과 양 서버 간 모두 동일, health/readiness200·익명명함API401.
+- 기존 이경훈 director 정상 UI 로그인에서 개발15:18:50 KST/가오픈15:21:01 KST에 PC1440/모바일390 질문 각2회가 모두 MANUAL. 보고서 질문은REPO-02, 명함 등록 질문은CONTACT-02를 먼저 안내하고 실제 명함 화면 이동·QR버튼 비실행 강조 PASS. 버블/접힘/입력clear와 원고·10/21일지·튜토리얼·자격증명상태4SHA가 각 서버 배포 전후 정확 일치. 도우미 POST 외 업무 쓰기0·차단된 예상밖 쓰기0, 권한/키/보고서 다른AI기능 변경0.
+- 종합원장 continuation/output/playwright/manual-assistant-20261029/revision2/verification-summary.json. 도우미 자체의 외부 AI 호출 제거를 코드·정상인증 Worker trap·실배포 MANUAL 응답으로 확인했으며 공급자 청구 포털을 감사한 것은 아니다. 보고서·제안서·명함 AI의 기존 사용 기준·비용은 별도다. 실물 휴대폰/실제 OS키보드는 미검증, 새 공식 복구 근거가 있을 때만 재개하는 heartbeat automation을 추가했다. 기존 Drive·주말/월요일 예약은 유지한다.
