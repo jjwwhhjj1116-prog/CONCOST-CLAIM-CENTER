@@ -1890,3 +1890,10 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 
 - 공개 공식 RSS의 최신 항목을 제한된 스트림 파싱으로 실제 읽어 이전 크기·형식 제한을 보완했다. CLI 0.165.0의 marketplace URL 검증과 0.164.0의 MXC 환경·SDK 변경은 기존 Chrome URL 신뢰도 안전 중단의 복구를 명시하지 않는다. 공식 browser/computer-use·driver 안내 및 설치 API 검토에서도 그 중단을 해제할 구체 근거를 확보하지 못했다. 이는 적용 가능성 판단이며 전체 릴리스에 수정이 없다는 단정은 아니다.
 - 정확한 회사 계정 재열기·실다운로드 SHA 대조 4개는 UNKNOWN 유지. updater/native/브라우저/Drive 호출·다운로드·권한/키 변경·제품 수정·배포0. 기존 감시와 다른 예약을 유지하고 사용자 중간 보고·수동 요청은 하지 않았다. 새 출처·제한·증거: continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261029-1113.json 및 official-feed-release-summary-20261029-1113.json.
+
+
+### 실물 업무 도우미 감시 기준 최신화 — 2026-10-29 20:48 KST 트리거
+
+- 공식 최신 RSS·정확 오류 검색·현재 제공 API를 세 전문 읽기 검토와 대조했지만 CreateProcessSecurityEnvironment 0x80070020에 적용할 새 지원 복구 근거는 미확보다. 충돌 파일/프로세스 UNKNOWN, 정상 runtime 시작과 기존 실제 폰 연결도 미확인. 상태 변화 없이 초기화/reset·ETW/PSS·updater·기기 조회를 반복하지 않았고 양 서버 실물 아이콘/팝업/질문답변/이동/실제 한글 키보드/터치 닫기·회전은 NOT_RUN 유지.
+- 같은 감시 automation의 옛 전체 무AI 전제만 최신 사용자 계약인 기본 MANUAL 무제한 + AI 기본OFF/선택형 회사Gemini/계정당20회/KST자정으로 공식 automation_update 갱신했다. prompt·updated_at만 바뀌었고 6시간 주기·상태·대화·생성시각은 동일하다. 삭제·보관한 QA를 재생성하지 않는 경계도 반영했다. 다른 예약·제품·자료·계정·권한·키·사용량 변경과 AI호출/배포0, 수동 요청0.
+- 증거: continuation/output/playwright/physical-phone-20261029/heartbeat-20261029-1148.json, heartbeat-20261029-1148-automation-update.json. 최신 PC/mobile viewport 합격과 실물 미검증을 구분하며 사용자 중간 보고 없이 기존 감시를 유지한다.
