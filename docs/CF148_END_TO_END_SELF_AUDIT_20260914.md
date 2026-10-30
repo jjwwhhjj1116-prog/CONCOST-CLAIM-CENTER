@@ -1945,3 +1945,6 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 
 
 - Drive4 조용한 재확인(2026-10-30 11:19 KST): 최신 공식 changelog 첫 항목은 이미 검토한 CLI0.166.0이며 공식 브라우저 연결/Windows sandbox 안내와 동일 설치 API 검토에서도 기존 URL-confidence 안전 중단을 해제할 새 적용 근거는 미확보다. 전체 역사적 수정 부재로 단정하지 않으며 updater·probe·브라우저 호출을 반복하지 않았다. 정확4ID/SHA·기존증거4파일SHA 일치, 회사 계정 재열기/실다운로드 검증0/4 UNKNOWN 유지. 직전 도우미 정상 Playwright 로그인·AI 성공을 Drive 복구 증거로 승격하지 않는다. 제품3d93300·original25dirty와 기존 자료·계정·권한·키·다른예약 보존, native/browser/Drive·다운로드·업무쓰기·제품수정/배포·수동요청0. 증거 continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261030-0219.json 및 official-review-20261030-0219.json. 상태 불변으로 사용자 중간 보고 없이 감시 유지.
+
+
+- 실물 도우미 재개 요청 확인(2026-10-30 11:35 KST): 최신 제품3d93300/정상 로그인·실AI4회·PC모바일viewport 증거를 읽고, 실물 연결·nativeIME/touch·회전의 NOT_RUN과 구분했다. 공식 최신 CLI0.166 및 정확오류 검색/동일 설치문서 검토에서 적용할 새 복구 근거는 미확보이며 전체공식부재로 단정하지 않는다. 초기화/reset/기기조회/충돌진단/업데이터 실패호출을 반복하지 않았다. 기존 automation은 이미3.1·관련매뉴얼·무매칭무차감/20KST 및 완료후만보고 기준이므로 중복예약·변경0. 원고·계정·권한·키·기존미커밋25·다른예약을 보존했고 native/browser/phone입력·AI/업무쓰기·제품수정/새배포·수동요청0. 증거 continuation/output/playwright/physical-phone-20261029/resume-review-20261030-0235.json. 복구와 실제기기경로가 확보될 때만 실물검수를 재개하며 같은 실패 중간보고는 반복하지 않는다.
