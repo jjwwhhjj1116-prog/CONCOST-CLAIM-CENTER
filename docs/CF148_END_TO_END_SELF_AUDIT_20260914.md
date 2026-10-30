@@ -1923,3 +1923,11 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 변경 전3개 실패를 보존했고 관련50검사(skip0), web/Worker 타입·build·양dryrun·compiledbundle8개 동일 PASS. 격리Chrome PC1440/모바일390/짧은360x400에서 기본/AI·무매칭무차감·정확매뉴얼·20회한도·오류/늦은입력·합성IME/Shift·Escape/닫기재열기·실제화면이동 PASS. 합성공급자이며 실물폰으로 승격하지 않는다.
 - 수치: 주간 질문의 manual JSON3474→837자(UTF8 7812→1951바이트), 무관 질문3582→전송0자. 실제토큰·청구액 측정이 아니다. HWP/명함 질문은 각 관련1개를 유지하며 주소metadata만 제외.
 - 공식제어의 새 복구 근거와 기존 실물폰 연결은 미확보, 실물 IME/touch NOT_RUN. 기존 안전종료를 우회하지 않는다. 배포·실서버 응답·보존·최종SHA는 후속결과로 연결한다. 증거 continuation/output/playwright/assistant-31-flash-lite-20261030.
+
+
+### 3.1 도우미 양 서버 배포·확인 범위 확정
+
+- 제품 커밋3d93300ff3ecf31bb7821dfaaefb5c3af1b411c3 정상 push. 개발8c153477-0e4b-489b-b6db-57ee3ddcd3e1 / 가오픈45b09d63-b1d7-4f41-95be-d0f4dd024524 각100%. 양 서버 검증 artifact 46/46 공개파일 SHA 일치, compiled Worker/이미지8개 동일, health/readiness200·익명 도우미401. 활성화 전 업로드버전의 nonasset bindings를 원본과 정확비교해 통과한 버전만 배포했다. 원래 plaintext vars 전부 보존·unchanged secrets 상속, migration0/업무쓰기0/키원문읽기0.
+- 실서버 로그인 후 Gemini 실제응답은 미검증이다. 자동승인검토가 기존 로그인검수승인과 별개로 회원명단 Excel 비밀번호 읽기의 명시승인이 없다고2회 차단했다(명령실행전/비밀번호읽기0). 이후 같은방식을더재시도하지않았다. 안전대안으로 기존 정확격리Chrome가오픈프로필을 공식CLI로 그대로열었으나 세션만료 로그인화면 확인;쿠키/토큰추출·복사0. 지정파일의 lkh기존계정1건 사용명시승인 질문이대기중이며 직접로그인·비밀번호입력·파일출력같은수동업무는요청하지않음.
+- 실제공급자호출0/실물폰NOT_RUN을명확히유지한다. 실제Worker mock의정확3.1 URL·단일호출검사와소스/동일산출물·실배포성공은확인했지만 live modelVersion을관측했다고쓰지않는다. 로컬Chrome의의도적502는오류입력유지시험이며서버실패가아님. 런타임0x80070020/URL안전중단의공식복구·기존실물연결은여전히미확보다.
+- assistant 감시만3.1/관련매뉴얼/무매칭무차감기준으로prompt갱신.6시간주기/상태/thread보존,다른예약변경0.새검수용Chrome3개만닫고자체fixture5198만정상중단,기존사용자앱·프로필/계정·암호·역할/키·원고·보관QA보존. 최종증거 continuation/output/playwright/assistant-31-flash-lite-20261030/verification-summary.json, 로그인차단원본2개·실제공개파일/배포버전·소스검사·UI그림을보존한다.
