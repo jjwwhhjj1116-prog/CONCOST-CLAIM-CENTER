@@ -2,9 +2,9 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-10-29';
-export const RELEASE_DATE_LABEL = '2026년 10월 29일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v12:${userId}`;
+export const RELEASE_DATE = '2026-10-30';
+export const RELEASE_DATE_LABEL = '2026년 10월 30일';
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v13:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'10월 30일 · AI 도우미 비용 절감',text:'선택형 AI 질문은 기존 회사 연결의 Gemini 3.1 Flash-Lite를 사용합니다. 질문에 관련된 매뉴얼만 보내고 중복되는 일반 안내와 화면 주소는 전송하지 않습니다. 맞는 항목이 없으면 기본 안내로 답하며 AI 호출·횟수 차감이 없습니다. 기본 무료 안내, 계정당 하루 20회·한국시간 자정 초기화, 저장·상신·승인 절차와 기존 키는 유지합니다.'},
   {title:'10월 29일 · 챗봇 팝업 대화창',text:'오른쪽 아래 원형 챗봇 아이콘을 누르면 팝업 채팅창이 열립니다. 질문과 답변을 말풍선으로 보고, 프로젝트 연결·서버 저장 상태·참고 매뉴얼은 필요할 때 펼쳐 확인하세요. Enter로 질문을 보내고 Shift+Enter로 줄을 바꿉니다. 저장·상신·승인은 기존 업무 화면에서 직접 진행합니다.'},
   {title:'10월 29일 · 개인 Gemini 연결 복구',text:'일반 직원의 개인 설정에서 모델 목록이 비어 키 저장을 누를 수 없던 문제를 수정했습니다. 개인 키를 암호화 저장한 뒤 연결 확인 모델을 선택해 확인하세요. 모델 선택은 연결 시험에만 적용되며 글쓰기 모델은 회사 설정을 따릅니다. 회사 원문 전송 승인·관리자 전용 설정·개인키 소유자 보호는 유지합니다.'},
   {title:'10월 29일 · 기본 안내와 선택형 AI 질문',text:'기본 매뉴얼 안내는 무료·무제한입니다. 팝업의 AI로 질문하기를 켜면 회사 Gemini로 설명을 요청하며, 계정당 하루 20회·한국시간 자정 초기화입니다. 전송 후 실패도 1회이고 자동 재시도는 없습니다. 앱 한도는 Google 무료 한도와 별개이며 회사 키 요금제에 따른 비용이 발생할 수 있습니다. 사용 방법·AI 한도 안내에서 기준을 확인하세요. 프로젝트 상태 조회와 저장·상신·승인은 기존 절차를 유지합니다.'},

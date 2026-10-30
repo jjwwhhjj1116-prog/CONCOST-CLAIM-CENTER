@@ -1,7 +1,7 @@
 import { CATEGORY_HELP, ROUTE_HELP, WORKSPACE_TUTORIAL_STEPS } from './workspace-help-content';
 
 // The help centre and assistant consume the same shipped manual, never a copied AI manual.
-export const ASSISTANT_MANUAL_VERSION = '2026-10-29';
+export const ASSISTANT_MANUAL_VERSION = '2026-10-30';
 export const ASSISTANT_ROUTES = [
   ['DASH-01', '/dashboard', 'home', '시작 처음 순서 사용법 작업 업무'],
   ['CASE-02', '/cases/new', 'proposal', '의뢰 의뢰등록 프로젝트등록 사건등록 새프로젝트 클라이언트'],
@@ -22,13 +22,16 @@ export const ASSISTANT_ROUTES = [
 export interface AssistantGuide { id: string; path: string; title: string; steps: readonly string[]; next: string }
 export function assistantGuides(question: string, routeId: string): AssistantGuide[] {
   const normalized = question.toLocaleLowerCase().replace(/\s+/gu, '');
+  const matchedWords = [...new Set(ASSISTANT_ROUTES.flatMap(([, , , keywords]) => keywords.toLocaleLowerCase().split(' ')))].filter(word => normalized.includes(word));
+  // A specific topic such as 주간업무일지 already covers generic 업무/일지 matches.
+  const specificWords = matchedWords.filter(word => !matchedWords.some(other => other.length > word.length && other.includes(word)));
   const ranked = ASSISTANT_ROUTES.map(([id, path, category, keywords]) => {
     const guide = ROUTE_HELP[id];
     const tutorial = WORKSPACE_TUTORIAL_STEPS.find(step => step.path === path);
     return { id, path, title: guide?.title ?? CATEGORY_HELP[category].title,
       steps: id === 'DASH-01' ? WORKSPACE_TUTORIAL_STEPS.map(step => `${step.title} ${step.tasks.join(' → ')} ${step.completion}`) : guide?.steps ?? (tutorial ? [tutorial.explanation, ...tutorial.tasks] : CATEGORY_HELP[category].actions),
       next: guide?.next ?? tutorial?.completion ?? '',
-      score: Math.max(0, ...keywords.split(' ').map(word => normalized.includes(word.toLocaleLowerCase()) ? word.length * 2 : 0)) + (id === routeId ? 1 : 0) };
+      score: Math.max(0, ...keywords.split(' ').map(word => specificWords.includes(word.toLocaleLowerCase()) ? word.length * 2 : 0)) + (id === routeId ? 1 : 0) };
   }).sort((a, b) => b.score - a.score);
   return ranked.filter(guide => !normalized || guide.score > (guide.id === routeId ? 1 : 0)).slice(0, 3).map(({ score: _score, ...guide }) => guide);
 }

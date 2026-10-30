@@ -9016,7 +9016,7 @@ const worker = {
           if (!credential) return {response:json({error:'회사 Gemini 연결이 없습니다. 기본 안내는 사용할 수 있습니다.',code:'ORGANIZATION_GEMINI_NOT_CONFIGURED'},503)};
           return {generate: async (system: string, input: string) => {
             const sanitized = redactExternalAiText(input);
-            const result = await generateGeminiContent(env,{apiKey:credential.apiKey,modelCode:'gemini-3.5-flash-lite',system,parts:[{text:sanitized.text}],reasoningEffort:'low',maxOutputTokens:1200,timeoutMs:20000,singleAttempt:true});
+            const result = await generateGeminiContent(env,{apiKey:credential.apiKey,modelCode:'gemini-3.1-flash-lite',system,parts:[{text:sanitized.text}],reasoningEffort:'low',maxOutputTokens:1200,timeoutMs:20000,singleAttempt:true});
             if(result.response && (result.response.status===502||result.response.status===503)) {
               const payload = await result.response.clone().json().catch(()=>null) as {providerStatus?:number}|null;
               if(payload?.providerStatus===429) return {response:json({error:'Gemini rate limit'},429)};

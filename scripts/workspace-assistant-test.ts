@@ -138,6 +138,38 @@ async function aiFixture() {
  f.context.db.prepare=(query:string)=>{if(!query.includes('preview_workspace_assistant_usage'))return original(query);return {bind(...values:unknown[]){return {async first(){const statement=f.sql.prepare(query);try{statement.bind(values as any[]);return statement.step()?statement.getAsObject():null;}finally{statement.free();}}};}};};
  return f;
 }
+test('AI sends only question-specific manual sections, keeping distinct topics and follow-up context',async()=>{
+ const f=await aiFixture();try{
+  const captured:any[]=[];
+  (f.context as any).prepareAi=async()=>({generate:async(_system:string,input:string)=>{captured.push(JSON.parse(input));return {content:'관련 매뉴얼을 확인하세요.'};}});
+  for(const [question,previousQuestion,ids] of [
+   ['HWP 불러오기 방법','주간 업무일지',['REPO-02']],
+   ['명함 QR 촬영','보고서 결재',['CONTACT-02']],
+   ['주간 업무일지 작성 방법','명함',['WL-02']],
+   ['일일 업무일지 작성 방법','주간',['WL-01']],
+   ['일일·주간 업무일지 작성 방법','',['WL-02','WL-01']],
+   ['보고서 결재 상신 방법','',['REPO-02','APPR-01']],
+   ['그럼 다음은?','명함 QR 촬영',['CONTACT-02']]
+  ] as const){
+   const answer=await ok(await f.send(f.body({question,previousQuestion,useAi:true,caseId:null,routeId:'REPO-02'})));
+   assert.equal(answer.mode,'AI');const sent=captured.at(-1);
+   assert.equal(sent.question,question);assert.equal(sent.manualVersion,ASSISTANT_MANUAL_VERSION);
+   assert.deepEqual(sent.manual.map((guide:any)=>guide.id),ids);
+   for(const guide of sent.manual)assert.deepEqual(Object.keys(guide).sort(),['id','next','steps','title']);
+   assert.equal(sent.previousQuestion,undefined);assert.equal(sent.snapshot,undefined);
+  }
+  assert.equal(captured.length,7);
+ }finally{f.sql.close();}
+});
+test('unmatched opt-in questions do not prepare a provider, send fallback manuals or consume quota',async()=>{
+ const f=await aiFixture();try{
+  let prepared=0;(f.context as any).prepareAi=async()=>{prepared++;throw Error('UNRELATED_QUESTION_MUST_NOT_PREPARE_AI');};
+  const before=f.digest();
+  const answer=await ok(await f.send(f.body({question:'점심 메뉴 추천',previousQuestion:'HWP 불러오기',useAi:true,caseId:null})));
+  assert.equal(answer.mode,'MANUAL');assert.match(answer.notice,/AI.*사용하지/u);
+  assert.equal(prepared,0);assert.equal((await ok(await f.get('?quota=1'))).quota.used,0);assert.equal(f.digest(),before);
+ }finally{f.sql.close();}
+});
 test('AI attempt accounting survives errors, new handler and account changes; invalid requests never reserve',async()=>{
  const f=await aiFixture();try{let prepared=0,calls=0;
   (f.context as any).prepareAi=async()=>{prepared++;return {generate:async()=>{calls++;throw Error('SYNTHETIC_TIMEOUT');}};};
@@ -160,7 +192,7 @@ test('actual authenticated Worker opt-in is one bounded Gemini call without proj
   f.sql.run('INSERT INTO preview_sessions VALUES(?,?,?)',[createHash('sha256').update(token).digest('hex'),f.context.userId,new Date(Date.now()+3600000).toISOString()]);
   let calls=0,status=200;const key='AIza'+'A'.repeat(35);
   const send=()=>worker.fetch(new Request('https://qa.invalid/api/workspace-assistant',{method:'POST',headers:{Origin:'https://qa.invalid','Content-Type':'application/json',Cookie:'claim_center_session='+token},body:JSON.stringify(f.body({useAi:true,question:'HWP 가져오기 방법 test@example.invalid',previousQuestion:'PRIVATE_PREVIOUS'}))}),{DB:f.context.db,GEMINI_API_KEY:key,GEMINI_TEST_FETCH:async(url:string,init:RequestInit)=>{
-   calls++;assert.match(url,/gemini-3\.5-flash-lite:generateContent$/u);const payload=JSON.parse(String(init.body));const serialized=JSON.stringify(payload);assert.doesNotMatch(serialized,/PRIVATE_CUSTOMER_PROJECT|PRIVATE_PREVIOUS|10000000-0000|test@example\.invalid/u);assert.doesNotMatch(serialized,/snapshot|draftVersion/u);assert.equal(payload.generationConfig.maxOutputTokens,1200);assert.deepEqual(payload.generationConfig.thinkingConfig,{thinkingLevel:'low'});assert.equal(payload.tools,undefined);
+   calls++;assert.match(url,/gemini-3\.1-flash-lite:generateContent$/u);const payload=JSON.parse(String(init.body));const serialized=JSON.stringify(payload);assert.doesNotMatch(serialized,/PRIVATE_CUSTOMER_PROJECT|PRIVATE_PREVIOUS|10000000-0000|test@example\.invalid/u);assert.doesNotMatch(serialized,/snapshot|draftVersion/u);assert.equal(payload.generationConfig.maxOutputTokens,1200);assert.deepEqual(payload.generationConfig.thinkingConfig,{thinkingLevel:'low'});assert.equal(payload.tools,undefined);
    return new Response(JSON.stringify(status===200?{candidates:[{content:{parts:[{text:'HWP 메뉴에서 가져오기를 선택하세요.'}]}}]}:{error:{code:status,message:'synthetic provider error'}}),{status,headers:{'Content-Type':'application/json'}});
   }} as any);
   const answer=await ok(await send());assert.equal(answer.mode,'AI');assert.equal(calls,1);assert.equal(answer.quota.used,1);assert.ok(!JSON.stringify(answer).includes(key));assert.equal(answer.snapshot.id,A);

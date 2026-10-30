@@ -1914,3 +1914,12 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 
 
 - Drive4 조용한 재확인(2026-10-30 08:24 KST): 공식 RSS 최신 3개 릴리스 요약과 설치 스킬/API 계약이 직전과 동일하다. 같은 CLI0.166 발표로 updater를 다시 조회하지 않았다. 공식 검색에서도 적용 가능한 새 복구 지시는 확보하지 못했다(전체 부재 단정 아님). 지정 원장·receipt 4개 SHA와 정확한 대상 ID/SHA는 그대로지만 실제 회사 계정 재열기·다운로드 검증은0/4 UNKNOWN이다. native/browser/Drive·자료/계정/권한/키·제품/배포·예약 변경0, original25dirty 보존. 증거 continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261029-2324.json. 사용자 중간 보고·수동 요청 없이 감시를 유지한다.
+
+
+## 도우미 Gemini 3.1 Flash-Lite·관련 매뉴얼만 전송 — 2026-10-30
+
+- 사용자 요청으로 선택형 도우미 호출만 안정 모델 gemini-3.1-flash-lite로 변경했다. 기존 회사 키·다른 AI 모델·권한·저장/상신/승인 절차는 변경하지 않는다. 기본 MANUAL/AI OFF·계정당20회/KST자정·실패1회·단일요청/자동재시도없음은 유지한다.
+- 주간업무일지에 포함되는 일반 업무/일지 키워드를 제거하고 독립된 복합 주제는 유지한다. AI 입력은 질문/매뉴얼버전/관련 id·title·steps·next만, 원문·상태·이전질문·화면주소 제외. 무매칭은 provider 준비·차감 전에 MANUAL로 반환한다. UI·HOME/설정 매뉴얼·업데이트10/30 v13을 함께 갱신했다.
+- 변경 전3개 실패를 보존했고 관련50검사(skip0), web/Worker 타입·build·양dryrun·compiledbundle8개 동일 PASS. 격리Chrome PC1440/모바일390/짧은360x400에서 기본/AI·무매칭무차감·정확매뉴얼·20회한도·오류/늦은입력·합성IME/Shift·Escape/닫기재열기·실제화면이동 PASS. 합성공급자이며 실물폰으로 승격하지 않는다.
+- 수치: 주간 질문의 manual JSON3474→837자(UTF8 7812→1951바이트), 무관 질문3582→전송0자. 실제토큰·청구액 측정이 아니다. HWP/명함 질문은 각 관련1개를 유지하며 주소metadata만 제외.
+- 공식제어의 새 복구 근거와 기존 실물폰 연결은 미확보, 실물 IME/touch NOT_RUN. 기존 안전종료를 우회하지 않는다. 배포·실서버 응답·보존·최종SHA는 후속결과로 연결한다. 증거 continuation/output/playwright/assistant-31-flash-lite-20261030.
