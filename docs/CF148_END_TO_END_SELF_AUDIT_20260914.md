@@ -1968,3 +1968,11 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 기존 관련20/20(skip0), 웹·Worker 타입, 빌드, 양 dryrun 통과. HWP runtime28개와 pinned WASM/binding SHA 보존, 양 compiled bundle8개 동일. 총괄+세 전문 읽기 검토 통과.
 - 새 전용 합성 Chrome에서1440×1000/390×844/360×400: 새 이름·58px touch target·텍스트/아이콘 비겹침·팝업제목·기본MANUAL200·닫기/재열기 입력유지·Escape초점복귀 통과. 실제 AI/업무쓰기0. 실물 휴대폰 검수/세 직원 실제 일지6개 검수로 확대하지 않는다. 로컬 최초 실패는 loaderURL/Chrome crashpad/합성 업무일지 actor누락+업데이트 overlay이며 원로그를 보존하고 QA환경만 바로잡았다. native Computer Use URL 안전중단 복구를 주장하지 않는다.
 - 증거 continuation/output/playwright/assistant-label-20261102/{local-ui-proof.json,setup-errors.json,tests-final.json,runtime-preservation.json,compiled-bundle-parity.json}. 배포 전 버전·바인딩 기준을 새로 수집했으며 실제 배포 결과는 별도 deploy-action/current-after/deployed-assets와 최종 completion에 연결한다. 사용자 원래25dirty 및 계정/키/업무자료 보존.
+
+
+## AI 챗봇 명칭 양 서버 배포 검수 완료 — 2026-11-02
+
+- 제품 f75a7b287a7d405d09380ba4e78876bb9f1700e0 정상push. 개발 b488cc8b-8273-4672-9b60-0ad75a3ddaf5 / 가오픈809894af-1aef-4038-9099-b083d5fe12cb 각100%. 실제 공개파일 각46/46 SHA가 검수 빌드·서버 간 일치, health/readiness200, 익명 챗봇401. 배포 전후 nonassetbinding metadata exact 및 plain vars/기존encryptedsecret 상속 보존, 키원문읽기/교체·migration·업무쓰기0.
+- 우측하단 아이콘 아래 AI 챗봇, 팝업제목/닫기/발화자/튜토리얼/사용안내 명칭 일치. PC1440·모바일크기390·작은360×400 실제Chrome 검수(합성backend) 통과. 기본MANUAL200 각1회/실AI0, 58px글자비겹침/잘림없음, 재열기입력·Escape초점복귀 유지.20검사/양types/build/dryrun/bundle8/runtime28 통과. 기본무료/선택형3.1/20KST·기존403·저장상신승인 로직 그대로. 세전문최종읽기PASS.
+- 새전용Chrome와로컬합성서버만정상종료. 기존25dirty/업무자료·계정·권한·키·다른예약 보존. 실물폰·Drive4·세직원실제일지6개·월요일실제양성상신은 이번 표시수정으로완료하지않는다.
+- 최종증거 continuation/output/playwright/assistant-label-20261102/{completion.json,local-ui-proof.json,development-deploy-action.json,gaopen-deploy-action.json,development-deployed-assets.json,gaopen-deployed-assets.json}. 현재source이름은AI 챗봇이므로후속UI locator는새접근성이름사용, 이전증거/로그는바꾸지말것.
