@@ -2005,3 +2005,15 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 공통 report 관리판단은 profile 누락 시 배정 director/pm 등에 fallback하지만0050 챕터 trigger는 관리자/명시PM만 허용한다. 실제 migration·SQLite Worker에서도 같은 guard 예외를 재현했다. 챕터 GET/PUT/POST에만 strict 옵션을 적용해 UI의canManage·API·DB기준을 일치시켰다. DBguard/계정역할/전역report fallback을 완화하지 않는다. PM미지정403·DB전체bytes불변, 관리자배정200, 직원본인SAVE/MARK_READY200/APPLY403, 명시PM배정200을 확인했다.
 - 관련59/59(skip0), 웹/Worker타입·build·양dryrun·compiled8/HWP28보존 통과. 업데이트·공통매뉴얼에 일정표의 담당PM 먼저 지정 절차를 추가했다. 새exact QA만 정상프로필API로 이경훈을 책임PM 지정해 나머지 실제6개 흐름을 재개한다. 기존 고객·계정·키·정기설정은 변경하지 않는다. 이 항목 시점에는 원격 업무일지 작성0이며 배포 및 실제저장 검수는 별도 후속 증거가 필요하다.
 - 증거 continuation/output/playwright/worklog-verification-20261102/{actual-1793583622112/first-failure.json,assignment-failure-d1.json,assignment-before.log,chapter-pm-fix/tests-final.json}. 신규QA는 복원된 옛QA가 아니며 정리 전 정확scope·주간참조없음·소유작업종료를 다시 검증한다.
+
+
+## 세 직원×양 서버 일지 실제 6경로 완료·검수자료 정리 — 2026-11-02
+
+- 이경훈·최영배·장범선 각 본인 정상 로그인으로 개발·가오픈6경로 실제 UI 작성(v1)·390×844수정저장(v2)·서버저장본재열기·전체새로고침·브라우저종료후새정상로그인·주간11/2~8 월요일칸을 확인했다. 12필드·최신ID/version2·원문SHA가 일일/주간/재로그인에서 동일하며 본인 SCHEDULE_ADDED ID가 유지되고 수기저장으로 자동업무가 중복되지 않았다. PC/viewport 검수이며 실물폰PASS가 아니다.
+- 제품c9581041994f7f306e2e98382e082442287c86e9는실제slot내용에기여한project로만새주간상신을연결한다. 제품22be6006ba2e5613a15e872c0f9d8b7148b4fefc는실제발생한PM미지정chapter500을기존DBguard와일치하는협업전용권한판단으로수정했다. 음성403·배정0 및 신규QA정상PM지정/배정200을양서버에서확인했다. 전역계정역할/DBtrigger/일반reportfallback은그대로이며기존잘못된anchor를소급변경하지않았다.
+- 관련59/59,web/Worker타입/build/dryrun·compiled8·HWP28·공개asset각46SHA 통과. 두제품commit정상push. 개발50cb9876-f9b1-487b-89c2-b78866a97dc2 / 가오픈d845e545-3ae8-4e51-aae6-0b7642d95808 각각100%; 원래nonassetbindings/plainvars/encryptedsecret상속보존,migration0. 새secret원문을읽거나교체하지않았다. 업데이트와공통매뉴얼에담당PM선지정절차반영.
+- 이전실패개발CC19 af62a7c7-752b-419c-92cc-9c7d5bd3de0f를정확scope/CAS로정리한뒤별도새CC20 fe8c69d9-467d-471f-ab33-827678630b28과가오픈CC29 08de4e47-1a31-432c-9937-ac715006c8fb에서최종성공했다. 최종두case도소유브라우저작업종료→같은UPDATE의주간상신/설정참조없음·기존eventID/생성자/marker/version검사후softdelete했다. 고객case삭제/옛삭제QA복구0이며새검수audit이력은남겼다. 여섯계정각목록제외·daily404·scopedweekly404·전체주간제외및기존접근가능project/이번주·전주일지/설정/상신hash동일을확인했다. 전체DBbytes불변주장은하지않으며정상로그인세션생성은구별한다.
+- VM import·filled-label exact선택자·자동알림창·D1--fileSELECT요약/삭제versionguard의검수도구실패는원본영수증으로보존하고제품오류로세지않았다. 알림창은source확인후나중에다시보기(localstate)만닫았고읽음PUT/튜토리얼건너뛰기/상신·승인·정기설정변경/강제cron/AI호출0. CC20setup재사용proof의이전run포인터오기는setup-reuse-source-correction.json으로정정하며원본은보존했다.
+- 최종결합증거 continuation/output/playwright/worklog-verification-20261102/{completion.json,verification-report.md}, 실제최종run actual-1793586390191. 이전단계실패와before/after증거는삭제하지않는다. credential원본각해당행만정상로그인사용·최종로그인영수증의sourceSHA동일/원본불변·비밀값정리완료를검증했다.
+- 물리폰·회사계정Drive4다운로드SHA·월요일09:00/09:05실제양성상신/수신자알림클릭은여전히별도미검증이다. 기존실물/Drive감시는보존한다. automation-5는이6경로완료후공식삭제하여중복QA생성을막는다. 원래월요일양성목표를이manual/weekly조회검수로완료처리하지않는다.
+
