@@ -1960,3 +1960,11 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 현재 인간 요청인 세 직원×두 서버의 실제 일일 작성→저장→정상 재로그인·재열기→주간 표 반영은 별도 active이고 원격쓰기0/신규QA0이다. 로컬32PASS만으로 완료가 아니다. 준비 harness의 Friday cutoff, guard 전 첫 navigation, async timeout 뒤 cleanup 경합, 주간 정확날짜·셀·정리 뒤 API 제외/기존hash 검증 누락을 발견해 실제 실행 전에 보완할 사항으로 남겼다. 제품 소스/빌드/새 배포0; 기존25dirty 보존.
 - 공식 automation_update로 automation-5만 최신 인간 요청에 맞춰11/3 화요일09:10 KST 한 번의 안전 창(당일09:10~12:00) 검수로 전환했다. 같은 대화·ACTIVE·created_at은 유지하고 실패시각/근거를 보존했다. 삭제 QA 재생성/소급 기록0, 새 exact QA는환경당최대1개만 허용하고 실제 guard·정상계정·12필드·본인 자동기록·주간11/2~8 화요일셀·재로그인UI·소유작업종료뒤정리·6명별API제외/hash를 먼저 갖추도록 인계했다. 원래 월요일 실제 정기상신 양성 목표는 미검증으로 남으며 이 manual/weekly 조회로 완료 처리하지 않는다. Drive/실물폰/다른 예약은 변경하지 않았다.
 - 증거: continuation/output/playwright/cf246-monday-20261102/run-20261101-235909/{preflight.json,specialist-review.json,historical-evidence-readback.json,automation-before.json,automation-update-args.json,automation-verification.json}. 완료/실제수신 증거가 없어 사용자 중간·예약 확인·수동 작업 요청은 하지 않는다. 다음 시작은 최신 Git/인계→실제 안전날짜→QA 장치 보완과 세 전문 검토→새 exact QA의 실제6개 흐름이며, 실제 실행하지 않은 부분은 미검증으로 유지한다.
+
+
+## AI 챗봇 표시 이름 정리 — 2026-11-02
+
+- 사용자 스크린샷의 도움말 느낌을 줄이기 위해 우측하단 실행 버튼에 AI 챗봇을 표시하고 팝업 제목·답변자·닫기 접근성 이름·튜토리얼 재진입·현재 사용 안내의 명칭을 맞췄다. 58px 원형은 유지하며 아이콘24px와 줄바꿈 없는 텍스트를 위아래로 배치했다. 기존 이벤트·기본 MANUAL/AI OFF·선택 Gemini3.1·계정20회KST·원문전송/권한/저장상신승인 로직 변경0.
+- 기존 관련20/20(skip0), 웹·Worker 타입, 빌드, 양 dryrun 통과. HWP runtime28개와 pinned WASM/binding SHA 보존, 양 compiled bundle8개 동일. 총괄+세 전문 읽기 검토 통과.
+- 새 전용 합성 Chrome에서1440×1000/390×844/360×400: 새 이름·58px touch target·텍스트/아이콘 비겹침·팝업제목·기본MANUAL200·닫기/재열기 입력유지·Escape초점복귀 통과. 실제 AI/업무쓰기0. 실물 휴대폰 검수/세 직원 실제 일지6개 검수로 확대하지 않는다. 로컬 최초 실패는 loaderURL/Chrome crashpad/합성 업무일지 actor누락+업데이트 overlay이며 원로그를 보존하고 QA환경만 바로잡았다. native Computer Use URL 안전중단 복구를 주장하지 않는다.
+- 증거 continuation/output/playwright/assistant-label-20261102/{local-ui-proof.json,setup-errors.json,tests-final.json,runtime-preservation.json,compiled-bundle-parity.json}. 배포 전 버전·바인딩 기준을 새로 수집했으며 실제 배포 결과는 별도 deploy-action/current-after/deployed-assets와 최종 completion에 연결한다. 사용자 원래25dirty 및 계정/키/업무자료 보존.

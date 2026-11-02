@@ -136,11 +136,11 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
   if (suspended) return null;
   const localSources = assistantGuides(pendingRequest?.question ?? (question || '처음 작업 순서'), pendingRequest?.routeId ?? routeId);
   return <>
-    <button ref={launcher} className="workspace-assistant-launcher" type="button" aria-label="업무 도우미" title="업무 도우미 열기" aria-haspopup="dialog" aria-expanded={open} aria-controls="workspace-assistant-panel" onClick={() => setOpen(!open)}>
-      <ChatIcon /><span aria-hidden="true">?</span>
+    <button ref={launcher} className="workspace-assistant-launcher" type="button" aria-label="AI 챗봇" title="AI 챗봇 열기" aria-haspopup="dialog" aria-expanded={open} aria-controls="workspace-assistant-panel" onClick={() => setOpen(!open)}>
+      <ChatIcon /><span aria-hidden="true">AI 챗봇</span>
     </button>
-    {open && <aside ref={panel} id="workspace-assistant-panel" className="workspace-assistant-panel" role="dialog" aria-modal={mobile ? true : undefined} aria-label="업무 도우미">
-      <header><div className="workspace-assistant-heading"><ChatIcon /><div><h2>업무 도우미</h2><p>기본 안내 · 선택형 Gemini 질문</p></div></div><button type="button" aria-label="업무 도우미 닫기" onClick={close}>×</button></header>
+    {open && <aside ref={panel} id="workspace-assistant-panel" className="workspace-assistant-panel" role="dialog" aria-modal={mobile ? true : undefined} aria-label="AI 챗봇">
+      <header><div className="workspace-assistant-heading"><ChatIcon /><div><h2>AI 챗봇</h2><p>기본 안내 · 선택형 Gemini 질문</p></div></div><button type="button" aria-label="AI 챗봇 닫기" onClick={close}>×</button></header>
       <details className="workspace-assistant-context">
         <summary>프로젝트 연결 <span>{projects.find(project => project.id === caseId)?.caseNumber ?? '선택 사항'}</span></summary>
         <div className="workspace-assistant-context-fields">
@@ -152,10 +152,10 @@ export function WorkspaceAssistant({ currentPath, currentSearch, roles, suspende
         </div>
       </details>
       <div className="workspace-assistant-conversation" role="log" aria-label="질문과 답변" aria-live="polite" aria-busy={busy}>
-        {!messages.length && !pendingRequest && <div className="workspace-assistant-welcome"><div className="workspace-assistant-bubble"><strong>업무 도우미</strong><p>안녕하세요. 기본 안내는 무료 매뉴얼 답변입니다. 더 풀어서 설명이 필요하면 아래 ‘AI로 질문하기’를 켜세요.</p><p>궁금한 업무를 질문하거나 아래 질문을 선택해 보세요.</p></div><div className="workspace-assistant-suggestions">{suggestions.map(value => <button type="button" key={value} disabled={busy} onClick={() => { setQuestion(value); void send(value); }}>{value}</button>)}</div></div>}
+        {!messages.length && !pendingRequest && <div className="workspace-assistant-welcome"><div className="workspace-assistant-bubble"><strong>AI 챗봇</strong><p>안녕하세요. 기본 안내는 무료 매뉴얼 답변입니다. 더 풀어서 설명이 필요하면 아래 ‘AI로 질문하기’를 켜세요.</p><p>궁금한 업무를 질문하거나 아래 질문을 선택해 보세요.</p></div><div className="workspace-assistant-suggestions">{suggestions.map(value => <button type="button" key={value} disabled={busy} onClick={() => { setQuestion(value); void send(value); }}>{value}</button>)}</div></div>}
         {messages.map(message => <article className="workspace-assistant-answer" key={message.id}>
           <div className="workspace-assistant-user"><small>나</small><p>{message.question}</p></div>
-          <div className="workspace-assistant-bubble"><strong>업무 도우미</strong><small>{message.reply.mode === 'AI' ? 'Gemini 답변' : '매뉴얼 자동 안내'} · {message.reply.manualVersion}</small>
+          <div className="workspace-assistant-bubble"><strong>AI 챗봇</strong><small>{message.reply.mode === 'AI' ? 'Gemini 답변' : '매뉴얼 자동 안내'} · {message.reply.manualVersion}</small>
           <p className="workspace-assistant-answer-text">{message.reply.answer}</p>
           {message.reply.notice && <p className="workspace-assistant-notice" role="status">{message.reply.notice}</p>}
           {message.reply.snapshot && <details className="workspace-assistant-facts" aria-label="실제 서버 저장 상태"><summary>내 프로젝트 저장 상태 · {message.reply.snapshot.caseNumber}</summary><strong>{message.reply.snapshot.title}</strong><ul>{assistantFacts(message.reply.snapshot).map(fact => <li key={fact}>{fact}</li>)}</ul><small>조회 {new Date(message.reply.observedAt).toLocaleString('ko-KR')} · 화면 미저장 입력 제외</small></details>}
