@@ -1998,3 +1998,10 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - snapshot의 실제 slot(주말은토일) 필터 뒤 기여project와기존접근권한의교집합에서만 새 상신의 보관프로젝트를 고른다. 명시caseId·기존row/원문/해시/stableID/설정/수신자·직전원자권한검사/삭제조회필터 유지. 과거 잘못된anchor를소급수정하거나삭제QA를복구하지 않는다.
 - 수기only주말추가를포함한관련41/41(skip0),웹/Worker타입·build·양dryrun·compiledbundle8같음·HWPpinned28보존 통과. 업데이트 안내와매뉴얼일자11/2동기화. 총괄+세읽기전문검토 후 기존환경/키보존배포 예정. 원격실제6직원일지흐름은아직미검증이며배포후새exactQA에서작성·저장·재로그인·주간반영·정리후목록제외를검수한다.
 - 증거 continuation/output/playwright/worklog-verification-20261102/{anchor-before-full.log,anchor-reproduction.json,tests-after-manual-coverage.json,compiled-bundle-parity.json}. 기존25dirty/고객자료·계정·키·다른예약보존.
+
+## 실제 챕터 배정 500 재현·담당 PM 보호 일치 — 2026-11-02
+
+- 세 직원×양 서버 정상 로그인·본인 writer 범위 확인 6건 후 신규 개발 합성 프로젝트 CC-2026-00019에서 첫 담당 지정 PUT이500을 반환했다(CF-Ray a53f70c6e8e8dd65-HKG). 반복 PUT 없이 소유 브라우저를 닫고 정확 UUID를 SELECT했다. 프로젝트·생성 활동 각1, 본인 배정1이며 PM profile/챕터 배정0으로 실제 실패의 부분 저장 범위를 보존했다. 이전 실패 및 D1 --file 요약 파싱 오류를 삭제·저장 성공으로 기록하지 않는다.
+- 공통 report 관리판단은 profile 누락 시 배정 director/pm 등에 fallback하지만0050 챕터 trigger는 관리자/명시PM만 허용한다. 실제 migration·SQLite Worker에서도 같은 guard 예외를 재현했다. 챕터 GET/PUT/POST에만 strict 옵션을 적용해 UI의canManage·API·DB기준을 일치시켰다. DBguard/계정역할/전역report fallback을 완화하지 않는다. PM미지정403·DB전체bytes불변, 관리자배정200, 직원본인SAVE/MARK_READY200/APPLY403, 명시PM배정200을 확인했다.
+- 관련59/59(skip0), 웹/Worker타입·build·양dryrun·compiled8/HWP28보존 통과. 업데이트·공통매뉴얼에 일정표의 담당PM 먼저 지정 절차를 추가했다. 새exact QA만 정상프로필API로 이경훈을 책임PM 지정해 나머지 실제6개 흐름을 재개한다. 기존 고객·계정·키·정기설정은 변경하지 않는다. 이 항목 시점에는 원격 업무일지 작성0이며 배포 및 실제저장 검수는 별도 후속 증거가 필요하다.
+- 증거 continuation/output/playwright/worklog-verification-20261102/{actual-1793583622112/first-failure.json,assignment-failure-d1.json,assignment-before.log,chapter-pm-fix/tests-final.json}. 신규QA는 복원된 옛QA가 아니며 정리 전 정확scope·주간참조없음·소유작업종료를 다시 검증한다.

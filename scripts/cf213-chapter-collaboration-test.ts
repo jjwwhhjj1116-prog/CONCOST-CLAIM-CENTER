@@ -63,7 +63,7 @@ const TEXT = 'CF213 합성 검수 원고';
 type Chapter = { id: string; chapterCode: string; title: string };
 const snapshot = (db: Database) => ['preview_report_drafts', 'preview_report_revisions', 'preview_report_chapter_assignments', 'preview_report_chapter_revisions', 'preview_case_activities'].map(name => db.exec(`SELECT * FROM ${name} ORDER BY rowid`));
 
-async function fixture() {
+async function fixture(withProfile = true) {
   const SQL = await initSqlJs(), db = new SQL.Database(); db.run('PRAGMA foreign_keys=ON');
   const directory = resolve('apps/cloudflare/migrations');
   const read = (name: string) => readFileSync(resolve(directory, name), 'utf8');
@@ -76,20 +76,43 @@ async function fixture() {
   for (const id of [ADMIN, PM, STAFF, OTHER]) db.run('INSERT INTO preview_sessions VALUES (?,?,?,?)', [sha(token(id)), id, now, '2099-01-01T00:00:00.000Z']);
   for (const [id, number] of [[CASE, 'CF213-CASE'], [OTHER_CASE, 'CF213-OTHER-CASE']]) db.run('INSERT INTO preview_cases (id,organization_id,case_number,title,claim_type,status,version,category_major,category_middle,category_minor,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [id, 'concost', number, 'CF213 고객 없는 합성 협업 사건', 'TYPE-01', 'INQUIRY', 1, '클레임', '합성', '검수', ADMIN, now, now]);
   for (const id of [PM, STAFF, OTHER]) db.run('INSERT INTO preview_case_assignments VALUES (?,?,?,?)', [CASE, id, ADMIN, now]);
-  db.run('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)', [CASE, 'concost', PM, 1, ADMIN, now, now]);
+  if (withProfile) db.run('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)', [CASE, 'concost', PM, 1, ADMIN, now, now]);
   const env: CloudflareEnv = { DB: new D1(db) as unknown as NonNullable<CloudflareEnv['DB']> };
   const call = (path: string, method = 'GET', body?: unknown, actor = PM) => worker.fetch(new Request(`https://cf213.example.invalid${path}`, { method, headers: { 'X-Session-Token': token(actor), 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env);
   const configResponse = await call(`/api/report-authoring/config?caseId=${CASE}`); assert.equal(configResponse.status, 200, await configResponse.clone().text());
   const chapters = ((await configResponse.json()) as { chapters: Chapter[] }).chapters;
   assert.ok(chapters.length >= 2);
   const path = `/api/report-chapter-collaboration?caseId=${CASE}`, chapter = chapters[0], other = chapters[1];
-  const assigned = await call(path, 'PUT', { chapterId: chapter.id, assigneeId: STAFF, expectedVersion: 0 }); assert.equal(assigned.status, 200, await assigned.clone().text());
+  if (withProfile) { const assigned = await call(path, 'PUT', { chapterId: chapter.id, assigneeId: STAFF, expectedVersion: 0 }); assert.equal(assigned.status, 200, await assigned.clone().text()); }
   const original: ReportNode = { type: 'doc', attrs: { reportHeader: { enabled: true, text: 'CF213 머리말 원문' }, reportFrontMatter: { enabled: true, date: '2026-10-13', author: '합성 작성자' } }, content: [...richChapter(chapter.chapterCode, chapter.title).content!.map(node => node.type === 'paragraph' ? paragraph('기존 교체 대상') : node), ...richChapter(other.chapterCode, other.title).content!] };
   const saveReport = (doc = original, expectedVersion = 0, content = '기존 보고서 원문') => call(`/api/report-drafts?caseId=${CASE}`, 'PUT', { title: 'CF213 합성 보고서', content, editorJson: doc, expectedVersion, wizardStep: 4, selectedChapterId: chapter.id, saveKind: 'MANUAL' });
-  const saved = await saveReport(); assert.equal(saved.status, 200, await saved.clone().text());
+  if (withProfile) { const saved = await saveReport(); assert.equal(saved.status, 200, await saved.clone().text()); }
   const post = (action: string, expectedVersion: number, draftEditorJson: ReportNode | undefined = richChapter(chapter.chapterCode, chapter.title), actor = STAFF, expectedReportVersion = 1) => call(path, 'POST', { action, chapterId: chapter.id, draftText: TEXT, draftEditorJson, expectedVersion, expectedReportVersion }, actor);
   return { db, call, path, post, chapter, other, original, saveReport };
 }
+
+test('CF213 missing responsible PM cannot expose chapter management or fall through to a DB constraint; explicit PM and admin retain access', async () => {
+  const f = await fixture(false);
+  try {
+    const before = f.db.export();
+    const denied = await f.call(f.path, 'PUT', { chapterId:f.chapter.id,assigneeId:STAFF,expectedVersion:0 });
+    assert.equal(denied.status,403,await denied.clone().text());
+    assert.equal((await denied.json() as {code:string}).code,'RESPONSIBLE_PM_REQUIRED');
+    const payload = await (await f.call(f.path)).json() as {canManage:boolean;members:unknown[]};
+    assert.equal(payload.canManage,false);assert.deepEqual(payload.members,[]);
+    assert.deepEqual(f.db.export(),before,'Denied assignment and GET must leave the database unchanged');
+    const admin = await (await f.call(f.path,'GET',undefined,ADMIN)).json() as {canManage:boolean};assert.equal(admin.canManage,true);
+    const adminAssigned=await f.call(f.path,'PUT',{chapterId:f.chapter.id,assigneeId:STAFF,expectedVersion:0},ADMIN);assert.equal(adminAssigned.status,200,await adminAssigned.clone().text());
+    assert.equal((await f.post('SAVE',1)).status,200,'Assigned staff can still save without a PM profile');
+    assert.equal((await f.post('MARK_READY',2)).status,200,'Assigned staff can still mark their own chapter ready');
+    assert.equal((await f.post('APPLY',3,undefined,STAFF)).status,403,'Assigned staff cannot become the reviewing PM');
+    const now = new Date().toISOString();
+    f.db.run('INSERT INTO preview_project_schedule_profiles (case_id,organization_id,responsible_pm_id,version,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?)',[CASE,'concost',PM,1,ADMIN,now,now]);
+    const assigned = await f.call(f.path,'PUT',{chapterId:f.other.id,assigneeId:STAFF,expectedVersion:0});assert.equal(assigned.status,200,await assigned.clone().text());
+    assert.equal((await assigned.json() as {canManage:boolean}).canManage,true);
+    assert.deepEqual(f.db.exec('PRAGMA foreign_key_check'),[]);
+  } finally { f.db.close(); }
+});
 
 test('CF213 real Worker saves, reopens, submits and merges the exact own-chapter rich JSON; unrelated chapter and front matter are unchanged', async () => {
   const f = await fixture();

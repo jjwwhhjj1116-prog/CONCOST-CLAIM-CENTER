@@ -4168,7 +4168,7 @@ async function previewReportPayload(env: CloudflareEnv, caseId: string, summary 
   return json(payload);
 }
 
-async function canManagePreviewProjectReport(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<boolean> {
+async function canManagePreviewProjectReport(env: CloudflareEnv, user: SessionUser, caseId: string, requireResponsiblePm = false): Promise<boolean> {
   if (!env.DB) return false;
   if (user.roles.includes('admin')) return true;
   try {
@@ -4177,6 +4177,8 @@ async function canManagePreviewProjectReport(env: CloudflareEnv, user: SessionUs
     ).bind(caseId, PREVIEW_ORGANIZATION_ID).first<{ responsiblePmId: string }>();
     if (profile) return profile.responsiblePmId === user.id;
   } catch { /* pre-CF40 databases use the safe assigned-PM fallback below */ }
+  // Chapter collaboration has DB guards requiring an explicit responsible PM.
+  if (requireResponsiblePm) return false;
   if (!user.roles.some((role) => ['ceo','director','pm'].includes(role))) return false;
   const assignment = await env.DB.prepare('SELECT 1 AS found FROM preview_case_assignments WHERE case_id=? AND user_id=?')
     .bind(caseId, user.id).first<{ found: number }>();
@@ -4383,7 +4385,7 @@ interface PreviewReportChapterAssignmentRow {
 
 async function previewReportChapterCollaborationPayload(env: CloudflareEnv, user: SessionUser, caseId: string): Promise<Record<string, unknown>> {
   if (!env.DB) return { assignments: [], members: [], canManage: false, currentUserId: user.id };
-  const canManage = await canManagePreviewProjectReport(env, user, caseId);
+  const canManage = await canManagePreviewProjectReport(env, user, caseId, true);
   const rows = await env.DB.prepare(
     `SELECT a.case_id AS caseId,a.chapter_id AS chapterId,a.chapter_code AS chapterCode,a.chapter_title AS chapterTitle,
       a.assignee_id AS assigneeId,assignee.display_name AS assigneeName,a.status,a.draft_text AS draftText,
@@ -4451,7 +4453,7 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
   if (!env.DB.batch) return json({ error: 'D1 batch is unavailable', code: 'D1_BATCH_REQUIRED' }, 503);
 
   if (request.method === 'PUT') {
-    if (!await canManagePreviewProjectReport(env, user, caseId)) return json({ error: '챕터 담당자는 담당 PM 또는 관리자만 지정할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
+    if (!await canManagePreviewProjectReport(env, user, caseId, true)) return json({ error: '프로젝트 일정표에서 담당 PM을 먼저 지정하세요. 챕터 담당자는 지정된 담당 PM 또는 관리자만 설정할 수 있습니다.', code: 'RESPONSIBLE_PM_REQUIRED' }, 403);
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || !exactObjectKeys(body, ['chapterId','assigneeId','expectedVersion']) || typeof body.chapterId !== 'string' || !(body.assigneeId === null || typeof body.assigneeId === 'string') || !Number.isInteger(body.expectedVersion)) {
       return json({ error: 'Chapter assignment payload is invalid', code: 'INVALID_CHAPTER_ASSIGNMENT' }, 400);
@@ -4501,7 +4503,7 @@ async function handlePreviewReportChapterCollaboration(request: Request, env: Cl
     'SELECT chapter_code AS chapterCode,chapter_title AS chapterTitle,assignee_id AS assigneeId,status,draft_text AS draftText,draft_editor_json AS draftEditorJson,version,updated_at AS updatedAt FROM preview_report_chapter_assignments WHERE case_id=? AND chapter_id=?'
   ).bind(caseId, body.chapterId).first<{ chapterCode: string; chapterTitle: string; assigneeId: string | null; status: string; draftText: string; draftEditorJson: string | null; version: number; updatedAt: string }>();
   if (!current) return json({ error: '챕터 담당자를 먼저 지정해 주세요.', code: 'CHAPTER_ASSIGNMENT_REQUIRED' }, 409);
-  const canManage = await canManagePreviewProjectReport(env, user, caseId);
+  const canManage = await canManagePreviewProjectReport(env, user, caseId, true);
   if (!canManage && current.assigneeId !== user.id) return json({ error: '배정된 챕터만 작성·검수할 수 있습니다.', code: 'CHAPTER_ASSIGNEE_REQUIRED' }, 403);
   const expectedVersion = Number(body.expectedVersion);
   if (Number(current.version) !== expectedVersion) return json({ error: 'Chapter draft changed in another session', code: 'VERSION_CONFLICT', currentVersion: Number(current.version) }, 409);
