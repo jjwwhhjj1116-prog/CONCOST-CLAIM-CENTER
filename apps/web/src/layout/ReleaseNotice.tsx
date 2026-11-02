@@ -4,7 +4,7 @@ import './ReleaseNotice.css';
 
 export const RELEASE_DATE = '2026-11-02';
 export const RELEASE_DATE_LABEL = '2026년 11월 2일';
-const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v13:${userId}`;
+const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v14:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
 }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'11월 2일 · 주간 상신본 이동 보완',text:'받은·보낸 상신본에서 선택한 보고서와 화면 주소를 함께 갱신합니다. 목록에서 다른 보고서를 본 뒤 기존 업무 알림을 다시 눌렀을 때 이전 보고서가 남는 문제를 보완했습니다. 상신본을 바꾸기 전에 작성자·주차·원문 식별을 확인하세요. 미저장 경고에서 이동을 취소하면 설정과 의견을 유지하며 기존 상신·승인 절차는 그대로입니다.'},
   {title:'11월 2일 · 챕터 담당 지정 보호 보완',text:'프로젝트 일정표에서 담당 PM을 먼저 지정한 뒤 보고서 챕터를 분담하세요. 담당 PM이 없는 상태에서 담당자를 지정하면 발생하던 서버 오류를 보완했습니다. 지정된 담당 PM·관리자의 배정과 직원 본인 챕터 작성은 기존 DB 보호 규칙에 맞게 유지합니다.'},
   {title:'11월 2일 · 주간 업무일지 프로젝트 연결 보완',text:'전체 프로젝트의 주간 상신본을 해당 기간에 실제 업무가 기록된 프로젝트에 연결합니다. 업무와 무관한 새 프로젝트를 정리할 때 다른 프로젝트의 주간 상신본과 결재 알림이 함께 숨는 문제를 보완했습니다. 월요일 추가 보고는 전주 토·일 기록을 기준으로 연결하며 기존 작성본·상신본·결재·정기설정은 변경하지 않습니다.'},
   {title:'10월 30일 · AI 도우미 비용 절감',text:'선택형 AI 질문은 기존 회사 연결의 Gemini 3.1 Flash-Lite를 사용합니다. 질문에 관련된 매뉴얼만 보내고 중복되는 일반 안내와 화면 주소는 전송하지 않습니다. 맞는 항목이 없으면 기본 안내로 답하며 AI 호출·횟수 차감이 없습니다. 기본 무료 안내, 계정당 하루 20회·한국시간 자정 초기화, 저장·상신·승인 절차와 기존 키는 유지합니다.'},
