@@ -1976,3 +1976,12 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 우측하단 아이콘 아래 AI 챗봇, 팝업제목/닫기/발화자/튜토리얼/사용안내 명칭 일치. PC1440·모바일크기390·작은360×400 실제Chrome 검수(합성backend) 통과. 기본MANUAL200 각1회/실AI0, 58px글자비겹침/잘림없음, 재열기입력·Escape초점복귀 유지.20검사/양types/build/dryrun/bundle8/runtime28 통과. 기본무료/선택형3.1/20KST·기존403·저장상신승인 로직 그대로. 세전문최종읽기PASS.
 - 새전용Chrome와로컬합성서버만정상종료. 기존25dirty/업무자료·계정·권한·키·다른예약 보존. 실물폰·Drive4·세직원실제일지6개·월요일실제양성상신은 이번 표시수정으로완료하지않는다.
 - 최종증거 continuation/output/playwright/assistant-label-20261102/{completion.json,local-ui-proof.json,development-deploy-action.json,gaopen-deploy-action.json,development-deployed-assets.json,gaopen-deployed-assets.json}. 현재source이름은AI 챗봇이므로후속UI locator는새접근성이름사용, 이전증거/로그는바꾸지말것.
+
+
+## 실물 AI 챗봇 감시 최신화·연결 미검증 보존 — 2026-11-02 09:24 KST
+
+- 시작HEAD03f29fb426724ab32c373c342839b99b3a685d5b / 제품f75a7b2 / 원래25dirty 보존. 공식 changelog·Windows sandbox·Computer Use 페이지를 실제 열어 검토했고 최신 노출CLI0.166.0과 현재26.1027.30824의설치문서SHA3개는기존검토와동일. inspected sources에정확0x80070020의새적용복구근거미확보이며전체수정부재주장아님. updater/runtime초기화/reset/listapps/getstate·기기조회·브라우저/폰입력·프로세스권한실험0. 새제품수정/빌드/배포0.
+- 저장된10/30 native부분증거는새패키지초기화/listapps 각1성공만이며Chrome URL안전중단해제·잠금원인·실폰연결UNKNOWN. 후속PhoneLink 후보0/launch aborted는이전대화요약에만남았고허용된두폴더에서원raw로그/정확시각은확인하지못했다. 성공/권한원인단정금지·후속앱입력중단유지. timeout의1회재시도를aborted에대입하거나다른도구로우회하지않는다.
+- 최근AI 챗봇명칭·양서버배포완료는PC Chrome+합성backend/모바일viewport 증거이며양서버실물검수는전부NOT_RUN. 회사계정·암호·권한·키·업무자료변경/실AI호출/usage초기화0. 기존도우미3.1·기본MANUAL/AI OFF·20KST·관련manual/무매칭무차감 기준유지.
+- 공식automation_update로physical id automation만새AI 챗봇 locator·제품f75/직전배포버전·native부분증거/abort원장한계로prompt갱신.6시간주기/ACTIVE/thread/created_at동일확인. Drive4·automation-5(11/3세직원업무일지안전창)등다른예약변경0. 세직원실제쓰기/주간반영·월요일실제양성상신미완료를이감시로대체하지않는다. 완료증거없어중간/반복실패·수동요청0.
+- 증거 continuation/output/playwright/physical-phone-20261029/review-20261102-0024/{review.json,automation-before.json,automation-verification.json}. 이전증거와본문전체보존. 다음재개는새공식적용근거+허용된정상제어와실제기존폰연결을확보한경우에만하며새로운실물검수전성공으로기재하지않는다.
