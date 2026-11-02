@@ -2032,3 +2032,16 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 공식 새 heartbeat11-9는 이 대화의 주말 실제준비→성공시월요일08:50재개를 담당한다. 기존 automation(6h 실물)·drive-4(3h)는 최신제품/업무일지완료/독립스코프로 갱신했으며 기술본부ai는 보존한다. 옛삭제automation-5를 복구하지 않았다. 이후 예정시각을 놓치면 실패원장을 보존하고 다음 실제일정으로 같은예약을 갱신하며 가짜시각/강제실행으로 대체하지 않는다.
 - 전체 남은3범위는 아직 미완료다. 실제 증거 확보 없이 완료/새 제품 배포로 기록하지 않는다. 정기상신 coordinator 성공만으로 합격하지 않고 회사Drive4/실물폰은 별도 계속 검수한다. 기준 산출물 C:/Users/user-owner/Documents/Codex/2026-10-13/claim-center-continuation/output/playwright/remaining-e2e-20261102.
 
+
+
+## 주간 고정본 선택 오류 재현·수정·양 서버 배포 — 2026-11-02 13:42 KST
+
+- 제품 c133f50b4f1331435d3ad838440bd3adde818181 정상 push. 이번에는 실제 배포된 프런트와 SHA가 같은 변경 전 산출물을 전체 App/Router+로컬 합성 API로 실행하여 오류를 재현했다. B알림으로URL B→목록A선택(화면A/URL B)→B알림재클릭에도A가남았다. 원본 before log/PNG와 두 환경 변경 전 main asset SHA 일치를 보존했다. 처음 의심한 단순 A URL→B URL은 Router search key의 remount로 정상이라는 반증도 구분했다.
+- 수정은 WeeklyWorklogApproval의 목록/상신성공선택을 기존 onNavigate로 통일하고 WeeklyProjectWorklogs가 이를 전달하는 최소 변경이다. week/submissionId를 선택값에 맞추며 caseId/authorId query를 보존한다. 이미 같은URL이면no-op하여 미저장dirty상태불일치를 막았다. APIpayload/요청잠금/멱등키회전/current가드/승인·설정저장·DB는 바꾸지 않았다. 업데이트v14와공통매뉴얼을갱신했다.
+- 최종 실제 Chrome 합성 검수: PC1440×1000·390×844·360×400에서 연속 알림/목록 전환, 정확 요청객체/응답ID/URL/작성자/원문hash/고유문장/주말2열, 의견+확인체크의 이동취소 보존, 버리기 후 대상전환·확인체크초기화가 통과했다. 프로젝트/작성자 필터도 유지됐다. reviewer 업무POST/PUT0. 직원 합성 상신 성공의 응답ID=URL=보이는 고정본, 현재선택no-op, 미저장정기설정취소/버리기·저장된상신본유지, 지연된상신성공중다른주간으로이동후강제복귀없음까지 통과했다. 직원두시나리오는 별도 로컬메모리 POST각1회이며 실제업무서버쓰기와 구분한다.
+- web/Worker타입, 업무일지회귀36개, 공통매뉴얼/AI/업데이트회귀20개, webbuild, 양Worker dry-run·compiled8파일SHA일치, 기존 HWP엔진/글꼴28개SHA 보존, 세전문 최종읽기 PASS. QA의존재하지않는Worker tsconfig 경로·이미선택된B에새GET을요구한초기상태오판·localhost격리네트워크실패는 최초로그로보존하고제품오류로세지않았다.
+- 실제 개발 e170c362-872c-490f-86c8-23b4ad4ec59e / 가오픈 831337e8-e6b9-4eff-8bd7-a524f68f3a6f 각100% 활성. 공개자산 각46/46 SHA 일치, health/readiness200·익명명함API401. 전후바인딩/기존plainvars/암호화secret상속 메타데이터가 같고 secret원문읽기·키교체·DDL/migration0. 옛25dirty(22삭제/package.json/미추적2종)는 포함하지 않았다.
+- 배포 후 실제 양서버 대표/부사장4정상로그인으로 PC/390 주간화면·읽기권한·목록을 검수했다. guard의auth/login외 업무쓰기0. 정확한 세 직원 두 주차 상신원장 메타데이터14건은배포전후동일했다. 이 범위의 실제활성상신/현재주말WEEKEND는0이므로 실서버12알림클릭양성으로세지않았고, 삭제된QA를복원/재생성하지 않았다.
+- 남은 실물휴대폰/native키보드, 회사Drive4개 실제다운로드SHA, 다음실제월요일두tick/12수신자클릭은미검증이다. 이번합성UI/배포확인으로대체하지않는다. 공식복구/회사계정제약을우회하거나수동작업을요구하지않았다. 실제시각검수는기존11-9와monday-20261109의날짜/잠금/CAS를유지하며, review모드가실제제목/hash/caption/토일열까지대조하도록보강됐다(17계약/14syntax/현재날짜거부2 PASS).
+- 최종 결합증거: C:/Users/user-owner/Documents/Codex/2026-10-13/claim-center-continuation/output/playwright/worklog-navigation-20261102/completion.json. 이파일의 thisProductFixComplete=true / overallRemainingVerificationComplete=false를구분한다. 배포 action/current-after/assets·actual live-post·before/after/writer/late 원로그를 함께 참조한다. 기존Drive/실물/정기상신감시와다른기술본부예약은유지하고최신제품/버전으로근거를갱신한다.
+
