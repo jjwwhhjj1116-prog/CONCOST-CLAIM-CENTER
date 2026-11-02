@@ -1948,3 +1948,15 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 
 
 - 실물 도우미 재개 요청 확인(2026-10-30 11:35 KST): 최신 제품3d93300/정상 로그인·실AI4회·PC모바일viewport 증거를 읽고, 실물 연결·nativeIME/touch·회전의 NOT_RUN과 구분했다. 공식 최신 CLI0.166 및 정확오류 검색/동일 설치문서 검토에서 적용할 새 복구 근거는 미확보이며 전체공식부재로 단정하지 않는다. 초기화/reset/기기조회/충돌진단/업데이터 실패호출을 반복하지 않았다. 기존 automation은 이미3.1·관련매뉴얼·무매칭무차감/20KST 및 완료후만보고 기준이므로 중복예약·변경0. 원고·계정·권한·키·기존미커밋25·다른예약을 보존했고 native/browser/phone입력·AI/업무쓰기·제품수정/새배포·수동요청0. 증거 continuation/output/playwright/physical-phone-20261029/resume-review-20261030-0235.json. 복구와 실제기기경로가 확보될 때만 실물검수를 재개하며 같은 실패 중간보고는 반복하지 않는다.
+
+
+## CF246 11/2 실제 검수 사전조건 실패·삭제 QA 재사용 중단 — 2026-11-02
+
+- 실제 최초 로컬 확인은 08:56:38 KST(11/1 23:56:38Z). automation-5 trigger는08:53:50.537 KST였다. 예정9시/9시5분 actual scheduledTime·cron outcome·월요일 양성 상신·대표/부사장 알림·고정본 열기는 이번에 관측하지 못했으며 모두 미검증이다. 제품의 예약 실행이 실패했다는 뜻은 아니다. 지연/도구 누락과 제품 오류를 구분한다.
+- 최신10/29 정리는 옛 CF244 CC13/14/15·CC23/24/25 복원을 금지한다. 이번 로컬에는11/2 prepare.json·clock canonical이 없으며, 삭제한 QA로 준비를 재실행하거나 날짜 보호를 풀지 않았다. 서버 주말 원고0을 새로 확인한 것은 아니다. 로그인/자격증명 읽기/네트워크/QA 생성·일지쓰기/설정변경/상신·알림쓰기0.
+- observer의 정적 import 대상 repo/tmp/cf239-qa/cloudflare-client.mjs와 tmp/cf246-qa/{baseline,friday,friday-clock}.json, cf245 두 live-verify 원본이 현재 경로에 없다. 원인을 삭제/다른PC로 단정하지 않고 복원·재작성하지 않았다. 이전 deployment API 권한 실패나 Chrome URL 안전 종료를 다른 도구로 우회하지 않았다. observer/tail·강제cron·가짜시각·시계변경0, 새 성공 clock 발행0.
+- 남은 cf246-friday-late의6개 파생 증거(실제 두 tick·ledger·수신 화면 포함)는 friday-final-proof.inputs와 현재 SHA6/6 일치. friday-clock 사본 SHA222133269ab02e1bea352cfaa229df190ed2a7fb78c01dc0f1f2d853dd625aa6은 과거 원본 해시와 같다. baseline/friday 원본 바이트는 미확보이며 역사적해시만 남았으므로 원본 복원/오늘보존 검증으로 확대하지 않는다. 금요일 성공을 이번 월요일에 대입하지 않는다.
+- 총괄+세 읽기 전문 검토에서 새 QA 생성의 Monday anchor 위험을 확인했다. 월요일9시 이후 매5분은 전주WEEKEND를 재시도하며 전체프로젝트 설정의 anchor는 최신 accessible[0]이다. 새 QA가 실상신 anchor가 된 뒤 softdelete되면 정상 실상신/알림을 숨길 수 있다. 실제 사고 발생/제품 오류로 확정하지 않는다. 여섯 직원의 기존 stable상신/고정설정 안전증거 없이 월요일 QA를 만들지 않았다.
+- 현재 인간 요청인 세 직원×두 서버의 실제 일일 작성→저장→정상 재로그인·재열기→주간 표 반영은 별도 active이고 원격쓰기0/신규QA0이다. 로컬32PASS만으로 완료가 아니다. 준비 harness의 Friday cutoff, guard 전 첫 navigation, async timeout 뒤 cleanup 경합, 주간 정확날짜·셀·정리 뒤 API 제외/기존hash 검증 누락을 발견해 실제 실행 전에 보완할 사항으로 남겼다. 제품 소스/빌드/새 배포0; 기존25dirty 보존.
+- 공식 automation_update로 automation-5만 최신 인간 요청에 맞춰11/3 화요일09:10 KST 한 번의 안전 창(당일09:10~12:00) 검수로 전환했다. 같은 대화·ACTIVE·created_at은 유지하고 실패시각/근거를 보존했다. 삭제 QA 재생성/소급 기록0, 새 exact QA는환경당최대1개만 허용하고 실제 guard·정상계정·12필드·본인 자동기록·주간11/2~8 화요일셀·재로그인UI·소유작업종료뒤정리·6명별API제외/hash를 먼저 갖추도록 인계했다. 원래 월요일 실제 정기상신 양성 목표는 미검증으로 남으며 이 manual/weekly 조회로 완료 처리하지 않는다. Drive/실물폰/다른 예약은 변경하지 않았다.
+- 증거: continuation/output/playwright/cf246-monday-20261102/run-20261101-235909/{preflight.json,specialist-review.json,historical-evidence-readback.json,automation-before.json,automation-update-args.json,automation-verification.json}. 완료/실제수신 증거가 없어 사용자 중간·예약 확인·수동 작업 요청은 하지 않는다. 다음 시작은 최신 Git/인계→실제 안전날짜→QA 장치 보완과 세 전문 검토→새 exact QA의 실제6개 흐름이며, 실제 실행하지 않은 부분은 미검증으로 유지한다.
