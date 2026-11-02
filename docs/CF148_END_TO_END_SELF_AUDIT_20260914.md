@@ -2017,3 +2017,18 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 최종결합증거 continuation/output/playwright/worklog-verification-20261102/{completion.json,verification-report.md}, 실제최종run actual-1793586390191. 이전단계실패와before/after증거는삭제하지않는다. credential원본각해당행만정상로그인사용·최종로그인영수증의sourceSHA동일/원본불변·비밀값정리완료를검증했다.
 - 물리폰·회사계정Drive4다운로드SHA·월요일09:00/09:05실제양성상신/수신자알림클릭은여전히별도미검증이다. 기존실물/Drive감시는보존한다. automation-5는이6경로완료후공식삭제하여중복QA생성을막는다. 원래월요일양성목표를이manual/weekly조회검수로완료처리하지않는다.
 
+
+
+## 남은 실물·Drive4·실제 정기상신 구분 검수 — 2026-11-02 12:49 KST
+
+- 시작/제품 기준: feat/CF123-es-v2, HEAD ddbcf6c435870dfa69fa27538a70282ba75aff06, 제품22be6006ba2e5613a15e872c0f9d8b7148b4fefc. 기존25dirty(22삭제/package.json/미추적2종)는 보존한다. 이번 제품 수정·새 배포·DDL·업무자료/정기설정/계정역할/키 변경은0이다. 정상 로그인 세션 생성은 업무 불변과 구분한다.
+- 현재 열 계정(양 환경 세 직원+대표/부사장)의 격리 headful Chrome 정상 로그인·본인 쓰기/결재자 쓰기 제외를 직접 확인했다. 여섯 정기설정은 enabled/전체 배정/기존 대표·부사장 포함이며 설정을 저장하지 않았다. guard 실제 요청은 auth/login POST 외 업무쓰기0, workbook 원본은 로그인 helper의 SHA 보존 영수증으로 연결된다. 근거 remaining-e2e-20261102/current-proof.json 및 두 preflight result/각 closing guard다.
+- 정상 공식 Wrangler whoami의 기존 workers_tail:read를 확인하고 새 권한·키 없이 실제 tail 구독이 성공했다. 11/2 12:00:29.032 KST(03:00:29.032Z) scheduledTime1793588429032, eventTimestamp1793588430232, 관측03:01:07.633Z, dev버전50cb9876-f9b1-487b-89c2-b78866a97dc2, outcome ok/2환경/실패0. 이는 12시 연결 사전 확인이며 09:00·09:05 두 실행/양성 상신·알림 성공이 아니다. 강제cron·시계조작0. 원본 cron-observation-preflight.json.
+- 공식 문서(changelog/computer-use/chrome-extension/windows-sandbox/mobile/remote-connections)를 실제 검토했으나 inspected sources에서 새 구체적 안전복구/기기 연결 근거는 미확보다. 현재 Computer Use26.1027.30824 동일. updater/native초기화/PhoneLink/다른브라우저우회0. 실물폰 native 키보드/닫기/3.1답변/이동은 NOT_RUN으로 유지한다.
+- 공식 Drive get_profile의 실제 연결 계정은 요구 회사 concost.dt@gmail.com과 달랐다. 파일조회/다운로드0이며 정확한 현4ID·uploadSHA는 두 원receipt 바이트SHA와 다시 대조했다. 회사 계정 열기/actual downloaded bytes/SHA 일치는4개 모두 UNKNOWN이다. 옛 원본 PASS나 Claim목록재열기를 대입하지 않는다. official-recovery-and-drive-account.json/current-proof.json 참조.
+- 자체 QA guard의 fonts.gstatic.com exact /l/font 읽기 누락만 보정한 새 실행에서 나머지6로그인이 통과했다(처음4와합계10). 이는 QA allowlist 결함이며 공식 native/URL 안전중단 복구 또는 제품 오류가 아니다. 최초 실패와 설치 응답의 failed 속성 오해도 원본 attempt로 보존한다.
+- 다음 실제 준비11/7~8, 실제월요일11/9 09:00/09:05의 범위를 monday-20261109 폴더에 준비했다. 새 합성은 환경당1case/본인1manual씩 총6행만 실제주말에 허용한다. 삭제된 옛case 복원0. 전원양일선조회·expectedVersion0·실제오늘전송검사·영구멱등plan·잠금·원문재열기·설정SHA전후 검사·wx canonical을 둔다. 상신 참조후QA삭제는 고정본/알림을 숨기므로 하지 않는다.
+- 실제 cron/script/버전/event/관측시각과6원장, 두tick중복0, 수신자12개의 알림 title+time→그 click request객체→response/URL/원장ID→전체snapshotSHA/주말2열/준비12필드를 검증하도록 helper를 보강했다. 고객원문은 로그·공개캡처로 반환하지 않는다. source에 없는 GET profile·PUT/GET shape·자정경계·증거파일 충돌·request이벤트 timing0 등 helper결함은 실행전 읽기검토로 고쳤다. 3전문 읽기 결과와 14파일syntax/계약17개/현재날짜접근전거부2개 PASS. 이는 미래 주말저장/월요일수신 UI 성공 증거가 아니다.
+- 공식 새 heartbeat11-9는 이 대화의 주말 실제준비→성공시월요일08:50재개를 담당한다. 기존 automation(6h 실물)·drive-4(3h)는 최신제품/업무일지완료/독립스코프로 갱신했으며 기술본부ai는 보존한다. 옛삭제automation-5를 복구하지 않았다. 이후 예정시각을 놓치면 실패원장을 보존하고 다음 실제일정으로 같은예약을 갱신하며 가짜시각/강제실행으로 대체하지 않는다.
+- 전체 남은3범위는 아직 미완료다. 실제 증거 확보 없이 완료/새 제품 배포로 기록하지 않는다. 정기상신 coordinator 성공만으로 합격하지 않고 회사Drive4/실물폰은 별도 계속 검수한다. 기준 산출물 C:/Users/user-owner/Documents/Codex/2026-10-13/claim-center-continuation/output/playwright/remaining-e2e-20261102.
+
