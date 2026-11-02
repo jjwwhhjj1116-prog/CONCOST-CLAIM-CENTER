@@ -56,11 +56,14 @@ async function submit(db:WorklogDatabase,actor:WorklogActor,week:string,caseId:s
  const previous=await readSubmission(db,id);
  if(previous){if(!sameRequest(previous))throw new Invalid('같은 요청 번호의 상신 내용이 다릅니다. 새로 상신하세요.',409);return {submission:await decorate(db,previous),created:false};}
  const allowed=await recipients(db,actor);validateRecipients(ids,allowed);
- const accessible=await projects(db,actor),anchor=caseId||accessible[0]?.id;if(!anchor||!accessible.some(p=>p.id===anchor))throw new Invalid('배정된 프로젝트가 필요합니다.',404);
+ const accessible=await projects(db,actor);if(!accessible.length||(caseId&&!accessible.some(p=>p.id===caseId)))throw new Invalid('배정된 프로젝트가 필요합니다.',404);
  const data=await snapshot(db,actor,week,caseId);
  if(!data.logs.length&&!data.automaticEntries.length)throw new Invalid('상신할 저장 업무가 없습니다.',409);
  const weekStart=data.weekStart;
  if(slot==='WEEKEND'){const saturday=data.days[5];data.days=data.days.slice(5);data.logs=data.logs.filter(row=>row.date>=saturday);data.automaticEntries=data.automaticEntries.filter(row=>row.date>=saturday);if(!data.logs.length&&!data.automaticEntries.length)return null;data.weekStart=saturday;}
+ // An unrelated recent project must not own a report of another project's work.
+ const contributingCases=new Set([...data.logs,...data.automaticEntries].map(row=>row.caseId)),anchor=caseId||accessible.find(p=>contributingCases.has(p.id))?.id;
+ if(!anchor)throw new Invalid('배정된 프로젝트가 필요합니다.',404);
  const s:Submission={id,authorId:actor.id,authorName:actor.displayName,weekStart,weekEnd:data.weekEnd,caseId,recipientIds:ids,recipientNames:Object.fromEntries(allowed.filter(r=>ids.includes(r.id)).map(r=>[r.id,r.name])),slot,createdAt:now.toISOString(),snapshot:data,snapshotHash:await digest(JSON.stringify(data))};
  const detail=JSON.stringify(s);if(new TextEncoder().encode(detail).length>2000000)throw new Invalid('주간 보고가 너무 큽니다. 프로젝트를 선택해 상신하세요.',413);
  // The immutable submission is also the durable notification. No second write can be lost.

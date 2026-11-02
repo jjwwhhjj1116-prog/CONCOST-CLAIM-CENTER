@@ -96,6 +96,61 @@ test('CF245 Monday supplement only follows weekend work and uses previous week a
  }finally{f.close();}
 });
 
+for(const slot of ['MANUAL','FRIDAY','WEEKEND'] as const)test(`CF245 ${slot} all-project report anchors only to projects with work in its frozen period`,async()=>{
+ const f=await fixture();try{
+ const workAt=slot==='WEEKEND'?'2026-10-31T01:00:00Z':'2026-10-23T01:00:00Z',week=slot==='WEEKEND'?'2026-10-26':day;
+ f.activity('actual-period-work',0,workAt,A);
+ f.sql.run('UPDATE preview_cases SET updated_at=? WHERE id=?',['2026-11-02T01:00:00Z',B]);
+ assert.equal((await f.metadata()).projects[0].id,B);
+ if(slot==='WEEKEND'){
+  // B has work in the week but none in the supplemental weekend. Pick the
+  // anchor after narrowing the snapshot, not merely after reading the week.
+  f.activity('unrelated-weekday',0,'2026-10-28T01:00:00Z',B);
+  f.activity('new-current-monday',0,'2026-11-02T01:00:00Z',B);
+ }
+ if(slot==='MANUAL')await success(await call(f,0,'/reviews','POST',{week,caseId:'',recipientIds:[f.actors[3].id,f.actors[4].id],requestId:requestId()}));
+ else await dispatchScheduledWorklogs(f.db as any,new Date(slot==='FRIDAY'?'2026-10-23T08:15:00Z':'2026-11-02T01:15:00Z'),{actorId:f.actors[0].id});
+ const listed=await success(await call(f,0,'/reviews?week='+week));assert.equal(listed.submissions.length,1);
+ const id=listed.submissions[0].id,stored=f.sql.exec("SELECT case_id FROM preview_workflow_events WHERE id='"+id+"'")[0].values[0][0];
+ const frozen=await success(await call(f,0,'/reviews/'+id));assert.equal(frozen.submission.caseId,'');
+ assert.deepEqual(frozen.submission.snapshot.automaticEntries.map((r:any)=>r.id),['activity:actual-period-work']);
+ const alerts=await weeklyWorklogAlerts(f.db as any,f.actors[3]);assert.equal(alerts.length,1);
+ f.sql.run('UPDATE preview_cases SET deleted_at=? WHERE id=?',['2026-11-02T02:00:00Z',B]);
+ f.reopen();const before=count(f),bytes=f.sql.export();
+ const recipientStatuses=await Promise.all([3,4].map(async i=>(await call(f,i,'/reviews/'+id)).status));
+ const recipientAlertCounts=await Promise.all([3,4].map(async i=>(await weeklyWorklogAlerts(f.db as any,f.actors[i])).filter(a=>a.path.includes(id)).length));
+ const observed={anchor:stored,recipientStatuses,recipientAlertCounts};
+ console.log(JSON.stringify({scenario:slot,...observed,syntheticSQLiteOnly:true}));
+ assert.deepEqual(observed,{anchor:A,recipientStatuses:[200,200],recipientAlertCounts:[1,1]},'An unrelated recent project must not hide the frozen report or recipient alerts');
+ assert.deepEqual(await success(await call(f,0,'/reviews/'+id)),frozen);
+ assert.deepEqual(await weeklyWorklogAlerts(f.db as any,f.actors[3]),alerts);
+ assert.equal((await success(await call(f,0,'/reviews?week='+week))).submissions[0].id,id);
+ assert.ok([403,404].includes((await call(f,5,'/reviews/'+id)).status));
+ if(slot!=='MANUAL'){
+  const repeated=await dispatchScheduledWorklogs(f.db as any,new Date(slot==='FRIDAY'?'2026-10-23T08:20:00Z':'2026-11-02T01:20:00Z'),{actorId:f.actors[0].id});
+  assert.deepEqual(repeated,{created:0,existing:1,skipped:0,failed:0});
+ }
+ assert.equal(count(f),before);assert.deepEqual(Array.from(f.sql.export()),Array.from(bytes));
+ }finally{f.close();}
+});
+
+test('CF245 manual-only weekend work keeps its project and both recipient alerts after an unrelated project is removed',async()=>{
+ const f=await fixture();try{
+ const saved=await success(await handleProjectWorklogs(new Request('https://qa.invalid/api/project-worklogs/'+A,{method:'PUT',headers:{'Content-Type':'application/json',Origin:'https://qa.invalid'},body:JSON.stringify({date:'2026-10-31',todayTask:'Manual-only weekend work',tomorrowPlan:'Next',notes:'',workHours:2,expectedVersion:0})}),f.db as any,f.actors[0]));
+ f.activity('weekday-only',0,'2026-10-28T01:00:00Z',B);f.activity('current-monday-only',0,'2026-11-02T01:00:00Z',B);
+ f.sql.run('UPDATE preview_cases SET updated_at=? WHERE id=?',['2026-11-02T01:00:00Z',B]);assert.equal((await f.metadata()).projects[0].id,B);
+ await dispatchScheduledWorklogs(f.db as any,new Date('2026-11-02T01:15:00Z'),{actorId:f.actors[0].id});
+ const listed=await success(await call(f,0,'/reviews?week=2026-10-26'));assert.equal(listed.submissions.length,1);
+ const id=listed.submissions[0].id,frozen=(await success(await call(f,0,'/reviews/'+id))).submission;
+ assert.equal(f.sql.exec("SELECT case_id FROM preview_workflow_events WHERE id='"+id+"'")[0].values[0][0],A);
+ assert.equal(frozen.snapshot.logs.length,1);assert.equal(frozen.snapshot.logs[0].id,saved.log.id);assert.equal(frozen.snapshot.automaticEntries.length,0);
+ f.sql.run('UPDATE preview_cases SET deleted_at=? WHERE id=?',['2026-11-02T02:00:00Z',B]);f.reopen();const before=count(f),bytes=f.sql.export();
+ for(const recipient of [3,4]){assert.deepEqual((await success(await call(f,recipient,'/reviews/'+id))).submission,frozen);assert.equal((await weeklyWorklogAlerts(f.db as any,f.actors[recipient])).filter(a=>a.path.includes(id)).length,1);}
+ assert.deepEqual(await dispatchScheduledWorklogs(f.db as any,new Date('2026-11-02T01:20:00Z'),{actorId:f.actors[0].id}),{created:0,existing:1,skipped:0,failed:0});
+ assert.equal(count(f),before);assert.deepEqual(Array.from(f.sql.export()),Array.from(bytes));
+ }finally{f.close();}
+});
+
 
 test('CF245 settings CAS and CSRF reject changes without rows; selection requires assigned case',async()=>{
  const f=await fixture();try{

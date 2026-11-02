@@ -1990,3 +1990,11 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 ## Drive4 조용한 보존 확인 — 2026-11-02 09:31 KST trigger
 
 공식 Browser extension 문서를 새로 열어 연결복구 절차와 URL-confidence를 조사했으나 inspected sources에서 구체적인 안전중단 해제 근거는 미확보(전체 수정 부재 주장 아님). 직전09:24 trigger의 공식 CLI0.166/설치API3hash 검토도 연결해 재사용했고 updater·runtime·브라우저/Drive·프로필·기기·인증 재조회0. 정확4ID/uploadSHA와 두receipt/원장4개 전체SHA는 이전기준과 같지만 실제 회사계정 재열기·원본다운로드는0/4 UNKNOWN. 계정/키/업무자료·제품변경/배포·다른예약변경·수동요청0. 최근 AI 챗봇 명칭·PC viewport/공개asset 배포검수는 Drive회사계정 읽기증거가 아니다. 새근거전동일실패·대체도구우회금지. 증거 continuation/output/playwright/card-readback-recovery-20261028/heartbeat-drive-4-20261102-0031.json. 기존감시유지, 완료증거전알림없이기록만유지한다. 아래 이전 본문 전체 보존.
+
+
+## 주간상신의 무관한 프로젝트 연결 오류 재현·최소 수정 — 2026-11-02
+
+- 전체 프로젝트 주간상신이 본문과 무관한 최신 프로젝트를 case_id로 삼아, 그 프로젝트 정리 시 다른 프로젝트의 실제 고정본·알림까지 숨길 수 있는 제품 경로를 확인했다. 실SQLite+실제제품handler의MANUAL/FRIDAY/WEEKEND3재현에서 변경 전 B anchor·두수신자404/알림0을 기록했고, 수정 후 A anchor·200/알림각1·같은고정본hash/중복0을 확인했다. 실제 운영에서 손상이 발생한 것으로 단정하지 않는다. before원로그 보존.
+- snapshot의 실제 slot(주말은토일) 필터 뒤 기여project와기존접근권한의교집합에서만 새 상신의 보관프로젝트를 고른다. 명시caseId·기존row/원문/해시/stableID/설정/수신자·직전원자권한검사/삭제조회필터 유지. 과거 잘못된anchor를소급수정하거나삭제QA를복구하지 않는다.
+- 수기only주말추가를포함한관련41/41(skip0),웹/Worker타입·build·양dryrun·compiledbundle8같음·HWPpinned28보존 통과. 업데이트 안내와매뉴얼일자11/2동기화. 총괄+세읽기전문검토 후 기존환경/키보존배포 예정. 원격실제6직원일지흐름은아직미검증이며배포후새exactQA에서작성·저장·재로그인·주간반영·정리후목록제외를검수한다.
+- 증거 continuation/output/playwright/worklog-verification-20261102/{anchor-before-full.log,anchor-reproduction.json,tests-after-manual-coverage.json,compiled-bundle-parity.json}. 기존25dirty/고객자료·계정·키·다른예약보존.

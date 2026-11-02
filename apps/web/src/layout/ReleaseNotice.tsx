@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react';
 import { Button } from '@claim-studio/ui';
 import './ReleaseNotice.css';
 
-export const RELEASE_DATE = '2026-10-30';
-export const RELEASE_DATE_LABEL = '2026년 10월 30일';
+export const RELEASE_DATE = '2026-11-02';
+export const RELEASE_DATE_LABEL = '2026년 11월 2일';
 const noticeKey = (userId: string) => `claim-studio-release-${RELEASE_DATE}-v13:${userId}`;
 export function hasSeenRelease(userId: string): boolean {
   try { return localStorage.getItem(noticeKey(userId)) === 'seen'; } catch { return false; }
@@ -13,6 +13,7 @@ export function markReleaseSeen(userId: string): void {
 }
 
 export const RELEASE_UPDATES = [
+  {title:'11월 2일 · 주간 업무일지 프로젝트 연결 보완',text:'전체 프로젝트의 주간 상신본을 해당 기간에 실제 업무가 기록된 프로젝트에 연결합니다. 업무와 무관한 새 프로젝트를 정리할 때 다른 프로젝트의 주간 상신본과 결재 알림이 함께 숨는 문제를 보완했습니다. 월요일 추가 보고는 전주 토·일 기록을 기준으로 연결하며 기존 작성본·상신본·결재·정기설정은 변경하지 않습니다.'},
   {title:'10월 30일 · AI 도우미 비용 절감',text:'선택형 AI 질문은 기존 회사 연결의 Gemini 3.1 Flash-Lite를 사용합니다. 질문에 관련된 매뉴얼만 보내고 중복되는 일반 안내와 화면 주소는 전송하지 않습니다. 맞는 항목이 없으면 기본 안내로 답하며 AI 호출·횟수 차감이 없습니다. 기본 무료 안내, 계정당 하루 20회·한국시간 자정 초기화, 저장·상신·승인 절차와 기존 키는 유지합니다.'},
   {title:'10월 29일 · 챗봇 팝업 대화창',text:'오른쪽 아래 원형 챗봇 아이콘을 누르면 팝업 채팅창이 열립니다. 질문과 답변을 말풍선으로 보고, 프로젝트 연결·서버 저장 상태·참고 매뉴얼은 필요할 때 펼쳐 확인하세요. Enter로 질문을 보내고 Shift+Enter로 줄을 바꿉니다. 저장·상신·승인은 기존 업무 화면에서 직접 진행합니다.'},
   {title:'10월 29일 · 개인 Gemini 연결 복구',text:'일반 직원의 개인 설정에서 모델 목록이 비어 키 저장을 누를 수 없던 문제를 수정했습니다. 개인 키를 암호화 저장한 뒤 연결 확인 모델을 선택해 확인하세요. 모델 선택은 연결 시험에만 적용되며 글쓰기 모델은 회사 설정을 따릅니다. 회사 원문 전송 승인·관리자 전용 설정·개인키 소유자 보호는 유지합니다.'},
