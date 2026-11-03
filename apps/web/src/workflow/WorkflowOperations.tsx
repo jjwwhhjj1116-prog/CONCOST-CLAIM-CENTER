@@ -429,7 +429,7 @@ export const WorkflowOperations: React.FC<{
         status: 'CONFIRMED'
       })
     });
-    if (!payload.kickoff?.summaryText) return payload;
+    if (!payload.kickoff || !(payload.kickoff.rawNotes.trim() || payload.kickoff.summaryText.trim())) return payload;
     try {
       const archived = await archiveWorkflowResult(selectedCaseId, 'KICKOFF', kickoffRecordAsImport(payload.kickoff), `최종확정_v${payload.kickoff.version}`);
       return { payload, notice: workflowArchiveNotice('회의록 최종본 확정 완료', archived) };
@@ -470,7 +470,7 @@ export const WorkflowOperations: React.FC<{
       method: 'POST', body: JSON.stringify({ surveyDate: survey.surveyDate, expectedVersion: survey.outputExpectedVersion })
     });
     const record = payload.siteSurveys.find((item) => item.surveyDate === survey.surveyDate);
-    if (!record?.summaryText) return payload;
+    if (!record || !(record.rawNotes.trim() || record.summaryText.trim())) return payload;
     try {
       const archived = await archiveWorkflowResult(selectedCaseId, 'SITE_SURVEY', surveyRecordAsImport(record), `최종확정_v${record.outputVersion}`);
       return { payload, notice: workflowArchiveNotice('현장조사 최종본 확정 완료', archived) };
@@ -848,7 +848,7 @@ const KickoffEditor: React.FC<{
         <CompanyMinutes values={minutesValues}/>
         <Button className="workflow-template-button" variant="secondary" onClick={downloadCurrentMinutes}>현재 회의록 XLSX 내려받기</Button>
         {(displayedSummary !== form.rawNotes || displayedTimeline.length > 0) && <details className="workflow-internal-review"><summary>AI 내부 확인사항 · 회의록 다운로드 제외</summary><p>실제 논의·합의된 내용인지 원문과 대조하세요. 반영할 사항만 왼쪽 회의 메모에 직접 작성한 뒤 저장합니다. 담당자·기한이 확인되지 않은 제안은 확정 일정이 아닙니다.</p><p style={{ whiteSpace: 'pre-wrap' }}>{displayedSummary}</p>{displayedTimeline.map(item => <section key={item.order}><strong>{item.title}</strong><p style={{ whiteSpace: 'pre-wrap' }}>{item.detail}</p></section>)}</details>}
-        {record?.summaryText && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
+        {record && (record.rawNotes.trim() || record.summaryText.trim()) && record.status !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '회의록 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
       </>
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
@@ -921,7 +921,7 @@ const SurveyEditor: React.FC<{
       {archivedFile && <div className={`workflow-drive-state is-${archivedFile.storageProvider.toLowerCase()}`}><div><strong>{archivedFile.storageProvider === 'GOOGLE_DRIVE' ? 'Google Drive 원본 보관 완료' : '원본 임시 보관 완료'}</strong><span>{archivedFile.originalName ?? '현장조사 원본'}</span></div><Button size="sm" variant="secondary" onClick={()=>onNavigate(`/cases/files?caseId=${encodeURIComponent(caseId)}`)}>스튜디오 자료실에서 보기</Button></div>}
       <CompanyMinutes values={minutesValues}/>
       <Button className="workflow-template-button" variant="secondary" onClick={() => downloadMinutes(minutesValues, `현장조사_회의록_${form.surveyDate}.xlsx`)}>현재 회의록 XLSX 내려받기</Button>
-      {record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
+      {record && (record.rawNotes.trim() || record.summaryText.trim()) && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
     </article>
     <article className="workflow-editor-card workflow-survey-ledger-card">
       <header><div><span>SURVEY RECORDS</span><h3>조사일자별 저장 기록</h3></div><em>{surveys.length}건</em></header>

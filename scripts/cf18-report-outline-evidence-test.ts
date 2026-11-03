@@ -60,6 +60,39 @@ async function setup(pdfMode?: 'complete' | 'partial'): Promise<{ sql: Database;
   return { sql, providerBodies, env: { DB: new SqlD1(sql) as unknown as NonNullable<CloudflareEnv['DB']>, GEMINI_API_KEY: 'SYNTHETIC_SERVER_ONLY_KEY', GEMINI_TEST_FETCH: geminiFetch } };
 }
 
+test('manual kickoff notes remain partial before explicit confirmation and survey notes confirm without AI', async () => {
+  const {sql,env,providerBodies}=await setup();
+  sql.exec(migration('0048_cf73_workflow_minutes_parity.sql'));
+  const config=async()=>await (await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`,STAFF_TOKEN),env)).json() as {sourceGroups:Array<{code:string;status:string;itemCount:number;detail:string}>};
+  let initialVersion=Number(sql.exec(`SELECT version FROM preview_workflow_kickoffs WHERE case_id='${CASE_ID}'`)[0]?.values[0]?.[0]??0);
+  const body={meetingAt:'2026-11-03T01:00:00.000Z',location:'합성 회의실',agenda:'수기 회의록 검수',participantUnits:['합성 담당자'],rawNotes:'직접 작성한 원문. 자료·계정·권한을 보존하고 원문과 대조한 뒤 확정한다.',status:'PLANNED',expectedVersion:initialVersion};
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`,STAFF_TOKEN,{method:'PUT',body:JSON.stringify({...body,rawNotes:''})}),env)).status,200);
+  body.expectedVersion=++initialVersion;
+  assert.equal((await config()).sourceGroups.find(x=>x.code==='KICKOFF')?.status,'EMPTY');
+  const saved=await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`,STAFF_TOKEN,{method:'PUT',body:JSON.stringify(body)}),env);
+  assert.equal(saved.status,200,await saved.clone().text());
+  const snapshot=()=>JSON.stringify(sql.exec(`SELECT * FROM preview_workflow_kickoffs WHERE case_id='${CASE_ID}';SELECT * FROM preview_workflow_events WHERE case_id='${CASE_ID}' ORDER BY id`));
+  const before=snapshot(),source=(await config()).sourceGroups.find(x=>x.code==='KICKOFF')!;
+  assert.equal(source.status,'PARTIAL');assert.equal(source.itemCount,1);assert.doesNotMatch(source.detail,/기록 필요/u);assert.equal(snapshot(),before);
+  const reopened=await (await worker.fetch(request(`/api/cases/${CASE_ID}/workflow`,STAFF_TOKEN),env)).json() as any;
+  assert.equal(reopened.kickoff.rawNotes,body.rawNotes);assert.equal(reopened.kickoff.status,'PLANNED');assert.equal(reopened.kickoff.version,initialVersion+1);assert.equal(reopened.kickoff.summaryText,'');
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/kickoff`,STAFF_TOKEN,{method:'PUT',body:JSON.stringify({...body,status:'CONFIRMED',expectedVersion:initialVersion+1})}),env)).status,200);
+  assert.equal((await config()).sourceGroups.find(x=>x.code==='KICKOFF')?.status,'READY');
+  const survey={surveyDate:'2026-11-03',location:'합성 현장',scopeText:'현장 수기 검수',leadUnit:'합성 담당자',rawNotes:'사진과 현장 확인사항을 직접 작성한 조사 원문',status:'IN_PROGRESS',expectedVersion:0,outputExpectedVersion:0};
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`,STAFF_TOKEN,{method:'PUT',body:JSON.stringify(survey)}),env)).status,200);
+  const confirm=()=>worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey-confirm`,STAFF_TOKEN,{method:'POST',body:JSON.stringify({surveyDate:survey.surveyDate,expectedVersion:1})}),env);
+  const confirmed=await confirm();assert.equal(confirmed.status,200,await confirmed.clone().text());
+  const record=(await confirmed.json() as any).siteSurveys.find((x:any)=>x.surveyDate===survey.surveyDate);
+  assert.equal(record.rawNotes,survey.rawNotes);assert.equal(record.summaryText,'');assert.equal(record.outputStatus,'CONFIRMED');assert.equal(record.outputVersion,2);
+  assert.equal((await confirm()).status,409,'stale confirmation must not write again');
+  const empty={...survey,surveyDate:'2026-11-04',rawNotes:'   ',status:'PLANNED'};
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey`,STAFF_TOKEN,{method:'PUT',body:JSON.stringify(empty)}),env)).status,200);
+  const surveySnapshot=()=>JSON.stringify(sql.exec(`SELECT * FROM preview_site_survey_outputs WHERE case_id='${CASE_ID}' ORDER BY survey_id;SELECT * FROM preview_workflow_events WHERE case_id='${CASE_ID}' ORDER BY id`)),emptyBefore=surveySnapshot();
+  assert.equal((await worker.fetch(request(`/api/cases/${CASE_ID}/workflow/site-survey-confirm`,STAFF_TOKEN,{method:'POST',body:JSON.stringify({surveyDate:empty.surveyDate,expectedVersion:1})}),env)).status,409,'empty plan is not a confirmable source');
+  assert.equal(surveySnapshot(),emptyBefore,'rejected empty confirmation preserves rows, versions and events');
+  assert.equal(providerBodies.length,0,'manual save and confirmation must not call AI');
+});
+
 test('CF18 persists an exact optimistic outline before chapter generation', async () => {
   const { sql, env, providerBodies } = await setup();
   const configResponse = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);

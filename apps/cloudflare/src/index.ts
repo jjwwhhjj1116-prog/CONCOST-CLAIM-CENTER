@@ -1294,11 +1294,11 @@ async function handlePreviewCaseWorkflow(request: Request, env: CloudflareEnv, u
     if (!exactObjectKeys(body, ['surveyDate','expectedVersion'])) return json({ error: 'Site survey confirmation payload is invalid', code: 'INVALID_SITE_SURVEY_CONFIRM_PAYLOAD' }, 400);
     const surveyDate = validWorkflowDate(body.surveyDate) ? body.surveyDate : null;
     const expectedVersion = Number(body.expectedVersion);
-    const current = surveyDate ? await env.DB.prepare('SELECT s.id,o.summary_text AS summaryText,o.version FROM preview_site_surveys s JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.case_id=? AND s.organization_id=? AND s.survey_date=?').bind(caseId,PREVIEW_ORGANIZATION_ID,surveyDate).first<{id:string;summaryText:string;version:number}>() : null;
-    if (!current || !current.summaryText.trim() || !Number.isInteger(expectedVersion) || current.version !== expectedVersion) return json({ error: 'Site survey output has changed or has no draft to confirm.', code: 'VERSION_CONFLICT' }, 409);
+    const current = surveyDate ? await env.DB.prepare('SELECT s.id,o.source_notes AS rawNotes,o.summary_text AS summaryText,o.version FROM preview_site_surveys s JOIN preview_site_survey_outputs o ON o.survey_id=s.id WHERE s.case_id=? AND s.organization_id=? AND s.survey_date=?').bind(caseId,PREVIEW_ORGANIZATION_ID,surveyDate).first<{id:string;rawNotes:string;summaryText:string;version:number}>() : null;
+    if (!current || !(current.rawNotes.trim() || current.summaryText.trim()) || !Number.isInteger(expectedVersion) || current.version !== expectedVersion) return json({ error: 'Site survey output has changed or has no draft to confirm.', code: 'VERSION_CONFLICT' }, 409);
     const nextVersion = expectedVersion + 1;
     await env.DB.batch([
-      env.DB.prepare("UPDATE preview_site_survey_outputs SET status='CONFIRMED',version=version+1,updated_by=?,updated_at=? WHERE survey_id=? AND version=? AND summary_text<>''")
+      env.DB.prepare("UPDATE preview_site_survey_outputs SET status='CONFIRMED',version=version+1,updated_by=?,updated_at=? WHERE survey_id=? AND version=? AND (TRIM(source_notes)<>'' OR TRIM(summary_text)<>'')")
         .bind(user.id,now,current.id,expectedVersion),
       env.DB.prepare('INSERT INTO preview_workflow_events (id,case_id,actor_id,event_type,entity_id,detail_json,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM preview_site_survey_outputs WHERE survey_id=? AND version=? AND updated_at=?)')
         .bind(crypto.randomUUID(),caseId,user.id,'SITE_SURVEY_CONFIRMED',current.id,JSON.stringify({surveyDate}),now,current.id,nextVersion,now)
@@ -4802,8 +4802,9 @@ async function previewReportSourceGroups(env: CloudflareEnv, caseRow: PreviewCas
     try { return Number((await env.DB!.prepare("SELECT COUNT(*) AS total FROM preview_proposal_links WHERE case_id=? AND organization_id=? AND verification_status='VERIFIED'").bind(caseRow.id,PREVIEW_ORGANIZATION_ID).first<{total:number}>())?.total ?? 0); }
     catch (error) { if (!/no such table.*preview_proposal_links/iu.test(String(error))) proposalLookupFailed = true; return 0; }
   };
-  const [externalCount, internalProposals, kickoffCount, surveyCount, allocationCount, evidenceCount, takeoffCount, costCount, litigationCount] = await Promise.all([
+  const [externalCount, internalProposals, kickoffCount, kickoffPreparedCount, surveyCount, allocationCount, evidenceCount, takeoffCount, costCount, litigationCount] = await Promise.all([
     externalProposalCount(), previewReportConfirmedProposals(env,caseRow),
+    count("SELECT COUNT(*) AS total FROM preview_workflow_kickoffs WHERE case_id=? AND organization_id=? AND (status IN ('COMPLETED','DRAFTED','CONFIRMED') OR TRIM(raw_notes)<>'' OR TRIM(summary_text)<>'')"),
     count("SELECT COUNT(*) AS total FROM preview_workflow_kickoffs WHERE case_id=? AND organization_id=? AND status IN ('COMPLETED','DRAFTED','CONFIRMED')"),
     count("SELECT COUNT(*) AS total FROM preview_site_surveys WHERE case_id=? AND organization_id=?"),
     count("SELECT COUNT(*) AS total FROM preview_workforce_allocations WHERE case_id=? AND organization_id=?"),
@@ -4817,7 +4818,7 @@ async function previewReportSourceGroups(env: CloudflareEnv, caseRow: PreviewCas
   const status = (items: number, partial = false): 'READY' | 'PARTIAL' | 'EMPTY' => items > 0 ? (partial ? 'PARTIAL' : 'READY') : 'EMPTY';
   return [
     { code: 'PROPOSAL', label: '제안서·수주', status: proposalLookupFailed ? 'PARTIAL' : status(proposalCount), itemCount: proposalCount, lookupFailed:proposalLookupFailed, detail: proposalLookupFailed ? '제안서 조회·무결성 확인 실패 · 자료 없음으로 판단할 수 없습니다.' : proposalCount ? `내부 확정본 ${internalProposals.snapshots.length}건 · 외부 검증 연동 ${externalCount}건 · 참고 원문 준비(계약 사실 별도 검증)` : '내부 제안서 확정 또는 검증된 외부 연동 필요', route: '/proposals/editor' },
-    { code: 'KICKOFF', label: '착수회의·회의록', status: status(kickoffCount), itemCount: kickoffCount, detail: kickoffCount ? '회의 기록과 요약 준비' : '착수회의 기록 필요', route: '/workflow/kickoff' },
+    { code: 'KICKOFF', label: '착수회의·회의록', status: status(kickoffCount,kickoffPreparedCount===0), itemCount: kickoffCount, detail: kickoffCount ? kickoffPreparedCount ? '저장된 회의 기록 준비 · 최종 확정 상태는 착수회의에서 확인' : '회의 원문 저장 · 원문 대조·최종 확정 전' : '착수회의 기록 필요', route: '/workflow/kickoff' },
     { code: 'SITE_SURVEY', label: '현장조사', status: status(surveyCount, surveyCount > 0 && evidenceCount === 0), itemCount: surveyCount, detail: surveyCount ? `조사 ${surveyCount}건 · 첨부 ${evidenceCount}건` : '현장조사 계획·결과 필요', route: '/workflow/site-survey' },
     { code: 'QUANTITY', label: '물량산출·내역', status: status(allocationCount + takeoffCount + costCount, allocationCount === 0 || takeoffCount === 0 || costCount === 0), itemCount: allocationCount + takeoffCount + costCount, detail: `팀 일정 ${allocationCount} · 산출자료 ${takeoffCount} · 내역자료 ${costCount}`, route: '/workflow/quantity' },
     { code: 'EVIDENCE', label: '클레임센터 자료실', status: evidenceLookupFailed ? 'PARTIAL' : status(evidenceCount), itemCount: evidenceCount, lookupFailed: evidenceLookupFailed, detail: evidenceLookupFailed ? '자료 목록 조회 실패 · 자료 없음으로 판단할 수 없습니다. 다시 조회해 주세요.' : evidenceCount ? `등록 파일 ${evidenceCount}건 · 원문 읽기·버전 대조 필요` : '프로젝트 근거 파일 필요', route: `/cases/files?caseId=${encodeURIComponent(caseRow.id)}` },

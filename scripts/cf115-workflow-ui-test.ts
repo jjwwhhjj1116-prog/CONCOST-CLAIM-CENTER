@@ -47,9 +47,10 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
         }
         if(path.endsWith('/download')){state.downloads++;return new Response('자료실 원문',{headers:{'Content-Type':'text/plain','Content-Disposition':"attachment; filename*=UTF-8''evidence.txt"}});}
         if(path.endsWith('/evidence')){
-          if(method==='POST') {state.uploads++;if(state.holdUpload)await new Promise(resolve=>state.uploadRelease=resolve);return json({file:{id:'file-1',originalName:'source.txt',storageProvider:'GOOGLE_DRIVE'}});}
+          if(method==='POST') {state.uploads++;const f=init.body.get('file');state.lastArchive={name:f.name,type:f.type,category:init.body.get('category'),bytes:[...new Uint8Array(await f.arrayBuffer())]};if(state.holdUpload)await new Promise(resolve=>state.uploadRelease=resolve);return json({file:{id:'file-1',originalName:'source.txt',storageProvider:'GOOGLE_DRIVE'}});}
           return json({files:state.mode==='wrong-evidence'?[]:[{id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',category:state.kind==='WF-03'?'KICKOFF_MATERIAL':'SITE_PHOTO',originalName:'evidence.txt',mimeType:'text/plain',byteSize:20,sha256:'test',storageProvider:'GOOGLE_DRIVE',uploadedBy:'검수자',uploadedAt:'2026-09-09',downloadUrl:'/api/cases/evidence/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/download',driveUrl:null}],googleDriveConnected:true,storagePolicy:'GOOGLE_DRIVE_REQUIRED'});
         }
+        if(method==='POST'&&path.endsWith('/workflow/site-survey-confirm')){state.saves.push(JSON.parse(init.body));records[index]={...records[index],outputStatus:'CONFIRMED',outputVersion:records[index].outputVersion+1};return json(payload());}
         if(method==='PUT'&&(path.endsWith('/workflow/kickoff')||path.endsWith('/workflow/site-survey'))){
           if(state.mode==='save-failure')return json({error:'합성 기록 저장 실패'},503);
           const body=JSON.parse(init.body);state.saves.push(body);records[index]={...records[index],...body,version:records[index].version+1,outputVersion:records[index].outputVersion+1,summaryText:body.summaryText??'',timeline:body.timeline??[]};return json(payload());
@@ -57,7 +58,7 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
         return json({});
       };
       function mount(kind='WF-03',index=0,evidence=false){state.kind=kind;history.replaceState({},'',location.pathname+'?caseId='+ids[index]+(evidence?'&evidenceId=eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee':''));root.render(React.createElement(WorkflowOperations,{key:++serial,routeId:kind,roles:['admin'],onNavigate:path=>requestNavigation(path,()=>{})}));}
-      window.cf115={state,ids,mount,reset(){records=ids.map(initial);Object.assign(state,{uploads:0,ai:0,downloads:0,saves:[],mode:'success',pending:[],holdUpload:false,uploadRelease:null,abortedSignals:[]});},navigate:()=>requestNavigation('/other',()=>{}),release:()=>{state.pending.splice(0).forEach(fn=>fn());}};
+      window.cf115={state,ids,mount,manual(){records=records.map(r=>({...r,status:'PLANNED',summaryText:'',timeline:[]}));},reset(){records=ids.map(initial);Object.assign(state,{uploads:0,ai:0,downloads:0,saves:[],mode:'success',pending:[],holdUpload:false,uploadRelease:null,abortedSignals:[],lastArchive:null});},navigate:()=>requestNavigation('/other',()=>{}),release:()=>{state.pending.splice(0).forEach(fn=>fn());}};
       mount();
     ` : undefined
   }] });
@@ -75,6 +76,13 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
     const upload = () => page.getByLabel('자동정리할 원본 파일').setInputFiles({ name: 'source.txt', mimeType: 'text/plain', buffer: Buffer.from('회의 원문') });
     const reset = async (kind='WF-03', evidence=false) => { await page.evaluate(({kind,evidence})=>{(window as any).cf115.reset();(window as any).cf115.mount(kind,0,evidence);},{kind,evidence}); await page.getByLabel('자동정리할 원본 파일').waitFor(); };
     await page.getByLabel('자동정리할 원본 파일').waitFor({ timeout:15_000 }).catch(()=>assert.fail(JSON.stringify(errors)));
+    for(const kind of ['WF-03','WF-04'])await t.test(`${kind}: saved manual notes confirm and archive without AI`,async()=>{
+      await page.evaluate(kind=>{(window as any).cf115.reset();(window as any).cf115.manual();(window as any).cf115.mount(kind);},kind);
+      const button=page.getByRole('button',{name:'원문 대조 완료 · 최종본 확정',exact:true});await button.waitFor({timeout:5000});assert.equal(await button.isEnabled(),true);
+      const notes=page.getByLabel(kind==='WF-03'?'회의 메모·녹취 텍스트':'조사 메모·녹취 텍스트');await notes.fill('미저장 변경');assert.equal(await button.isEnabled(),false);await notes.fill('기존 원문');assert.equal(await button.isEnabled(),true);
+      await button.click();await page.waitForFunction(()=>(window as any).cf115.state.uploads===1);await page.getByText('최종 확정본',{exact:true}).waitFor();
+      const r=await page.evaluate(()=>{const s=(window as any).cf115.state;return{ai:s.ai,saves:s.saves,archive:s.lastArchive};});assert.equal(r.ai,0);assert.equal(r.saves.length,1);assert.equal(r.archive.category,kind==='WF-03'?'MEETING_MINUTES':'SITE_DOCUMENT');assert.match(r.archive.name,kind==='WF-03'?/최종확정_v2\.xlsx$/u:/최종확정_v2\.txt$/u);assert.ok(r.archive.bytes.length>10);assert.equal(await button.count(),0);
+    });
     await t.test('survey records preserve dates and distinguish shared files from unmaintained per-day counts', async()=>{
       for(const mode of ['success','nonzero-survey-counts','two-surveys','wrong-evidence']){
         await page.evaluate(mode=>{(window as any).cf115.reset();(window as any).cf115.state.mode=mode;(window as any).cf115.mount('WF-04');},mode);
