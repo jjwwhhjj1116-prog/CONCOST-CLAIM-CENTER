@@ -1,3 +1,12 @@
+## Aside 회사 DNS 관리 계정 추적·그룹웨어 실제 서버 계약 추가 조사 — 2026-11-03
+
+- 최신 사용자 지시로 Aside의 회사 도메인 한정 기존 기록을 추가 조회했다. task oul8tKaRQKgHurfg의 실제 조회는16:19~16:21KST이며 일치 방문167개에서 관리 단서는 기존 Cloudflare 검색과 Resend domain URL뿐이다. DNS owner/실제 zone URL은 여전히UNKNOWN이고 현재 계정의 No matches found·전환가능계정1개를 실제 이미지로 확인했다. 무관한 기록·도메인/키·쿠키는 공개하지 않았다.
+- 기존 연결 Gmail jjwwhhjj1116 계정에서 회사 도메인명+Resend 제외 검색0을 확인했다. Aside의 Google 로그인 계정은0이었고, 정상 Gmail 로그인 화면에서 기존 concost.dt 계정을 선택하자 실제 비밀번호 입력 화면이 나왔다. 자동완성은 해당 화면에서 관측되지 않았으며 전체 저장자격의 존재는UNKNOWN이다. 비밀번호 조회·입력·제출/재설정/추가인증/새계정·권한생성0, 자체 popup/Gmail 탭만 정상 닫았다. 로그아웃됨 표시는 관측 사실이며 행위주체를 추정하지 않는다.
+- 별도 그룹웨어 후보에는 실제 Express 접수 소스도 있다. Claim sender는 HMAC 수주 POST+최상위 projectId/id ACK인 반면 후보 기존 runtime은 sid·회사권한의 /api/project-intakes 조회/수정/검토/접수이고 루트 생성POST가 없다. 실제 생성은 견적 WON transaction이다. 별도 신규 OpenAPI는 /api/v1·세션/회사/CSRF·executionPlanId/sourceDecisionId/initialStep·{data,meta}이므로 URL만 지정해서 직접 호환된다고 볼 수 없다. 두 후보 server/src에서 Claim HMAC 전용수신기 미확인이다. 이 차이는 현재 활성 서버 결함 확정이나 다른 프로젝트 구현/배포 승인으로 확대하지 않는다.
+- 정상 C worktree의 등록메타상 최신 local branch는 finance-accounting-core-v24/7e3c414(9/3), 연결 checkout은prunable다. E 경로 Git 접근 거부는 재시도·우회하지 않았고 dirty/현재운영은UNKNOWN이다. 후보 Claim handoff의 BACKEND_CAPABILITY_PENDING/운영provider연결 주장 아님과 실제 source의 존재를 함께 보존한다. 내부 PM·공유일정 PASS와 외부 미설정·미검증은 별개다.
+- 총괄+세 전문 읽기 검토 완료. 기존 DNS3 복구 및 Verified 후 두 검수메일 각1회 승인은 그대로 유효하지만 실제 기존 zone 접근 미확보로 DNS쓰기/검증재시작/메일재시도0이다. 정상 UI는 정확한 각 case의 reports/studio?caseId=…&step=5에서 현재 v5·review와 기존 notification을 맞추고 GET /api/notifications/{id}/email 후 해당 결재승인이메일 버튼만 각1회다. 가오픈 caseId는 e2c7059c-494a-4e25-a316-2525a3423744이며 reviewId와 혼동하지 않는다.
+- 원장: continuation/output/playwright/full-workflow-20261103/mailer-erp-recovery/resume-20261103-oul8/proof.json. 이전 증거 SHA·기존25dirty 보존이며 이번 제품수정·새제품배포0/원본자료·계정·역할·키 변경0이다. 이번 두 범위를 완료·복구·실제메일수신·ERP운영연결로 보고하지 않는다. 수동작업 요청/취소예약 재생성/새 receiver·URL·키 생성은 하지 않는다.
+
 ## 기존 발송 계정·DNS 미인증 403 확인과 별도 개발 ERP 경계 — 2026-11-03
 
 - 앞선 발송 워크스페이스/403 원인 UNKNOWN 기록은 당시 관측이다. 사용자에게 별도 승인받은 기존 jjwwhhjj1116@gmail.com 정상 Resend 로그인에서 jjwwhhjj1116 워크스페이스, 기존 성공 provider ID 01a15792-1a1e-776b-aa2d-4162525fa2bb와 2026-07-06 기존 팀 가입일을 확인했다. concost.dt 빈 워크스페이스와 구분한다. 이전 SSO의 계정 자동 provisioning 시점은 UNKNOWN이며 가입/팀생성/키/도메인 추가를 누르지 않은 사실만 보존한다.
