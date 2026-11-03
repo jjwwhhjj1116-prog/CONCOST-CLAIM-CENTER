@@ -81,6 +81,35 @@ async function main() { const out = mkdtempSync(join(tmpdir(), 'claim-cf252-flow
     assert.equal(metrics.multiText, 0, 'Ambiguous multi glyph SVG segment requires separate matching');
     assert.ok(metrics.maxX <= .51, 'Glyph X > .51px');
     assert.ok(metrics.maxY <= .1, 'Baseline Y > .1px');
+    // Captured synthetic three-paragraph input: the second 632px body line
+    // rounds to exactly 632px. HWP serialization used to move its last glyph
+    // to the next line even though the reviewed line cache remained unchanged.
+    const boundaryInput = JSON.parse(readFileSync('scripts/fixtures/cf252-rounded-body.json', 'utf8'));
+    const boundary = await page.evaluate(async input => {
+        const { createNativeHwp } = await import('/src/documents/editable-hwp-export.ts' as string);
+        const { nativePaintGlyphs } = await import('/src/documents/native-hwp-paragraph-advances.ts' as string);
+        const { loadNativeHwpEngine } = await import('/src/documents/native-hwp-runtime.ts' as string);
+        const before = JSON.stringify(input), Engine = await loadNativeHwpEngine(), bytes = createNativeHwp([input], Engine), doc = new Engine(bytes);
+        try {
+            const positions = nativePaintGlyphs(doc), lines: any[] = [];
+            for (const source of input.flowLines) {
+                const actual = positions.get(`section:0/para:${source.paragraphIndex}`), chars = Array.from(source.text);
+                const diffs = source.paint.origins.filter((g: any) => String(chars[g.at]).trim()).map((g: any) => ({ at: g.at, dx: actual!.get(g.at)!.x - g.x, dy: actual!.get(g.at)!.y - g.y }));
+                const starts = [...actual!.entries()].filter(([at, g]: any) => at === 0 || Math.abs(g.y - actual!.get(at - 1)!.y) > .12).map(([at]: any) => at);
+                lines.push({ paragraph: source.paragraphIndex, starts, expectedStarts: source.starts, maxX: Math.max(...diffs.map((d: any) => Math.abs(d.dx))), maxY: Math.max(...diffs.map((d: any) => Math.abs(d.dy))) });
+            }
+            return { pages: doc.pageCount(), bytes: bytes.length, text: JSON.parse((doc as any).getPageText(0)), inputUnchanged: JSON.stringify(input) === before, lines };
+        } finally { doc.free(); }
+    }, boundaryInput);
+    writeFileSync(join(out, 'rounded-body.json'), JSON.stringify(boundary, null, 2));
+    assert.equal(boundary.pages, 1);
+    assert.equal(boundary.text.replace(/\r?\n/gu, ''), boundaryInput.text);
+    assert.equal(boundary.inputUnchanged, true);
+    for (const line of boundary.lines) {
+        assert.deepEqual(line.starts, line.expectedStarts, 'Every reviewed soft line break must survive binary reopen');
+        assert.ok(line.maxX <= .51, 'Rounded body glyph X > .51px');
+        assert.ok(line.maxY <= .12, 'Rounded body baseline Y > .12px');
+    }
     assert.deepEqual(Object.fromEntries(files.map(n => [n, hash(readFileSync('apps/web/src/documents/' + n))])), hashes);
 }
 finally {

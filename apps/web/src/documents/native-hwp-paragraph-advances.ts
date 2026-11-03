@@ -373,7 +373,11 @@ export function restoreNativeParagraphAdvances(files:Record<string,Uint8Array>,p
       // CENTER/RIGHT native cells expand negative-tracked lines when their
       // untracked width exceeds the frame. Reserve measured natural width so
       // that heuristic cannot change the explicitly reviewed glyph advances.
-      const reserve=Math.max(0,(target.cell?(Math.ceil(Math.max(maxAdvance,maxNatural)*75)+2)/75:maxAdvance)-target.width);
+      // A rounded body advance can exactly fill its HU cache while native
+      // floating-point frame arithmetic puts the last glyph on the next line.
+      // Reserve one representable HU beyond the measured advance; glyph origins
+      // and authored line breaks still have to pass the saved-binary checks.
+      const reserve=Math.max(0,(target.cell?(Math.ceil(Math.max(maxAdvance,maxNatural)*75)+2)/75:(Math.ceil(maxAdvance*75)+1)/75)-target.width);
       if(reserve){
         const overhang=Math.max(0,...source.widths??[])-target.width,spaces=Math.max(0,...source.starts.map((start,i)=>{const end=source.starts[i+1]??Array.from(source.text).length;let width=0;for(let pos=end-1;pos>=start&&!desired.has(pos);pos--)width+=Math.round(actual!.get(pos)?.width??0);return width;}));
         if(!target.cell&&reserve>Math.max(0,overhang)+spaces+1)throw Error('HWP 글자 위치가 현재 줄 범위를 벗어납니다.');
