@@ -2084,3 +2084,14 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 이전 본문은 아래/위에 바이트 그대로 보존했다.
 
 **실제 실행 순서 보충(2026-11-03):** completion.json의 verifiedSequence는 단계별 검수 항목 목록이며 전체 동작의 시계열을 뜻하지 않는다. 착수회의·현장조사의 원문 저장·재열기는 보고서 작성 전에 수행했지만, 수기 원문 명시 확정 v2·Drive 보관은 오류 수정 후 보고서 승인·확정(02:37~02:40 UTC)에 이어 03:28~03:36 UTC에 수행한 후속 회귀다. 확정된 회의록을 자동 반영해 새 보고서를 생성했다는 증거가 아니다. 동일한 승인 v5 보존과 최종 배포 후 HWP가 앞서 시각 검수한 실제 파일과 같음을 확인했다.
+
+
+## Aside 공식 브라우저로 회사 Resend 정상 로그인·남은 메일/ERP 조사 — 2026-11-03
+
+- 사용자 지시에 따라 브라우저 작업은 Aside를 우선한다. 공식 aside guide/guide repl 및 제공 스킬을 읽고 연결 profile을 확인했다. 종전 취소한 native/Drive4/월요일 감시를 재생성하지 않았다.
+- 최초 Google 로그인 클릭은 자동 승인 검토에서 외부 인증 시작의 명시 승인이 부족하다고 거절됐다. 사용자가 기존 concost.dt@gmail.com 정상 로그인·실패 로그 읽기를 승인했고, 뒤이어 Google의 이름·프로필 사진·이메일 주소 공유 동의도 별도로 명시 승인했다. 그 범위만 진행했으며 Gmail/Drive 권한 추가·키/설정 변경·메일 발송은 없다. 최초 OAuth state 만료는 원본 보존 후 새 정상 로그인 상태로 한 번 재개해 로그인에 성공했다.
+- 실제 Aside 화면에서 concost.dt@gmail.com / concost.dt 워크스페이스를 확인했다. 2026-11-03T05:18:58.090Z의 /logs는 Last 15 days·All statuses·All user agents·All sources에서 No logs yet, /domains는 No domains yet다. 과거 회사 발신 도메인 Verified/키 사용147회 기록과 이 빈 워크스페이스의 연결은 UNKNOWN이다. 이를 기존 회사 도메인/키가 삭제되었거나 현재 403 원인이 확정됐다는 근거로 확대하지 않는다. 가입·팀 생성·키 생성·도메인 추가·발송 버튼을 누르지 않았고 계정 provisioning 시점은 미확인이다.
+- Cloudflare Aside 화면은 기존 로그인 없이 /login까지 확인했다. 새 Cloudflare 인증을 만들지 않고 기존 Wrangler 정상 인증으로 현재 배포 메타데이터만 읽었다. 개발3860592a-a761-4837-8558-7159bf3221f1 / 가오픈782e9589-1833-44a7-b478-c69fc2ac5245 각100% 및 기존 바인딩 SHA가 그대로이며, 양쪽 ERP_PROJECT_WEBHOOK_URL/SECRET 이름도 여전히 없다. 외부 ERP 미설정/PENDING을 내부 공유 일정 성공과 구분한다. ERP 재시도 POST/DB 쓰기는 0이다.
+- 연결된 기존 메일러 concost-migration-trial의 현재 버전 cf8e9fef-ce0b-47c1-a96e-6d043efe44a4 각100%를 읽었다. 현재 배포 식별자 확인을 실제 소스 byte 동일성 또는 과거 provider 거절 상세 복원으로 바꾸지 않는다. 원래 두 승인 시각은 개발02:37:01.787Z/가오픈02:37:02.762Z이고, 당시 자동1회씩 EMAIL_BRIDGE_403이었다. 추가 발송/재시도는 0이며 정확한 provider 이유와 실제 발송 워크스페이스 연결은 계속 UNKNOWN이다.
+- 세 전문의 소스·회귀 읽기 조사에서 추가 Claim 제품 결함은 입증되지 않았다. optional Aside 사용자 메모리 검색도 자동 검토에서 개인/다른 프로젝트 기록 노출 우려로 거절돼 데이터 수신이나 우회 없이 중단했다. 현 화면·기존 감사·공식 배포 메타데이터만 근거로 삼았다. 이번 제품 소스 수정·새 제품 커밋/푸시·제품 배포는 없으며 기존25dirty·업무자료·키/설정은 보존했다. 승인된 Google 기본정보 공유 동의와 그 외 불변을 구분한다.
+- 원장: C:/Users/user-owner/Documents/Codex/2026-10-13/claim-center-continuation/output/playwright/full-workflow-20261103/aside-followup/review.json 및 같은 폴더의 실제 PNG·현재 Worker metadata. 다음에는 이 원장부터 읽고 실제 기존 발송 워크스페이스의 소유/로그 접근을 확인해야 한다. 다른 Google 계정으로 추정 로그인하거나 키/도메인 재생성·시험 재발송으로 403을 우회하지 않는다.
