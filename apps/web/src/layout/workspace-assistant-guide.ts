@@ -1,7 +1,7 @@
 import { CATEGORY_HELP, ROUTE_HELP, WORKSPACE_TUTORIAL_STEPS } from './workspace-help-content';
 
 // The help centre and assistant consume the same shipped manual, never a copied AI manual.
-export const ASSISTANT_MANUAL_VERSION = '2026-11-02';
+export const ASSISTANT_MANUAL_VERSION = '2026-11-03';
 export const ASSISTANT_ROUTES = [
   ['DASH-01', '/dashboard', 'home', '시작 처음 순서 사용법 작업 업무'],
   ['CASE-02', '/cases/new', 'proposal', '의뢰 의뢰등록 프로젝트등록 사건등록 새프로젝트 클라이언트'],

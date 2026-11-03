@@ -47,7 +47,7 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
   useEffect(()=>{const next=formFromLog(logs.find(entry=>entry.authorId===author));setForm(next);setOriginal(next);},[author,logs]);
   const discard=(proceed:()=>void)=>{if(dirty)setPendingDiscard(()=>proceed);else proceed();};
   const change=(field:keyof Form,value:string|number|null)=>setForm(current=>({...current,[field]:value}));
-  const chooseContext=(nextCase:string,nextDay:string)=>{if(onNavigate){onNavigate('/projects/worklogs?'+new URLSearchParams({...(nextCase?{caseId:nextCase}:{}),date:nextDay,authorId:author}));}else discard(()=>{setCaseId(nextCase);setDay(nextDay);});};
+  const chooseContext=(nextCase:string,nextDay:string,nextAuthor=author)=>{if(onNavigate){onNavigate('/projects/worklogs?'+new URLSearchParams({...(nextCase?{caseId:nextCase}:{}),date:nextDay,authorId:nextAuthor}));}else discard(()=>{setCaseId(nextCase);setDay(nextDay);setAuthor(nextAuthor);});};
   const save=async()=>{
     if(!canEdit||saveBusy.current||loading)return;saveBusy.current=true;setSaving(true);setFailure('');setNotice('');const savedKey=keyRef.current;
     try{const result=await request<{log:Log}>(`${basePath}/${encodeURIComponent(caseId)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...form,date:day,expectedVersion:selected?.version||0})});
@@ -66,7 +66,7 @@ export function ProjectWorklogPanel({basePath='/api/project-worklogs',actorKey='
     <div className="project-worklog__filters">
       <label>프로젝트<select value={caseId} disabled={saving||loading} onChange={e=>chooseContext(e.target.value,day)}><option value="">프로젝트 선택</option>{context?.projects.map(p=><option key={p.id} value={p.id}>{p.caseNumber} · {p.title}</option>)}</select></label>
       <label>작성일<input type="date" value={day} disabled={saving||loading} onChange={e=>{if(e.target.value)chooseContext(caseId,e.target.value);}}/></label>
-      <label>작성자{context?.actor.canWrite?<output>{context.writers.find(p=>p.id===author)?.name} {context.writers.find(p=>p.id===author)?.position} · 본인</output>:<select value={author} disabled={saving||loading} onChange={e=>{const value=e.target.value;discard(()=>setAuthor(value));}}>{!context?.writers.length&&<option value="">작성 대상 직원 없음</option>}{context?.writers.map(p=><option key={p.id} value={p.id}>{p.name} {p.position}</option>)}</select>}</label>
+      <label>작성자{context?.actor.canWrite?<output>{context.writers.find(p=>p.id===author)?.name} {context.writers.find(p=>p.id===author)?.position} · 본인</output>:<select value={author} disabled={saving||loading} onChange={e=>chooseContext(caseId,day,e.target.value)}>{!context?.writers.length&&<option value="">작성 대상 직원 없음</option>}{context?.writers.map(p=><option key={p.id} value={p.id}>{p.name} {p.position}</option>)}</select>}</label>
     </div>
     {loading?<p role="status">서버 업무일지를 불러오는 중입니다.</p>:!caseId?<p>배정된 프로젝트를 선택하세요. 프로젝트가 없으면 기존 프로젝트 배정 상태를 확인해야 합니다.</p>:<>
       <div className="project-worklog__record"><strong>{project?.caseNumber} · {project?.title}</strong><span>{loadedKey!==caseId+'|'+day?'서버 저장본을 확인하지 못했습니다. 다시 불러오세요.':`자동 작성 ${entries.length}건${selected?' · 직접 기록 저장본 v'+selected.version:''}`}</span>{!canEdit&&<span>조회 전용 화면입니다.</span>}</div>
