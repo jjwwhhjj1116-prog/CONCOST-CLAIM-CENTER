@@ -2095,3 +2095,10 @@ CF202는 실제 CC7의 Ctrl+A 전체교체→숨은manual 모드표식 유실→
 - 연결된 기존 메일러 concost-migration-trial의 현재 버전 cf8e9fef-ce0b-47c1-a96e-6d043efe44a4 각100%를 읽었다. 현재 배포 식별자 확인을 실제 소스 byte 동일성 또는 과거 provider 거절 상세 복원으로 바꾸지 않는다. 원래 두 승인 시각은 개발02:37:01.787Z/가오픈02:37:02.762Z이고, 당시 자동1회씩 EMAIL_BRIDGE_403이었다. 추가 발송/재시도는 0이며 정확한 provider 이유와 실제 발송 워크스페이스 연결은 계속 UNKNOWN이다.
 - 세 전문의 소스·회귀 읽기 조사에서 추가 Claim 제품 결함은 입증되지 않았다. optional Aside 사용자 메모리 검색도 자동 검토에서 개인/다른 프로젝트 기록 노출 우려로 거절돼 데이터 수신이나 우회 없이 중단했다. 현 화면·기존 감사·공식 배포 메타데이터만 근거로 삼았다. 이번 제품 소스 수정·새 제품 커밋/푸시·제품 배포는 없으며 기존25dirty·업무자료·키/설정은 보존했다. 승인된 Google 기본정보 공유 동의와 그 외 불변을 구분한다.
 - 원장: C:/Users/user-owner/Documents/Codex/2026-10-13/claim-center-continuation/output/playwright/full-workflow-20261103/aside-followup/review.json 및 같은 폴더의 실제 PNG·현재 Worker metadata. 다음에는 이 원장부터 읽고 실제 기존 발송 워크스페이스의 소유/로그 접근을 확인해야 한다. 다른 Google 계정으로 추정 로그인하거나 키/도메인 재생성·시험 재발송으로 403을 우회하지 않는다.
+
+
+## 회사 메일 연결 기록의 좁은 추가 승인·조회 결과 — 2026-11-03
+
+- 사용자가 기존 회사 메일 연결 기록의 Aside 메모리 조회를 별도로 명시 승인했다. 승인 후 Resend/con-cost.co.kr/ClaimApprovalMailer의 기존 연결을 한 번 검색(max3)했지만 반환은 일반 briefing/taxonomy뿐이며 실제 회사 연결 일치 기록은0이었다. 무관한 파일 본문·비밀번호·키·토큰을 열거나 이용하지 않았다. 앞선 자동 거절을 우회한 것이 아니며 이후 이 정확한 범위의 승인은 재요청하지 않는다.
+- 실제 발송 워크스페이스와 provider403 이유는 계속UNKNOWN이다. 정상 Resend 회사 로그인·빈 로그/도메인 관측, 양 서버 배포/바인딩·ERP 미설정 재확인만 이번 후속의 검증 범위다. 다른 계정을 추정 로그인하거나 메일 재발송·키/도메인 변경은 하지 않았다. 제품 수정/새 제품배포0, 기존25dirty와 업무자료·키/설정 보존이다. Resend 로그 탭은 남겼고, 검수 Cloudflare 로그인 탭 닫기는 Aside가 이 REPL의 tracked tab이 아니라고 거절해 강제/대체 종료 없이 그대로 두었다.
+- 추가 원장: continuation/output/playwright/full-workflow-20261103/aside-followup/memory-lookup-result.json. 기존 review.json은 그 앞선 시각의 원본이며 덮어쓰지 않는다. 다음 시작은 실제 기존 발송 워크스페이스 식별/정상 로그 접근부터이며, 이 PC의 새 Aside 기본정보 공유/회사 연결 기록 조회에 대한 사용자 승인을 보존한다.
