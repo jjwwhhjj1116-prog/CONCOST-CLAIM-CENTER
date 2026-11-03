@@ -924,8 +924,9 @@ const SurveyEditor: React.FC<{
       {record?.summaryText && record.outputStatus !== 'CONFIRMED' && <Button className="workflow-confirm-button" disabled={disabled || unsaved} onClick={onConfirm}>{busy === '현장조사 최종본 확정' ? '확정 중…' : '원문 대조 완료 · 최종본 확정'}</Button>}
     </article>
     <article className="workflow-editor-card workflow-survey-ledger-card">
-      <header><div><span>FOLDER LEDGER</span><h3>조사일자별 저장 기록</h3></div><em>{surveys.length}건</em></header>
-      {surveys.length ? <div className="survey-list">{surveys.map((item) => <section key={item.id}><div><strong>{item.surveyDate} · {item.leadUnit}</strong><span>{item.location || '위치 미입력'} · {item.status}</span></div><code>{item.folderPath}</code><small>사진 {item.photoCount} · 녹음 {item.audioCount} · 문서 {item.documentCount}</small></section>)}</div> : <div className="workflow-empty"><strong>저장된 현장조사 계획이 없습니다.</strong><p>조사 일자와 범위를 먼저 등록하세요.</p></div>}
+      <header><div><span>SURVEY RECORDS</span><h3>조사일자별 저장 기록</h3></div><em>{surveys.length}건</em></header>
+      <p className="workflow-honest-note">파일 목록과 건수는 아래 프로젝트 통합 자료실에서 확인하세요. 자료실 파일은 조사일별 기록과 별도로 보관되는 프로젝트 공통 자료입니다.</p>
+      {surveys.length ? <div className="survey-list">{surveys.map((item) => <section key={item.id}><div><strong>{item.surveyDate} · {item.leadUnit}</strong><span>{item.location || '위치 미입력'} · {item.status}</span></div><small>조사 기록 분류</small><code>{item.folderPath}</code></section>)}</div> : <div className="workflow-empty"><strong>저장된 현장조사 계획이 없습니다.</strong><p>조사 일자와 범위를 먼저 등록하세요.</p></div>}
     </article>
     <article className="workflow-editor-card workflow-evidence-card">
       <header><div><span>SITE EVIDENCE</span><h3>현장 사진·녹음·도면 → 회사 Google Drive에 업로드하세요</h3></div><em>프로젝트 자료실 자동 연동</em></header>

@@ -37,7 +37,7 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
         if(path==='/api/cases')return json({cases});
         if(path==='/api/project-workflow/schedule')return state.mode==='schedule-failure'?json({error:'합성 일정 조회 실패'},503):json({projects:[]});
         const index=path.includes(ids[1])?1:0;
-        const payload=()=>({case:cases[index],kickoff:records[index],siteSurveys:[records[index]],allocations:[],events:[],googleDrive:{connected:true,deferredByUser:false,uploadEnabled:true}});
+        const payload=()=>({case:cases[index],kickoff:records[index],siteSurveys:state.mode==='two-surveys'?[records[index],{...records[index],id:'survey-2',surveyDate:'2026-09-08'}]:state.mode==='nonzero-survey-counts'?[{...records[index],photoCount:5,audioCount:2,documentCount:3}]:[records[index]],allocations:[],events:[],googleDrive:{connected:true,deferredByUser:false,uploadEnabled:true}});
         if(path.endsWith('/workflow'))return json(payload());
         if(path.endsWith('/workflow/ai-import')){
           state.ai++; state.abortedSignals.push(init.signal);
@@ -48,7 +48,7 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
         if(path.endsWith('/download')){state.downloads++;return new Response('자료실 원문',{headers:{'Content-Type':'text/plain','Content-Disposition':"attachment; filename*=UTF-8''evidence.txt"}});}
         if(path.endsWith('/evidence')){
           if(method==='POST') {state.uploads++;if(state.holdUpload)await new Promise(resolve=>state.uploadRelease=resolve);return json({file:{id:'file-1',originalName:'source.txt',storageProvider:'GOOGLE_DRIVE'}});}
-          return json({files:state.mode==='wrong-evidence'?[]:[{id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',category:state.kind==='WF-03'?'KICKOFF_MATERIAL':'SITE_PHOTO',originalName:'evidence.txt',mimeType:'text/plain',byteSize:20,sha256:'test',storageProvider:'GOOGLE_DRIVE',uploadedBy:'검수자',uploadedAt:'2026-09-07',downloadUrl:'/api/cases/evidence/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/download',driveUrl:null}],googleDriveConnected:true,storagePolicy:'GOOGLE_DRIVE_REQUIRED'});
+          return json({files:state.mode==='wrong-evidence'?[]:[{id:'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',category:state.kind==='WF-03'?'KICKOFF_MATERIAL':'SITE_PHOTO',originalName:'evidence.txt',mimeType:'text/plain',byteSize:20,sha256:'test',storageProvider:'GOOGLE_DRIVE',uploadedBy:'검수자',uploadedAt:'2026-09-09',downloadUrl:'/api/cases/evidence/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/download',driveUrl:null}],googleDriveConnected:true,storagePolicy:'GOOGLE_DRIVE_REQUIRED'});
         }
         if(method==='PUT'&&(path.endsWith('/workflow/kickoff')||path.endsWith('/workflow/site-survey'))){
           if(state.mode==='save-failure')return json({error:'합성 기록 저장 실패'},503);
@@ -75,6 +75,21 @@ test('CF115 actual workflow UI imports automatically, preserves drafts and block
     const upload = () => page.getByLabel('자동정리할 원본 파일').setInputFiles({ name: 'source.txt', mimeType: 'text/plain', buffer: Buffer.from('회의 원문') });
     const reset = async (kind='WF-03', evidence=false) => { await page.evaluate(({kind,evidence})=>{(window as any).cf115.reset();(window as any).cf115.mount(kind,0,evidence);},{kind,evidence}); await page.getByLabel('자동정리할 원본 파일').waitFor(); };
     await page.getByLabel('자동정리할 원본 파일').waitFor({ timeout:15_000 }).catch(()=>assert.fail(JSON.stringify(errors)));
+    await t.test('survey records preserve dates and distinguish shared files from unmaintained per-day counts', async()=>{
+      for(const mode of ['success','nonzero-survey-counts','two-surveys','wrong-evidence']){
+        await page.evaluate(mode=>{(window as any).cf115.reset();(window as any).cf115.state.mode=mode;(window as any).cf115.mount('WF-04');},mode);
+        await page.locator('.workflow-survey-ledger-card .survey-list section').first().waitFor();
+        await page.waitForFunction(()=>!document.querySelector('.case-evidence-empty')?.textContent?.includes('불러오는 중'));
+        const ledger=await page.locator('.workflow-survey-ledger-card').innerText();
+        assert.match(ledger,/2026-09-07 · 기존 팀/u);assert.match(ledger,/기존 장소 · DRAFTED/u);
+        assert.match(ledger,/조사 기록 분류/u);assert.match(ledger,/프로젝트 통합 자료실/u);
+        assert.doesNotMatch(ledger,/사진 \d+|녹음 \d+|문서 \d+/u,'project files are not assigned to survey dates by upload date');
+        assert.equal(await page.locator('.survey-list section').count(),mode==='two-surveys'?2:1);
+        assert.match(await page.locator('.case-evidence-list>header').innerText(),new RegExp('파일 '+(mode==='wrong-evidence'?0:1)+'개','u'));
+        assert.equal(await page.getByRole('button',{name:'스튜디오 권한으로 다운로드',exact:true}).count(),mode==='wrong-evidence'?0:1);
+      }
+      assert.deepEqual({uploads:(await state()).uploads,ai:(await state()).ai,saves:(await state()).saves.length},{uploads:0,ai:0,saves:0});
+    });
     for (const kind of ['WF-03','WF-04']) await t.test(`${kind}: one selection auto-runs AI, retry reuses original, preview and PUT use matching new result`, async () => {
       await reset(kind);
       await page.evaluate(()=>{(window as any).cf115.state.mode='failure';}); await upload();
