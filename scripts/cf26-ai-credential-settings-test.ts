@@ -20,15 +20,15 @@ const MASTER_KEY = '7'.repeat(64);
 async function sha256(value: string): Promise<string> { const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)); return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
 class SqlStatement {
   private values: unknown[] = [];
-  constructor(private readonly database: Database, private readonly sql: string) {}
+  constructor(private readonly database: Database, private readonly sql: string, private readonly onRead?: (query: string, values: unknown[]) => void | Promise<void>) {}
   bind(...values: unknown[]): SqlStatement { this.values = values; return this; }
-  async first<T>(): Promise<T | null> { const statement = this.database.prepare(this.sql); try { statement.bind(this.values as any[]); return statement.step() ? statement.getAsObject() as T : null; } finally { statement.free(); } }
-  async all<T>(): Promise<{ results: T[] }> { const statement = this.database.prepare(this.sql); const results: T[] = []; try { statement.bind(this.values as any[]); while (statement.step()) results.push(statement.getAsObject() as T); return { results }; } finally { statement.free(); } }
+  async first<T>(): Promise<T | null> { await this.onRead?.(this.sql, this.values); const statement = this.database.prepare(this.sql); try { statement.bind(this.values as any[]); return statement.step() ? statement.getAsObject() as T : null; } finally { statement.free(); } }
+  async all<T>(): Promise<{ results: T[] }> { await this.onRead?.(this.sql, this.values); const statement = this.database.prepare(this.sql); const results: T[] = []; try { statement.bind(this.values as any[]); while (statement.step()) results.push(statement.getAsObject() as T); return { results }; } finally { statement.free(); } }
   async run(): Promise<{ success: boolean; meta: { changes: number; last_row_id: number } }> { this.database.run(this.sql, this.values as any[]); const row = this.database.exec('SELECT last_insert_rowid() AS id')[0]?.values[0]?.[0]; return { success: true, meta: { changes: this.database.getRowsModified(), last_row_id: Number(row ?? 0) } }; }
 }
 class SqlD1 {
-  constructor(readonly database: Database) {}
-  prepare(sql: string): SqlStatement { return new SqlStatement(this.database, sql); }
+  constructor(readonly database: Database, private readonly onRead?: (query: string, values: unknown[]) => void | Promise<void>) {}
+  prepare(sql: string): SqlStatement { return new SqlStatement(this.database, sql, this.onRead); }
   async batch(statements: SqlStatement[]): Promise<unknown[]> { this.database.run('BEGIN IMMEDIATE'); try { const results=[]; for (const statement of statements) results.push(await statement.run()); this.database.run('COMMIT'); return results; } catch (error) { this.database.run('ROLLBACK'); throw error; } }
 }
 const migration = (name: string): string => readFileSync(join(process.cwd(), 'apps', 'cloudflare', 'migrations', name), 'utf8');
@@ -139,6 +139,55 @@ test('CF26 retains company-source consent 403 before any personal or company pro
   assert.equal(usedKeys.length,0);
   assert.deepEqual(Buffer.from(sql.export()),before,'blocked company-source generation must preserve the database');
   sql.close();
+});
+
+test('CF254 report setup overlaps independent reads and decrypts a shared provider only once without changing state', async () => {
+  const { sql, env, usedKeys } = await setup();
+  try {
+    const stored = await worker.fetch(request('/api/settings/ai-credentials/GEMINI', STAFF_TOKEN, {method:'PUT', body:JSON.stringify({scope:'USER', apiKey:PERSONAL_KEY, expectedVersion:0})}), env);
+    assert.equal(stored.status, 200);
+    const before = Buffer.from(sql.export()), timeline: string[] = [];
+    let credentialReads = 0;
+    env.DB = new SqlD1(sql, (query, values) => {
+      if (query.includes('ciphertext_hex AS ciphertextHex') && values.at(-1) === 'GEMINI') credentialReads++;
+      if (query.includes('FROM preview_report_template_categories')) timeline.push('library-start');
+      if (query.includes('FROM preview_report_template_previews')) {
+        timeline.push('template-start');
+        return Promise.resolve().then(() => { timeline.push('template-end'); });
+      }
+    }) as unknown as NonNullable<CloudflareEnv['DB']>;
+    const response = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+    assert.equal(response.status, 200);
+    const text = await response.text(), config = JSON.parse(text);
+    assert.equal(config.credentialSource, 'PERSONAL');
+    assert.equal(config.assistantCredentialSource, 'PERSONAL');
+    assert.equal(config.aiConnected, true);
+    assert.equal(config.assistantConnected, true);
+    assert.ok(config.chapters.length > 0 && Array.isArray(config.templateLibrary));
+    assert.doesNotMatch(text, new RegExp(`${PERSONAL_KEY}|${ENVIRONMENT_KEY}|ciphertextHex|ivHex|rolePrompt|instructionPrompt`, 'u'));
+    assert.equal(credentialReads, 1, 'the same personal Gemini key must not be read/decrypted for each display flag');
+    assert.ok(timeline.indexOf('library-start') >= 0 && timeline.indexOf('library-start') < timeline.indexOf('template-end'), 'the independent template library must start while preview templates are pending');
+    assert.equal(usedKeys.length, 0, 'reading configuration must not call an AI provider');
+    assert.deepEqual(Buffer.from(sql.export()), before, 'reading configuration preserves credentials and business records');
+  } finally { sql.close(); }
+});
+
+test('CF254 optional preview-template setup keeps synchronous failure fallback without changing the library or database', async () => {
+  const { sql, env, usedKeys } = await setup();
+  try {
+    const before = Buffer.from(sql.export()), database = env.DB as unknown as SqlD1, prepare = database.prepare.bind(database);
+    database.prepare = (query) => {
+      if (query.includes('FROM preview_report_template_previews')) throw Error('SYNTHETIC_OPTIONAL_PREVIEW_PREPARE_FAILURE');
+      return prepare(query);
+    };
+    const response = await worker.fetch(request(`/api/report-authoring/config?caseId=${CASE_ID}`, STAFF_TOKEN), env);
+    assert.equal(response.status, 200);
+    const config = await response.json() as {templates: unknown[]; templateLibrary: unknown[]; chapters: unknown[]};
+    assert.deepEqual(config.templates, []);
+    assert.ok(Array.isArray(config.templateLibrary) && config.chapters.length > 0);
+    assert.equal(usedKeys.length, 0);
+    assert.deepEqual(Buffer.from(sql.export()), before);
+  } finally { sql.close(); }
 });
 
 test('CF26 UI exposes a settings route but never reads stored raw keys back', () => {

@@ -7098,32 +7098,42 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
     if (!PREVIEW_DRAFT_KEY.test(caseId)) return json({ error: 'A valid caseId is required', code: 'INVALID_CASE_ID' }, 400);
     const caseRow = await accessiblePreviewCase(env, user, caseId);
     if (!caseRow) return json({ error: 'Case was not found or is not assigned to this user', code: 'CASE_NOT_FOUND' }, 404);
-    const routes = await previewAiRoutes(env);
-    const writingRoute = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
-    const outlineRoute = routes.find((route) => route.taskKind === 'OUTLINE_PLANNING') ?? writingRoute;
-    const prompts = await previewPromptRows(env, caseRow.claimType);
-    const unavailable = prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
-    const [outlinePlan, sourceGroups, typeGuideline, guidelinePackage] = await Promise.all([
-      previewOutlinePlan(env, caseRow.id, prompts),
+    const promptsPromise = previewPromptRows(env, caseRow.claimType);
+    const credentialConfigPromise = previewAiRoutes(env).then(async (routes) => {
+      const writingRoute = routes.find((route) => route.taskKind === 'CHAPTER_WRITING') ?? routes[0] ?? null;
+      const outlineRoute = routes.find((route) => route.taskKind === 'OUTLINE_PLANNING') ?? writingRoute;
+      // Only share resolved credentials inside this authorized request; retain provider fallback order.
+      const credentials = new Map<PreviewAiProvider, Promise<ResolvedPreviewAiCredential | null>>();
+      const credentialFor = (provider: PreviewAiProvider) => {
+        let pending = credentials.get(provider);
+        if (!pending) { pending = resolvePreviewAiCredential(env, user.id, provider); credentials.set(provider, pending); }
+        return pending;
+      };
+      const [writingCredential, outlineCredential, assistantCredential] = await Promise.all([
+        writingRoute ? credentialFor(writingRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
+        outlineRoute ? credentialFor(outlineRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
+        credentialFor('GEMINI')
+      ]);
+      return { writingRoute, outlineRoute, assistantRoute: previewPersonalGeminiAssistantRoute(routes), writingCredential, outlineCredential, assistantCredential };
+    });
+    const [{ writingRoute, outlineRoute, assistantRoute, writingCredential, outlineCredential, assistantCredential }, prompts, outlinePlan, sourceGroups, typeGuideline, guidelinePackage, templates, templateLibrary] = await Promise.all([
+      credentialConfigPromise,
+      promptsPromise,
+      promptsPromise.then((prompts) => previewOutlinePlan(env, caseRow.id, prompts)),
       previewReportSourceGroups(env, caseRow),
       previewTypeGuidelines(env, caseRow.claimType).then((rows) => rows[0] ?? null),
-      previewGuidelinePackageSummary(env)
+      previewGuidelinePackageSummary(env),
+      (async () => {
+        try {
+          const result = await env.DB!.prepare(
+            'SELECT claim_type AS claimType, template_name AS templateName, purpose_text AS purposeText, version, finished_example_markdown AS finishedExample FROM preview_report_template_previews ORDER BY claim_type'
+          ).all<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }>();
+          return result.results ?? [];
+        } catch { return []; }
+      })(),
+      previewReportTemplateLibrary(env, caseRow.claimType)
     ]);
-    let templates: Array<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }> = [];
-    try {
-      const result = await env.DB.prepare(
-        'SELECT claim_type AS claimType, template_name AS templateName, purpose_text AS purposeText, version, finished_example_markdown AS finishedExample FROM preview_report_template_previews ORDER BY claim_type'
-      ).all<{ claimType: string; templateName: string; purposeText: string; version: number; finishedExample: string }>();
-      templates = result.results ?? [];
-    } catch {
-      templates = [];
-    }
-    const assistantRoute = previewPersonalGeminiAssistantRoute(routes);
-    const [writingCredential, outlineCredential, personalGeminiCredential] = await Promise.all([
-      writingRoute ? resolvePreviewAiCredential(env, user.id, writingRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
-      outlineRoute ? resolvePreviewAiCredential(env, user.id, outlineRoute.providerKind as PreviewAiProvider) : Promise.resolve(null),
-      previewStoredAiCredential(env, 'GEMINI', 'USER', user.id)
-    ]);
+    const unavailable = prompts.length === 0 || prompts[0]?.setStatus !== 'ACTIVE';
     return json({
       claimType: caseRow.claimType,
       available: !unavailable,
@@ -7135,8 +7145,8 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       outlineAiConnected: Boolean(outlineCredential),
       outlineProviderLabel: outlineRoute?.providerKind ?? 'OPENAI',
       outlineModelLabel: outlineRoute?.modelCode ?? 'gpt-5.6',
-      assistantConnected: Boolean(await resolvePreviewAiCredential(env, user.id, 'GEMINI')),
-      assistantCredentialSource: personalGeminiCredential ? 'PERSONAL' : (await resolvePreviewAiCredential(env, user.id, 'GEMINI'))?.source ?? 'NONE',
+      assistantConnected: Boolean(assistantCredential),
+      assistantCredentialSource: assistantCredential?.source ?? 'NONE',
       assistantProviderLabel: 'GEMINI',
       assistantModelLabel: assistantRoute.modelCode,
       chapters: prompts.filter((row) => Boolean(row.id)).map((row) => ({ id: row.id, chapterCode: row.chapterCode, title: row.title, agentCode: row.agentCode, ordinal: Number(row.ordinal), promptVersion: Number(row.version) })),
@@ -7145,7 +7155,7 @@ async function handlePreviewReportAuthoring(request: Request, env: CloudflareEnv
       outlinePlan,
       sourceGroups,
       templates,
-      templateLibrary: await previewReportTemplateLibrary(env, caseRow.claimType),
+      templateLibrary,
       phase: guidelinePackage ? 'CF84_CLAIM_REPORT_GUIDELINE_PACKAGE' : 'CF33_TYPE_AUTHORING_GUIDELINES'
     });
   }
