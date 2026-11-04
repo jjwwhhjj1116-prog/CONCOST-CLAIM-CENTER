@@ -248,6 +248,7 @@ test('CF213 actual chapter workspace edits rich content, reopens and applies wit
         const boundary = (doc: any) => doc.content.slice(0, doc.content.findIndex((n: any) => n.attrs?.marker === 'AI-CHAPTER:CH-01:END') + 1);
         assert.deepEqual(boundary(merged), boundary(original));
         assert.match(JSON.stringify(merged), /CH-02 협업 검수 원고입니다/u);
+        await page.locator('.document-review-split .tiptap').getByText('CH-02 협업 검수 원고입니다.', {exact:true}).waitFor();
       } finally { await page.close(); }
     });
     await t.test('a chapter save 503 keeps its accepted local rich edits, does not save whole body and can explicitly retry', async () => {
@@ -326,6 +327,53 @@ test('CF213 actual chapter workspace edits rich content, reopens and applies wit
           assert.equal(writes.length,1);assert.notEqual(writes[0].title,await title.inputValue(),'The old ACK did not include or discard the accepted new title');
         }
       }finally{await page.close()}
+    });
+    await t.test('CF253 stage3 background save keeps typing available and preserves edits after an older ACK; file import remains locked', async () => {
+      const page = await open(false);
+      try {
+        await page.locator('.report-wizard-navigation li').nth(2).getByRole('button').click();
+        const editor = page.locator('.report-stage-inline-editor .tiptap');
+        await editor.waitFor();
+        await page.waitForFunction(() => (window as any).cf213.read().draft.wizardStep === 3);
+        const initial = await state(page);
+        await page.evaluate(() => (window as any).cf213.holdNextReport());
+        await editor.click(); await page.keyboard.press('Control+End');
+        await page.keyboard.insertText(' CF253 자동저장 전 원고');
+        await page.waitForFunction(() => (window as any).cf213.pendingReport);
+        const editableDuringSave = await editor.getAttribute('contenteditable');
+        t.diagnostic(`CF253 background-save contenteditable=${editableDuringSave}`);
+        assert.equal(editableDuringSave, 'true', 'A background report save must not lock stage3 typing until its response arrives');
+        await page.keyboard.insertText(' CF253 저장 응답 전 추가 원고');
+        await page.evaluate(() => (window as any).cf213.releaseReport());
+        await page.waitForFunction(version => (window as any).cf213.read().draft.version > version, initial.draft.version);
+        assert.match(await editor.innerText(), /CF253 저장 응답 전 추가 원고/u, 'The older ACK cannot discard later accepted input');
+        assert.doesNotMatch((await state(page)).draft.content, /CF253 저장 응답 전 추가 원고/u, 'The first request did not contain the later edit');
+        await page.keyboard.press('Control+s');
+        await page.waitForFunction(() => (window as any).cf213.read().draft.content.includes('CF253 저장 응답 전 추가 원고'));
+        const saved = await state(page);
+        const countNodes = (json: unknown, type: string) => (JSON.stringify(json).match(new RegExp(`"type":"${type}"`, 'gu')) ?? []).length;
+        for (const type of ['table', 'image']) assert.equal(countNodes(saved.draft.editorJson, type), countNodes(initial.draft.editorJson, type));
+
+        // Delay only the local fixture File read. No real file or backend is used.
+        await page.evaluate(() => {
+          const read = File.prototype.arrayBuffer;
+          File.prototype.arrayBuffer = async function () {
+            (window as any).cf253ImportPending = true;
+            await new Promise<void>(resolve => { (window as any).cf253ReleaseImport = resolve; });
+            return read.call(this);
+          };
+        });
+        await page.locator('input[type="file"][accept^=".xlsx"]').setInputFiles({name:'cf253-invalid-synthetic.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from('CF253 invalid synthetic workbook')});
+        await page.waitForFunction(() => (window as any).cf253ImportPending);
+        assert.equal(await editor.getAttribute('contenteditable'), 'false', 'A file import must still lock editing before it can replace the document');
+        await page.evaluate(() => (window as any).cf253ReleaseImport());
+        await page.locator('.report-stage-inline-editor .tiptap[contenteditable="true"]').waitFor();
+        assert.equal((await state(page)).draft.content, saved.draft.content, 'The rejected synthetic import cannot change the saved body');
+        assert.match(await editor.innerText(), /CF253 저장 응답 전 추가 원고/u);
+      } finally {
+        await page.evaluate(() => { const api=(window as any).cf213; if(api?.pendingReport)api.releaseReport(); (window as any).cf253ReleaseImport?.(); }).catch(() => undefined);
+        await page.close();
+      }
     });
     assert.deepEqual(errors, []);
   } finally { await browser.close(); await server.close(); }

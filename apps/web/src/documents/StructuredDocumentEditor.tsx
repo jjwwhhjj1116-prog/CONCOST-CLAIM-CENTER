@@ -21,7 +21,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import StarterKit from '@tiptap/starter-kit';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
@@ -774,14 +774,17 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [tableRows, setTableRows] = useState(3);
   const [tableColumns, setTableColumns] = useState(3);
-  const lastAppliedContentSignature = useRef(structuredDocumentContentSignature(value, editorJson));
+  const contentSignature = useMemo(() => structuredDocumentContentSignature(value, editorJson), [value, editorJson]);
+  const lastAppliedContentSignature = useRef(contentSignature);
   const selectionRef = useRef<StructuredSelection | null>(null);
   const reviewPagesRef = useRef<DocumentReviewPagesHandle | null>(null);
   const manualModeContextRef=useRef({key:documentKey,enabled:false});
   manualModeContextRef.current={key:documentKey,enabled:reportMode&&!readOnly&&!collaborationSession};
   // useEditor is recreated for each documentKey. Calculate this value on that
   // render so a chapter never inherits the previous chapter's first content.
-  const initialContent = collaborationSession ? undefined : editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value);
+  // Later prop changes are reconciled below; initial parsing belongs only to
+  // the same lifecycle keys as useEditor, not every keystroke or selection.
+  const initialContent = useMemo(() => collaborationSession ? undefined : editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), [documentKey, collaborationSession]);
 
   const selectedImageElement = (activeEditor: Editor): HTMLImageElement | null => {
     if (!(activeEditor.state.selection instanceof NodeSelection) || activeEditor.state.selection.node.type.name !== 'image') return null;
@@ -952,7 +955,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
   useEffect(() => {
     if (collaborationSession) return;
     if (!editor?.isInitialized || editor.isDestroyed) return;
-    const desiredSignature = structuredDocumentContentSignature(value, editorJson);
+    const desiredSignature = contentSignature;
     if (desiredSignature === lastAppliedContentSignature.current) return;
     lastAppliedContentSignature.current = desiredSignature;
     if (editorJson) {
@@ -968,7 +971,7 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
       }
     }
     syncReportNativeSource(editor, editorJson, editorJson ? (pageMode === 'a4-portrait' ? normalizeA4TableJson(editorJson) : editorJson) : markdownToEditorHtml(value), false);
-  }, [collaborationSession, editor, editorJson, pageMode, value]);
+  }, [collaborationSession, contentSignature, editor, editorJson, pageMode, value]);
 
   useEffect(() => {
     if (!collaborationSession || !collaborationSynced || !editor?.isInitialized || editor.isDestroyed || !editor.isEmpty || !value.trim()) return;
