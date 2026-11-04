@@ -346,12 +346,22 @@ export function restoreNativeParagraphAdvances(files:Record<string,Uint8Array>,p
             const ratios=[...all(def,'ratio')[0].attributes].map(a=>Number(a.value)),ratio=ratios[0];
             if(ratios.some(r=>r!==ratio)||!ratio)throw Error('HWP 공백 장평의 기준이 다릅니다.');
             const next=desired.get(pos+1),width=want?(next&&!starts.has(pos+1)?next.x-want.x:want.width):0,base=metric.width/(1+old/100)/ratio;
-            let best:{ratio:number;advance:number;score:number}|undefined;
+            let best:{ratio:number;spacing:number;advance:number;score:number}|undefined;
             for(let candidate=50;candidate<=200;candidate++){
               const raw=base*candidate,advance=Math.round(raw),score=Math.abs(x+advance-(want?.x??x)-width)*1000+Math.abs(raw-width);
-              if(!best||score<best.score)best={ratio:candidate,advance,score};
+              if(!best||score<best.score)best={ratio:candidate,spacing:0,advance,score};
             }
-            spaceRatio=want?best!.ratio:50;value=0;x+=want?best!.advance:0;natural+=want?best!.advance:0;
+            // A web space can be narrower than the native 50% width ratio.
+            // Use standard tracking only when ratio alone misses its end;
+            // retain untracked width for native aligned-cell reservations.
+            if(want&&Math.abs(x+best!.advance-want.x-width)>.51){
+              const ratio=best!.ratio;
+              for(let spacing=-50;spacing<=50;spacing++){
+                const raw=base*ratio*(1+spacing/100),advance=Math.round(raw),score=Math.abs(x+advance-want.x-width)*1000+Math.abs(raw-width);
+                if(advance>0&&score<best!.score)best={ratio,spacing,advance,score};
+              }
+            }
+            spaceRatio=want?best!.ratio:50;value=want?best!.spacing:0;x+=want?best!.advance:0;natural+=want?Math.round(base*best!.ratio):0;
           }else if(want){
             const next=desired.get(pos+1),width=next&&!starts.has(pos+1)?next.x-want.x:want.width,base=metric.width/(1+old/100);let best:{value:number;advance:number;score:number}|undefined;
             if(!Number.isFinite(base)||base<=0||!Number.isFinite(width)||width<=0)throw Error('HWP 글자의 측정 폭이 잘못됐습니다.');

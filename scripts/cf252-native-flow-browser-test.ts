@@ -110,6 +110,29 @@ async function main() { const out = mkdtempSync(join(tmpdir(), 'claim-cf252-flow
         assert.ok(line.maxX <= .51, 'Rounded body glyph X > .51px');
         assert.ok(line.maxY <= .12, 'Rounded body baseline Y > .12px');
     }
+    // Actual synthetic Studio failure: the space after the middle dot in
+    // a confirmed-minutes heading is narrower than 50% of native space width.
+    const minutesInput = JSON.parse(readFileSync('scripts/fixtures/cf253-confirmed-minutes-spaces.json', 'utf8'));
+    const minutes = await page.evaluate(async input => {
+        const { createNativeHwp } = await import('/src/documents/editable-hwp-export.ts' as string);
+        const { nativePaintGlyphs } = await import('/src/documents/native-hwp-paragraph-advances.ts' as string);
+        const { loadNativeHwpEngine } = await import('/src/documents/native-hwp-runtime.ts' as string);
+        const before = JSON.stringify(input), Engine = await loadNativeHwpEngine(), bytes = createNativeHwp(input, Engine), doc = new Engine(bytes);
+        try {
+            const positions = nativePaintGlyphs(doc), heading = input[2].flowLines[0], actual = positions.get('section:2/para:0')!;
+            const chars = Array.from(heading.text), diffs = heading.paint.origins.filter((g: any) => String(chars[g.at]).trim()).map((g: any) => ({ at: g.at, dx: actual.get(g.at)!.x - g.x, dy: actual.get(g.at)!.y - g.y }));
+            const cellText = JSON.parse((doc as any).getPageTextLayout(2)).runs.filter((r: any) => r.cellPath).map((r: any) => r.text).join('');
+            return { pages: doc.pageCount(), sections: doc.getSectionCount(), bytes: bytes.length, text: input.map((_: any, i: number) => JSON.parse((doc as any).getPageText(i))), cellText, inputUnchanged: JSON.stringify(input) === before, maxX: Math.max(...diffs.map((d: any) => Math.abs(d.dx))), maxY: Math.max(...diffs.map((d: any) => Math.abs(d.dy))), nextToNarrowSpace: diffs.find((d: any) => d.at === 11) };
+        } finally { doc.free(); }
+    }, minutesInput);
+    writeFileSync(join(out, 'confirmed-minutes-spaces.json'), JSON.stringify(minutes, null, 2));
+    assert.equal(minutes.pages, 3);
+    assert.equal(minutes.sections, 3);
+    assert.equal(minutes.inputUnchanged, true);
+    assert.ok(minutes.maxX <= .51, 'Confirmed-minutes heading glyph X > .51px');
+    assert.ok(minutes.maxY <= .12, 'Confirmed-minutes heading baseline Y > .12px');
+    assert.ok(minutes.nextToNarrowSpace);
+    for (const text of ['회의내용 및 지시사항', '자료와 기존 계정·권한·키는 보존한다.', '최종 HWP와 대조한다.']) assert.ok(minutes.cellText.includes(text), 'Confirmed source cells must survive HWP reopen');
     assert.deepEqual(Object.fromEntries(files.map(n => [n, hash(readFileSync('apps/web/src/documents/' + n))])), hashes);
 }
 finally {
