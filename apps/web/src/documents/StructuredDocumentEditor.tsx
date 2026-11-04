@@ -3,6 +3,7 @@ import { readReportNativeSource, reportSourceNavigationKey, reportSourcePageCoun
 import { ReportChapterDecoration } from './report-chapter-decoration';
 import { reportChapterPrefix } from '../reports/report-outline-sync';
 import { prepareReportPrint } from './report-print-structure';
+import { watchDocumentFonts } from './document-fonts';
 import Collaboration from '@tiptap/extension-collaboration';
 import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import CharacterCount from '@tiptap/extension-character-count';
@@ -934,8 +935,8 @@ const StructuredDocumentEditorCore = forwardRef<StructuredDocumentEditorHandle, 
     editor.on('update',align);window.addEventListener('resize',align);window.addEventListener('final-document:refit',align);
     const images=Array.from(editor.view.dom.querySelectorAll('img'));
     images.forEach(image=>image.addEventListener('load',align));
-    void document.fonts.ready.then(align);align();
-    return()=>{active=false;cancelAnimationFrame(frame);editor.off('update',align);window.removeEventListener('resize',align);window.removeEventListener('final-document:refit',align);images.forEach(image=>image.removeEventListener('load',align));};
+    const stopFonts=watchDocumentFonts(align);align();
+    return()=>{active=false;stopFonts();cancelAnimationFrame(frame);editor.off('update',align);window.removeEventListener('resize',align);window.removeEventListener('final-document:refit',align);images.forEach(image=>image.removeEventListener('load',align));};
   },[editor,editorJson]);
 
   useEffect(() => {

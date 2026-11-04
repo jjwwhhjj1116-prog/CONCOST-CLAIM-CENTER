@@ -528,6 +528,23 @@ test('CF146 real report renderer: portrait, TOC, photo tables and imported page 
       assert.ok(result.text===expected.trimEnd(),JSON.stringify({actualLength:result.text.length,expectedLength:expected.trimEnd().length,pages:result.pages}));
       assert.equal(result.shortText,'보조 근거');
     });
+    await t.test('CF254 immediate PDF output after a document change waits for the initial observed pagination',async()=>{
+      const result=await page.evaluate(async()=>{
+        const {downloadFinalDocument}=await import('/src/documents/final-document-export.ts' as string) as typeof import('../apps/web/src/documents/final-document-export');
+        const api=(globalThis as any).cf146,doc=api.parse('# CH-01 즉시 출력 확인\n\nCF254 저장 원문과 표는 그대로 출력합니다.\n\n| 원문 | 확인 |\n| --- | --- |\n| 123,456원 | 보존 |');
+        const before=JSON.stringify(doc),files:Uint8Array[]=[],pending:Promise<void>[]=[],original=HTMLAnchorElement.prototype.click;let capturedText='';
+        HTMLAnchorElement.prototype.click=function(){pending.push(fetch(this.href).then(r=>r.arrayBuffer()).then(b=>{files.push(new Uint8Array(b));}));};
+        try{
+          api.flushSync(()=>api.setDoc(doc));
+          const root=document.querySelector<HTMLElement>('.report-final-document')!;
+          const bodyText=()=>[...root.querySelectorAll('[data-report-body-page]')].map(page=>page.textContent).join('');
+          const output=await downloadFinalDocument({root,format:'pdf',fileName:'cf254-immediate',onProgress:message=>{if(message.startsWith('미리보기 1/'))capturedText=bodyText();}});await Promise.all(pending);
+          return {pages:output.pageCount,visiblePages:root.querySelectorAll('[data-export-page]').length,signature:new TextDecoder().decode(files[0].subarray(0,5)),unchanged:JSON.stringify((globalThis as any).cf146.getDoc())===before,capturedText,visibleText:bodyText()};
+        }finally{HTMLAnchorElement.prototype.click=original;}
+      });
+      assert.equal(result.signature,'%PDF-');assert(result.pages>0);assert.equal(result.pages,result.visiblePages);assert(result.unchanged);
+      for(const text of [result.capturedText,result.visibleText]){assert.match(text,/CF254 저장 원문과 표는 그대로 출력합니다\./u);assert.match(text,/123,456원/u);assert.match(text,/보존/u);}
+    });
     if (process.env.CF146_EXPORT_QA === '1') await t.test('long table downloads keep portrait PDF pages and editable DOCX cell text',async()=>{
       const result=await page.evaluate(async()=>{
         const {downloadFinalDocument}=await import('/src/documents/final-document-export.ts' as string) as typeof import('../apps/web/src/documents/final-document-export');

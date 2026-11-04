@@ -3,6 +3,7 @@ import { paginateReport } from './report-pagination';
 import { prepareReportPrint, reportContentsPages } from './report-print-structure';
 import { importedHwpPages } from './hwp-import-overflow';
 import { alignImportedHwpPages } from './hwp-import-alignment';
+import { watchDocumentFonts } from './document-fonts';
 
 export function ReportBodyPages({ html, header, contents = false, tocTitle = 'ëª© ì°¨', tocTitles }: { html: string; header?: ReactNode; contents?: boolean; tocTitle?: string; tocTitles?: Record<string,string> }): React.ReactElement {
   const sourceRef = useRef<HTMLElement>(null);
@@ -15,11 +16,10 @@ export function ReportBodyPages({ html, header, contents = false, tocTitle = 'ëª
     source.innerHTML = html;
     const imported = Boolean(source.querySelector(':scope > [data-hwp-import-page]'));
     const headings = imported ? [] : prepareReportPrint(source);
-    setLayout(current => ({ ...current, ready: false }));
-    let active = true, frame = 0;
-    const paginate = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
+    setLayout(current => current.ready ? { ...current, ready: false } : current);
+    let active = true, measured = typeof ResizeObserver !== 'function', frame = 0;
+    const renderPages = () => {
+      if (!active || !measured) return;
         alignImportedHwpPages(source);
         const importedPages = importedHwpPages(source);
         if (importedPages) {
@@ -34,13 +34,25 @@ export function ReportBodyPages({ html, header, contents = false, tocTitle = 'ëª
           toc = paginateReport(tocSource, tocSource.clientHeight);
         }
         if (active) setLayout({ ...next, toc: toc.pages, overflow: next.overflow || toc.overflow, ready: true });
-      });
+    };
+    const paginate = () => {
+      if (!active || !measured) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(renderPages);
     };
     const images = [...source.querySelectorAll('img')];
     images.forEach(image => { image.addEventListener('load', paginate); image.addEventListener('error', paginate); });
     window.addEventListener('resize', paginate); window.addEventListener('final-document:refit', paginate);
-    void document.fonts?.ready.then(paginate); paginate();
-    return () => { active = false; cancelAnimationFrame(frame); window.removeEventListener('resize', paginate); window.removeEventListener('final-document:refit', paginate); images.forEach(image => { image.removeEventListener('load', paginate); image.removeEventListener('error', paginate); }); };
+    const stopFonts = watchDocumentFonts(paginate);
+    // The observer supplies the initial refit after natural layout, without a mount-time flush.
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(entries => {
+      if (!active) return;
+      const initial = !measured;
+      measured = entries.some(entry => entry.target === source && entry.contentRect.width > 0 && entry.contentRect.height > 0);
+      if (measured) { if (initial) renderPages(); else paginate(); }
+    }) : null;
+    if (observer) observer.observe(source); else paginate();
+    return () => { active = false; stopFonts(); observer?.disconnect(); cancelAnimationFrame(frame); window.removeEventListener('resize', paginate); window.removeEventListener('final-document:refit', paginate); images.forEach(image => { image.removeEventListener('load', paginate); image.removeEventListener('error', paginate); }); };
   }, [html, header, contents, tocTitle, tocTitlesSignature]);
   return <>
     <section ref={sourceRef} className="report-final-body report-pagination-source" aria-hidden="true">{header}<article className="structured-editor__preview" dangerouslySetInnerHTML={{ __html: html }}/></section>

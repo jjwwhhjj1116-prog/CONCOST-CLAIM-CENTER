@@ -1,6 +1,4 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { createEditableDocx, documentImageData } from './editable-docx-export';
 import { BLANK_HWPX_BASE64 } from './hwpx-blank-template';
 import { createNativeHwp, type NativeHwpPage } from './editable-hwp-export';
@@ -137,6 +135,7 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
   const layout = pageLayout(orientation);
   const report = root.matches('[data-export-document-kind="REPORT"]') || Boolean(root.querySelector('[data-export-document-kind="REPORT"]'));
   const elements = await prepareExportPages(root);
+  const { default: html2canvas } = await import('html2canvas');
   const result: CapturedPage[] = [];
   for (let index = 0; index < elements.length; index += 1) {
     const isFittedSheet = elements[index].dataset.exportPagePolicy === 'fit';
@@ -264,7 +263,8 @@ const capturePages = async (root: HTMLElement, orientation: FinalDocumentOrienta
 };
 
 
-const createPdf = (pages: CapturedPage[], orientation: FinalDocumentOrientation): Uint8Array => {
+const createPdf = async (pages: CapturedPage[], orientation: FinalDocumentOrientation): Promise<Uint8Array> => {
+  const { jsPDF } = await import('jspdf');
   const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation, compress: true });
   const dimensions = orientation === 'portrait' ? { width: 210, height: 297 } : { width: 297, height: 210 };
   pages.forEach((page, index) => {
@@ -474,7 +474,7 @@ export async function downloadFinalDocument(options: {
     catch (error) { if (revision && capturedPageCache.get(options.root)?.pages === pagePromise) capturedPageCache.delete(options.root); throw error; }
     pageCount = pages.length;
     options.onProgress?.(`${pageCount}개 A4 페이지를 ${options.format.toUpperCase()}로 묶고 있습니다.`);
-    bytes = createPdf(pages, orientation);
+    bytes = await createPdf(pages, orientation);
   }
   const expectedSignature = options.format === 'docx' || nativeExtension === 'hwpx'
     ? [0x50, 0x4b, 0x03, 0x04]

@@ -328,6 +328,31 @@ test('CF213 actual chapter workspace edits rich content, reopens and applies wit
         }
       }finally{await page.close()}
     });
+    await t.test('CF254 inactive and collapsed preapproval previews do not paginate; opening the visible preview preserves the saved document', async () => {
+      const page = await open(false);
+      try {
+        const preview=page.getByRole('article',{name:'결재상신 전 저장본 미리보기',exact:true,includeHidden:true});
+        assert.equal(await preview.count(),0,'Step4 must not construct the hidden step5 preapproval renderer');
+        await page.locator('.report-wizard-navigation li').nth(4).getByRole('button').click();
+        await page.waitForFunction(()=>(window as any).cf213.read().draft.wizardStep===5);
+        assert.equal(await preview.count(),0,'A collapsed preapproval disclosure must not construct or paginate its document');
+        const saved=await state(page);
+        const details=page.locator('.report-step-card--5 details').filter({has:page.locator('summary').filter({hasText:/^최종 보고서 미리보기/u})});
+        await details.locator('summary').click();
+        await preview.waitFor();
+        await page.waitForFunction(()=>{const pages=[...document.querySelectorAll('[aria-label="결재상신 전 저장본 미리보기"] [data-export-page]')];return pages.length>0&&pages.every(p=>p.getAttribute('data-page-fit-overflow')!=='true')});
+        const pages=await preview.locator('[data-export-page]').count();assert(pages>0);
+        await details.locator('summary').click();
+        await page.waitForFunction(()=>!document.querySelector('[aria-label="결재상신 전 저장본 미리보기"]'));
+        await details.locator('summary').click();await preview.waitFor();
+        await page.waitForFunction(()=>{const pages=[...document.querySelectorAll('[aria-label="결재상신 전 저장본 미리보기"] [data-export-page]')];return pages.length>0&&pages.every(p=>p.getAttribute('data-page-fit-overflow')!=='true')});
+        assert.equal(await preview.locator('[data-export-page]').count(),pages);
+        assert.deepEqual((await state(page)).draft,saved.draft,'Opening and closing the preview cannot save or change the report');
+        await page.locator('.report-wizard-navigation li').nth(3).getByRole('button').click();
+        await page.waitForFunction(()=>(window as any).cf213.read().draft.wizardStep===4);
+        assert.equal(await preview.count(),0,'Returning to editing must unmount the preapproval renderer even when its disclosure was open');
+      }finally{await page.close()}
+    });
     await t.test('CF253 stage3 background save keeps typing available and preserves edits after an older ACK; file import remains locked', async () => {
       const page = await open(false);
       try {
@@ -351,6 +376,10 @@ test('CF213 actual chapter workspace edits rich content, reopens and applies wit
         await page.keyboard.press('Control+s');
         await page.waitForFunction(() => (window as any).cf213.read().draft.content.includes('CF253 저장 응답 전 추가 원고'));
         const saved = await state(page);
+        t.diagnostic('CF253 canonical ACK before import: '+JSON.stringify(await page.evaluate(()=>({buttons:[...document.querySelectorAll('.report-stage-inline-editor__actions button')].map(n=>n.textContent),error:document.querySelector('.error-box')?.textContent??null}))));
+        // The fixture can store the request before React has consumed its ACK.
+        // File import is allowed only after the visible save operation finishes.
+        await page.locator('.report-stage-inline-editor__actions').getByRole('button',{name:'Ctrl+S 저장 지점 만들기',exact:true}).waitFor();
         const countNodes = (json: unknown, type: string) => (JSON.stringify(json).match(new RegExp(`"type":"${type}"`, 'gu')) ?? []).length;
         for (const type of ['table', 'image']) assert.equal(countNodes(saved.draft.editorJson, type), countNodes(initial.draft.editorJson, type));
 

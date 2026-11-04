@@ -52,7 +52,7 @@ export const DocumentReviewPages = forwardRef<DocumentReviewPagesHandle, {
       const pane = spread.querySelector('.document-review-pages__side');
       if (pane) setFit(Math.min(1, Math.max(0.15, (pane.clientWidth - 40) / width)));
     };
-    const observer = new ResizeObserver(measure); observer.observe(spread); measure();
+    const observer = new ResizeObserver(measure); observer.observe(spread);
     return () => observer.disconnect();
   }, [Boolean(previewContent), width]);
   const moveToSourcePage = (page: number) => {
